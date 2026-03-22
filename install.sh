@@ -13,16 +13,14 @@ ARCH=$(uname -m)
 case "$OS" in
   Darwin)
     case "$ARCH" in
-      x86_64) TARGET="x86_64-apple-darwin" ;;
-      arm64)  TARGET="aarch64-apple-darwin" ;;
-      *) echo "Unsupported arch: $ARCH" && exit 1 ;;
+      arm64) TARGET="aarch64-apple-darwin" ;;
+      *) echo "Unsupported arch: $ARCH (only arm64 supported)" && exit 1 ;;
     esac
     ;;
   Linux)
     case "$ARCH" in
-      x86_64)          TARGET="x86_64-unknown-linux-gnu" ;;
       aarch64 | arm64) TARGET="aarch64-unknown-linux-gnu" ;;
-      *) echo "Unsupported arch: $ARCH" && exit 1 ;;
+      *) echo "Unsupported arch: $ARCH (only arm64 supported)" && exit 1 ;;
     esac
     ;;
   *)
