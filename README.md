@@ -24,8 +24,13 @@ ln -sf "$(pwd)/target/release/warpforge" ~/.local/bin/wf
 ## Quick Start
 
 ```bash
+# existing project
 wf add ~/projects/my-app
-wf add ~/projects/my-api
+
+# new project
+cd ~/projects/my-app
+wf init --add
+
 wf
 ```
 
