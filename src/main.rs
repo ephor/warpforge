@@ -46,6 +46,13 @@ async fn main() -> Result<()> {
         Commands::Add { path, name } => {
             let entry = registry::add_project(&path, name.as_deref())?;
             println!("Registered \"{}\" at {}", entry.name, entry.path);
+            let workspace_yaml = std::path::Path::new(&entry.path).join(".workspace.yaml");
+            if !workspace_yaml.exists() {
+                match config::generate_workspace_yaml(std::path::Path::new(&entry.path)) {
+                    Ok(_) => println!("Created .workspace.yaml — edit it to configure services"),
+                    Err(e) => println!("Note: could not create .workspace.yaml: {}", e),
+                }
+            }
         }
         Commands::Remove { name } => {
             registry::remove_project(&name)?;
