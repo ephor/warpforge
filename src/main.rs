@@ -33,6 +33,9 @@ enum Commands {
     Init {
         /// Directory to init (defaults to current directory)
         path: Option<String>,
+        /// Also register the project
+        #[arg(short, long)]
+        add: bool,
     },
     /// Start the TUI (default)
     Ui,
@@ -69,9 +72,13 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Init { path } => {
+        Commands::Init { path, add } => {
             let dir = path.unwrap_or_else(|| ".".to_string());
             config::generate_workspace_yaml(std::path::Path::new(&dir))?;
+            if add {
+                let entry = registry::add_project(&dir, None)?;
+                println!("Registered \"{}\" at {}", entry.name, entry.path);
+            }
         }
         Commands::Ui => {
             app::run().await?;
