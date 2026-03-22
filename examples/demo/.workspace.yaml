@@ -1,0 +1,16 @@
+name: demo
+
+services:
+  api:
+    command: python3 -m http.server ${api.port}
+    port: 8080
+
+  web:
+    command: python3 -m http.server ${web.port}
+    port: 3000
+    dependsOn: [api]
+
+agentTemplates:
+  dev:
+    command: claude
+    description: "dev session"
