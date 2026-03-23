@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 
 use crate::agent::{AgentManager, AgentStatus};
@@ -82,7 +82,7 @@ pub fn render(
                 Span::raw("  "),
                 help_key("s", "services"),
                 Span::raw("   "),
-                help_key("i", "type"),
+                help_key("Enter", "type"),
                 Span::raw("  "),
                 help_key("n", "new agent"),
                 Span::raw("  "),
@@ -111,6 +111,8 @@ pub fn render(
             ])),
             ProjectFocus::ServiceDetail => Paragraph::new(Line::from(vec![
                 help_key("↑↓", "scroll"),
+                Span::raw("  "),
+                help_key("w", "wrap"),
                 Span::raw("   "),
                 help_key("u", "start"),
                 Span::raw("  "),
@@ -134,7 +136,9 @@ pub fn render(
                 help_key("Esc", "→ agents"),
             ])),
             ProjectFocus::PfDetail => Paragraph::new(Line::from(vec![
-                help_key("↑↓", "scroll logs"),
+                help_key("↑↓", "scroll"),
+                Span::raw("  "),
+                help_key("w", "wrap"),
                 Span::raw("   "),
                 help_key("Esc", "← port-fwd"),
             ])),
@@ -440,19 +444,27 @@ fn render_log_detail(
         None => return,
     };
 
+    let wrap = state.log_wrap.get(project_name).copied().unwrap_or(false);
     let inner_height = area.height.saturating_sub(2) as usize;
-    let total = svc.logs.len();
-    let max_scroll = total.saturating_sub(inner_height);
-    // log_scroll stores offset-from-bottom: 0 = follow tail, N = scrolled N lines up
+    let inner_width = area.width.saturating_sub(2) as usize;
+
+    let total_visual = if wrap {
+        svc.logs.iter().map(|l| visual_rows(l, inner_width)).sum::<usize>()
+    } else {
+        svc.logs.len()
+    };
+
+    let max_scroll = total_visual.saturating_sub(inner_height);
     let scroll_up = state.log_scroll.get(project_name).copied().unwrap_or(0).min(max_scroll);
     let offset = max_scroll.saturating_sub(scroll_up) as u16;
 
-    let scroll_info = if total > inner_height {
-        let current_end = (offset as usize + inner_height).min(total);
-        format!(" {}/{} ", current_end, total)
+    let scroll_info = if total_visual > inner_height {
+        let current_end = (offset as usize + inner_height).min(total_visual);
+        format!(" {}/{} ", current_end, total_visual)
     } else {
         String::new()
     };
+    let wrap_indicator = if wrap { " [wrap]" } else { "" };
 
     let status_color = match svc.status {
         ServiceStatus::Running  => Color::Green,
@@ -460,17 +472,17 @@ fn render_log_detail(
         ServiceStatus::Failed   => Color::Red,
         ServiceStatus::Stopped  => Color::DarkGray,
     };
-    let title = format!(" {} [{}]{} ", svc.name, svc.status, scroll_info);
+    let title = format!(" {} [{}]{}{} ", svc.name, svc.status, scroll_info, wrap_indicator);
 
     let log_lines: Vec<Line> = svc.logs.iter().map(|l| {
         let color = if l.contains("[err]") { Color::Red } else { Color::Reset };
         Line::from(Span::styled(l.as_str(), Style::default().fg(color)))
     }).collect();
 
-    let widget = Paragraph::new(log_lines)
-        .scroll((offset, 0))
+    let widget = Paragraph::new(log_lines).scroll((offset, 0))
         .block(Block::default().title(title).borders(Borders::ALL)
             .border_style(Style::default().fg(status_color)));
+    let widget = if wrap { widget.wrap(Wrap { trim: false }) } else { widget };
     frame.render_widget(widget, area);
 }
 
@@ -545,18 +557,27 @@ fn render_pf_detail(
         None => return,
     };
 
+    let wrap = state.log_wrap.get(project_name).copied().unwrap_or(false);
     let inner_height = area.height.saturating_sub(2) as usize;
-    let total = pf.logs.len();
-    let max_scroll = total.saturating_sub(inner_height);
+    let inner_width = area.width.saturating_sub(2) as usize;
+
+    let total_visual = if wrap {
+        pf.logs.iter().map(|l| visual_rows(l, inner_width)).sum::<usize>()
+    } else {
+        pf.logs.len()
+    };
+
+    let max_scroll = total_visual.saturating_sub(inner_height);
     let scroll_up = state.log_scroll.get(project_name).copied().unwrap_or(0).min(max_scroll);
     let offset = max_scroll.saturating_sub(scroll_up) as u16;
 
-    let scroll_info = if total > inner_height {
-        let current_end = (offset as usize + inner_height).min(total);
-        format!(" {}/{} ", current_end, total)
+    let scroll_info = if total_visual > inner_height {
+        let current_end = (offset as usize + inner_height).min(total_visual);
+        format!(" {}/{} ", current_end, total_visual)
     } else {
         String::new()
     };
+    let wrap_indicator = if wrap { " [wrap]" } else { "" };
 
     let status_color = match pf.status {
         PfStatus::Active     => Color::Green,
@@ -564,7 +585,7 @@ fn render_pf_detail(
         PfStatus::Failed     => Color::Red,
         PfStatus::Stopped    => Color::DarkGray,
     };
-    let title = format!(" {} [{}]{} ", pf.name, pf.status, scroll_info);
+    let title = format!(" {} [{}]{}{} ", pf.name, pf.status, scroll_info, wrap_indicator);
 
     let log_lines: Vec<Line> = pf.logs.iter().map(|l| {
         let color = if l.contains("[err]") || l.contains("[error]") { Color::Red }
@@ -574,10 +595,10 @@ fn render_pf_detail(
         Line::from(Span::styled(l.as_str(), Style::default().fg(color)))
     }).collect();
 
-    let widget = Paragraph::new(log_lines)
-        .scroll((offset, 0))
+    let widget = Paragraph::new(log_lines).scroll((offset, 0))
         .block(Block::default().title(title).borders(Borders::ALL)
             .border_style(Style::default().fg(status_color)));
+    let widget = if wrap { widget.wrap(Wrap { trim: false }) } else { widget };
     frame.render_widget(widget, area);
 }
 
@@ -622,6 +643,12 @@ fn render_spawn_picker(frame: &mut Frame, options: &[SpawnOption], parent: Rect)
         Paragraph::new(Span::styled("  Esc to cancel", Style::default().fg(Color::DarkGray))),
         inner[1],
     );
+}
+
+/// Number of visual rows a log line occupies given the available width.
+fn visual_rows(line: &str, width: usize) -> usize {
+    if width == 0 || line.is_empty() { return 1; }
+    (line.len() + width - 1) / width
 }
 
 fn help_key<'a>(key: &'a str, desc: &'a str) -> Span<'a> {

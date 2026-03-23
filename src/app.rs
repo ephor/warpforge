@@ -68,6 +68,8 @@ pub struct AppState {
     pub selected_pf: HashMap<String, usize>,
     /// Scroll offset for detail log panes
     pub log_scroll: HashMap<String, usize>,
+    /// Word-wrap toggle for log detail panes (per project)
+    pub log_wrap: HashMap<String, bool>,
     /// When Some — spawn picker popup is open with these options
     pub spawn_picker: Option<Vec<SpawnOption>>,
 }
@@ -84,6 +86,7 @@ impl AppState {
             selected_service: HashMap::new(),
             selected_pf: HashMap::new(),
             log_scroll: HashMap::new(),
+            log_wrap: HashMap::new(),
             spawn_picker: None,
         }
     }
@@ -146,6 +149,8 @@ async fn event_loop(
     pf_rx: &mut mpsc::UnboundedReceiver<PfEvent>,
 ) -> Result<()> {
     let mut events = EventStream::new();
+    let shutdown = os_shutdown_signal();
+    tokio::pin!(shutdown);
 
     loop {
         // Render current frame
@@ -206,8 +211,30 @@ async fn event_loop(
                     portforwards.apply_event(project_name, event);
                 }
             }
+
+            // Graceful shutdown on SIGTERM (kill <pid>) or SIGHUP (terminal closed)
+            _ = &mut shutdown => { return Ok(()); }
         }
     }
+}
+
+/// Resolves on SIGTERM or SIGHUP (unix), or never on other platforms.
+async fn os_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let (Ok(mut term), Ok(mut hup)) = (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::hangup()),
+        ) {
+            tokio::select! {
+                _ = term.recv() => {}
+                _ = hup.recv() => {}
+            }
+            return;
+        }
+    }
+    std::future::pending::<()>().await
 }
 
 /// Returns true if the app should quit.
@@ -382,6 +409,11 @@ async fn handle_project_key(
                 KeyCode::Char('r') => {
                     restart_selected(state, services, &project_name).await;
                 }
+                // toggle word wrap
+                KeyCode::Char('w') => {
+                    let wrap = state.log_wrap.entry(project_name).or_insert(false);
+                    *wrap = !*wrap;
+                }
                 _ => {}
             }
             return Ok(false);
@@ -461,6 +493,11 @@ async fn handle_project_key(
                     let off = state.log_scroll.entry(project_name).or_insert(0);
                     *off = off.saturating_sub(1);
                 }
+                // toggle word wrap
+                KeyCode::Char('w') => {
+                    let wrap = state.log_wrap.entry(project_name).or_insert(false);
+                    *wrap = !*wrap;
+                }
                 _ => {}
             }
             return Ok(false);
@@ -472,6 +509,8 @@ async fn handle_project_key(
 
     // Keys that work in Agents focus (or globally in Navigate mode)
     match key.code {
+        KeyCode::Char('q') => return Ok(true),
+
         // Back to dashboard
         KeyCode::Esc => {
             state.screen = Screen::Dashboard;
@@ -537,7 +576,7 @@ async fn handle_project_key(
         }
 
         // Enter terminal mode for current agent
-        KeyCode::Char('i') => {
+        KeyCode::Enter | KeyCode::Char('i') => {
             let has_agents = !agents.list_for_project(&project_name).is_empty();
             if has_agents {
                 state.project_focus.insert(project_name, ProjectFocus::Agents);

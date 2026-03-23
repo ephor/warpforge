@@ -273,7 +273,7 @@ impl ServiceManager {
                 kill_group(pgid).await;
                 if let Some(mut child) = svc.child.take() {
                     child.kill().await.ok();
-                    // Don't wait — we're about to process::exit anyway
+                    child.wait().await.ok();
                 }
                 svc.status = ServiceStatus::Stopped;
             }

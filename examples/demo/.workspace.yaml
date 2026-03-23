@@ -2,11 +2,19 @@ name: demo
 
 services:
   api:
-    command: python3 -m http.server ${api.port}
-    port: 8080
+    command: >
+      while true; do
+        echo "[api] running on port $PORT — $(date '+%H:%M:%S')";
+        sleep 3;
+      done
+    port: 4000
 
   web:
-    command: python3 -m http.server ${web.port}
+    command: >
+      while true; do
+        echo "[web] running on port $PORT — $(date '+%H:%M:%S')";
+        sleep 2;
+      done
     port: 3000
     dependsOn: [api]
 
