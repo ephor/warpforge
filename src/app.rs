@@ -649,12 +649,13 @@ fn handle_mouse(
     }
 }
 
-/// PTY size for agent terminals: full terminal height, width minus sidebar (28) and borders (2).
+/// PTY size for agent terminals: must match the actual inner area of the agent pane.
+/// Layout: header(3) + help(2) = 5, pane borders(2), tab bar(1) = 8 rows overhead.
+/// Cols: sidebar(28) + sidebar-borders(2) + pane-borders(2) = 32 overhead.
 fn agent_pty_size() -> (u16, u16) {
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((220, 50));
-    let sidebar: u16 = 30; // sidebar width + borders
-    let cols = term_cols.saturating_sub(sidebar).max(40);
-    let rows = term_rows.saturating_sub(5).max(10); // minus header + help bar
+    let cols = term_cols.saturating_sub(32).max(40);
+    let rows = term_rows.saturating_sub(8).max(10);
     (cols, rows)
 }
 

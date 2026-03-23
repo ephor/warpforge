@@ -146,7 +146,9 @@ impl AgentManager {
                         if let Ok(text) = std::str::from_utf8(chunk) {
                             recent.push_str(text);
                             if recent.len() > 2000 {
-                                recent = recent[recent.len() - 2000..].to_string();
+                                let cut = recent.len() - 2000;
+                                let start = (cut..).find(|&i| recent.is_char_boundary(i)).unwrap_or(recent.len());
+                                recent = recent[start..].to_string();
                             }
                         }
 
