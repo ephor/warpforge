@@ -95,7 +95,8 @@ main { flex: 1; overflow: auto; padding: 14px; }
   padding: 8px 10px;
   margin-bottom: 8px;
 }
-.attn-head { display: flex; justify-content: space-between; cursor: pointer; font-size: 12px; }
+.attn-head { display: flex; justify-content: space-between; align-items: center; cursor: pointer; font-size: 12px; }
+.attn-head .project { font-weight: 600; }
 .attention-item .reason { margin: 6px 0; }
 .attn-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
@@ -301,20 +302,20 @@ main { flex: 1; overflow: auto; padding: 14px; }
 .line-del { background: rgba(247, 118, 142, 0.12); }
 
 /* ── Projects ── */
-.project {
+.projects-view .project {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 12px;
 }
-.project header { display: flex; align-items: center; gap: 12px; }
-.project h2 { margin: 0; font-size: 15px; }
-.project header .actions { margin-left: auto; display: flex; gap: 6px; }
-.project table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-.project td { padding: 5px 8px; border-top: 1px solid var(--border); }
-.project td.name { font-weight: 600; width: 160px; }
-.project td.port { font-family: ui-monospace, monospace; color: var(--accent); width: 110px; }
-.project td.cmd { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; }
-.project td.actions { text-align: right; white-space: nowrap; }
-.project td.actions button { margin-left: 6px; }
+.projects-view .project header { display: flex; align-items: center; gap: 12px; }
+.projects-view .project h2 { margin: 0; font-size: 15px; }
+.projects-view .project header .actions { margin-left: auto; display: flex; gap: 6px; }
+.projects-view .project table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+.projects-view .project td { padding: 5px 8px; border-top: 1px solid var(--border); }
+.projects-view .project td.name { font-weight: 600; width: 160px; }
+.projects-view .project td.port { font-family: ui-monospace, monospace; color: var(--accent); width: 110px; }
+.projects-view .project td.cmd { color: var(--muted); font-family: ui-monospace, monospace; font-size: 12px; }
+.projects-view .project td.actions { text-align: right; white-space: nowrap; }
+.projects-view .project td.actions button { margin-left: 6px; }

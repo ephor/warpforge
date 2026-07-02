@@ -203,7 +203,12 @@ instead of the daemon retaining unbounded history per client.
   `npm run tauri dev`. Bundling is off (`bundle.active: false`) until icons
   exist.
 
-## 5. Open questions — flagged, with recommendations (not implemented)
+## 5. Open questions — resolved
+
+**All three recommendations below were confirmed by the project owner
+(2026-07-02).** Additionally confirmed: ACP integration with permission
+round-trips (approvals) and first-class diff review is core scope, not
+optional — Stages 4–5 are the point of the pivot, not a stretch goal.
 
 1. **Worktree model.** Recommend **shared worktree per repo** for v1, per the
    brief's own lean: single developer, and per-task worktrees buy parallelism
