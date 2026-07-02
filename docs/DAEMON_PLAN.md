@@ -191,9 +191,11 @@ instead of the daemon retaining unbounded history per client.
   else is the frontend's WebSocket. `src-tauri` depends on
   `warpforge-protocol` only — importing daemon internals is structurally
   impossible (it's not even in the same cargo workspace).
-- Views: **Board** (5-column Kanban, filter by project/agent/tag),
-  **Task detail** (session stream + multi-file diff with per-hunk
-  accept/reject), **Projects** (services + port-forwards with
+- Views: **Mission Control** (default — attention rail + live session wall +
+  pinnable focus panes; the multi-project, many-threads-at-once operating
+  view, see `docs/UI_CONCEPT.md`), **Board** (5-column Kanban, filter by
+  project/agent/tag), **Task detail** (session stream + multi-file diff with
+  per-hunk accept/reject), **Projects** (services + port-forwards with
   start/stop/restart — the TUI feature set re-rendered).
 - `npm run typecheck` and `vite build` pass. `src-tauri` is `exclude`d from
   the root workspace because compiling Tauri needs GUI system libs
