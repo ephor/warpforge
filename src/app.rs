@@ -182,22 +182,7 @@ async fn event_loop(
 
             // PTY output — update status + trigger redraw
             Some(event) = agent_rx.recv() => {
-                match event {
-                    AgentEvent::Data { id, needs_review } => {
-                        if let Some(agent) = agents.get_mut(&id) {
-                            if needs_review && agent.status == crate::agent::AgentStatus::Running {
-                                agent.status = crate::agent::AgentStatus::NeedsReview;
-                            } else if !needs_review && agent.status == crate::agent::AgentStatus::NeedsReview {
-                                agent.status = crate::agent::AgentStatus::Running;
-                            }
-                        }
-                    }
-                    AgentEvent::Exit { id, .. } => {
-                        if let Some(agent) = agents.get_mut(&id) {
-                            agent.status = crate::agent::AgentStatus::Completed;
-                        }
-                    }
-                }
+                agents.apply_event(&event);
             }
 
             // Service log/status events
@@ -205,11 +190,10 @@ async fn event_loop(
                 services.apply_event(event);
             }
 
-            // Port-forward watcher events (restart / failure notifications)
+            // Port-forward watcher events — self-attributed by project, so they
+            // apply correctly no matter which screen is open.
             Some(event) = pf_rx.recv() => {
-                if let Some(project_name) = state.active_project_name() {
-                    portforwards.apply_event(project_name, event);
-                }
+                portforwards.apply_event(event);
             }
 
             // Graceful shutdown on SIGTERM (kill <pid>) or SIGHUP (terminal closed)

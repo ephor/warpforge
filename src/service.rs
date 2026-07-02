@@ -1,8 +1,10 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Command;
 use tokio::sync::mpsc;
 
 use crate::ports;
@@ -40,7 +42,9 @@ pub struct ManagedService {
     pub allocated_port: u16,
     /// Process-group ID — used to kill the entire tree (sh → npm → node)
     pgid: Option<u32>,
-    child: Option<Child>,
+    /// Set true when we're deliberately stopping, so the exit waiter can tell
+    /// an intentional stop from a crash and report the right status.
+    stopping: Arc<AtomicBool>,
 }
 
 pub enum ServiceEvent {
@@ -77,6 +81,7 @@ impl ServiceManager {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn start(
         &mut self,
         project_name: &str,
@@ -90,21 +95,18 @@ impl ServiceManager {
     ) -> Result<()> {
         let key = format!("{project_name}/{service_name}");
         // Already running — skip. Stopped/Failed — allow restart.
-        if self.services.contains_key(&key) {
+        if let Some(existing) = self.services.get(&key) {
             let running = matches!(
-                self.services[&key].status,
+                existing.status,
                 ServiceStatus::Running | ServiceStatus::Starting
             );
-            if running { return Ok(()); }
-            // Kill old child and wait for it to fully exit before reallocating port
-            let (old_pgid, old_child) = self.services.get_mut(&key)
-                .map(|s| (s.pgid.take(), s.child.take()))
-                .unwrap_or((None, None));
-            kill_group(old_pgid).await;
-            if let Some(mut child) = old_child {
-                child.kill().await.ok();
-                child.wait().await.ok();
+            if running {
+                return Ok(());
             }
+            // Ensure any lingering old process group is gone before reallocating.
+            existing.stopping.store(true, Ordering::SeqCst);
+            let old_pgid = existing.pgid;
+            kill_group(old_pgid).await;
             ports::release(project_name, service_name);
         }
 
@@ -194,17 +196,25 @@ impl ServiceManager {
             });
         }
 
-        // Monitor exit
-        let tx = self.event_tx.clone();
-        let k = key.clone();
-        let pid = child.id();
-        tokio::spawn(async move {
-            // We can't use child here since it's moved; the kill_on_drop handles cleanup.
-            // For exit monitoring, rely on log stream EOF as proxy.
-            let _ = tx;
-            let _ = k;
-            let _ = pid;
-        });
+        // Exit waiter — actually detects the process ending (previously a no-op,
+        // so a crashed service showed "running" forever). Reports Stopped for an
+        // intentional stop, Failed for an unexpected exit.
+        let stopping = Arc::new(AtomicBool::new(false));
+        {
+            let tx = self.event_tx.clone();
+            let k = key.clone();
+            let flag = Arc::clone(&stopping);
+            tokio::spawn(async move {
+                let result = child.wait().await;
+                let clean_exit = result.map(|s| s.success()).unwrap_or(false);
+                let status = if flag.load(Ordering::SeqCst) || clean_exit {
+                    ServiceStatus::Stopped
+                } else {
+                    ServiceStatus::Failed
+                };
+                let _ = tx.send(ServiceEvent::StatusChange { key: k, status });
+            });
+        }
 
         // Preserve existing logs on restart
         let existing_logs = self.services.get(&key)
@@ -220,24 +230,25 @@ impl ServiceManager {
             original_port,
             allocated_port,
             pgid,
-            child: Some(child),
+            stopping,
         };
 
         self.services.insert(key, managed);
         Ok(())
     }
 
-    pub async fn stop(&mut self, project_name: &str, service_name: &str) -> Result<()> {
-        let key = format!("{project_name}/{service_name}");
-        if let Some(svc) = self.services.get_mut(&key) {
+    async fn stop_key(&mut self, key: &str) {
+        if let Some(svc) = self.services.get_mut(key) {
+            svc.stopping.store(true, Ordering::SeqCst);
             let pgid = svc.pgid.take();
             kill_group(pgid).await;
-            if let Some(mut child) = svc.child.take() {
-                child.kill().await.ok();
-                child.wait().await.ok();
-            }
             svc.status = ServiceStatus::Stopped;
         }
+    }
+
+    pub async fn stop(&mut self, project_name: &str, service_name: &str) -> Result<()> {
+        let key = format!("{project_name}/{service_name}");
+        self.stop_key(&key).await;
         ports::release(project_name, service_name);
         Ok(())
     }
@@ -250,15 +261,7 @@ impl ServiceManager {
             .cloned()
             .collect();
         for key in keys {
-            if let Some(svc) = self.services.get_mut(&key) {
-                let pgid = svc.pgid.take();
-                kill_group(pgid).await;
-                if let Some(mut child) = svc.child.take() {
-                    child.kill().await.ok();
-                    child.wait().await.ok();
-                }
-                svc.status = ServiceStatus::Stopped;
-            }
+            self.stop_key(&key).await;
         }
         ports::release_project(project_name);
         Ok(())
@@ -268,15 +271,7 @@ impl ServiceManager {
     pub async fn stop_all(&mut self) -> Result<()> {
         let keys: Vec<String> = self.services.keys().cloned().collect();
         for key in keys {
-            if let Some(svc) = self.services.get_mut(&key) {
-                let pgid = svc.pgid.take();
-                kill_group(pgid).await;
-                if let Some(mut child) = svc.child.take() {
-                    child.kill().await.ok();
-                    child.wait().await.ok();
-                }
-                svc.status = ServiceStatus::Stopped;
-            }
+            self.stop_key(&key).await;
         }
         Ok(())
     }
@@ -308,9 +303,64 @@ impl ServiceManager {
             }
             ServiceEvent::StatusChange { key, status } => {
                 if let Some(svc) = self.services.get_mut(&key) {
+                    // A late "ready" line must not resurrect a stopped service.
+                    if svc.status == ServiceStatus::Stopped
+                        && status == ServiceStatus::Running
+                    {
+                        return;
+                    }
                     svc.status = status;
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    /// A service whose process exits non-zero must be detected and reported as
+    /// Failed — previously the exit monitor was a no-op and it stayed "running".
+    #[tokio::test]
+    async fn crashed_service_reports_failed() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut mgr = ServiceManager::new(tx);
+        mgr.start("p", ".", 0, "boom", "exit 7", 0, None, None)
+            .await
+            .unwrap();
+
+        let mut saw_failed = false;
+        while let Ok(Some(ev)) = timeout(Duration::from_secs(5), rx.recv()).await {
+            if let ServiceEvent::StatusChange { status: ServiceStatus::Failed, .. } = ev {
+                saw_failed = true;
+                break;
+            }
+        }
+        assert!(saw_failed, "expected a Failed status change for a crashed service");
+    }
+
+    /// A clean exit (or an intentional stop) reports Stopped, not Failed.
+    #[tokio::test]
+    async fn clean_exit_reports_stopped() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut mgr = ServiceManager::new(tx);
+        mgr.start("p", ".", 0, "ok", "true", 0, None, None)
+            .await
+            .unwrap();
+
+        let mut saw_stopped = false;
+        while let Ok(Some(ev)) = timeout(Duration::from_secs(5), rx.recv()).await {
+            if let ServiceEvent::StatusChange { status, .. } = &ev {
+                assert_ne!(*status, ServiceStatus::Failed, "clean exit must not be Failed");
+                if *status == ServiceStatus::Stopped {
+                    saw_stopped = true;
+                    break;
+                }
+            }
+        }
+        assert!(saw_stopped, "expected a Stopped status change for a clean exit");
     }
 }

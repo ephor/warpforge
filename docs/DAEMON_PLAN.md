@@ -125,14 +125,30 @@ Cargo workspace; `crates/warpforge-protocol` defines the wire types shared by
 daemon and all clients. Desktop scaffold builds against it.
 
 **Stage 1 — core extraction, no networking yet.**
-Move `agent/service/portforward/ports/registry/config` into a
-`warpforge-core` crate (or `daemon/` module) owned by a single **daemon actor
-task**: one tokio task owning all managers, driven by an
-`mpsc<Command>` + `broadcast<Event>` pair. The TUI keeps linking it in-process
-for now — behavior identical, but the UI already talks through the
-command/event channels instead of `&mut` manager access. Fold in the defect
-fixes above (pf project keying, service exit monitoring, agent kill, pkill
-scoping, status transitions into managers).
+A single **daemon actor task** (`src/daemon/`) owns all managers, driven by an
+`mpsc<Command>` + `broadcast<Event>` pair. The internal `Event` is rich
+(carries the live vt100 parser for in-process rendering); the serializable
+wire `Event` is a Stage-2 translation of it.
+
+- ✅ **Done (this branch):** the actor (`daemon::Daemon` / `DaemonHandle`),
+  the `Task` model with **`session_id` kept distinct from `task_id`** (so
+  multi-agent-per-task stays additive), and command/event plumbing. Integration
+  tests cover task lifecycle and the id separation.
+- ✅ **Audit defect fixes, folded in and tested where runtime-observable:**
+  pf events self-attribute by project (`PfEvent` carries `project`); service
+  exit is actually detected (real waiter → Failed on crash / Stopped on clean
+  exit or intentional stop, with a stopping-intent flag) — covered by
+  `service::tests`; agent `kill` signals the PTY child instead of leaking it,
+  and also resizes the real PTY on resize; `stop_all`/`stop_project` for
+  port-forwards signal per-watcher `Notify`s and rely on `kill_on_drop`
+  instead of a machine-wide `pkill`; agent status transitions moved into
+  `AgentManager::apply_event`.
+- ⏳ **Remaining: TUI cutover.** The TUI still owns the managers in-process
+  (behavior identical, now with the fixes). Next increment points it at
+  `DaemonHandle` — sending commands and rendering from an event-fed projection
+  — which retires the direct `&mut` manager access. Mechanical but broad
+  (render signatures across `tui/`); verified by compile + review since the
+  TUI is inherently interactive.
 
 **Stage 2 — the socket.**
 `wf daemon` subcommand: the actor from Stage 1 plus a WebSocket server

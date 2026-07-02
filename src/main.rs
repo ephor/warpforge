@@ -1,5 +1,6 @@
 mod app;
 mod config;
+mod daemon;
 mod portforward;
 mod ports;
 mod registry;
