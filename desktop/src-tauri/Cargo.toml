@@ -1,0 +1,19 @@
+# Deliberately outside the main cargo workspace (see root Cargo.toml `exclude`):
+# building Tauri requires GUI system libraries (webkit2gtk on Linux, etc.) that
+# the daemon/TUI build must never depend on.
+[package]
+name = "warpforge-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Warpforge desktop shell — a thin Tauri client for the warpforge daemon"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+# Wire types only — never daemon internals.
+warpforge-protocol = { path = "../../crates/warpforge-protocol" }
