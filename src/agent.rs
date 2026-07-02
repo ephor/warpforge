@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use portable_pty::{CommandBuilder, NativePtySystem, PtyPair, PtySize, PtySystem};
+use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtyPair, PtySize, PtySystem};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -46,6 +46,11 @@ pub struct Agent {
     pub screen: Arc<Mutex<vt100::Parser>>,
     cols: u16,
     rows: u16,
+    /// PTY master — kept alive so the child isn't orphaned; also used to resize.
+    master: Box<dyn MasterPty + Send>,
+    /// The spawned child, so `kill` actually signals the process instead of
+    /// only dropping the map entry and leaking it. (Audit fix.)
+    child: Box<dyn Child + Send + Sync>,
 }
 
 /// Notification sent from PTY reader to UI event loop
@@ -104,7 +109,7 @@ impl AgentManager {
 
         // Spawn child then drop slave FD in parent — required for proper PTY behaviour
         let PtyPair { master, slave } = pair;
-        let _child = slave.spawn_command(cmd)?;
+        let child = slave.spawn_command(cmd)?;
         drop(slave);
 
         let mut pty_writer = master.take_writer()?;
@@ -183,6 +188,8 @@ impl AgentManager {
             screen,
             cols,
             rows,
+            master,
+            child,
         };
 
         self.agents.insert(id.clone(), agent);
@@ -200,6 +207,31 @@ impl AgentManager {
             agent.cols = cols;
             agent.rows = rows;
             agent.screen.lock().unwrap().set_size(rows, cols);
+            // Also resize the real PTY so the child program reflows — previously
+            // only the vt100 parser was resized, leaving the child at old dims.
+            let _ = agent.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+        }
+    }
+
+    /// Apply a PTY reader event to agent state. Lives here (not in the UI event
+    /// loop) so status stays correct with no client attached, or many. (Audit
+    /// fix: status transitions used to run only while the TUI drained events.)
+    pub fn apply_event(&mut self, event: &AgentEvent) {
+        match event {
+            AgentEvent::Data { id, needs_review } => {
+                if let Some(agent) = self.agents.get_mut(id) {
+                    if *needs_review && agent.status == AgentStatus::Running {
+                        agent.status = AgentStatus::NeedsReview;
+                    } else if !*needs_review && agent.status == AgentStatus::NeedsReview {
+                        agent.status = AgentStatus::Running;
+                    }
+                }
+            }
+            AgentEvent::Exit { id, .. } => {
+                if let Some(agent) = self.agents.get_mut(id) {
+                    agent.status = AgentStatus::Completed;
+                }
+            }
         }
     }
 
@@ -219,21 +251,35 @@ impl AgentManager {
     }
 
     pub fn kill(&mut self, id: &str) {
-        self.agents.remove(id);
+        if let Some(mut agent) = self.agents.remove(id) {
+            // Signal the child before dropping so the process actually dies
+            // instead of being orphaned holding the PTY open. (Audit fix.)
+            let _ = agent.child.kill();
+        }
     }
 
     pub fn kill_project_agents(&mut self, project_name: &str) {
-        self.agents.retain(|_, a| a.project_name != project_name);
+        let ids: Vec<String> = self
+            .agents
+            .iter()
+            .filter(|(_, a)| a.project_name == project_name)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            self.kill(&id);
+        }
     }
 
     pub fn all_ids(&self) -> Vec<String> {
         self.agents.keys().cloned().collect()
     }
 
-    /// Kill all agents — used on app exit.
-    /// Dropping input_tx causes the PTY writer task to exit.
-    /// The PTY reader (spawn_blocking) will be abandoned — caller must process::exit.
+    /// Kill all agents — used on app exit. Signals each child so nothing is
+    /// left running; the blocking PTY readers then hit EOF and exit.
     pub fn kill_all(&mut self) {
-        self.agents.clear();
+        let ids: Vec<String> = self.agents.keys().cloned().collect();
+        for id in ids {
+            self.kill(&id);
+        }
     }
 }
