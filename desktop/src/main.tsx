@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { daemon } from "./daemon";
 import { startDemo } from "./demo";
-import "./styles.css";
+import "./globals.css";
 
 // Demo mode: `?demo` in dev, or a global set by a host page (e.g. the
 // single-file design-review build).

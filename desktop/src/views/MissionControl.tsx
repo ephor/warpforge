@@ -1,47 +1,61 @@
 import { useState } from "react";
+import {
+  Maximize2,
+  Pin,
+  X,
+  Wrench,
+  FilePen,
+  TriangleAlert,
+  Send,
+  Plus,
+} from "lucide-react";
 import { daemon, DaemonState } from "../daemon";
 import { SessionUpdate, TaskInfo } from "../protocol";
+import { taskBadge, taskEdge, elapsed } from "@/lib/status";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
 
 /**
  * Mission Control — the default, attention-driven operating view.
- *
- * Left: attention rail — everything blocked on a human decision, triaged and
- * actionable inline. Right: the session wall — every live task as a
- * glanceable tile with its current activity line. Pinned tiles expand into a
- * focus row of side-by-side live streams. See docs/UI_CONCEPT.md.
+ * Attention rail (blocked-on-a-human, triaged) + live session wall + a
+ * pinnable focus row where sessions can be steered inline. See UI_CONCEPT.md.
  */
 
 interface Props {
   state: DaemonState;
   onOpenTask: (id: string) => void;
+  onNewTask: (project?: string) => void;
+}
+
+type PermissionUpdate = Extract<SessionUpdate, { kind: "permission_request" }>;
+
+function pendingPermission(updates: SessionUpdate[]): PermissionUpdate | undefined {
+  const last = updates[updates.length - 1];
+  return last?.kind === "permission_request" ? last : undefined;
 }
 
 interface AttentionItem {
   task: TaskInfo;
   reason: string;
-  /** Lower = more urgent. */
   priority: number;
-  permission?: Extract<SessionUpdate, { kind: "permission_request" }>;
-}
-
-function pendingPermission(updates: SessionUpdate[]) {
-  const last = updates[updates.length - 1];
-  return last?.kind === "permission_request" ? last : undefined;
+  permission?: PermissionUpdate;
 }
 
 function attentionQueue(state: DaemonState): AttentionItem[] {
   const items: AttentionItem[] = [];
   for (const task of state.snapshot.tasks) {
     const permission = pendingPermission(state.sessionUpdates[task.id] ?? []);
-    if (permission) {
-      items.push({ task, reason: permission.title, priority: 0, permission });
-    } else if (task.status === "needs_review") {
+    if (permission) items.push({ task, reason: permission.title, priority: 0, permission });
+    else if (task.status === "needs_review")
       items.push({ task, reason: "finished — review changes", priority: 1 });
-    } else if (task.status === "blocked") {
+    else if (task.status === "blocked")
       items.push({ task, reason: task.blockedReason ?? "blocked", priority: 2 });
-    } else if (task.status === "interrupted") {
+    else if (task.status === "interrupted")
       items.push({ task, reason: "session lost on daemon restart", priority: 3 });
-    }
   }
   return items.sort((a, b) => a.priority - b.priority || a.task.updatedAt - b.task.updatedAt);
 }
@@ -49,27 +63,18 @@ function attentionQueue(state: DaemonState): AttentionItem[] {
 function activityLine(updates: SessionUpdate[]): string {
   for (let i = updates.length - 1; i >= 0; i--) {
     const u = updates[i];
-    switch (u.kind) {
-      case "tool_call":
-        return `⚙ ${u.title}`;
-      case "file_edit":
-        return `✎ ${u.path}`;
-      case "agent_text":
-        return u.text;
-      case "permission_request":
-        return `⚠ ${u.title}`;
-      case "turn_ended":
-        return `— turn ended (${u.stop_reason})`;
-      case "agent_thought":
-        continue;
-    }
+    if (u.kind === "tool_call") return `⚙ ${u.title}`;
+    if (u.kind === "file_edit") return `✎ ${u.path}`;
+    if (u.kind === "agent_text") return u.text;
+    if (u.kind === "user_message") return `› ${u.text}`;
+    if (u.kind === "permission_request") return `⚠ ${u.title}`;
+    if (u.kind === "turn_ended") return `— turn ended (${u.stop_reason})`;
   }
   return "waiting for agent…";
 }
 
-export default function MissionControl({ state, onOpenTask }: Props) {
+export default function MissionControl({ state, onOpenTask, onNewTask }: Props) {
   const [pinned, setPinned] = useState<string[]>([]);
-
   const live = state.snapshot.tasks.filter((t) => t.status !== "done");
   const queue = attentionQueue(state);
   const working = live.filter((t) => t.status === "running").length;
@@ -82,84 +87,115 @@ export default function MissionControl({ state, onOpenTask }: Props) {
     .filter((t): t is TaskInfo => !!t);
 
   return (
-    <div className="mission">
-      <aside className="attention-rail">
-        <h2>Needs you {queue.length > 0 && <span className="count hot">{queue.length}</span>}</h2>
-        {queue.length === 0 ? (
-          <p className="all-quiet">
-            All quiet — {working} agent{working === 1 ? "" : "s"} working.
-            <br />
-            Nothing needs you.
-          </p>
-        ) : (
-          queue.map((item) => (
-            <div key={item.task.id} className="attention-item">
-              <div className="attn-head" onClick={() => onOpenTask(item.task.id)}>
-                <span className="project">{item.task.project}</span>
-                <span className={`status status-${item.task.status}`}>{item.task.status}</span>
-              </div>
-              <p className="reason">{item.reason}</p>
-              {item.permission && (
-                <div className="attn-actions">
-                  {item.permission.options.map((opt) => (
-                    <button
-                      key={opt}
-                      onClick={() =>
-                        void daemon.request("session.permission", {
-                          task_id: item.task.id,
-                          request_id: item.permission!.request_id,
-                          outcome: opt,
-                        })
-                      }
-                    >
-                      {opt}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {item.task.status === "needs_review" && (
-                <div className="attn-actions">
-                  <button onClick={() => onOpenTask(item.task.id)}>review diff</button>
-                </div>
-              )}
-            </div>
-          ))
-        )}
-      </aside>
-
-      <div className="wall-area">
-        {pinnedTasks.length > 0 && (
-          <div className="focus-row">
-            {pinnedTasks.map((task) => (
-              <FocusPane
-                key={task.id}
-                task={task}
-                updates={state.sessionUpdates[task.id] ?? []}
-                onUnpin={() => togglePin(task.id)}
-                onOpen={() => onOpenTask(task.id)}
-              />
-            ))}
-          </div>
-        )}
-
-        <div className="wall">
-          {live.length === 0 && (
-            <p className="empty big">
-              No live sessions. Spawn one from a project, or via <code>wf</code>.
-            </p>
+    <div className="grid h-full grid-cols-[300px_1fr] gap-4">
+      {/* ── Attention rail ── */}
+      <Card className="flex min-h-0 flex-col">
+        <div className="flex items-center justify-between px-4 py-3">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Needs you
+          </span>
+          {queue.length > 0 && (
+            <span className="tnum flex size-5 items-center justify-center rounded-full bg-destructive text-xs font-bold text-destructive-foreground">
+              {queue.length}
+            </span>
           )}
-          {live.map((task) => (
-            <SessionTile
-              key={task.id}
-              task={task}
-              updates={state.sessionUpdates[task.id] ?? []}
-              pinned={pinned.includes(task.id)}
-              onPin={() => togglePin(task.id)}
-              onOpen={() => onOpenTask(task.id)}
-            />
-          ))}
         </div>
-      </div>
+        <Separator />
+        <ScrollArea className="flex-1">
+          <div className="flex flex-col gap-2 p-3">
+            {queue.length === 0 ? (
+              <div className="mt-10 px-4 text-center text-sm leading-relaxed text-muted-foreground">
+                <p className="mb-1 text-foreground">All quiet.</p>
+                {working} agent{working === 1 ? "" : "s"} working. Nothing needs you.
+              </div>
+            ) : (
+              queue.map((item) => (
+                <Card
+                  key={item.task.id}
+                  className="border-warn/40 bg-warn/5 p-3 transition-colors hover:border-warn"
+                >
+                  <button
+                    className="mb-1.5 flex w-full items-center justify-between text-xs"
+                    onClick={() => onOpenTask(item.task.id)}
+                  >
+                    <span className="font-semibold">{item.task.project}</span>
+                    <Badge variant={taskBadge(item.task.status).variant}>
+                      {taskBadge(item.task.status).label}
+                    </Badge>
+                  </button>
+                  <p className="mb-2 text-sm">{item.reason}</p>
+                  {item.permission ? (
+                    <div className="flex flex-wrap gap-1.5">
+                      {item.permission.options.map((opt) => (
+                        <Button
+                          key={opt}
+                          size="sm"
+                          variant={opt === "deny" ? "destructive" : "default"}
+                          onClick={() =>
+                            void daemon.request("session.permission", {
+                              task_id: item.task.id,
+                              request_id: item.permission!.request_id,
+                              outcome: opt,
+                            })
+                          }
+                        >
+                          {opt}
+                        </Button>
+                      ))}
+                    </div>
+                  ) : (
+                    <Button size="sm" variant="outline" onClick={() => onOpenTask(item.task.id)}>
+                      {item.task.status === "needs_review" ? "review diff" : "open"}
+                    </Button>
+                  )}
+                </Card>
+              ))
+            )}
+          </div>
+        </ScrollArea>
+      </Card>
+
+      {/* ── Wall + focus row ── */}
+      <ScrollArea className="min-h-0">
+        <div className="flex flex-col gap-4 pr-3">
+          {pinnedTasks.length > 0 && (
+            <div className="grid grid-flow-col auto-cols-fr gap-3">
+              {pinnedTasks.map((task) => (
+                <FocusPane
+                  key={task.id}
+                  task={task}
+                  updates={state.sessionUpdates[task.id] ?? []}
+                  onUnpin={() => togglePin(task.id)}
+                  onOpen={() => onOpenTask(task.id)}
+                />
+              ))}
+            </div>
+          )}
+
+          {live.length === 0 ? (
+            <div className="mt-16 flex flex-col items-center gap-3 text-muted-foreground">
+              <p>No live sessions.</p>
+              <Button variant="outline" onClick={() => onNewTask()}>
+                <Plus className="size-4" />
+                Start a task
+              </Button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3">
+              {live.map((task) => (
+                <SessionTile
+                  key={task.id}
+                  task={task}
+                  updates={state.sessionUpdates[task.id] ?? []}
+                  pinned={pinned.includes(task.id)}
+                  onPin={() => togglePin(task.id)}
+                  onOpen={() => onOpenTask(task.id)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </ScrollArea>
     </div>
   );
 }
@@ -177,29 +213,43 @@ function SessionTile({
   onPin: () => void;
   onOpen: () => void;
 }) {
+  const badge = taskBadge(task.status);
   return (
-    <article className={`tile tile-${task.status} ${pinned ? "pinned" : ""}`} onClick={onPin}>
-      <div className="tile-head">
-        <span className="project">{task.project}</span>
-        <span className="agent">{task.agent}</span>
+    <Card
+      className={cn(
+        "cursor-pointer border-l-[3px] p-3 transition-colors hover:border-primary/60",
+        taskEdge(task.status),
+        pinned && "ring-1 ring-primary",
+      )}
+      onClick={onPin}
+    >
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="font-semibold text-foreground">{task.project}</span>
+        <span>{task.agent}</span>
+        <span className="tnum ml-auto">{elapsed(task.createdAt)}</span>
         <button
-          className="tile-open"
+          className="rounded p-0.5 hover:bg-secondary"
           onClick={(e) => {
             e.stopPropagation();
             onOpen();
           }}
           title="Open full detail"
         >
-          ⤢
+          <Maximize2 className="size-3.5" />
         </button>
       </div>
-      <p className="prompt">{task.prompt}</p>
-      <p className="activity">{activityLine(updates)}</p>
-      <div className="tile-foot">
-        <span className={`status status-${task.status}`}>{task.status.replace("_", " ")}</span>
-        {task.filesChanged > 0 && <span className="badge">{task.filesChanged} files</span>}
+      <p className="mt-2 truncate text-sm font-medium">{task.prompt}</p>
+      <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
+        {activityLine(updates)}
+      </p>
+      <div className="mt-2 flex items-center gap-2">
+        <Badge variant={badge.variant}>{badge.label}</Badge>
+        {task.filesChanged > 0 && (
+          <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
+        )}
+        {pinned && <Pin className="ml-auto size-3.5 text-primary" />}
       </div>
-    </article>
+    </Card>
   );
 }
 
@@ -214,32 +264,98 @@ function FocusPane({
   onUnpin: () => void;
   onOpen: () => void;
 }) {
-  const recent = updates.slice(-12);
+  const [draft, setDraft] = useState("");
+  const recent = updates.slice(-14);
+
+  const send = () => {
+    const text = draft.trim();
+    if (!text) return;
+    void daemon.request("session.prompt", { task_id: task.id, text });
+    setDraft("");
+  };
+
   return (
-    <section className={`focus-pane tile-${task.status}`}>
-      <header>
-        <span className="project">{task.project}</span>
-        <span className="prompt">{task.prompt}</span>
-        <button onClick={onOpen} title="Full detail">
-          ⤢
+    <Card className={cn("flex max-h-[340px] flex-col border-l-[3px]", taskEdge(task.status))}>
+      <div className="flex items-center gap-2 border-b px-3 py-2">
+        <span className="text-xs font-semibold">{task.project}</span>
+        <span className="truncate text-xs text-muted-foreground">{task.prompt}</span>
+        <button className="ml-auto rounded p-0.5 hover:bg-secondary" onClick={onOpen} title="Full detail">
+          <Maximize2 className="size-3.5" />
         </button>
-        <button onClick={onUnpin} title="Unpin">
-          ✕
+        <button className="rounded p-0.5 hover:bg-secondary" onClick={onUnpin} title="Unpin">
+          <X className="size-3.5" />
         </button>
-      </header>
-      <div className="focus-stream">
-        {recent.length === 0 && <p className="empty">waiting for agent…</p>}
-        {recent.map((u, i) => (
-          <p key={i} className={`fs-${u.kind}`}>
-            {u.kind === "tool_call" && `⚙ ${u.title} (${u.status})`}
-            {u.kind === "file_edit" && `✎ ${u.path}`}
-            {u.kind === "agent_text" && u.text}
-            {u.kind === "agent_thought" && <i>{u.text}</i>}
-            {u.kind === "permission_request" && `⚠ ${u.title}`}
-            {u.kind === "turn_ended" && `— turn ended (${u.stop_reason})`}
-          </p>
-        ))}
       </div>
-    </section>
+      <ScrollArea className="flex-1">
+        <div className="flex flex-col gap-1.5 p-3 text-xs">
+          {recent.length === 0 && <p className="text-muted-foreground">waiting for agent…</p>}
+          {recent.map((u, i) => (
+            <StreamLine key={i} update={u} compact />
+          ))}
+        </div>
+      </ScrollArea>
+      <div className="flex items-center gap-2 border-t p-2">
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && send()}
+          placeholder="Steer this session…"
+          className="h-7 flex-1 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+        <Button size="icon" className="size-7" onClick={send} disabled={!draft.trim()}>
+          <Send className="size-3.5" />
+        </Button>
+      </div>
+    </Card>
   );
+}
+
+/** Shared renderer for one session-stream update. */
+export function StreamLine({ update, compact }: { update: SessionUpdate; compact?: boolean }) {
+  switch (update.kind) {
+    case "user_message":
+      return (
+        <p className={cn("rounded-md bg-primary/10 px-2 py-1 text-primary", compact && "text-xs")}>
+          › {update.text}
+        </p>
+      );
+    case "agent_text":
+      return <p className={compact ? "" : "leading-relaxed"}>{update.text}</p>;
+    case "agent_thought":
+      return <p className="italic text-muted-foreground">{update.text}</p>;
+    case "tool_call":
+      return (
+        <p className="flex items-center gap-1.5 text-muted-foreground">
+          <Wrench
+            className={cn(
+              "size-3.5 shrink-0",
+              update.status === "completed" && "text-ok",
+              update.status === "failed" && "text-destructive",
+              (update.status === "in_progress" || update.status === "pending") && "text-warn",
+            )}
+          />
+          <span className="text-foreground">{update.title}</span>
+        </p>
+      );
+    case "file_edit":
+      return (
+        <p className="flex items-center gap-1.5 font-mono text-xs">
+          <FilePen className="size-3.5 shrink-0 text-primary" />
+          {update.path}
+        </p>
+      );
+    case "permission_request":
+      return (
+        <p className="flex items-center gap-1.5 text-warn">
+          <TriangleAlert className="size-3.5 shrink-0" />
+          {update.title}
+        </p>
+      );
+    case "turn_ended":
+      return (
+        <p className="text-center text-xs text-muted-foreground">
+          — turn ended ({update.stop_reason}) —
+        </p>
+      );
+  }
 }

@@ -52,17 +52,50 @@ earns your full attention.
 project, jump to any session, restart any service — cross-project actions
 never require "going to" the project first.
 
+Agents are talked to, not just watched. Each focus pane carries an inline
+"steer this session" composer; the full conversation + composer lives in Task
+Detail (below). Both map to ACP `session/prompt`; permission requests map to
+`session/request_permission` and are answerable from the attention rail
+without opening anything.
+
 ### 2. Board (the planning view)
 
-The Kanban from the original spec — queued / running / needs-review / done /
-blocked, filterable by project, agent, tag. Used to review the queue and
-history, not to operate. Already scaffolded.
+Queue + priorities + history + throughput in one screen. A throughput strip
+(running now / in queue / awaiting review / done-24h) over four columns:
+**Queue** (reorderable — priority is drag/Аrrow order, persisted daemon-side),
+**Running**, **Review / blocked**, **History** (done tasks newest-first).
+Filterable by project and agent. MC is "what needs me now"; Board is "what to
+run next and what already shipped".
 
-### 3. Projects (the infrastructure view)
+### 3. Projects (infrastructure + the bridge to agent work)
 
-Services, ports, port-forwards per project — the TUI's operational feature
-set, kept intact but demoted from "the whole app" to one view. Already
-scaffolded.
+Per-project drilldown, not just a services table: services/ports,
+port-forwards, and the project's tasks in one place, with **"New task here"**.
+
+The load-bearing idea (from the owner): **running services are agent
+context.** A callout — "Shared with new agent sessions" — lists the live
+services and their URLs (`app → http://localhost:4001`), and the New Task
+dialog carries a "Share running services with the agent" toggle. When on, the
+daemon prepends a runtime-context block to the agent's first prompt so it
+knows the app is already up, on which ports, and can hit real endpoints / run
+tests. This is what stops Projects being a fifth wheel — infra flows into the
+agent's working context. Protocol: `task.create { includeRuntimeContext }`;
+the daemon composes the block from live `ServiceManager` state.
+
+### 4. Task Detail (working inside one session)
+
+Conversation (the ACP stream + a message composer, ⌘↵ to send) on the left,
+multi-file diff with per-hunk accept/reject on the right. The composer is the
+primary agent-interaction surface: send follow-ups, steer, answer questions.
+
+## Component stack
+
+Frontend is **React + TypeScript + Tailwind + shadcn/ui** (Radix primitives).
+We don't hand-write design-system CSS — shadcn components are vendored into
+`src/components/ui`, themed via CSS variables in `globals.css`. Semantic
+status hues (ok / warn / destructive) are kept separate from the single blue
+accent. The demo-review artifact is the same built `dist/` inlined into one
+file — Tailwind compiles to static CSS, so it stays CSP-safe with no CDN.
 
 ## What this changes in the daemon API
 

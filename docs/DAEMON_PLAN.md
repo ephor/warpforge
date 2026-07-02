@@ -184,22 +184,27 @@ instead of the daemon retaining unbounded history per client.
 
 ## 4. Desktop shell (scaffolded in this branch)
 
-`desktop/` — Tauri 2 + React/TS + Vite. Thin by construction:
+`desktop/` — Tauri 2 + React/TS + Vite + **Tailwind + shadcn/ui**. Thin by
+construction:
 
 - The **only** Rust command is `daemon_endpoint()` (reads
   `~/.warpforge/daemon.json`, which the webview sandbox can't). Everything
   else is the frontend's WebSocket. `src-tauri` depends on
   `warpforge-protocol` only — importing daemon internals is structurally
   impossible (it's not even in the same cargo workspace).
-- Views: **Mission Control** (default — attention rail + live session wall +
-  pinnable focus panes; the multi-project, many-threads-at-once operating
-  view, see `docs/UI_CONCEPT.md`), **Board** (5-column Kanban, filter by
-  project/agent/tag), **Task detail** (session stream + multi-file diff with
-  per-hunk accept/reject), **Projects** (services + port-forwards with
-  start/stop/restart — the TUI feature set re-rendered).
-- `npm run typecheck` and `vite build` pass. `src-tauri` is `exclude`d from
-  the root workspace because compiling Tauri needs GUI system libs
-  (webkit2gtk on Linux); it builds on a normal dev machine with
+- We don't hand-write design CSS: shadcn components are vendored into
+  `src/components/ui`, themed via CSS variables in `globals.css`.
+- Views (all built, exercisable via the demo build): **Mission Control**
+  (default — attention rail + live session wall + pinnable focus panes with
+  inline steer composers), **Board** (throughput strip + queue/priority +
+  running + review + history), **Task Detail** (agent conversation + composer
+  and multi-file per-hunk diff review), **Projects** (per-project drilldown:
+  services/ports, port-forwards, project tasks, "New task here", and the
+  running-services→agent-context callout).
+- `npm run build` (typecheck + vite) passes. A `?demo` / `__WARPFORGE_DEMO__`
+  mode seeds mock state so the whole UI runs with no daemon. `src-tauri` is
+  `exclude`d from the root workspace because compiling Tauri needs GUI system
+  libs (webkit2gtk on Linux); it builds on a normal dev machine with
   `npm run tauri dev`. Bundling is off (`bundle.active: false`) until icons
   exist.
 
