@@ -235,4 +235,25 @@ optional — Stages 4–5 are the point of the pivot, not a stretch goal.
    uneven across agents today.
 
 These are recommendations, not decisions — daemon implementation (Stage 1+)
-should start after they're confirmed.
+should start after they're confirmed. **Confirmed 2026-07-02**: all three as
+recommended.
+
+## 6. Deferred / noted for later
+
+Flagged by the owner as future direction, explicitly **not** for this pass —
+config-driven behaviour is fine for now. Recorded so they survive and so we
+don't build anything that blocks them:
+
+- **Multi-agent collaboration on one task.** Currently a non-goal (one task =
+  one agent session), and the UI reflects that. The owner will spec this
+  later. *Architectural caveat to honour now so it stays cheap to add:* don't
+  hard-wire task↔session as 1:1 in the SQLite schema or the protocol. Keep a
+  `session_id` distinct from `task_id`, and treat `session.update` / diff as
+  per-session under a task, even while there's exactly one session per task in
+  v1. Then collaboration becomes "N sessions under a task" rather than a
+  migration.
+- **Auto-detect installed harnesses.** Which agent CLIs are on the machine
+  (claude, codex, …) could be probed and offered automatically. For now agents
+  come from `.workspace.yaml` `agentTemplates` (config = source of truth). When
+  added, auto-detect should *augment* the config list, not replace it — a
+  `agent.list` RPC that merges detected binaries with configured templates.
