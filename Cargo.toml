@@ -1,3 +1,10 @@
+[workspace]
+members = ["crates/warpforge-protocol"]
+# The Tauri app has heavy system-library deps (webkit2gtk etc.) — kept out of the
+# main workspace so `cargo build` for the daemon/TUI never requires a GUI toolchain.
+exclude = ["desktop/src-tauri"]
+resolver = "2"
+
 [package]
 name = "warpforge"
 version = "0.0.3"
