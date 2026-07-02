@@ -144,6 +144,7 @@ export interface TaskInfo {
 }
 
 export type SessionUpdate =
+  | { kind: "user_message"; text: string }
   | { kind: "agent_text"; text: string }
   | { kind: "agent_thought"; text: string }
   | {

@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Warpforge desktop theme. Cool steel ground (the forge), a single blue
+ * accent, semantic status hues kept separate from that accent. Dark-only for
+ * now — this is a developer tool that lives next to a terminal.
+ */
+:root {
+  --background: 222 16% 9%;
+  --foreground: 220 14% 85%;
+
+  --card: 222 15% 12%;
+  --card-foreground: 220 14% 85%;
+
+  --popover: 222 16% 11%;
+  --popover-foreground: 220 14% 85%;
+
+  --primary: 222 89% 73%;
+  --primary-foreground: 222 47% 11%;
+
+  --secondary: 222 14% 18%;
+  --secondary-foreground: 220 14% 85%;
+
+  --muted: 222 14% 16%;
+  --muted-foreground: 220 9% 60%;
+
+  --accent: 222 14% 20%;
+  --accent-foreground: 220 14% 90%;
+
+  --destructive: 348 80% 62%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 222 13% 22%;
+  --input: 222 13% 22%;
+  --ring: 222 89% 73%;
+
+  --ok: 92 45% 60%;
+  --warn: 37 62% 62%;
+
+  --radius: 0.6rem;
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  margin: 0;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Tabular numerals wherever digits line up (ports, counts, timers). */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}

@@ -19,6 +19,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+fn default_true() -> bool {
+    true
+}
+
 // ─── Envelope ────────────────────────────────────────────────────────────────
 
 /// A client → daemon frame.
@@ -115,6 +119,13 @@ pub enum Method {
         agent: String,
         #[serde(default)]
         tags: Vec<String>,
+        /// When true (default), the daemon prepends a runtime-context block to
+        /// the agent's first prompt describing the project's currently-running
+        /// services and their live URLs/ports — so the agent knows the app is
+        /// already up and can hit real endpoints / run tests against them.
+        /// This is what ties Projects to agent work (see docs/UI_CONCEPT.md).
+        #[serde(default = "default_true")]
+        include_runtime_context: bool,
     },
     #[serde(rename = "task.cancel")]
     TaskCancel { task_id: String },
@@ -340,6 +351,9 @@ pub enum TaskStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionUpdate {
+    /// The developer's own prompt, echoed by the daemon into the stream so
+    /// every attached client shows the same conversation.
+    UserMessage { text: String },
     AgentText { text: String },
     AgentThought { text: String },
     ToolCall {
@@ -471,6 +485,7 @@ mod tests {
                 prompt: "fix the login bug".into(),
                 agent: "claude".into(),
                 tags: vec!["bug".into()],
+                include_runtime_context: true,
             },
         };
         let json = serde_json::to_value(&req).unwrap();

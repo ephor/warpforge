@@ -20,6 +20,8 @@ import {
 
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 
+const nowSecs = () => Math.floor(Date.now() / 1000);
+
 export interface DaemonState {
   connection: ConnectionState;
   snapshot: Snapshot;
@@ -123,6 +125,13 @@ class DaemonClient {
     });
   }
 
+  private appendUpdate(taskId: string, update: SessionUpdate) {
+    const updates = this.state.sessionUpdates[taskId] ?? [];
+    this.setState({
+      sessionUpdates: { ...this.state.sessionUpdates, [taskId]: [...updates, update] },
+    });
+  }
+
   private demoRequest(method: string, params?: unknown): Promise<unknown> {
     const p = (params ?? {}) as Record<string, unknown>;
     switch (method) {
@@ -130,22 +139,67 @@ class DaemonClient {
         return Promise.resolve(this.demoDiff!(String(p.task_id)));
       case "session.permission": {
         const taskId = String(p.task_id);
-        const updates = this.state.sessionUpdates[taskId] ?? [];
-        // Mark the request answered by appending the resolution to the stream.
-        this.setState({
-          sessionUpdates: {
-            ...this.state.sessionUpdates,
-            [taskId]: [
-              ...updates,
-              { kind: "agent_text", text: `(permission: ${String(p.outcome)})` },
-            ],
-          },
+        this.appendUpdate(taskId, {
+          kind: "agent_text",
+          text: `(permission ${String(p.outcome)} — continuing)`,
         });
+        // Reflect the answer on the task so it leaves the attention rail.
+        this.patchTask(taskId, (t) => ({ ...t, status: "running", updatedAt: nowSecs() }));
+        return Promise.resolve({});
+      }
+      case "session.prompt": {
+        const taskId = String(p.task_id);
+        this.appendUpdate(taskId, { kind: "user_message", text: String(p.text) });
+        // Fake an agent acknowledgement shortly after.
+        setTimeout(
+          () =>
+            this.appendUpdate(taskId, {
+              kind: "agent_text",
+              text: "Got it — adjusting course.",
+            }),
+          700,
+        );
+        return Promise.resolve({});
+      }
+      case "task.create": {
+        const id = `t${Math.random().toString(36).slice(2, 7)}`;
+        const task = {
+          id,
+          project: String(p.project),
+          prompt: String(p.prompt),
+          agent: String(p.agent ?? "claude"),
+          status: "running" as const,
+          tags: (p.tags as string[]) ?? [],
+          createdAt: nowSecs(),
+          updatedAt: nowSecs(),
+          filesChanged: 0,
+          blockedReason: null,
+        };
+        this.applyEvent({ event: "task.created", data: task });
+        if (p.include_runtime_context) {
+          this.appendUpdate(id, {
+            kind: "agent_text",
+            text: "Context received: services are up on their dev ports. Starting.",
+          });
+        }
+        return Promise.resolve({ taskId: id });
+      }
+      case "task.cancel": {
+        this.patchTask(String(p.task_id), (t) => ({
+          ...t,
+          status: "done",
+          updatedAt: nowSecs(),
+        }));
         return Promise.resolve({});
       }
       default:
         return Promise.resolve({});
     }
+  }
+
+  private patchTask(id: string, fn: (t: import("./protocol").TaskInfo) => import("./protocol").TaskInfo) {
+    const task = this.state.snapshot.tasks.find((t) => t.id === id);
+    if (task) this.applyEvent({ event: "task.updated", data: fn(task) });
   }
 
   private handleMessage(msg: ServerMessage) {
