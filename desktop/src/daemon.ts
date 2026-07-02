@@ -14,6 +14,7 @@ import {
   ServerMessage,
   SessionUpdate,
   Snapshot,
+  TaskDiff,
   isEvent,
 } from "./protocol";
 
@@ -57,6 +58,27 @@ class DaemonClient {
     this.listeners.forEach((fn) => fn());
   }
 
+  // ── demo mode (no daemon; used for UI review and `?demo` dev runs) ──
+  private demoDiff: ((taskId: string) => TaskDiff) | null = null;
+
+  enableDemoMode(seed: {
+    snapshot: Snapshot;
+    sessionUpdates: Record<string, SessionUpdate[]>;
+    diffFor: (taskId: string) => TaskDiff;
+  }) {
+    this.demoDiff = seed.diffFor;
+    this.setState({
+      connection: "connected",
+      snapshot: seed.snapshot,
+      sessionUpdates: seed.sessionUpdates,
+    });
+  }
+
+  /** Inject a daemon event locally (demo mode only). */
+  demoEvent(ev: DaemonEvent) {
+    if (this.demoDiff) this.applyEvent(ev);
+  }
+
   // ── connection ──
   async connect(): Promise<void> {
     this.setState({ connection: "connecting" });
@@ -89,6 +111,7 @@ class DaemonClient {
 
   // ── RPC ──
   request(method: string, params?: unknown): Promise<unknown> {
+    if (this.demoDiff) return this.demoRequest(method, params);
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("not connected to daemon"));
@@ -98,6 +121,31 @@ class DaemonClient {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
+  }
+
+  private demoRequest(method: string, params?: unknown): Promise<unknown> {
+    const p = (params ?? {}) as Record<string, unknown>;
+    switch (method) {
+      case "diff.get":
+        return Promise.resolve(this.demoDiff!(String(p.task_id)));
+      case "session.permission": {
+        const taskId = String(p.task_id);
+        const updates = this.state.sessionUpdates[taskId] ?? [];
+        // Mark the request answered by appending the resolution to the stream.
+        this.setState({
+          sessionUpdates: {
+            ...this.state.sessionUpdates,
+            [taskId]: [
+              ...updates,
+              { kind: "agent_text", text: `(permission: ${String(p.outcome)})` },
+            ],
+          },
+        });
+        return Promise.resolve({});
+      }
+      default:
+        return Promise.resolve({});
+    }
   }
 
   private handleMessage(msg: ServerMessage) {
