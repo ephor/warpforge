@@ -1,4 +1,5 @@
 mod app;
+mod client;
 mod config;
 mod daemon;
 mod portforward;

@@ -53,6 +53,7 @@ pub enum Command {
     StopService { project: String, service: String },
     RestartService { project: String, service: String },
     StopProject { project: String },
+    StopPortForward { project: String, name: String },
     SpawnAgent {
         project: String,
         command: String,
@@ -106,6 +107,9 @@ pub enum Event {
     /// Structured ACP session activity for a task (tool calls, agent text,
     /// file edits, permission requests) — already in wire shape.
     SessionUpdate { task_id: String, update: wire::SessionUpdate },
+    /// A PTY terminal's rendered screen changed (serialized, so clients need no
+    /// terminal emulator — the daemon owns the one authoritative vt100 parser).
+    TerminalScreen { terminal_id: String, screen: wire::TerminalScreen },
 }
 
 /// Cloneable handle clients use to talk to the daemon.
@@ -328,12 +332,28 @@ impl Daemon {
             self.tasks.values().map(wireconv::task_info).collect();
         tasks.sort_by_key(|t| t.created_at);
 
+        let terminals = self
+            .agents
+            .all()
+            .map(|a| {
+                let (cols, rows) = a.dims();
+                wire::TerminalInfo {
+                    id: a.id.clone(),
+                    project: a.project_name.clone(),
+                    command: a.command.clone(),
+                    started_at: a.started_at,
+                    cols,
+                    rows,
+                }
+            })
+            .collect();
+
         wire::Snapshot {
             projects,
             services,
             portforwards,
             tasks,
-            terminals: Vec::new(),
+            terminals,
         }
     }
 
@@ -379,7 +399,12 @@ impl Daemon {
         match ev {
             AgentEvent::Data { id, .. } => {
                 if let Some(agent) = self.agents.get(&id) {
-                    self.emit(Event::AgentStatus { id, status: agent.status.clone() });
+                    self.emit(Event::AgentStatus { id: id.clone(), status: agent.status.clone() });
+                    // Serialize and push the terminal screen for remote clients.
+                    if let Ok(parser) = agent.screen.lock() {
+                        let screen = wireconv::terminal_screen(&parser);
+                        self.emit(Event::TerminalScreen { terminal_id: id, screen });
+                    }
                 }
             }
             AgentEvent::Exit { id, .. } => self.emit(Event::AgentExited { id }),
@@ -450,6 +475,9 @@ impl Daemon {
             Command::StopProject { project } => {
                 self.services.stop_project(&project).await.ok();
                 self.portforwards.stop_project(&project);
+            }
+            Command::StopPortForward { project, name } => {
+                self.portforwards.stop(&project, &name);
             }
             Command::SpawnAgent { project, command, description, cols, rows, reply } => {
                 let result = match self.project_path(&project) {

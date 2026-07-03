@@ -8,15 +8,15 @@ use ratatui::{
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::agent::AgentManager;
 use crate::app::AppState;
-use crate::service::{ServiceManager, ServiceStatus};
+use crate::client::{AgentProjection, ServiceProjection};
+use crate::service::ServiceStatus;
 
 pub fn render(
     frame: &mut Frame,
     state: &AppState,
-    agents: &AgentManager,
-    services: &ServiceManager,
+    agents: &AgentProjection,
+    services: &ServiceProjection,
 ) {
     let area = frame.area();
 

@@ -1,23 +1,17 @@
 mod dashboard;
 mod project;
-mod terminal;
+mod wire_terminal;
 
 use ratatui::Frame;
 
-use crate::agent::AgentManager;
 use crate::app::{AppState, Screen};
-use crate::portforward::PortForwardManager;
-use crate::service::ServiceManager;
+use crate::client::ClientState;
 
-pub fn render(
-    frame: &mut Frame,
-    state: &AppState,
-    agents: &AgentManager,
-    services: &ServiceManager,
-    portforwards: &PortForwardManager,
-) {
+pub fn render(frame: &mut Frame, state: &AppState, cs: &ClientState) {
     match &state.screen {
-        Screen::Dashboard => dashboard::render(frame, state, agents, services),
-        Screen::Project(name) => project::render(frame, state, agents, services, portforwards, name),
+        Screen::Dashboard => dashboard::render(frame, state, &cs.agents, &cs.services),
+        Screen::Project(name) => {
+            project::render(frame, state, &cs.agents, &cs.services, &cs.portforwards, name)
+        }
     }
 }
