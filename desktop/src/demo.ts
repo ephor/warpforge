@@ -6,7 +6,7 @@
  */
 
 import { daemon } from "./daemon";
-import { SessionUpdate, Snapshot, TaskDiff, TaskInfo } from "./protocol";
+import { FileDoc, SessionUpdate, Snapshot, TaskDiff, TaskInfo } from "./protocol";
 
 const now = Math.floor(Date.now() / 1000);
 
@@ -333,6 +333,27 @@ function diffFor(taskId: string): TaskDiff {
           },
         ],
       },
+      {
+        path: "internal/auth/session.go",
+        oldPath: null,
+        status: "modified",
+        hunks: [
+          {
+            oldStart: 12,
+            oldLines: 4,
+            newStart: 12,
+            newLines: 6,
+            lines: [
+              " func NewSession(userID string) *Session {",
+              "-\treturn &Session{ID: userID, TTL: 3600}",
+              "+\t// Sliding window: refresh TTL on each use.",
+              "+\treturn &Session{ID: userID, TTL: 3600, LastSeen: time.Now()}",
+              " }",
+            ],
+            resolution: null,
+          },
+        ],
+      },
     ],
   };
 }
@@ -378,7 +399,115 @@ function startTicker() {
   }, 2500);
 }
 
+/** Mock old/new file contents for the split (CodeMirror merge) review. */
+function fileDocFor(path: string): FileDoc {
+  if (path === "e2e/login.spec.ts") {
+    return {
+      path,
+      status: "modified",
+      oldText: `import { test, expect } from '@playwright/test';
+import { loginAs } from './helpers/session';
+
+test.describe('login', () => {
+  test('signs in and lands on dashboard', async ({ page }) => {
+    await loginAs(page, testUser);
+    await page.fill('#email', user.email);
+    await page.fill('#password', user.password);
+    await page.click('button[type=submit]');
+    await page.waitForSelector('.dashboard');
+    await expect(page).toHaveTitle(/Lingoverse/);
+  });
+
+  test('remembers session', async ({ page }) => {
+    await page.waitForTimeout(2000); // flaky sleep
+    await page.reload();
+    await expect(page.locator('[data-testid=avatar]')).toBeVisible();
+  });
+});
+`,
+      newText: `import { test, expect } from '@playwright/test';
+import { loginAs } from './helpers/session';
+
+test.describe('login', () => {
+  test('signs in and lands on dashboard', async ({ page }) => {
+    await loginAs(page, testUser);
+    await page.fill('#email', user.email);
+    await page.fill('#password', user.password);
+    await page.click('button[type=submit]');
+    // Redirect lands on /home first; .dashboard mounts after data loads.
+    await page.waitForURL('**/home');
+    await page.waitForSelector('[data-testid=dashboard-root]');
+    await expect(page).toHaveTitle(/Lingoverse/);
+  });
+
+  test('remembers session', async ({ page }) => {
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.locator('[data-testid=avatar]')).toBeVisible();
+  });
+});
+`,
+    };
+  }
+  if (path === "e2e/helpers/session.ts") {
+    return {
+      path,
+      status: "modified",
+      oldText: `export async function loginAs(page: Page, user: TestUser) {
+  await page.goto('/login');
+  await fillCredentials(page, user);
+}
+`,
+      newText: `export async function loginAs(page: Page, user: TestUser) {
+  await page.goto('/login');
+  // Wait for the auth service to be reachable before typing.
+  await page.waitForResponse((r) => r.url().includes('/api/health'));
+
+  await fillCredentials(page, user);
+}
+`,
+    };
+  }
+  if (path === "e2e/fixtures/flaky-retry.json") {
+    return { path, status: "deleted", oldText: `{\n  "retries": 4\n}\n`, newText: "" };
+  }
+  if (path === "internal/auth/session.go") {
+    return {
+      path,
+      status: "modified",
+      oldText: `package auth
+
+import "time"
+
+type Session struct {
+	ID  string
+	TTL int
+}
+
+func NewSession(userID string) *Session {
+	return &Session{ID: userID, TTL: 3600}
+}
+`,
+      newText: `package auth
+
+import "time"
+
+type Session struct {
+	ID       string
+	TTL      int
+	LastSeen time.Time
+}
+
+func NewSession(userID string) *Session {
+	// Sliding window: refresh TTL on each use.
+	return &Session{ID: userID, TTL: 3600, LastSeen: time.Now()}
+}
+`,
+    };
+  }
+  return { path, status: "modified", oldText: "", newText: "" };
+}
+
 export function startDemo() {
-  daemon.enableDemoMode({ snapshot, sessionUpdates, diffFor });
+  daemon.enableDemoMode({ snapshot, sessionUpdates, diffFor, fileDocFor });
   startTicker();
 }
