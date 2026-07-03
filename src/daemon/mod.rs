@@ -9,10 +9,15 @@
 #![allow(dead_code)]
 
 pub mod actor;
+pub mod server;
+pub mod store;
 pub mod task;
+pub mod wire;
 
 #[allow(unused_imports)]
 pub use actor::{Command, Daemon, DaemonHandle, Event};
+#[allow(unused_imports)]
+pub use store::Store;
 #[allow(unused_imports)]
 pub use task::{Task, TaskStatus};
 
@@ -33,7 +38,8 @@ mod tests {
 
     #[tokio::test]
     async fn create_task_generates_distinct_id_and_no_session() {
-        let daemon = Daemon::spawn(test_projects());
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(test_projects(), store);
         let mut events = daemon.subscribe();
 
         let id = daemon
@@ -78,7 +84,8 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_task_marks_done() {
-        let daemon = Daemon::spawn(test_projects());
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(test_projects(), store);
         let id = daemon.create_task("demo", "p", "claude", vec![]).await;
         let mut events = daemon.subscribe();
 

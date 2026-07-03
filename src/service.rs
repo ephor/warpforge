@@ -291,6 +291,11 @@ impl ServiceManager {
             .collect()
     }
 
+    /// Every managed service across all projects (for snapshot building).
+    pub fn all(&self) -> impl Iterator<Item = &ManagedService> {
+        self.services.values()
+    }
+
     pub fn apply_event(&mut self, event: ServiceEvent) {
         match event {
             ServiceEvent::Log { key, line } => {

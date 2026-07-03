@@ -18,13 +18,17 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use tokio::sync::{broadcast, mpsc, oneshot};
 
+use warpforge_protocol as wire;
+
 use crate::agent::{AgentEvent, AgentManager, AgentStatus};
 use crate::config::{load_workspace_config, sorted_services};
 use crate::portforward::{PfEvent, PfStatus, PortForwardManager};
 use crate::registry::ProjectEntry;
 use crate::service::{ServiceEvent, ServiceManager, ServiceStatus};
 
+use super::store::Store;
 use super::task::{Task, TaskStatus};
+use super::wire as wireconv;
 
 /// Split a `project/service` service key back into its parts (split on first
 /// `/`, which is how `ServiceManager` composes the key).
@@ -39,6 +43,8 @@ fn split_key(key: &str) -> (String, String) {
 pub enum Command {
     Projects(oneshot::Sender<Vec<ProjectEntry>>),
     Tasks(oneshot::Sender<Vec<Task>>),
+    /// Full serializable state snapshot (sent to a client on `state.subscribe`).
+    Snapshot(oneshot::Sender<wire::Snapshot>),
     /// Start every declared service + port-forward for a project (what "opening"
     /// a project used to do implicitly in the TUI — now explicit).
     OpenProject { name: String },
@@ -112,6 +118,12 @@ impl DaemonHandle {
         rx.await.unwrap_or_default()
     }
 
+    pub async fn snapshot(&self) -> wire::Snapshot {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::Snapshot(tx)).await;
+        rx.await.unwrap_or_default()
+    }
+
     pub async fn create_task(
         &self,
         project: &str,
@@ -160,24 +172,36 @@ pub struct Daemon {
     services: ServiceManager,
     portforwards: PortForwardManager,
     event_tx: broadcast::Sender<Event>,
+    store: Option<Store>,
 }
 
 impl Daemon {
     /// Construct the daemon and run its actor loop on a background task.
-    pub fn spawn(projects: Vec<ProjectEntry>) -> DaemonHandle {
+    /// Persisted tasks are loaded from the store (Running/Queued tasks come back
+    /// as Interrupted — no live-session resumption in v1).
+    pub fn spawn(projects: Vec<ProjectEntry>, store: Option<Store>) -> DaemonHandle {
         let (cmd_tx, cmd_rx) = mpsc::channel(256);
         let (event_tx, _) = broadcast::channel(2048);
         let (agent_tx, agent_rx) = mpsc::unbounded_channel();
         let (service_tx, service_rx) = mpsc::unbounded_channel();
         let (pf_tx, pf_rx) = mpsc::unbounded_channel();
 
+        let tasks = store
+            .as_ref()
+            .and_then(|s| s.load_tasks().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| (t.id.clone(), t))
+            .collect();
+
         let daemon = Daemon {
             projects,
-            tasks: HashMap::new(),
+            tasks,
             agents: AgentManager::new(agent_tx),
             services: ServiceManager::new(service_tx),
             portforwards: PortForwardManager::new(pf_tx),
             event_tx: event_tx.clone(),
+            store,
         };
 
         tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx));
@@ -188,6 +212,83 @@ impl Daemon {
     fn emit(&self, event: Event) {
         // Err just means no subscribers right now — fine.
         let _ = self.event_tx.send(event);
+    }
+
+    fn persist(&self, task: &Task) {
+        if let Some(store) = &self.store {
+            let _ = store.upsert_task(task);
+        }
+    }
+
+    /// Build the serializable snapshot handed to a client on subscribe.
+    fn build_snapshot(&self) -> wire::Snapshot {
+        let projects = self
+            .projects
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let (start, end) = crate::ports::port_range(i);
+                let config = load_workspace_config(std::path::Path::new(&p.path));
+                let declared_services =
+                    config.as_ref().map(sorted_services).unwrap_or_default();
+                let agent_templates = config
+                    .as_ref()
+                    .and_then(|c| c.agent_templates.clone())
+                    .map(|m| m.into_iter().map(|(k, v)| (k, v.command)).collect())
+                    .unwrap_or_default();
+                wire::ProjectInfo {
+                    name: p.name.clone(),
+                    path: p.path.clone(),
+                    port_range: (start, end),
+                    declared_services,
+                    agent_templates,
+                }
+            })
+            .collect();
+
+        let services = self
+            .services
+            .all()
+            .map(|s| wire::ServiceInfo {
+                project: s.project_name.clone(),
+                name: s.name.clone(),
+                command: s.command.clone(),
+                status: wireconv::service_status(&s.status),
+                original_port: s.original_port,
+                allocated_port: s.allocated_port,
+                log_seq: 0,
+            })
+            .collect();
+
+        let portforwards = self
+            .portforwards
+            .forwards
+            .iter()
+            .map(|(key, pf)| {
+                let project = key.split_once('/').map(|(p, _)| p).unwrap_or("").to_string();
+                wire::PortForwardInfo {
+                    project,
+                    name: pf.name.clone(),
+                    namespace: pf.namespace.clone(),
+                    pod: pf.pod_prefix.clone(),
+                    local_port: pf.local_port,
+                    remote_port: pf.remote_port,
+                    status: wireconv::pf_status(&pf.status),
+                }
+            })
+            .collect();
+
+        let mut tasks: Vec<wire::TaskInfo> =
+            self.tasks.values().map(wireconv::task_info).collect();
+        tasks.sort_by_key(|t| t.created_at);
+
+        wire::Snapshot {
+            projects,
+            services,
+            portforwards,
+            tasks,
+            terminals: Vec::new(),
+        }
     }
 
     fn project_path(&self, name: &str) -> Option<String> {
@@ -284,6 +385,9 @@ impl Daemon {
                 tasks.sort_by_key(|t| t.created_at);
                 let _ = reply.send(tasks);
             }
+            Command::Snapshot(reply) => {
+                let _ = reply.send(self.build_snapshot());
+            }
             Command::OpenProject { name } => self.open_project(&name).await,
             Command::StartService { project, service } => {
                 self.start_one_service(&project, &service).await;
@@ -327,6 +431,7 @@ impl Daemon {
                 let task = Task::new(&project, &prompt, &agent, tags);
                 let id = task.id.clone();
                 self.tasks.insert(id.clone(), task.clone());
+                self.persist(&task);
                 self.emit(Event::TaskCreated(task));
                 let _ = reply.send(id);
                 // Stage 4 will attach a real ACP session here; for now the task
@@ -336,6 +441,7 @@ impl Daemon {
                 if let Some(task) = self.tasks.get_mut(&id) {
                     task.set_status(TaskStatus::Done);
                     let updated = task.clone();
+                    self.persist(&updated);
                     self.emit(Event::TaskUpdated(updated));
                 }
             }
@@ -362,6 +468,7 @@ impl Daemon {
                     )
                     .await
                     .ok();
+                self.emit_service_status(name, &svc_name);
             }
         }
         self.portforwards.start_all(name, &config.portforwards).await;
@@ -385,5 +492,20 @@ impl Daemon {
             )
             .await
             .ok();
+        self.emit_service_status(project, service);
+    }
+
+    /// Broadcast a service's current status. Emitted right after a start so a
+    /// client learns the service exists (it may have subscribed before it did)
+    /// — without this, newly started services never appear for other clients.
+    fn emit_service_status(&self, project: &str, service: &str) {
+        if let Some(svc) = self.services.get(project, service) {
+            self.emit(Event::ServiceStatus {
+                project: project.to_string(),
+                service: service.to_string(),
+                status: svc.status.clone(),
+                allocated_port: svc.allocated_port,
+            });
+        }
     }
 }

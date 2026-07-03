@@ -237,18 +237,33 @@ class DaemonClient {
           },
         });
         break;
-      case "service.status":
-        this.setState({
-          snapshot: {
-            ...snap,
-            services: snap.services.map((s) =>
+      case "service.status": {
+        const exists = snap.services.some(
+          (s) => s.project === ev.data.project && s.name === ev.data.service,
+        );
+        const services = exists
+          ? snap.services.map((s) =>
               s.project === ev.data.project && s.name === ev.data.service
                 ? { ...s, status: ev.data.status, allocatedPort: ev.data.allocated_port }
                 : s,
-            ),
-          },
-        });
+            )
+          : // A service started after we subscribed — add it. command/originalPort
+            // fill in on the next full snapshot; status + port are what matter now.
+            [
+              ...snap.services,
+              {
+                project: ev.data.project,
+                name: ev.data.service,
+                command: "",
+                status: ev.data.status,
+                originalPort: 0,
+                allocatedPort: ev.data.allocated_port,
+                logSeq: 0,
+              },
+            ];
+        this.setState({ snapshot: { ...snap, services } });
         break;
+      }
       case "portforward.status":
         this.setState({
           snapshot: {
