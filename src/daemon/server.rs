@@ -186,9 +186,24 @@ async fn dispatch(
             handle.send(Command::OpenProject { name: project }).await;
             Ok(json!(null))
         }
-        TaskCreate { project, prompt, agent, tags, .. } => {
-            let id = handle.create_task(&project, &prompt, &agent, tags).await;
+        TaskCreate { project, prompt, agent, tags, include_runtime_context } => {
+            let id = handle
+                .create_task(&project, &prompt, &agent, tags, include_runtime_context)
+                .await;
             Ok(json!({ "taskId": id }))
+        }
+        DiffGet { task_id } => {
+            let diff = handle.diff(&task_id).await;
+            serde_json::to_value(diff).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        DiffResolveHunk { task_id, file, hunk_index, resolution } => {
+            handle
+                .send(Command::ResolveHunk { task_id, file, hunk_index, resolution })
+                .await;
+            Ok(json!(null))
         }
         TaskCancel { task_id } => {
             handle.send(Command::CancelTask { id: task_id }).await;
@@ -207,8 +222,8 @@ async fn dispatch(
             handle.session_permission(&task_id, &request_id, outcome).await;
             Ok(json!(null))
         }
-        // Not yet in this build: diff.*, terminal.*, project.*,
-        // portforward.stop, task.archive. They land with Stages 3 & 5.
+        // Not yet in this build: terminal.*, project.*, portforward.stop,
+        // task.archive. They land with Stage 3 / follow-ups.
         _ => Err(wire::RpcError {
             code: wire::ErrorCode::NotFound,
             message: "method not implemented in this build".to_string(),

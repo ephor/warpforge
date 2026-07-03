@@ -10,6 +10,7 @@
 
 pub mod acp;
 pub mod actor;
+pub mod diff;
 pub mod server;
 pub mod store;
 pub mod task;
@@ -44,7 +45,7 @@ mod tests {
         let mut events = daemon.subscribe();
 
         let id = daemon
-            .create_task("demo", "fix the bug", "claude", vec!["bug".into()])
+            .create_task("demo", "fix the bug", "claude", vec!["bug".into()], false)
             .await;
 
         assert!(id.starts_with("t_"), "task id looks like a task id: {id}");
@@ -94,7 +95,7 @@ mod tests {
         // Agent is a raw command (not a template): our mock ACP agent.
         let mock = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mock-acp-agent.mjs");
         let agent = format!("node {mock}");
-        let task_id = daemon.create_task("demo", "fix the thing", &agent, vec![]).await;
+        let task_id = daemon.create_task("demo", "fix the thing", &agent, vec![], false).await;
 
         let mut saw_running = false;
         let mut saw_agent_text = false;
@@ -161,7 +162,7 @@ mod tests {
     async fn cancel_task_marks_done() {
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let daemon = Daemon::spawn(test_projects(), store);
-        let id = daemon.create_task("demo", "p", "claude", vec![]).await;
+        let id = daemon.create_task("demo", "p", "claude", vec![], false).await;
         let mut events = daemon.subscribe();
 
         daemon.send(Command::CancelTask { id: id.clone() }).await;
