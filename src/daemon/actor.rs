@@ -559,14 +559,27 @@ impl Daemon {
                 }
             }
             Command::SessionPrompt { task_id, text } => {
-                if let Some(handle) = self.sessions.get(&task_id) {
-                    // Echo the developer's message into the stream so every
-                    // client shows the same conversation.
-                    self.emit(Event::SessionUpdate {
-                        task_id: task_id.clone(),
-                        update: wire::SessionUpdate::UserMessage { text: text.clone() },
-                    });
-                    handle.prompt(text);
+                // Always echo the developer's message so every client shows the
+                // same conversation.
+                self.emit(Event::SessionUpdate {
+                    task_id: task_id.clone(),
+                    update: wire::SessionUpdate::UserMessage { text: text.clone() },
+                });
+                match self.sessions.get(&task_id) {
+                    Some(handle) => handle.prompt(text),
+                    None => {
+                        // No live session (interrupted after a restart, or the
+                        // agent exited). Say so instead of dropping the message.
+                        self.emit(Event::SessionUpdate {
+                            task_id: task_id.clone(),
+                            update: wire::SessionUpdate::AgentText {
+                                text: "⚠ No live agent session for this task — its \
+                                       session ended (e.g. daemon restart). Re-run \
+                                       the task to continue."
+                                    .into(),
+                            },
+                        });
+                    }
                 }
             }
             Command::SessionPermission { task_id, request_id, outcome } => {

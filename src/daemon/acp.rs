@@ -83,26 +83,49 @@ pub fn spawn_acp_session(
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()?;
 
     let stdin = child.stdin.take().expect("piped stdin");
     let stdout = child.stdout.take().expect("piped stdout");
 
+    // Surface the agent's own stderr to the daemon's stderr — real agents log
+    // handshake/protocol errors there, and without this they vanish. Run
+    // `wf daemon` in a terminal to see them.
+    if let Some(stderr) = child.stderr.take() {
+        let tid = task_id.clone();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                eprintln!("[acp {tid} stderr] {line}");
+            }
+        });
+    }
+
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<AcpCommand>();
 
+    // Set WARPFORGE_ACP_DEBUG=1 to log the raw JSON-RPC exchange to the daemon's
+    // stderr — the fastest way to see why a real agent isn't answering.
+    let debug = std::env::var("WARPFORGE_ACP_DEBUG").is_ok();
+
     // Writer: serialize outgoing frames (ndjson) to the agent's stdin.
-    tokio::spawn(async move {
-        let mut stdin = stdin;
-        while let Some(line) = out_rx.recv().await {
-            if stdin.write_all(line.as_bytes()).await.is_err() || stdin.write_all(b"\n").await.is_err() {
-                break;
+    {
+        let tid = task_id.clone();
+        tokio::spawn(async move {
+            let mut stdin = stdin;
+            while let Some(line) = out_rx.recv().await {
+                if debug {
+                    eprintln!("[acp {tid} >>] {line}");
+                }
+                if stdin.write_all(line.as_bytes()).await.is_err() || stdin.write_all(b"\n").await.is_err() {
+                    break;
+                }
+                let _ = stdin.flush().await;
             }
-            let _ = stdin.flush().await;
-        }
-    });
+        });
+    }
 
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
     let perms: Arc<Mutex<HashMap<String, PendingPerm>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -124,7 +147,18 @@ pub fn spawn_acp_session(
                 if line.is_empty() {
                     continue;
                 }
-                let Ok(msg): Result<Value, _> = serde_json::from_str(line) else { continue };
+                if debug {
+                    eprintln!("[acp {task_id} <<] {line}");
+                }
+                let msg: Value = match serde_json::from_str(line) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        // Not JSON — likely a framing mismatch (Content-Length?)
+                        // or a banner line. Surface it so it's diagnosable.
+                        eprintln!("[acp {task_id} <<?] non-JSON line: {line}");
+                        continue;
+                    }
+                };
 
                 // Response to one of our requests?
                 if msg.get("id").is_some()
@@ -144,11 +178,15 @@ pub fn spawn_acp_session(
                 let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
 
                 match method {
-                    "session/update" => {
-                        if let Some(update) = parse_update(&params) {
+                    "session/update" => match parse_update(&params) {
+                        Some(update) => {
                             let _ = updates.send((task_id.clone(), update));
                         }
-                    }
+                        None if debug => {
+                            eprintln!("[acp {task_id} <<?] unhandled session/update shape: {params}");
+                        }
+                        None => {}
+                    },
                     "session/request_permission" => {
                         let Some(agent_id) = id else { continue };
                         let (title, options, map) = parse_permission(&params);
@@ -324,14 +362,8 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
     let update = params.get("update")?;
     let kind = update.get("sessionUpdate")?.as_str()?;
     match kind {
-        "agent_message_chunk" => {
-            let text = update.get("content")?.get("text")?.as_str()?.to_string();
-            Some(AcpUpdate::AgentText(text))
-        }
-        "agent_thought_chunk" => {
-            let text = update.get("content")?.get("text")?.as_str()?.to_string();
-            Some(AcpUpdate::AgentThought(text))
-        }
+        "agent_message_chunk" => Some(AcpUpdate::AgentText(content_text(update.get("content")?)?)),
+        "agent_thought_chunk" => Some(AcpUpdate::AgentThought(content_text(update.get("content")?)?)),
         "tool_call" | "tool_call_update" => {
             let id = update.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("in_progress").to_string();
@@ -350,6 +382,27 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
         }
         _ => None, // user_message_chunk (our own echo), plan, etc.
     }
+}
+
+/// Extract display text from an ACP content value, tolerating the shapes real
+/// agents use: a `{ text }` block, a bare string, or an array of blocks.
+fn content_text(content: &Value) -> Option<String> {
+    if let Some(t) = content.get("text").and_then(|v| v.as_str()) {
+        return Some(t.to_string());
+    }
+    if let Some(t) = content.as_str() {
+        return Some(t.to_string());
+    }
+    if let Some(arr) = content.as_array() {
+        let joined: String = arr
+            .iter()
+            .filter_map(|b| b.get("text").and_then(|v| v.as_str()))
+            .collect();
+        if !joined.is_empty() {
+            return Some(joined);
+        }
+    }
+    None
 }
 
 /// Pull the first edited file path out of a tool_call update, from `locations`
