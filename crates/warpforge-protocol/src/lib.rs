@@ -106,6 +106,8 @@ pub enum Method {
     // ── Port-forwards ──
     #[serde(rename = "portforward.startAll")]
     PortForwardStartAll { project: String },
+    #[serde(rename = "portforward.start")]
+    PortForwardStart { project: String, name: String },
     #[serde(rename = "portforward.stop")]
     PortForwardStop { project: String, name: String },
 

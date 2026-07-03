@@ -28,9 +28,12 @@ export interface DaemonState {
   snapshot: Snapshot;
   /** Retained per-task ACP stream (bounded), keyed by task id. */
   sessionUpdates: Record<string, SessionUpdate[]>;
+  /** Service log lines keyed by "project/service", bounded to MAX_SERVICE_LOGS. */
+  serviceLogs: Record<string, string[]>;
 }
 
 const MAX_SESSION_UPDATES = 500;
+const MAX_SERVICE_LOGS = 1000;
 
 type Listener = () => void;
 
@@ -47,6 +50,7 @@ class DaemonClient {
     connection: "disconnected",
     snapshot: EMPTY_SNAPSHOT,
     sessionUpdates: {},
+    serviceLogs: {},
   };
 
   // ── external store interface (for useSyncExternalStore) ──
@@ -306,9 +310,14 @@ class DaemonClient {
         });
         break;
       }
-      // Log lines and terminal frames are high-frequency; detail views will
-      // maintain their own bounded buffers once implemented.
-      case "service.log":
+      case "service.log": {
+        const key = `${ev.data.project}/${ev.data.service}`;
+        const existing = this.state.serviceLogs[key] ?? [];
+        const trimmed = [...existing, ev.data.line].slice(-MAX_SERVICE_LOGS);
+        this.setState({ serviceLogs: { ...this.state.serviceLogs, [key]: trimmed } });
+        break;
+      }
+      // High-frequency events with no retained state yet.
       case "portforward.log":
       case "terminal.screen":
       case "terminal.exited":

@@ -181,13 +181,23 @@ impl ServiceManager {
             });
         }
 
-        // Stream stderr
+        // Stream stderr — also check readyPattern here since many dev servers
+        // (bun, vite, etc.) write their "ready" message to stderr, not stdout.
         if let Some(stderr) = stderr {
             let tx = self.event_tx.clone();
             let k = key.clone();
+            let pattern = ready_pattern.map(|s| s.to_string());
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    if let Some(ref pat) = pattern {
+                        if line.contains(pat.as_str()) {
+                            let _ = tx.send(ServiceEvent::StatusChange {
+                                key: k.clone(),
+                                status: ServiceStatus::Running,
+                            });
+                        }
+                    }
                     let _ = tx.send(ServiceEvent::Log {
                         key: k.clone(),
                         line: format!("[err] {line}"),

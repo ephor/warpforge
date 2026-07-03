@@ -75,7 +75,9 @@ pub fn sorted_services(config: &WorkspaceConfig) -> Vec<String> {
                 visit(dep, config, visited, result, depth + 1);
             }
         }
-        result.push(name.to_string());
+        if config.services.contains_key(name) {
+            result.push(name.to_string());
+        }
     }
 
     let mut names: Vec<String> = config.services.keys().cloned().collect();

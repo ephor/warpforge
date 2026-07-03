@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "dev.warpforge.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "sh -c 'cargo build --manifest-path ../Cargo.toml & npm run dev'",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "cargo build --release --manifest-path ../../Cargo.toml && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
