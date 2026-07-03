@@ -6,18 +6,19 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 
-use crate::agent::{AgentManager, AgentStatus};
+use crate::agent::AgentStatus;
 use crate::app::{AppState, InputMode, ProjectFocus, SpawnOption};
-use crate::portforward::{PfStatus, PortForwardManager};
-use crate::service::{ServiceManager, ServiceStatus};
-use crate::tui::terminal::TerminalPane;
+use crate::client::{AgentProjection, PfProjection, ServiceProjection};
+use crate::portforward::PfStatus;
+use crate::service::ServiceStatus;
+use crate::tui::wire_terminal::WireTerminalPane;
 
 pub fn render(
     frame: &mut Frame,
     state: &AppState,
-    agents: &AgentManager,
-    services: &ServiceManager,
-    portforwards: &PortForwardManager,
+    agents: &AgentProjection,
+    services: &ServiceProjection,
+    portforwards: &PfProjection,
     project_name: &str,
 ) {
     let area = frame.area();
@@ -157,9 +158,9 @@ pub fn render(
 fn render_sidebar(
     frame: &mut Frame,
     state: &AppState,
-    agents: &AgentManager,
-    services: &ServiceManager,
-    portforwards: &PortForwardManager,
+    agents: &AgentProjection,
+    services: &ServiceProjection,
+    portforwards: &PfProjection,
     project_name: &str,
     focus: &ProjectFocus,
     area: ratatui::layout::Rect,
@@ -311,7 +312,7 @@ fn render_sidebar(
 fn render_agent_pane(
     frame: &mut Frame,
     state: &AppState,
-    agents: &AgentManager,
+    agents: &AgentProjection,
     project_name: &str,
     area: ratatui::layout::Rect,
 ) {
@@ -367,8 +368,13 @@ fn render_agent_pane(
     frame.render_widget(block, content_area);
 
     if let Some(agent) = agent_list.get(active_tab) {
-        let parser = agent.screen.lock().unwrap();
-        frame.render_widget(TerminalPane::new(parser.screen()), inner);
+        match &agent.screen {
+            Some(screen) => frame.render_widget(WireTerminalPane::new(screen), inner),
+            None => frame.render_widget(
+                Paragraph::new(Span::styled("  connecting…", Style::default().fg(Color::DarkGray))),
+                inner,
+            ),
+        }
     }
 }
 
@@ -377,7 +383,7 @@ fn render_agent_pane(
 fn render_log_tail(
     frame: &mut Frame,
     _state: &AppState,
-    services: &ServiceManager,
+    services: &ServiceProjection,
     project_name: &str,
     area: ratatui::layout::Rect,
 ) {
@@ -422,7 +428,7 @@ fn render_log_tail(
 fn render_log_detail(
     frame: &mut Frame,
     state: &AppState,
-    services: &ServiceManager,
+    services: &ServiceProjection,
     project_name: &str,
     area: ratatui::layout::Rect,
 ) {
@@ -493,7 +499,7 @@ fn render_log_detail(
 fn render_pf_tail(
     frame: &mut Frame,
     state: &AppState,
-    portforwards: &PortForwardManager,
+    portforwards: &PfProjection,
     project_name: &str,
     area: ratatui::layout::Rect,
 ) {
@@ -536,7 +542,7 @@ fn render_pf_tail(
 fn render_pf_detail(
     frame: &mut Frame,
     state: &AppState,
-    portforwards: &PortForwardManager,
+    portforwards: &PfProjection,
     project_name: &str,
     area: ratatui::layout::Rect,
 ) {

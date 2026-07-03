@@ -196,6 +196,7 @@ impl PortForwardManager {
         }
     }
 
+    #[allow(dead_code)] // retained for symmetry with the other managers
     pub fn list_for_project(&self, project_name: &str) -> Vec<&ManagedPortForward> {
         let prefix = format!("{project_name}/");
         let mut list: Vec<&ManagedPortForward> = self.forwards.iter()

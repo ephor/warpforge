@@ -222,8 +222,44 @@ async fn dispatch(
             handle.session_permission(&task_id, &request_id, outcome).await;
             Ok(json!(null))
         }
-        // Not yet in this build: terminal.*, project.*, portforward.stop,
-        // task.archive. They land with Stage 3 / follow-ups.
+        PortForwardStop { project, name } => {
+            handle.send(Command::StopPortForward { project, name }).await;
+            Ok(json!(null))
+        }
+        // ── Legacy PTY terminals (the TUI's live agent panes) ──
+        TerminalSpawn { project, command } => {
+            let id = handle
+                .spawn_agent(&project, &command, "", 120, 40)
+                .await
+                .map_err(|e| wire::RpcError {
+                    code: wire::ErrorCode::AgentUnavailable,
+                    message: e.to_string(),
+                })?;
+            Ok(json!({ "terminalId": id }))
+        }
+        TerminalInput { terminal_id, data_b64 } => {
+            use base64::Engine;
+            match base64::engine::general_purpose::STANDARD.decode(&data_b64) {
+                Ok(data) => {
+                    handle.send(Command::WriteAgent { id: terminal_id, data }).await;
+                    Ok(json!(null))
+                }
+                Err(e) => Err(wire::RpcError {
+                    code: wire::ErrorCode::InvalidRequest,
+                    message: format!("bad base64: {e}"),
+                }),
+            }
+        }
+        TerminalResize { terminal_id, cols, rows } => {
+            handle.send(Command::ResizeAgent { id: terminal_id, cols, rows }).await;
+            Ok(json!(null))
+        }
+        TerminalKill { terminal_id } => {
+            handle.send(Command::KillAgent { id: terminal_id }).await;
+            Ok(json!(null))
+        }
+        // Not yet in this build: project.* (use `wf add` + restart) and
+        // task.archive. Follow-ups.
         _ => Err(wire::RpcError {
             code: wire::ErrorCode::NotFound,
             message: "method not implemented in this build".to_string(),
@@ -327,5 +363,59 @@ mod tests {
         }
         assert!(saw_created, "expected a task.created event");
         assert!(saw_response, "expected a response with a taskId");
+    }
+
+    #[tokio::test]
+    async fn spawn_terminal_streams_screen_over_websocket() {
+        let projects = vec![ProjectEntry {
+            name: "demo".into(),
+            path: ".".into(),
+            added_at: "0".into(),
+        }];
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let handle = Daemon::spawn(projects, store);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(run(listener, handle.clone(), String::new()));
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}")).await.unwrap();
+        ws.send(Message::Text(
+            json!({ "id": 1, "method": "state.subscribe", "params": {} }).to_string().into(),
+        ))
+        .await
+        .unwrap();
+
+        // Spawn a PTY that prints a marker.
+        ws.send(Message::Text(
+            json!({
+                "id": 2, "method": "terminal.spawn",
+                "params": { "project": "demo", "command": "printf WARPMARK; sleep 2" }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+
+        // Expect a terminal.screen event whose rows contain the marker.
+        let mut saw_marker = false;
+        for _ in 0..40 {
+            let msg = match timeout(Duration::from_secs(3), ws.next()).await {
+                Ok(Some(Ok(m))) => m,
+                _ => break,
+            };
+            if let Message::Text(t) = msg {
+                let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+                if v.get("event").and_then(|e| e.as_str()) == Some("terminal.screen") {
+                    let text = v["data"]["screen"].to_string();
+                    if text.contains("WARPMARK") {
+                        saw_marker = true;
+                        break;
+                    }
+                }
+            }
+        }
+        assert!(saw_marker, "expected a terminal.screen event containing the printed marker");
     }
 }

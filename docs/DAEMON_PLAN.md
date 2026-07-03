@@ -143,12 +143,9 @@ wire `Event` is a Stage-2 translation of it.
   port-forwards signal per-watcher `Notify`s and rely on `kill_on_drop`
   instead of a machine-wide `pkill`; agent status transitions moved into
   `AgentManager::apply_event`.
-- ⏳ **Remaining: TUI cutover.** The TUI still owns the managers in-process
-  (behavior identical, now with the fixes). Next increment points it at
-  `DaemonHandle` — sending commands and rendering from an event-fed projection
-  — which retires the direct `&mut` manager access. Mechanical but broad
-  (render signatures across `tui/`); verified by compile + review since the
-  TUI is inherently interactive.
+- ✅ **TUI cutover (Stage 3).** Done — the TUI no longer owns any manager; it's
+  a WebSocket client (`src/client/`) that auto-spawns the daemon, subscribes,
+  and renders from an event-fed projection. See Stage 3 below.
 
 **Stage 2 — the socket. ✅ Done (this branch).**
 `wf daemon [--dev]` runs the Stage-1 actor behind a `tokio-tungstenite` server
@@ -174,7 +171,28 @@ Deferred from this stage: persisting per-project port-range assignments
 (registry still read at daemon start) — both are follow-ups, not blockers.
 `wf` (TUI) auto-spawning the daemon lands with the TUI cutover.
 
-**Stage 3 — TUI becomes a client.**
+**Stage 3 — TUI becomes a client. ✅ Done (this branch).**
+`src/client/` is a WebSocket client: on launch the TUI calls `Client::connect`,
+which reads `~/.warpforge/daemon.json` and, if no daemon is reachable, spawns
+`wf daemon` itself and waits for it. It subscribes, maintains a local
+projection (`ClientState`) of services / port-forwards / terminals from the
+event stream, and sends commands (service start/stop, `terminal.spawn/input/
+resize/kill`) back over the socket. The daemon serializes each PTY's vt100
+screen into `TerminalScreen` events; `tui/wire_terminal.rs` renders them, so
+the TUI shows remote agent panes with no local PTY. The old in-process managers
+and vt100 renderer are gone from the TUI path; the render code reads
+manager-shaped views (`ServiceProjection` etc.) so it changed only in the types
+it reads, not its logic. On exit the TUI just restores the terminal — the
+daemon keeps running, so `wf` over SSH and the desktop app share one source of
+truth.
+
+Verified: the daemon side has WS integration tests (including a PTY terminal
+streaming its screen over the socket); and a real-PTY smoke run of `wf` showed
+it auto-spawn the daemon, connect, and render live daemon state (a project's
+`web` service) without panic. Interactive polish (typing into agent panes over
+SSH, resize edge cases) is for hands-on testing.
+
+Legacy note (superseded):
 Replace the TUI's in-process managers with a WS client speaking the protocol
 crate. Delete the in-process path. TUI over SSH now shows the same state as
 the desktop app. Terminal panes render `TerminalScreen` events.

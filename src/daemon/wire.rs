@@ -30,6 +30,57 @@ pub fn pf_status(s: &PfStatus) -> wire::PortForwardStatus {
     }
 }
 
+/// Serialize a vt100 parser's current screen into the wire form: per-row
+/// run-length styled spans, so clients render without a terminal emulator.
+pub fn terminal_screen(parser: &vt100::Parser) -> wire::TerminalScreen {
+    let screen = parser.screen();
+    let (rows, cols) = screen.size();
+    let (cur_row, cur_col) = screen.cursor_position();
+
+    let mut rows_content = Vec::with_capacity(rows as usize);
+    for r in 0..rows {
+        let mut spans: Vec<wire::StyledSpan> = Vec::new();
+        let mut run: Option<wire::StyledSpan> = None;
+        for c in 0..cols {
+            let (text, fg, bg, bold, inverse) = match screen.cell(r, c) {
+                Some(cell) => {
+                    let t = cell.contents();
+                    let t = if t.is_empty() { " ".to_string() } else { t };
+                    (t, color_str(cell.fgcolor()), color_str(cell.bgcolor()), cell.bold(), cell.inverse())
+                }
+                None => (" ".to_string(), None, None, false, false),
+            };
+            match run.as_mut() {
+                Some(s) if s.fg == fg && s.bg == bg && s.bold == bold && s.inverse == inverse => {
+                    s.text.push_str(&text);
+                }
+                _ => {
+                    if let Some(s) = run.take() {
+                        spans.push(s);
+                    }
+                    run = Some(wire::StyledSpan { text, fg, bg, bold, inverse });
+                }
+            }
+        }
+        if let Some(s) = run.take() {
+            spans.push(s);
+        }
+        rows_content.push(spans);
+    }
+
+    wire::TerminalScreen { cols, rows, cursor: (cur_row, cur_col), rows_content }
+}
+
+/// Encode a vt100 colour compactly: `None` = default, `#rrggbb` = truecolor,
+/// `i<n>` = 256-colour palette index. Clients decode the inverse.
+fn color_str(c: vt100::Color) -> Option<String> {
+    match c {
+        vt100::Color::Default => None,
+        vt100::Color::Idx(i) => Some(format!("i{i}")),
+        vt100::Color::Rgb(r, g, b) => Some(format!("#{r:02x}{g:02x}{b:02x}")),
+    }
+}
+
 pub fn tool_status(s: &str) -> wire::ToolCallStatus {
     match s {
         "pending" => wire::ToolCallStatus::Pending,
@@ -105,6 +156,15 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
             task_id: task_id.clone(),
             update: update.clone(),
         }),
-        Event::AgentSpawned { .. } | Event::AgentStatus { .. } | Event::AgentExited { .. } => None,
+        Event::TerminalScreen { terminal_id, screen } => Some(wire::Event::TerminalScreen {
+            terminal_id: terminal_id.clone(),
+            screen: screen.clone(),
+        }),
+        Event::AgentExited { id } => Some(wire::Event::TerminalExited {
+            terminal_id: id.clone(),
+            code: 0,
+        }),
+        // Internal-only: the wire conveys terminals via screen/exited events.
+        Event::AgentSpawned { .. } | Event::AgentStatus { .. } => None,
     }
 }

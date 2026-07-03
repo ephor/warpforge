@@ -53,6 +53,12 @@ pub struct Agent {
     child: Box<dyn Child + Send + Sync>,
 }
 
+impl Agent {
+    pub fn dims(&self) -> (u16, u16) {
+        (self.cols, self.rows)
+    }
+}
+
 /// Notification sent from PTY reader to UI event loop
 pub enum AgentEvent {
     Data { id: String, needs_review: bool },
@@ -248,6 +254,11 @@ impl AgentManager {
             .values()
             .filter(|a| a.project_name == project_name)
             .collect()
+    }
+
+    /// Every agent across projects (for snapshot building).
+    pub fn all(&self) -> impl Iterator<Item = &Agent> {
+        self.agents.values()
     }
 
     pub fn kill(&mut self, id: &str) {
