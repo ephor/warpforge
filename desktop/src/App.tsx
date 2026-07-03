@@ -23,12 +23,14 @@ export default function App() {
   const [view, setView] = useState<View>("control");
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   const [newTaskProject, setNewTaskProject] = useState<string | null>(null);
+  const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
 
   const openTask = state.snapshot.tasks.find((t) => t.id === openTaskId) ?? null;
 
-  const startNewTask = (project?: string) => {
+  const startNewTask = (project?: string, prompt?: string) => {
     setNewTaskProject(project ?? null);
+    setNewTaskPrompt(prompt);
     setNewTaskOpen(true);
   };
 
@@ -112,6 +114,7 @@ export default function App() {
           onOpenChange={setNewTaskOpen}
           snapshot={state.snapshot}
           defaultProject={newTaskProject}
+          initialPrompt={newTaskPrompt}
         />
       </div>
     </TooltipProvider>

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import {
   Plus,
   Play,
@@ -8,6 +8,10 @@ import {
   Radio,
   FolderGit2,
   Share2,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Send,
 } from "lucide-react";
 import { daemon } from "../daemon";
 import { ServiceInfo, Snapshot } from "../protocol";
@@ -22,7 +26,7 @@ import { cn } from "@/lib/utils";
 interface Props {
   snapshot: Snapshot;
   onOpenTask: (id: string) => void;
-  onNewTask: (project?: string) => void;
+  onNewTask: (project?: string, prompt?: string) => void;
 }
 
 /**
@@ -106,10 +110,18 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
               <Button
                 variant="outline"
                 size="sm"
+                onClick={() => void daemon.request("portforward.startAll", { project: project.name })}
+              >
+                <PlugZap className="size-4" />
+                start pfs
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => void daemon.request("service.startAll", { project: project.name })}
               >
                 <Play className="size-4" />
-                start all
+                start services
               </Button>
               <Button
                 variant="destructive"
@@ -162,39 +174,76 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
               )}
               {project.declaredServices.map((name) => {
                 const svc = services.find((s) => s.name === name);
-                return <ServiceRow key={name} project={project.name} name={name} svc={svc} />;
-              })}
-              {pfs.map((pf) => {
-                const badge = pfBadge(pf.status);
                 return (
-                  <div key={pf.name} className="flex items-center gap-3 px-3 py-2">
-                    <PlugZap className="size-4 text-muted-foreground" />
-                    <span className="w-40 truncate text-sm font-medium">{pf.name}</span>
-                    <Badge variant={badge.variant}>{badge.label}</Badge>
-                    <span className="tnum font-mono text-xs text-primary">
-                      :{pf.localPort} → {pf.remotePort}
-                    </span>
-                    <span className="truncate font-mono text-xs text-muted-foreground">
-                      {pf.namespace}/{pf.pod}
-                    </span>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="ml-auto"
-                      onClick={() =>
-                        void daemon.request("portforward.stop", {
-                          project: project.name,
-                          name: pf.name,
-                        })
-                      }
-                    >
-                      stop
-                    </Button>
-                  </div>
+                  <ServiceRow
+                    key={name}
+                    project={project.name}
+                    name={name}
+                    svc={svc}
+                    onSendToAgent={(proj, text) => onNewTask(proj, text)}
+                  />
                 );
               })}
             </div>
           </Card>
+
+          {/* Port-forwards */}
+          {pfs.length > 0 && (
+            <Card>
+              <div className="border-b px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Port Forwards
+              </div>
+              <div className="divide-y">
+                {pfs.map((pf) => {
+                  const badge = pfBadge(pf.status);
+                  const active = pf.status === "active";
+                  return (
+                    <div key={pf.name} className="flex items-center gap-3 px-3 py-2">
+                      <PlugZap className="size-4 text-muted-foreground" />
+                      <span className="w-40 truncate text-sm font-medium">{pf.name}</span>
+                      <Badge variant={badge.variant}>{badge.label}</Badge>
+                      <span className="tnum font-mono text-xs text-primary">
+                        :{pf.localPort} → {pf.remotePort}
+                      </span>
+                      <span className="truncate font-mono text-xs text-muted-foreground">
+                        {pf.namespace}/{pf.pod}
+                      </span>
+                      <div className="ml-auto flex gap-1">
+                        {!active && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7"
+                            onClick={() =>
+                              void daemon.request("portforward.start", {
+                                project: project.name,
+                                name: pf.name,
+                              })
+                            }
+                          >
+                            <Play className="size-3" />
+                          </Button>
+                        )}
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="h-7"
+                          onClick={() =>
+                            void daemon.request("portforward.stop", {
+                              project: project.name,
+                              name: pf.name,
+                            })
+                          }
+                        >
+                          <Square className="size-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
 
           {/* Tasks in this project */}
           <Card>
@@ -230,44 +279,93 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
   );
 }
 
+const EMPTY_LOGS: string[] = [];
+
 function ServiceRow({
   project,
   name,
   svc,
+  onSendToAgent,
 }: {
   project: string;
   name: string;
   svc: ServiceInfo | undefined;
+  onSendToAgent: (project: string, text: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const logs = useSyncExternalStore(
+    daemon.subscribe,
+    () => daemon.getState().serviceLogs[`${project}/${name}`] ?? EMPTY_LOGS,
+  );
+
   const badge = serviceBadge(svc?.status ?? "stopped");
+  const logText = logs.join("\n");
+
   return (
-    <div className="flex items-center gap-3 px-3 py-2">
-      <span className="w-40 truncate text-sm font-medium">{name}</span>
-      <Badge variant={badge.variant}>{badge.label}</Badge>
-      <span className="tnum w-16 font-mono text-xs text-primary">
-        {svc && svc.allocatedPort > 0 ? `:${svc.allocatedPort}` : ""}
-      </span>
-      <span className="flex-1 truncate font-mono text-xs text-muted-foreground">
-        {svc?.command ?? ""}
-      </span>
-      <div className="ml-auto flex gap-1">
-        <Button
-          variant="outline"
-          size="sm"
-          className="h-7"
-          onClick={() => void daemon.request("service.restart", { project, service: name })}
-        >
-          <RotateCw className="size-3" />
-        </Button>
-        <Button
-          variant="destructive"
-          size="sm"
-          className="h-7"
-          onClick={() => void daemon.request("service.stop", { project, service: name })}
-        >
-          <Square className="size-3" />
-        </Button>
+    <div>
+      <div
+        className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-secondary/30"
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? (
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <span className="w-36 truncate text-sm font-medium">{name}</span>
+        <Badge variant={badge.variant}>{badge.label}</Badge>
+        <span className="tnum w-16 font-mono text-xs text-primary">
+          {svc && svc.allocatedPort > 0 ? `:${svc.allocatedPort}` : ""}
+        </span>
+        <span className="flex-1 truncate font-mono text-xs text-muted-foreground">
+          {svc?.command ?? ""}
+        </span>
+        <div className="ml-auto flex gap-1" onClick={(e) => e.stopPropagation()}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7"
+            onClick={() => void daemon.request("service.restart", { project, service: name })}
+          >
+            <RotateCw className="size-3" />
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            className="h-7"
+            onClick={() => void daemon.request("service.stop", { project, service: name })}
+          >
+            <Square className="size-3" />
+          </Button>
+        </div>
       </div>
+
+      {open && (
+        <div className="border-t bg-black/40 px-3 pb-3 pt-2">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">{logs.length} lines</span>
+            <button
+              className="ml-auto flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
+              onClick={() => void navigator.clipboard.writeText(logText)}
+            >
+              <Copy className="size-3" /> copy
+            </button>
+            <button
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
+              onClick={() =>
+                onSendToAgent(project, `Logs for service "${name}":\n\`\`\`\n${logText}\n\`\`\``)
+              }
+            >
+              <Send className="size-3" /> send to agent
+            </button>
+          </div>
+          <ScrollArea className="h-48">
+            <pre className="font-mono text-xs leading-relaxed text-green-400 whitespace-pre-wrap break-all">
+              {logs.length === 0 ? "no logs yet" : logText}
+            </pre>
+          </ScrollArea>
+        </div>
+      )}
     </div>
   );
 }

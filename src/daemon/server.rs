@@ -55,6 +55,22 @@ pub async fn serve(handle: DaemonHandle, dev: bool) -> Result<()> {
     let token = if dev { String::new() } else { Uuid::new_v4().to_string() };
     write_endpoint(addr, &token)?;
     eprintln!("warpforge daemon listening on ws://{addr}");
+
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate())?;
+        tokio::select! {
+            r = run(listener, handle.clone(), token) => r,
+            _ = sigterm.recv() => {
+                eprintln!("warpforge daemon: SIGTERM — stopping services");
+                handle.shutdown().await;
+                std::fs::remove_file(daemon_json_path()).ok();
+                Ok(())
+            }
+        }
+    }
+    #[cfg(not(unix))]
     run(listener, handle, token).await
 }
 
@@ -161,6 +177,10 @@ async fn dispatch(
     use wire::Method::*;
     match method {
         StateSubscribe { .. } => Ok(json!(null)), // handled by caller
+        ServiceLogs { project, service, after, limit } => {
+            let lines = handle.service_logs(&project, &service, after, limit).await;
+            Ok(json!({ "lines": lines }))
+        }
         ServiceStart { project, service } => {
             handle.send(Command::StartService { project, service }).await;
             Ok(json!(null))
@@ -174,8 +194,7 @@ async fn dispatch(
             Ok(json!(null))
         }
         ServiceStartAll { project } => {
-            // Opening a project starts its declared services + port-forwards.
-            handle.send(Command::OpenProject { name: project }).await;
+            handle.send(Command::StartAllServices { project }).await;
             Ok(json!(null))
         }
         ServiceStopAll { project } => {
@@ -183,7 +202,11 @@ async fn dispatch(
             Ok(json!(null))
         }
         PortForwardStartAll { project } => {
-            handle.send(Command::OpenProject { name: project }).await;
+            handle.send(Command::StartAllPortForwards { project }).await;
+            Ok(json!(null))
+        }
+        PortForwardStart { project, name } => {
+            handle.send(Command::StartPortForward { project, name }).await;
             Ok(json!(null))
         }
         TaskCreate { project, prompt, agent, tags, include_runtime_context } => {

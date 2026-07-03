@@ -26,12 +26,13 @@ interface Props {
   onOpenChange: (v: boolean) => void;
   snapshot: Snapshot;
   defaultProject: string | null;
+  initialPrompt?: string;
 }
 
-export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultProject }: Props) {
+export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultProject, initialPrompt }: Props) {
   const [project, setProject] = useState(defaultProject ?? snapshot.projects[0]?.name ?? "");
   const [agent, setAgent] = useState("");
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPrompt] = useState(initialPrompt ?? "");
   const [tags, setTags] = useState("");
   const [shareContext, setShareContext] = useState(true);
 
@@ -44,11 +45,11 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
   useEffect(() => {
     if (open) {
       setProject(defaultProject ?? snapshot.projects[0]?.name ?? "");
-      setPrompt("");
+      setPrompt(initialPrompt ?? "");
       setTags("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, defaultProject]);
+  }, [open, defaultProject, initialPrompt]);
 
   useEffect(() => {
     setAgent(agentOptions[0] ?? "claude");
