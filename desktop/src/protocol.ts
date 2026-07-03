@@ -143,6 +143,19 @@ export interface TaskInfo {
   blockedReason: string | null;
 }
 
+export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";
+
+export interface PlanEntry {
+  content: string;
+  status: string; // "pending" | "in_progress" | "completed"
+  priority?: string;
+}
+
+export interface CommandInfo {
+  name: string;
+  description: string;
+}
+
 export type SessionUpdate =
   | { kind: "user_message"; text: string }
   | { kind: "agent_text"; text: string }
@@ -151,7 +164,9 @@ export type SessionUpdate =
       kind: "tool_call";
       tool_call_id: string;
       title: string;
-      status: "pending" | "in_progress" | "completed" | "failed";
+      status: ToolCallStatus;
+      tool_kind: string;
+      content?: string;
     }
   | { kind: "file_edit"; path: string }
   | {
@@ -160,6 +175,8 @@ export type SessionUpdate =
       title: string;
       options: string[];
     }
+  | { kind: "plan"; entries: PlanEntry[] }
+  | { kind: "available_commands"; commands: CommandInfo[] }
   | { kind: "turn_ended"; stop_reason: string };
 
 // ── Diff ────────────────────────────────────────────────────────────────────

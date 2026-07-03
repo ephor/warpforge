@@ -360,6 +360,12 @@ pub enum SessionUpdate {
         tool_call_id: String,
         title: String,
         status: ToolCallStatus,
+        /// ACP tool kind: read/edit/delete/move/search/execute/think/fetch/other.
+        #[serde(default)]
+        tool_kind: String,
+        /// Rendered tool output/content, if the agent included any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
     },
     FileEdit { path: String },
     PermissionRequest {
@@ -367,7 +373,29 @@ pub enum SessionUpdate {
         title: String,
         options: Vec<String>,
     },
+    /// The agent's plan / todo list (ACP `plan` update).
+    Plan { entries: Vec<PlanEntry> },
+    /// Slash-commands the agent exposes (ACP `available_commands_update`).
+    AvailableCommands { commands: Vec<CommandInfo> },
     TurnEnded { stop_reason: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanEntry {
+    pub content: String,
+    /// "pending" | "in_progress" | "completed".
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandInfo {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

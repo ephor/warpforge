@@ -197,30 +197,58 @@ const snapshot: Snapshot = {
 
 const sessionUpdates: Record<string, SessionUpdate[]> = {
   t1: [
-    { kind: "agent_text", text: "Starting with the onboarding layout — moving pages/onboarding/*.tsx under app/onboarding." },
-    { kind: "tool_call", tool_call_id: "c1", title: "Read src/pages/onboarding/index.tsx", status: "completed" },
+    {
+      kind: "available_commands",
+      commands: [
+        { name: "test", description: "Run the test suite" },
+        { name: "commit", description: "Commit staged changes" },
+        { name: "review", description: "Summarize the diff for review" },
+        { name: "compact", description: "Compact the conversation" },
+      ],
+    },
+    {
+      kind: "agent_text",
+      text: "Here's the plan. I'll move `pages/onboarding/*` under the **app router** and fix the hydration warning that comes from calling `Date.now()` during render.",
+    },
+    {
+      kind: "plan",
+      entries: [
+        { content: "Move onboarding pages under app/onboarding", status: "completed" },
+        { content: "Fix Date.now() hydration warning", status: "in_progress" },
+        { content: "Update unit tests", status: "pending" },
+      ],
+    },
+    { kind: "tool_call", tool_call_id: "c1", title: "Read src/pages/onboarding/index.tsx", status: "completed", tool_kind: "read" },
     { kind: "file_edit", path: "src/app/onboarding/page.tsx" },
     { kind: "file_edit", path: "src/app/onboarding/layout.tsx" },
-    { kind: "tool_call", tool_call_id: "c2", title: "Run `bun run typecheck`", status: "in_progress" },
+    {
+      kind: "tool_call",
+      tool_call_id: "c2",
+      title: "Run `bun run typecheck`",
+      status: "completed",
+      tool_kind: "execute",
+      content: "$ bun run typecheck\n✓ no type errors (1,204 files) in 3.1s",
+    },
+    { kind: "agent_text", text: "Typecheck is green. Moving the header's `Date.now()` into a client component now." },
   ],
   t2: [
     { kind: "agent_thought", text: "Sliding window fits better than token bucket here — auth bursts are legitimate." },
-    { kind: "tool_call", tool_call_id: "c3", title: "Edit src/middleware/ratelimit.ts", status: "completed" },
+    { kind: "tool_call", tool_call_id: "c3", title: "Edit src/middleware/ratelimit.ts", status: "completed", tool_kind: "edit" },
     { kind: "file_edit", path: "src/middleware/ratelimit.ts" },
     { kind: "permission_request", request_id: "p1", title: "Run `bun test src/middleware`?", options: ["allow", "allow_always", "deny"] },
   ],
   t3: [
-    { kind: "tool_call", tool_call_id: "c4", title: "Run `bun run e2e --filter login` (3× green)", status: "completed" },
+    { kind: "tool_call", tool_call_id: "c4", title: "Run `bun run e2e --filter login` (3× green)", status: "completed", tool_kind: "execute" },
     { kind: "file_edit", path: "e2e/login.spec.ts" },
     { kind: "file_edit", path: "e2e/helpers/session.ts" },
     { kind: "turn_ended", stop_reason: "end_turn" },
   ],
   t4: [
-    { kind: "agent_text", text: "Moving agent status transitions out of app.rs into AgentManager." },
-    { kind: "tool_call", tool_call_id: "c5", title: "Edit src/daemon/actor.rs", status: "in_progress" },
+    { kind: "agent_text", text: "Moving agent status transitions out of `app.rs` into `AgentManager`." },
+    { kind: "tool_call", tool_call_id: "c5", title: "Edit src/daemon/actor.rs", status: "in_progress", tool_kind: "edit" },
   ],
   t5: [
-    { kind: "tool_call", tool_call_id: "c6", title: "Run `atlas migrate diff`", status: "failed" },
+    { kind: "tool_call", tool_call_id: "c6", title: "Run `atlas migrate diff`", status: "failed", tool_kind: "execute", content: "error: migration 0042 conflicts with existing index idx_users_email on staging" },
     { kind: "agent_text", text: "Migration 0042 conflicts with a manual index on staging. Need a decision: drop and recreate, or rename." },
   ],
 };
@@ -312,17 +340,16 @@ function diffFor(taskId: string): TaskDiff {
 /** Live ticker: keeps the wall visibly alive and stages a permission ask. */
 function startTicker() {
   const t1Feed: SessionUpdate[] = [
-    { kind: "tool_call", tool_call_id: "c2", title: "Run `bun run typecheck`", status: "completed" },
     { kind: "file_edit", path: "src/app/onboarding/steps/profile.tsx" },
-    { kind: "agent_text", text: "Hydration warning came from Date.now() in the header — moved it to a client component." },
-    { kind: "tool_call", tool_call_id: "c7", title: "Run `bun run test:unit onboarding`", status: "in_progress" },
-    { kind: "tool_call", tool_call_id: "c7", title: "Run `bun run test:unit onboarding`", status: "completed" },
+    { kind: "agent_text", text: "Hydration warning came from `Date.now()` in the header — moved it to a client component." },
+    { kind: "tool_call", tool_call_id: "c7", title: "Run `bun run test:unit onboarding`", status: "in_progress", tool_kind: "execute" },
+    { kind: "tool_call", tool_call_id: "c7", title: "Run `bun run test:unit onboarding`", status: "completed", tool_kind: "execute", content: "PASS  onboarding.test.tsx (12 tests)" },
   ];
   const t4Feed: SessionUpdate[] = [
     { kind: "file_edit", path: "src/daemon/actor.rs" },
-    { kind: "tool_call", tool_call_id: "c8", title: "Run `cargo check`", status: "in_progress" },
-    { kind: "tool_call", tool_call_id: "c8", title: "Run `cargo check`", status: "completed" },
-    { kind: "agent_text", text: "PfEvent now carries the project key — dashboard no longer drops watcher events." },
+    { kind: "tool_call", tool_call_id: "c8", title: "Run `cargo check`", status: "in_progress", tool_kind: "execute" },
+    { kind: "tool_call", tool_call_id: "c8", title: "Run `cargo check`", status: "completed", tool_kind: "execute" },
+    { kind: "agent_text", text: "`PfEvent` now carries the project key — dashboard no longer drops watcher events." },
   ];
   let i = 0;
   setInterval(() => {

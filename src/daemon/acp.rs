@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
+use warpforge_protocol as wire;
 
 /// An update from an agent session, forwarded to the daemon actor as
 /// `(task_id, AcpUpdate)`.
@@ -28,9 +29,11 @@ pub enum AcpUpdate {
     SessionStarted { session_id: String },
     AgentText(String),
     AgentThought(String),
-    ToolCall { id: String, title: String, status: String },
+    ToolCall { id: String, title: String, status: String, kind: String, content: Option<String> },
     FileEdit { path: String },
     PermissionRequest { request_id: String, title: String, options: Vec<String> },
+    Plan { entries: Vec<wire::PlanEntry> },
+    AvailableCommands { commands: Vec<wire::CommandInfo> },
     TurnEnded { stop_reason: String },
     Error(String),
 }
@@ -367,8 +370,9 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
         "tool_call" | "tool_call_update" => {
             let id = update.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("in_progress").to_string();
-            let is_edit = update.get("kind").and_then(|v| v.as_str()) == Some("edit");
-            if is_edit {
+            let kind = update.get("kind").and_then(|v| v.as_str()).unwrap_or("other").to_string();
+            // A file edit still emits a dedicated FileEdit for the diff badge…
+            if kind == "edit" {
                 if let Some(path) = edit_path(update) {
                     return Some(AcpUpdate::FileEdit { path });
                 }
@@ -378,10 +382,53 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
                 .and_then(|v| v.as_str())
                 .map(String::from)
                 .unwrap_or_else(|| id.clone());
-            Some(AcpUpdate::ToolCall { id, title, status })
+            Some(AcpUpdate::ToolCall { id, title, status, kind, content: tool_content(update) })
         }
-        _ => None, // user_message_chunk (our own echo), plan, etc.
+        "plan" => {
+            let entries = update
+                .get("entries")?
+                .as_array()?
+                .iter()
+                .map(|e| wire::PlanEntry {
+                    content: e.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    status: e.get("status").and_then(|v| v.as_str()).unwrap_or("pending").to_string(),
+                    priority: e.get("priority").and_then(|v| v.as_str()).map(String::from),
+                })
+                .collect();
+            Some(AcpUpdate::Plan { entries })
+        }
+        "available_commands_update" => {
+            let commands = update
+                .get("availableCommands")?
+                .as_array()?
+                .iter()
+                .map(|c| wire::CommandInfo {
+                    name: c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    description: c.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                })
+                .collect();
+            Some(AcpUpdate::AvailableCommands { commands })
+        }
+        _ => None, // user_message_chunk (our own echo), current_mode_update, etc.
     }
+}
+
+/// Concatenate any text output attached to a tool call (ACP ToolCallContent
+/// `{ type: "content", content: { text } }` blocks).
+fn tool_content(update: &Value) -> Option<String> {
+    let arr = update.get("content")?.as_array()?;
+    let mut out = String::new();
+    for item in arr {
+        if let Some(block) = item.get("content") {
+            if let Some(t) = content_text(block) {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&t);
+            }
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// Extract display text from an ACP content value, tolerating the shapes real

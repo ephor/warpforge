@@ -727,14 +727,22 @@ impl Daemon {
             AcpUpdate::AgentThought(text) => {
                 self.emit_session(&task_id, wire::SessionUpdate::AgentThought { text })
             }
-            AcpUpdate::ToolCall { id, title, status } => self.emit_session(
+            AcpUpdate::ToolCall { id, title, status, kind, content } => self.emit_session(
                 &task_id,
                 wire::SessionUpdate::ToolCall {
                     tool_call_id: id,
                     title,
                     status: wireconv::tool_status(&status),
+                    tool_kind: kind,
+                    content,
                 },
             ),
+            AcpUpdate::Plan { entries } => {
+                self.emit_session(&task_id, wire::SessionUpdate::Plan { entries })
+            }
+            AcpUpdate::AvailableCommands { commands } => {
+                self.emit_session(&task_id, wire::SessionUpdate::AvailableCommands { commands })
+            }
             AcpUpdate::FileEdit { path } => {
                 if let Some(task) = self.tasks.get_mut(&task_id) {
                     task.files_changed += 1;
