@@ -1,14 +1,16 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MergeView } from "@codemirror/merge";
 import { EditorState, Extension } from "@codemirror/state";
-import { EditorView, lineNumbers } from "@codemirror/view";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { javascript } from "@codemirror/lang-javascript";
 import { rust } from "@codemirror/lang-rust";
 import { json } from "@codemirror/lang-json";
 import { python } from "@codemirror/lang-python";
 import { go } from "@codemirror/lang-go";
+import { Undo2, Check } from "lucide-react";
 import { FileDoc } from "../protocol";
+import { cn } from "@/lib/utils";
 
 /** Pick a CodeMirror language extension by file extension. */
 function langFor(path: string): Extension[] {
@@ -35,11 +37,14 @@ function langFor(path: string): Extension[] {
   }
 }
 
+type SaveStatus = "clean" | "unsaved" | "saved";
+
 /**
  * Editable side-by-side review of one file: HEAD (left, read-only) vs the
  * working tree (right, editable) via CodeMirror's MergeView. Per-chunk revert
- * arrows discard a change; edits to the right pane are debounced-saved back to
- * the working tree.
+ * arrows (↩) discard an agent change; edits to the right pane auto-save (debounced)
+ * back to the working tree. ⌘S saves now; "Discard edits" restores the file to
+ * how the agent left it.
  */
 export function MergeDiff({
   doc,
@@ -51,12 +56,33 @@ export function MergeDiff({
   onSave: (content: string) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<MergeView | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
+  const original = doc.newText; // the agent's version, for "discard edits"
+  const [status, setStatus] = useState<SaveStatus>("clean");
+
+  const flushSave = () => {
+    const view = viewRef.current;
+    if (!view) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    onSaveRef.current(view.b.state.doc.toString());
+    setStatus("saved");
+  };
+
+  const discard = () => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.b.dispatch({
+      changes: { from: 0, to: view.b.state.doc.length, insert: original },
+    });
+    flushSave();
+  };
 
   useEffect(() => {
     if (!host.current) return;
+    setStatus("clean");
     const lang = langFor(doc.path);
     const common: Extension[] = [lineNumbers(), oneDark, EditorView.lineWrapping, ...lang];
 
@@ -71,11 +97,16 @@ export function MergeDiff({
         extensions: [
           ...common,
           EditorState.readOnly.of(!editable),
+          keymap.of([{ key: "Mod-s", run: () => (flushSave(), true) }]),
           EditorView.updateListener.of((u) => {
             if (!u.docChanged) return;
+            setStatus("unsaved");
             if (saveTimer.current) clearTimeout(saveTimer.current);
             const text = u.state.doc.toString();
-            saveTimer.current = setTimeout(() => onSaveRef.current(text), 600);
+            saveTimer.current = setTimeout(() => {
+              onSaveRef.current(text);
+              setStatus("saved");
+            }, 600);
           }),
         ],
       },
@@ -84,12 +115,49 @@ export function MergeDiff({
       gutter: true,
       collapseUnchanged: { margin: 3, minSize: 4 },
     });
+    viewRef.current = view;
 
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       view.destroy();
+      viewRef.current = null;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.path, doc.oldText, doc.newText, editable]);
 
-  return <div ref={host} className="cm-merge-host h-full overflow-auto text-[13px]" />;
+  return (
+    <div className="flex h-full flex-col">
+      {editable && (
+        <div className="flex items-center gap-3 border-b px-3 py-1 text-xs text-muted-foreground">
+          <span className="font-mono">{doc.path}</span>
+          <span
+            className={cn(
+              "flex items-center gap-1",
+              status === "unsaved" && "text-warn",
+              status === "saved" && "text-ok",
+            )}
+          >
+            {status === "unsaved" ? (
+              "● unsaved"
+            ) : status === "saved" ? (
+              <>
+                <Check className="size-3" /> saved
+              </>
+            ) : (
+              ""
+            )}
+          </span>
+          <button
+            onClick={discard}
+            className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground"
+            title="Restore this file to how the agent left it"
+          >
+            <Undo2 className="size-3" /> discard edits
+          </button>
+          <span className="text-[10px]">⌘S save · ↩ revert hunk</span>
+        </div>
+      )}
+      <div ref={host} className="min-h-0 flex-1 overflow-auto text-[13px]" />
+    </div>
+  );
 }
