@@ -30,3 +30,6 @@ dirs = "5"
 futures = "0.3"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
+tokio-tungstenite = "0.24"
+rusqlite = { version = "0.32", features = ["bundled"] }
+warpforge-protocol = { path = "crates/warpforge-protocol" }

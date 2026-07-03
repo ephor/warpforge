@@ -40,6 +40,14 @@ enum Commands {
     },
     /// Start the TUI (default)
     Ui,
+    /// Run the daemon: owns all state, serves the local WebSocket API for
+    /// clients (desktop app, TUI). Publishes ~/.warpforge/daemon.json.
+    Daemon {
+        /// Bind a fixed local port with no auth token, so a browser (vite dev,
+        /// no Tauri) can connect. For development only.
+        #[arg(long)]
+        dev: bool,
+    },
 }
 
 #[tokio::main]
@@ -83,6 +91,12 @@ async fn main() -> Result<()> {
         }
         Commands::Ui => {
             app::run().await?;
+        }
+        Commands::Daemon { dev } => {
+            let projects = registry::list_projects().unwrap_or_default();
+            let store = daemon::Store::open().ok();
+            let handle = daemon::Daemon::spawn(projects, store);
+            daemon::server::serve(handle, dev).await?;
         }
     }
 

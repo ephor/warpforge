@@ -150,13 +150,29 @@ wire `Event` is a Stage-2 translation of it.
   (render signatures across `tui/`); verified by compile + review since the
   TUI is inherently interactive.
 
-**Stage 2 — the socket.**
-`wf daemon` subcommand: the actor from Stage 1 plus a WebSocket server
-(`tokio-tungstenite`, no framework) on `127.0.0.1`, endpoint + random token
-written to `~/.warpforge/daemon.json` (schema: `DaemonEndpoint` in the
-protocol crate). SQLite (`rusqlite`, owned by the actor thread) for projects,
-port-range assignments, and tasks. `wf` (TUI) auto-spawns the daemon if
-`daemon.json` is stale/absent.
+**Stage 2 — the socket. ✅ Done (this branch).**
+`wf daemon [--dev]` runs the Stage-1 actor behind a `tokio-tungstenite` server
+(no framework) on `127.0.0.1`, publishing `~/.warpforge/daemon.json`
+(`DaemonEndpoint`) with a random per-start token (`--dev` uses a fixed port
+and empty token so a plain browser can connect). `state.subscribe` returns a
+full `Snapshot` then streams events; `service.*` and `task.*` methods dispatch
+to the actor. Tasks persist to SQLite (`rusqlite`, owned by the actor);
+in-flight tasks reload as `Interrupted` (no live-session resumption in v1).
+`src/daemon/{server,store,wire}.rs`.
+
+Verified end-to-end: a Rust WS integration test (`server::tests`) plus a live
+run — the React desktop build (no demo mode) connecting to `wf daemon --dev`,
+showing the real project/services, starting services (real child processes on
+allocated ports 4000/4001), creating a task, and recovering a persisted task
+as `Interrupted` across a daemon restart. Also fixed a multi-client gap found
+during that run: the daemon now broadcasts a service's status on start (so a
+client that subscribed earlier learns it exists), and the client upserts
+rather than only updating known services.
+
+Deferred from this stage: persisting per-project port-range assignments
+(still derived from registry index) and `project.add/remove` over the socket
+(registry still read at daemon start) — both are follow-ups, not blockers.
+`wf` (TUI) auto-spawning the daemon lands with the TUI cutover.
 
 **Stage 3 — TUI becomes a client.**
 Replace the TUI's in-process managers with a WS client speaking the protocol
