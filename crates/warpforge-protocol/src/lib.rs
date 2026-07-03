@@ -155,6 +155,13 @@ pub enum Method {
         hunk_index: u32,
         resolution: HunkResolution,
     },
+    /// Full old (HEAD) + new (working-tree) contents of one file — powers the
+    /// editable side-by-side (CodeMirror merge) review.
+    #[serde(rename = "file.contents")]
+    FileContents { task_id: String, path: String },
+    /// Write new contents to a file in the task's working tree (in-review edit).
+    #[serde(rename = "file.save")]
+    FileSave { task_id: String, path: String, content: String },
 
     // ── Raw terminal agents (legacy PTY sessions, kept for the TUI) ──
     #[serde(rename = "terminal.spawn")]
