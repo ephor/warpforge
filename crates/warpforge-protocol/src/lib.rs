@@ -454,6 +454,17 @@ pub struct Hunk {
     pub resolution: Option<HunkResolution>,
 }
 
+/// Result of `file.contents`: a file's HEAD (old) and working-tree (new) text,
+/// for the editable side-by-side (CodeMirror merge) review.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDoc {
+    pub path: String,
+    pub status: FileDiffStatus,
+    pub old_text: String,
+    pub new_text: String,
+}
+
 // ─── Terminal agents (legacy PTY path) ───────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

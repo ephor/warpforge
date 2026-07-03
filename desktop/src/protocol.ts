@@ -204,6 +204,14 @@ export interface Hunk {
   resolution: HunkResolution | null;
 }
 
+/** Result of `file.contents` — a file's HEAD + working-tree text. */
+export interface FileDoc {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  oldText: string;
+  newText: string;
+}
+
 // ── Terminals ───────────────────────────────────────────────────────────────
 
 export interface TerminalInfo {

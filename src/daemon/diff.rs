@@ -56,6 +56,52 @@ pub async fn working_diff(repo: &str) -> Result<Vec<wire::FileDiff>> {
     Ok(files)
 }
 
+/// A file's old (HEAD) and new (working-tree) text, for the editable review.
+pub async fn file_doc(repo: &str, path: &str) -> Result<wire::FileDoc> {
+    if path.contains("..") {
+        bail!("refusing path with ..: {path}");
+    }
+    let show = Command::new("git")
+        .args(["-C", repo, "show", &format!("HEAD:{path}")])
+        .output()
+        .await?;
+    let in_head = show.status.success();
+    let old_text = if in_head {
+        String::from_utf8_lossy(&show.stdout).to_string()
+    } else {
+        String::new()
+    };
+
+    let full = std::path::Path::new(repo).join(path);
+    let in_tree = full.is_file();
+    let new_text = if in_tree {
+        std::fs::read_to_string(&full).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let status = match (in_head, in_tree) {
+        (true, true) => wire::FileDiffStatus::Modified,
+        (false, true) => wire::FileDiffStatus::Added,
+        (true, false) => wire::FileDiffStatus::Deleted,
+        (false, false) => wire::FileDiffStatus::Modified,
+    };
+    Ok(wire::FileDoc { path: path.to_string(), status, old_text, new_text })
+}
+
+/// Write new contents to a file in the working tree (an in-review edit).
+pub fn save_file(repo: &str, path: &str, content: &str) -> Result<()> {
+    if path.contains("..") {
+        bail!("refusing path with ..: {path}");
+    }
+    let full = std::path::Path::new(repo).join(path);
+    if let Some(dir) = full.parent() {
+        std::fs::create_dir_all(dir).ok();
+    }
+    std::fs::write(full, content)?;
+    Ok(())
+}
+
 /// Revert exactly one hunk of one file in the working tree.
 pub async fn reject_hunk(repo: &str, file: &str, hunk_index: u32) -> Result<()> {
     let files = working_diff(repo).await?;

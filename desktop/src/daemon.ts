@@ -11,6 +11,7 @@ import {
   DaemonEndpoint,
   DaemonEvent,
   EMPTY_SNAPSHOT,
+  FileDoc,
   ServerMessage,
   SessionUpdate,
   Snapshot,
@@ -62,13 +63,16 @@ class DaemonClient {
 
   // ── demo mode (no daemon; used for UI review and `?demo` dev runs) ──
   private demoDiff: ((taskId: string) => TaskDiff) | null = null;
+  private demoFileDoc: ((path: string) => FileDoc) | null = null;
 
   enableDemoMode(seed: {
     snapshot: Snapshot;
     sessionUpdates: Record<string, SessionUpdate[]>;
     diffFor: (taskId: string) => TaskDiff;
+    fileDocFor: (path: string) => FileDoc;
   }) {
     this.demoDiff = seed.diffFor;
+    this.demoFileDoc = seed.fileDocFor;
     this.setState({
       connection: "connected",
       snapshot: seed.snapshot,
@@ -137,6 +141,10 @@ class DaemonClient {
     switch (method) {
       case "diff.get":
         return Promise.resolve(this.demoDiff!(String(p.task_id)));
+      case "file.contents":
+        return Promise.resolve(this.demoFileDoc!(String(p.path)));
+      case "file.save":
+        return Promise.resolve({});
       case "session.permission": {
         const taskId = String(p.task_id);
         this.appendUpdate(taskId, {

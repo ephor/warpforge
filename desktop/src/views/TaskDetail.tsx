@@ -1,9 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Check, X, ChevronDown } from "lucide-react";
 import { daemon } from "../daemon";
-import { CommandInfo, FileDiff, HunkResolution, SessionUpdate, TaskDiff, TaskInfo } from "../protocol";
+import {
+  CommandInfo,
+  FileDiff,
+  FileDoc,
+  HunkResolution,
+  SessionUpdate,
+  TaskDiff,
+  TaskInfo,
+} from "../protocol";
 import { StreamLine } from "./MissionControl";
 import { Composer } from "../components/Composer";
+import { MergeDiff } from "../components/MergeDiff";
 import { taskBadge } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,8 +40,46 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
   const [diff, setDiff] = useState<TaskDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [localRes, setLocalRes] = useState<Record<string, HunkResolution>>({});
+  const [diffView, setDiffView] = useState<"unified" | "split">(
+    () => (localStorage.getItem("wf-diff-view") as "unified" | "split") || "split",
+  );
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [fileDoc, setFileDoc] = useState<FileDoc | null>(null);
   const streamEnd = useRef<HTMLDivElement>(null);
   const badge = taskBadge(task.status);
+  const editable = task.status !== "done";
+
+  const setView = (v: "unified" | "split") => {
+    localStorage.setItem("wf-diff-view", v);
+    setDiffView(v);
+  };
+
+  // Default the split-view selection to the first changed file.
+  useEffect(() => {
+    if (!diff) return;
+    const paths = diff.files.map((f) => f.path);
+    if (selectedFile && paths.includes(selectedFile)) return;
+    setSelectedFile(paths[0] ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diff]);
+
+  // Load the selected file's old/new text for the split editor. Deliberately
+  // NOT keyed on task.updatedAt — a save bumps that, and refetching mid-edit
+  // would clobber the editor.
+  useEffect(() => {
+    if (diffView !== "split" || !selectedFile) {
+      setFileDoc(null);
+      return;
+    }
+    let cancelled = false;
+    daemon
+      .request("file.contents", { task_id: task.id, path: selectedFile })
+      .then((d) => !cancelled && setFileDoc(d as FileDoc))
+      .catch(() => !cancelled && setFileDoc(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [diffView, selectedFile, task.id]);
 
   // Slash-menu commands = the agent's most recent available_commands update.
   const commands = useMemo<CommandInfo[]>(() => {
@@ -129,26 +176,86 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
             {diff && (
               <span className="tnum text-xs text-muted-foreground">{diff.files.length} files</span>
             )}
-          </div>
-          <ScrollArea className="flex-1">
-            <div className="p-3">
-              {diffError && <p className="text-sm text-destructive">{diffError}</p>}
-              {!diff && !diffError && (
-                <p className="text-sm text-muted-foreground">Loading diff…</p>
-              )}
-              {diff && diff.files.length === 0 && (
-                <p className="text-sm text-muted-foreground">No changes yet.</p>
-              )}
-              {diff?.files.map((file) => (
-                <FileDiffView
-                  key={file.path}
-                  file={file}
-                  localRes={localRes}
-                  onResolve={resolveHunk}
-                />
+            <div className="ml-auto flex rounded-md border p-0.5">
+              {(["unified", "split"] as const).map((v) => (
+                <button
+                  key={v}
+                  onClick={() => setView(v)}
+                  className={cn(
+                    "rounded px-2 py-0.5 text-xs capitalize transition-colors",
+                    diffView === v
+                      ? "bg-secondary text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {v}
+                </button>
               ))}
             </div>
-          </ScrollArea>
+          </div>
+
+          {diffView === "unified" ? (
+            <ScrollArea className="flex-1">
+              <div className="p-3">
+                {diffError && <p className="text-sm text-destructive">{diffError}</p>}
+                {!diff && !diffError && (
+                  <p className="text-sm text-muted-foreground">Loading diff…</p>
+                )}
+                {diff && diff.files.length === 0 && (
+                  <p className="text-sm text-muted-foreground">No changes yet.</p>
+                )}
+                {diff?.files.map((file) => (
+                  <FileDiffView
+                    key={file.path}
+                    file={file}
+                    localRes={localRes}
+                    onResolve={resolveHunk}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col">
+              {diff && diff.files.length > 0 && (
+                <div className="flex gap-1 overflow-x-auto border-b px-2 py-1.5">
+                  {diff.files.map((f) => (
+                    <button
+                      key={f.path}
+                      onClick={() => setSelectedFile(f.path)}
+                      title={f.path}
+                      className={cn(
+                        "shrink-0 rounded px-2 py-1 font-mono text-xs transition-colors",
+                        selectedFile === f.path
+                          ? "bg-secondary text-foreground"
+                          : "text-muted-foreground hover:bg-secondary/50",
+                      )}
+                    >
+                      {f.path.split("/").pop()}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="min-h-0 flex-1">
+                {diff && diff.files.length === 0 ? (
+                  <p className="p-3 text-sm text-muted-foreground">No changes yet.</p>
+                ) : fileDoc ? (
+                  <MergeDiff
+                    doc={fileDoc}
+                    editable={editable}
+                    onSave={(content) =>
+                      void daemon.request("file.save", {
+                        task_id: task.id,
+                        path: fileDoc.path,
+                        content,
+                      })
+                    }
+                  />
+                ) : (
+                  <p className="p-3 text-sm text-muted-foreground">Loading file…</p>
+                )}
+              </div>
+            </div>
+          )}
         </Card>
         </ResizablePanel>
       </ResizablePanelGroup>

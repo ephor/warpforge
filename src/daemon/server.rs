@@ -205,6 +205,20 @@ async fn dispatch(
                 .await;
             Ok(json!(null))
         }
+        FileContents { task_id, path } => match handle.file_contents(&task_id, &path).await {
+            Some(doc) => serde_json::to_value(doc).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            }),
+            None => Err(wire::RpcError {
+                code: wire::ErrorCode::NotFound,
+                message: format!("cannot read {path}"),
+            }),
+        },
+        FileSave { task_id, path, content } => {
+            handle.send(Command::SaveFile { task_id, path, content }).await;
+            Ok(json!(null))
+        }
         TaskCancel { task_id } => {
             handle.send(Command::CancelTask { id: task_id }).await;
             Ok(json!(null))

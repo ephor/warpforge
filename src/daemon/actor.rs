@@ -76,6 +76,14 @@ pub enum Command {
     CancelTask { id: String },
     /// Compute the task's working-tree diff (git).
     GetDiff { task_id: String, reply: oneshot::Sender<wire::TaskDiff> },
+    /// Old (HEAD) + new (working-tree) text of one file.
+    GetFileContents {
+        task_id: String,
+        path: String,
+        reply: oneshot::Sender<Option<wire::FileDoc>>,
+    },
+    /// Write new contents to a file in the task's working tree.
+    SaveFile { task_id: String, path: String, content: String },
     /// Accept (keep) or reject (revert) a single hunk in the working tree.
     ResolveHunk {
         task_id: String,
@@ -171,6 +179,17 @@ impl DaemonHandle {
         let (tx, rx) = oneshot::channel();
         self.send(Command::GetDiff { task_id: task_id.to_string(), reply: tx }).await;
         rx.await.unwrap_or_default()
+    }
+
+    pub async fn file_contents(&self, task_id: &str, path: &str) -> Option<wire::FileDoc> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GetFileContents {
+            task_id: task_id.to_string(),
+            path: path.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.ok().flatten()
     }
 
     pub async fn session_prompt(&self, task_id: &str, text: &str) {
@@ -524,6 +543,34 @@ impl Daemon {
                     None => Vec::new(),
                 };
                 let _ = reply.send(wire::TaskDiff { task_id, files });
+            }
+            Command::GetFileContents { task_id, path, reply } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let doc = match repo {
+                    Some(p) => super::diff::file_doc(&p, &path).await.ok(),
+                    None => None,
+                };
+                let _ = reply.send(doc);
+            }
+            Command::SaveFile { task_id, path, content } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                if let Some(p) = repo {
+                    if super::diff::save_file(&p, &path, &content).is_ok() {
+                        // Nudge clients so the diff/file list refetches.
+                        if let Some(task) = self.tasks.get_mut(&task_id) {
+                            task.updated_at = super::task::now_secs();
+                            let updated = task.clone();
+                            self.persist(&updated);
+                            self.emit(Event::TaskUpdated(updated));
+                        }
+                    }
+                }
             }
             Command::ResolveHunk { task_id, file, hunk_index, resolution } => {
                 // accept keeps the change (no-op); only reject touches the tree.
