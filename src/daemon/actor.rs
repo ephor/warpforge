@@ -26,6 +26,7 @@ use crate::portforward::{PfEvent, PfStatus, PortForwardManager};
 use crate::registry::ProjectEntry;
 use crate::service::{ServiceEvent, ServiceManager, ServiceStatus};
 
+use super::acp::{spawn_acp_session, AcpHandle, AcpUpdate};
 use super::store::Store;
 use super::task::{Task, TaskStatus};
 use super::wire as wireconv;
@@ -71,6 +72,10 @@ pub enum Command {
         reply: oneshot::Sender<String>,
     },
     CancelTask { id: String },
+    /// Send a follow-up prompt into a task's running agent session.
+    SessionPrompt { task_id: String, text: String },
+    /// Answer a permission request the agent raised.
+    SessionPermission { task_id: String, request_id: String, outcome: String },
     Shutdown,
 }
 
@@ -88,6 +93,9 @@ pub enum Event {
     AgentExited { id: String },
     TaskCreated(Task),
     TaskUpdated(Task),
+    /// Structured ACP session activity for a task (tool calls, agent text,
+    /// file edits, permission requests) — already in wire shape.
+    SessionUpdate { task_id: String, update: wire::SessionUpdate },
 }
 
 /// Cloneable handle clients use to talk to the daemon.
@@ -143,6 +151,19 @@ impl DaemonHandle {
         rx.await.unwrap_or_default()
     }
 
+    pub async fn session_prompt(&self, task_id: &str, text: &str) {
+        self.send(Command::SessionPrompt { task_id: task_id.into(), text: text.into() }).await;
+    }
+
+    pub async fn session_permission(&self, task_id: &str, request_id: &str, outcome: &str) {
+        self.send(Command::SessionPermission {
+            task_id: task_id.into(),
+            request_id: request_id.into(),
+            outcome: outcome.into(),
+        })
+        .await;
+    }
+
     pub async fn spawn_agent(
         &self,
         project: &str,
@@ -168,10 +189,14 @@ impl DaemonHandle {
 pub struct Daemon {
     projects: Vec<ProjectEntry>,
     tasks: HashMap<String, Task>,
+    /// Live agent sessions keyed by task id. One per task in v1; the map (not a
+    /// field on Task) is what keeps multi-session-per-task additive later.
+    sessions: HashMap<String, AcpHandle>,
     agents: AgentManager,
     services: ServiceManager,
     portforwards: PortForwardManager,
     event_tx: broadcast::Sender<Event>,
+    acp_tx: mpsc::UnboundedSender<(String, AcpUpdate)>,
     store: Option<Store>,
 }
 
@@ -185,6 +210,7 @@ impl Daemon {
         let (agent_tx, agent_rx) = mpsc::unbounded_channel();
         let (service_tx, service_rx) = mpsc::unbounded_channel();
         let (pf_tx, pf_rx) = mpsc::unbounded_channel();
+        let (acp_tx, acp_rx) = mpsc::unbounded_channel();
 
         let tasks = store
             .as_ref()
@@ -197,14 +223,16 @@ impl Daemon {
         let daemon = Daemon {
             projects,
             tasks,
+            sessions: HashMap::new(),
             agents: AgentManager::new(agent_tx),
             services: ServiceManager::new(service_tx),
             portforwards: PortForwardManager::new(pf_tx),
             event_tx: event_tx.clone(),
+            acp_tx,
             store,
         };
 
-        tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx));
+        tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx, acp_rx));
 
         DaemonHandle { cmd_tx, event_tx }
     }
@@ -305,6 +333,7 @@ impl Daemon {
         mut agent_rx: mpsc::UnboundedReceiver<AgentEvent>,
         mut service_rx: mpsc::UnboundedReceiver<ServiceEvent>,
         mut pf_rx: mpsc::UnboundedReceiver<PfEvent>,
+        mut acp_rx: mpsc::UnboundedReceiver<(String, AcpUpdate)>,
     ) {
         loop {
             tokio::select! {
@@ -317,6 +346,7 @@ impl Daemon {
                 Some(ev) = agent_rx.recv() => self.handle_agent_event(ev),
                 Some(ev) = service_rx.recv() => self.handle_service_event(ev),
                 Some(ev) = pf_rx.recv() => self.handle_pf_event(ev),
+                Some((task_id, update)) = acp_rx.recv() => self.handle_acp_update(task_id, update),
             }
         }
 
@@ -433,16 +463,34 @@ impl Daemon {
                 self.tasks.insert(id.clone(), task.clone());
                 self.persist(&task);
                 self.emit(Event::TaskCreated(task));
-                let _ = reply.send(id);
-                // Stage 4 will attach a real ACP session here; for now the task
-                // sits Queued until the session layer exists.
+                let _ = reply.send(id.clone());
+                self.start_session(&id, &project, &agent, &prompt);
             }
             Command::CancelTask { id } => {
+                if let Some(handle) = self.sessions.remove(&id) {
+                    handle.cancel();
+                }
                 if let Some(task) = self.tasks.get_mut(&id) {
                     task.set_status(TaskStatus::Done);
                     let updated = task.clone();
                     self.persist(&updated);
                     self.emit(Event::TaskUpdated(updated));
+                }
+            }
+            Command::SessionPrompt { task_id, text } => {
+                if let Some(handle) = self.sessions.get(&task_id) {
+                    // Echo the developer's message into the stream so every
+                    // client shows the same conversation.
+                    self.emit(Event::SessionUpdate {
+                        task_id: task_id.clone(),
+                        update: wire::SessionUpdate::UserMessage { text: text.clone() },
+                    });
+                    handle.prompt(text);
+                }
+            }
+            Command::SessionPermission { task_id, request_id, outcome } => {
+                if let Some(handle) = self.sessions.get(&task_id) {
+                    handle.answer(request_id, outcome);
                 }
             }
         }
@@ -493,6 +541,109 @@ impl Daemon {
             .await
             .ok();
         self.emit_service_status(project, service);
+    }
+
+    /// Resolve a task's `agent` to a spawnable ACP command: a named template
+    /// from the project's `.workspace.yaml` wins; otherwise the string is
+    /// treated as a raw command (the protocol allows either).
+    fn resolve_agent_command(&self, project: &str, agent: &str) -> String {
+        if let Some(path) = self.project_path(project) {
+            if let Some(config) = load_workspace_config(std::path::Path::new(&path)) {
+                if let Some(tmpl) = config.agent_templates.and_then(|m| m.get(agent).cloned()) {
+                    return tmpl.command;
+                }
+            }
+        }
+        agent.to_string()
+    }
+
+    /// Spawn an ACP agent session for a task and remember its handle.
+    fn start_session(&mut self, task_id: &str, project: &str, agent: &str, prompt: &str) {
+        let cwd = self.project_path(project).unwrap_or_else(|| ".".to_string());
+        let command = self.resolve_agent_command(project, agent);
+        match spawn_acp_session(
+            task_id.to_string(),
+            command,
+            cwd,
+            prompt.to_string(),
+            self.acp_tx.clone(),
+        ) {
+            Ok(handle) => {
+                self.sessions.insert(task_id.to_string(), handle);
+            }
+            Err(e) => {
+                if let Some(task) = self.tasks.get_mut(task_id) {
+                    task.blocked_reason = Some(format!("failed to start agent: {e}"));
+                    task.set_status(TaskStatus::Blocked);
+                    let updated = task.clone();
+                    self.persist(&updated);
+                    self.emit(Event::TaskUpdated(updated));
+                }
+            }
+        }
+    }
+
+    fn handle_acp_update(&mut self, task_id: String, update: AcpUpdate) {
+        match update {
+            AcpUpdate::SessionStarted { session_id } => {
+                if let Some(task) = self.tasks.get_mut(&task_id) {
+                    task.attach_session(session_id);
+                    let updated = task.clone();
+                    self.persist(&updated);
+                    self.emit(Event::TaskUpdated(updated));
+                }
+            }
+            AcpUpdate::AgentText(text) => self.emit_session(&task_id, wire::SessionUpdate::AgentText { text }),
+            AcpUpdate::AgentThought(text) => {
+                self.emit_session(&task_id, wire::SessionUpdate::AgentThought { text })
+            }
+            AcpUpdate::ToolCall { id, title, status } => self.emit_session(
+                &task_id,
+                wire::SessionUpdate::ToolCall {
+                    tool_call_id: id,
+                    title,
+                    status: wireconv::tool_status(&status),
+                },
+            ),
+            AcpUpdate::FileEdit { path } => {
+                if let Some(task) = self.tasks.get_mut(&task_id) {
+                    task.files_changed += 1;
+                    let updated = task.clone();
+                    self.persist(&updated);
+                    self.emit(Event::TaskUpdated(updated));
+                }
+                self.emit_session(&task_id, wire::SessionUpdate::FileEdit { path });
+            }
+            AcpUpdate::PermissionRequest { request_id, title, options } => self.emit_session(
+                &task_id,
+                wire::SessionUpdate::PermissionRequest { request_id, title, options },
+            ),
+            AcpUpdate::TurnEnded { stop_reason } => {
+                self.emit_session(&task_id, wire::SessionUpdate::TurnEnded { stop_reason });
+                // A finished turn with edits is ready for review.
+                if let Some(task) = self.tasks.get_mut(&task_id) {
+                    if task.status == TaskStatus::Running {
+                        task.set_status(TaskStatus::NeedsReview);
+                        let updated = task.clone();
+                        self.persist(&updated);
+                        self.emit(Event::TaskUpdated(updated));
+                    }
+                }
+            }
+            AcpUpdate::Error(message) => {
+                if let Some(task) = self.tasks.get_mut(&task_id) {
+                    task.blocked_reason = Some(message);
+                    task.set_status(TaskStatus::Blocked);
+                    let updated = task.clone();
+                    self.persist(&updated);
+                    self.emit(Event::TaskUpdated(updated));
+                }
+            }
+        }
+    }
+
+    fn emit_session(&self, task_id: &str, update: wire::SessionUpdate) {
+        self.emit(Event::SessionUpdate { task_id: task_id.to_string(), update });
     }
 
     /// Broadcast a service's current status. Emitted right after a start so a

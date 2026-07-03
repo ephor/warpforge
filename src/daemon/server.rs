@@ -194,8 +194,21 @@ async fn dispatch(
             handle.send(Command::CancelTask { id: task_id }).await;
             Ok(json!(null))
         }
-        // Not yet in this build: session.*, diff.*, terminal.*, project.*,
-        // portforward.stop, task.archive. They land with Stages 3–5.
+        SessionPrompt { task_id, text } => {
+            handle.session_prompt(&task_id, &text).await;
+            Ok(json!(null))
+        }
+        SessionPermission { task_id, request_id, outcome } => {
+            let outcome = match outcome {
+                wire::PermissionOutcome::Allow => "allow",
+                wire::PermissionOutcome::AllowAlways => "allow_always",
+                wire::PermissionOutcome::Deny => "deny",
+            };
+            handle.session_permission(&task_id, &request_id, outcome).await;
+            Ok(json!(null))
+        }
+        // Not yet in this build: diff.*, terminal.*, project.*,
+        // portforward.stop, task.archive. They land with Stages 3 & 5.
         _ => Err(wire::RpcError {
             code: wire::ErrorCode::NotFound,
             message: "method not implemented in this build".to_string(),

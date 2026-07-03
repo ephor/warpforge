@@ -8,6 +8,7 @@
 //! the TUI and socket consume the actor.
 #![allow(dead_code)]
 
+pub mod acp;
 pub mod actor;
 pub mod server;
 pub mod store;
@@ -80,6 +81,80 @@ mod tests {
         assert_eq!(task.session_id.as_deref(), Some("sess-xyz"));
         assert_ne!(task.session_id.as_deref(), Some(task_id.as_str()));
         assert_eq!(task.status, TaskStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn acp_session_streams_updates_and_permission_roundtrip() {
+        use warpforge_protocol as wire;
+
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(test_projects(), store);
+        let mut events = daemon.subscribe();
+
+        // Agent is a raw command (not a template): our mock ACP agent.
+        let mock = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mock-acp-agent.mjs");
+        let agent = format!("node {mock}");
+        let task_id = daemon.create_task("demo", "fix the thing", &agent, vec![]).await;
+
+        let mut saw_running = false;
+        let mut saw_agent_text = false;
+        let mut saw_file_edit = false;
+        let mut permission_request_id: Option<String> = None;
+        let mut saw_turn_ended = false;
+        let mut saw_needs_review = false;
+        let mut answered = false;
+
+        // Drive the event stream to completion of one turn.
+        for _ in 0..60 {
+            let ev = match timeout(Duration::from_secs(5), events.recv()).await {
+                Ok(Ok(ev)) => ev,
+                _ => break,
+            };
+            match ev {
+                Event::TaskUpdated(t) if t.id == task_id => {
+                    if t.status == TaskStatus::Running {
+                        saw_running = true;
+                    }
+                    if t.status == TaskStatus::NeedsReview {
+                        saw_needs_review = true;
+                    }
+                }
+                Event::SessionUpdate { task_id: tid, update } if tid == task_id => match update {
+                    wire::SessionUpdate::AgentText { .. } => saw_agent_text = true,
+                    wire::SessionUpdate::FileEdit { path } => {
+                        assert_eq!(path, "src/main.rs");
+                        saw_file_edit = true;
+                    }
+                    wire::SessionUpdate::PermissionRequest { request_id, options, .. } => {
+                        assert!(options.contains(&"allow".to_string()));
+                        permission_request_id = Some(request_id);
+                    }
+                    wire::SessionUpdate::TurnEnded { .. } => saw_turn_ended = true,
+                    _ => {}
+                },
+                _ => {}
+            }
+
+            // Once the agent asks, answer "allow" so it can finish the turn.
+            if !answered {
+                if let Some(rid) = permission_request_id.clone() {
+                    daemon.session_permission(&task_id, &rid, "allow").await;
+                    answered = true;
+                }
+            }
+
+            if saw_turn_ended && saw_needs_review {
+                break;
+            }
+        }
+
+        assert!(saw_running, "task should go Running when the session starts");
+        assert!(saw_agent_text, "should stream agent text");
+        assert!(saw_file_edit, "should report the file edit");
+        assert!(permission_request_id.is_some(), "should surface a permission request");
+        assert!(answered, "should have answered the permission");
+        assert!(saw_turn_ended, "turn should end after the permission is answered");
+        assert!(saw_needs_review, "task should land in NeedsReview after the turn");
     }
 
     #[tokio::test]

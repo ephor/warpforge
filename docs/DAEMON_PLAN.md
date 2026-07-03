@@ -179,12 +179,32 @@ Replace the TUI's in-process managers with a WS client speaking the protocol
 crate. Delete the in-process path. TUI over SSH now shows the same state as
 the desktop app. Terminal panes render `TerminalScreen` events.
 
-**Stage 4 — ACP + tasks (the new capability).**
-`AcpSessionManager` in the daemon speaking ACP as a client over child-process
-stdio (`claude-code-acp` / `codex acp` / any conforming agent). `task.create`
-persists a task row, spawns the session, streams `session.update` events to
-clients. Board lands in the desktop app (scaffold already renders it).
-Permission requests round-trip via `session.permission`.
+**Stage 4 — ACP + tasks (the new capability). ✅ Done (this branch).**
+`src/daemon/acp.rs` speaks ACP as a client over an agent's stdio
+(newline-delimited JSON-RPC 2.0): `initialize` → `session/new` →
+`session/prompt`, streaming the agent's `session/update` notifications back as
+`session.update` events. The agent's own requests are handled here —
+`fs/read_text_file`/`fs/write_text_file` directly, `session/request_permission`
+by surfacing it to the UI and replying once the human answers (ACP option
+`kind`s collapse to allow/allow_always/deny, mapping back to the chosen
+`optionId`). One agent binary is the whole abstraction — no per-agent code.
+`task.create` spawns the session; `session.prompt` steers; `session.permission`
+answers; a finished turn lands the task in NeedsReview; task state persists.
+
+Verified end-to-end: an in-process integration test against a mock ACP agent
+(`tests/fixtures/mock-acp-agent.mjs`) covering session start → agent text →
+file edit → permission request → answer → turn end → NeedsReview; and a live
+run — the React desktop on `wf daemon --dev` creating a task whose agent is
+that mock, streaming the conversation into Task Detail and surfacing the
+permission (allow/allow_always/deny) in the attention rail, over the real
+WebSocket.
+
+Still to do here: prepend `includeRuntimeContext` to the initial prompt (the
+daemon should compose live `ServiceManager` topology — "app on
+http://localhost:4001, db on :4002" — so the agent knows the app is up; the
+protocol field and UI toggle exist, the compose step doesn't yet). Real agents
+(`claude-code-acp`, `codex acp`) drop in as the `agentTemplates` command with
+no code change; only the mock was available to test against here.
 
 **Stage 5 — diff/review.**
 `diff.get` computes the task's working-tree diff (git) server-side into the
@@ -289,3 +309,16 @@ don't build anything that blocks them:
   come from `.workspace.yaml` `agentTemplates` (config = source of truth). When
   added, auto-detect should *augment* the config list, not replace it — a
   `agent.list` RPC that merges detected binaries with configured templates.
+- **In-diff editing & review comments.** The diff view is read + accept/reject
+  today. Add (a) an embedded editor so a reviewer can make a quick fix inline
+  without leaving the task, and (b) inline comments anchored to lines/hunks —
+  either as notes for the human or fed back to the agent as a follow-up
+  `session.prompt`. Editor of choice: CodeMirror 6 (light, embeddable) over a
+  full Monaco unless we need language servers. Lands on top of Stage 5.
+- **Cross-tool session history per project.** Surface *all* prior Claude Code
+  and Codex sessions for a project, not only warpforge-created tasks — read
+  the agents' own history stores (`~/.claude/projects/<hash>/*.jsonl`,
+  `~/.codex/sessions/…`) and list them per project so you can reopen/resume or
+  fork a past session into a task. A daemon-side `history.list { project }` RPC
+  that scans those stores (path/format per agent), independent of whether the
+  session was ever started from warpforge. Pairs with harness auto-detect.

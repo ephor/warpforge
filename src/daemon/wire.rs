@@ -30,6 +30,15 @@ pub fn pf_status(s: &PfStatus) -> wire::PortForwardStatus {
     }
 }
 
+pub fn tool_status(s: &str) -> wire::ToolCallStatus {
+    match s {
+        "pending" => wire::ToolCallStatus::Pending,
+        "completed" => wire::ToolCallStatus::Completed,
+        "failed" => wire::ToolCallStatus::Failed,
+        _ => wire::ToolCallStatus::InProgress,
+    }
+}
+
 pub fn task_status(s: &TaskStatus) -> wire::TaskStatus {
     match s {
         TaskStatus::Queued => wire::TaskStatus::Queued,
@@ -92,6 +101,10 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
         }),
         Event::TaskCreated(t) => Some(wire::Event::TaskCreated(task_info(t))),
         Event::TaskUpdated(t) => Some(wire::Event::TaskUpdated(task_info(t))),
+        Event::SessionUpdate { task_id, update } => Some(wire::Event::SessionUpdate {
+            task_id: task_id.clone(),
+            update: update.clone(),
+        }),
         Event::AgentSpawned { .. } | Event::AgentStatus { .. } | Event::AgentExited { .. } => None,
     }
 }
