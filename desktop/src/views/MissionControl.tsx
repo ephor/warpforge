@@ -8,9 +8,11 @@ import {
   TriangleAlert,
   Send,
   Plus,
+  ListTodo,
 } from "lucide-react";
 import { daemon, DaemonState } from "../daemon";
 import { SessionUpdate, TaskInfo } from "../protocol";
+import { Markdown } from "../components/Markdown";
 import { taskBadge, taskEdge, elapsed } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -310,33 +312,61 @@ function FocusPane({
   );
 }
 
-/** Shared renderer for one session-stream update. */
+/** Shared renderer for one session-stream update. `compact` = focus pane
+ * (plain text, dense); otherwise the full Task Detail (markdown, tool cards). */
 export function StreamLine({ update, compact }: { update: SessionUpdate; compact?: boolean }) {
   switch (update.kind) {
     case "user_message":
       return (
-        <p className={cn("rounded-md bg-primary/10 px-2 py-1 text-primary", compact && "text-xs")}>
-          › {update.text}
-        </p>
+        <div className={cn("rounded-md bg-primary/10 px-2.5 py-1.5 text-primary", compact && "text-xs")}>
+          {compact ? `› ${update.text}` : <Markdown>{update.text}</Markdown>}
+        </div>
       );
     case "agent_text":
-      return <p className={compact ? "" : "leading-relaxed"}>{update.text}</p>;
-    case "agent_thought":
-      return <p className="italic text-muted-foreground">{update.text}</p>;
-    case "tool_call":
-      return (
-        <p className="flex items-center gap-1.5 text-muted-foreground">
-          <Wrench
-            className={cn(
-              "size-3.5 shrink-0",
-              update.status === "completed" && "text-ok",
-              update.status === "failed" && "text-destructive",
-              (update.status === "in_progress" || update.status === "pending") && "text-warn",
-            )}
-          />
-          <span className="text-foreground">{update.title}</span>
-        </p>
+      return compact ? (
+        <p>{update.text}</p>
+      ) : (
+        <Markdown>{update.text}</Markdown>
       );
+    case "agent_thought":
+      return (
+        <p className="italic text-muted-foreground">{compact ? update.text : `💭 ${update.text}`}</p>
+      );
+    case "tool_call": {
+      const dot =
+        update.status === "completed"
+          ? "text-ok"
+          : update.status === "failed"
+            ? "text-destructive"
+            : "text-warn";
+      if (compact) {
+        return (
+          <p className="flex items-center gap-1.5 text-muted-foreground">
+            <Wrench className={cn("size-3.5 shrink-0", dot)} />
+            <span className="text-foreground">{update.title}</span>
+          </p>
+        );
+      }
+      return (
+        <div className="rounded-md border bg-secondary/30">
+          <div className="flex items-center gap-2 px-2.5 py-1.5 text-sm">
+            <Wrench className={cn("size-3.5 shrink-0", dot)} />
+            <span className="font-medium">{update.title}</span>
+            {update.tool_kind && update.tool_kind !== "other" && (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                {update.tool_kind}
+              </span>
+            )}
+            <span className={cn("ml-auto text-xs", dot)}>{update.status.replace("_", " ")}</span>
+          </div>
+          {update.content && (
+            <pre className="max-h-56 overflow-auto border-t px-2.5 py-2 font-mono text-xs leading-relaxed text-muted-foreground">
+              {update.content}
+            </pre>
+          )}
+        </div>
+      );
+    }
     case "file_edit":
       return (
         <p className="flex items-center gap-1.5 font-mono text-xs">
@@ -351,6 +381,47 @@ export function StreamLine({ update, compact }: { update: SessionUpdate; compact
           {update.title}
         </p>
       );
+    case "plan":
+      if (compact) {
+        const done = update.entries.filter((e) => e.status === "completed").length;
+        return (
+          <p className="flex items-center gap-1.5 text-muted-foreground">
+            <ListTodo className="size-3.5 shrink-0" />
+            plan · {done}/{update.entries.length}
+          </p>
+        );
+      }
+      return (
+        <div className="rounded-md border bg-secondary/30 p-2.5">
+          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <ListTodo className="size-3.5" /> Plan
+          </div>
+          <ul className="space-y-1 text-sm">
+            {update.entries.map((e, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <span
+                  className={cn(
+                    "mt-0.5",
+                    e.status === "completed"
+                      ? "text-ok"
+                      : e.status === "in_progress"
+                        ? "text-warn"
+                        : "text-muted-foreground",
+                  )}
+                >
+                  {e.status === "completed" ? "✓" : e.status === "in_progress" ? "◐" : "○"}
+                </span>
+                <span className={cn(e.status === "completed" && "text-muted-foreground line-through")}>
+                  {e.content}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      );
+    case "available_commands":
+      // Metadata for the composer's slash menu — not shown inline.
+      return null;
     case "turn_ended":
       return (
         <p className="text-center text-xs text-muted-foreground">

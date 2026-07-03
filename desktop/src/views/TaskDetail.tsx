@@ -1,14 +1,19 @@
-import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Send, Check, X, ChevronDown } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Check, X, ChevronDown } from "lucide-react";
 import { daemon } from "../daemon";
-import { FileDiff, HunkResolution, SessionUpdate, TaskDiff, TaskInfo } from "../protocol";
+import { CommandInfo, FileDiff, HunkResolution, SessionUpdate, TaskDiff, TaskInfo } from "../protocol";
 import { StreamLine } from "./MissionControl";
+import { Composer } from "../components/Composer";
 import { taskBadge } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Textarea } from "@/components/ui/textarea";
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from "@/components/ui/resizable";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -26,9 +31,17 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
   const [diff, setDiff] = useState<TaskDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [localRes, setLocalRes] = useState<Record<string, HunkResolution>>({});
-  const [draft, setDraft] = useState("");
   const streamEnd = useRef<HTMLDivElement>(null);
   const badge = taskBadge(task.status);
+
+  // Slash-menu commands = the agent's most recent available_commands update.
+  const commands = useMemo<CommandInfo[]>(() => {
+    for (let i = updates.length - 1; i >= 0; i--) {
+      const u = updates[i];
+      if (u.kind === "available_commands") return u.commands;
+    }
+    return [];
+  }, [updates]);
 
   useEffect(() => {
     setLocalRes({});
@@ -46,13 +59,6 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
   useEffect(() => {
     streamEnd.current?.scrollIntoView({ behavior: "smooth" });
   }, [updates.length]);
-
-  const send = () => {
-    const text = draft.trim();
-    if (!text) return;
-    void daemon.request("session.prompt", { task_id: task.id, text });
-    setDraft("");
-  };
 
   const resolveHunk = (file: string, hunkIndex: number, resolution: HunkResolution) => {
     // Optimistic: mark it now; a reject also revert-refetches via task.updated.
@@ -85,42 +91,37 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
         )}
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(340px,1fr)_1.5fr] gap-3">
+      <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1 gap-0">
         {/* ── Conversation ── */}
-        <Card className="flex min-h-0 flex-col">
-          <div className="border-b px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Conversation
-          </div>
-          <ScrollArea className="flex-1">
-            <div className="flex flex-col gap-2 p-4 text-sm">
-              {updates.length === 0 && (
-                <p className="text-muted-foreground">No session activity yet.</p>
-              )}
-              {updates.map((u, i) => (
-                <StreamLine key={i} update={u} />
-              ))}
-              <div ref={streamEnd} />
+        <ResizablePanel defaultSize={42} minSize={28}>
+          <Card className="flex h-full min-h-0 flex-col">
+            <div className="border-b px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Conversation
             </div>
-          </ScrollArea>
-          <div className="flex items-end gap-2 border-t p-2">
-            <Textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send();
-              }}
-              placeholder="Message or steer the agent…  (⌘↵ to send)"
-              className="max-h-32 min-h-[38px] flex-1 resize-none"
-              rows={1}
+            <ScrollArea className="flex-1">
+              <div className="flex flex-col gap-2.5 p-4 text-sm">
+                {updates.length === 0 && (
+                  <p className="text-muted-foreground">No session activity yet.</p>
+                )}
+                {updates.map((u, i) => (
+                  <StreamLine key={i} update={u} />
+                ))}
+                <div ref={streamEnd} />
+              </div>
+            </ScrollArea>
+            <Composer
+              commands={commands}
+              disabled={task.status === "done"}
+              onSend={(text) => void daemon.request("session.prompt", { task_id: task.id, text })}
             />
-            <Button size="icon" onClick={send} disabled={!draft.trim()}>
-              <Send className="size-4" />
-            </Button>
-          </div>
-        </Card>
+          </Card>
+        </ResizablePanel>
+
+        <ResizableHandle withHandle className="mx-2" />
 
         {/* ── Diff ── */}
-        <Card className="flex min-h-0 flex-col">
+        <ResizablePanel defaultSize={58} minSize={30}>
+        <Card className="flex h-full min-h-0 flex-col">
           <div className="flex items-center gap-2 border-b px-4 py-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Changes
@@ -149,7 +150,8 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
             </div>
           </ScrollArea>
         </Card>
-      </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   );
 }
