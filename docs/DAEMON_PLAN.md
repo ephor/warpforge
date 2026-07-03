@@ -206,11 +206,25 @@ protocol field and UI toggle exist, the compose step doesn't yet). Real agents
 (`claude-code-acp`, `codex acp`) drop in as the `agentTemplates` command with
 no code change; only the mock was available to test against here.
 
-**Stage 5 — diff/review.**
-`diff.get` computes the task's working-tree diff (git) server-side into the
-`TaskDiff` DTO; `diff.resolveHunk` applies accept (keep) / reject (revert
-hunk via reverse-apply) — Zed's agent-panel review UX is the bar. Desktop
-diff pane is already scaffolded against these two calls.
+**Stage 5 — diff/review. ✅ Done (this branch).**
+`src/daemon/diff.rs`: `diff.get` shells out to `git diff HEAD` for the task's
+project, parses the unified diff into the `TaskDiff`/`FileDiff`/`Hunk` wire
+shape (untracked files surface as whole-file additions); `diff.resolveHunk`
+with `reject` builds a one-hunk patch and `git apply -R`s it (reject of an
+added file deletes it), then bumps the task so clients refetch — `accept` is a
+no-op on the tree (the change stays; the desktop marks it optimistically).
+Non-destructive until you reject.
+
+Verified: a unit test over a real temp git repo (parse a modification's hunk,
+reject → file reverts, diff empties); and a live run — `diff.get` over the
+socket returning the parsed hunk, `diff.resolveHunk reject` reverting
+`hello.txt` via git, and the desktop rendering both a modified file
+(red/green hunk) and an untracked addition with per-hunk accept/reject.
+
+Also wired this pass: `includeRuntimeContext` — `task.create` now prepends the
+project's running-service topology ("- web → http://localhost:4101") to the
+agent's first prompt when the flag is set, composed from live `ServiceManager`
+state. This closes the Projects↔Tasks bridge end to end.
 
 Estimated churn: Stages 1–3 are moves plus the listed fixes (~the existing
 3k lines re-homed, few hundred new). Stages 4–5 are genuinely new (~1–2k).

@@ -69,9 +69,19 @@ pub enum Command {
         prompt: String,
         agent: String,
         tags: Vec<String>,
+        include_runtime_context: bool,
         reply: oneshot::Sender<String>,
     },
     CancelTask { id: String },
+    /// Compute the task's working-tree diff (git).
+    GetDiff { task_id: String, reply: oneshot::Sender<wire::TaskDiff> },
+    /// Accept (keep) or reject (revert) a single hunk in the working tree.
+    ResolveHunk {
+        task_id: String,
+        file: String,
+        hunk_index: u32,
+        resolution: wire::HunkResolution,
+    },
     /// Send a follow-up prompt into a task's running agent session.
     SessionPrompt { task_id: String, text: String },
     /// Answer a permission request the agent raised.
@@ -138,6 +148,7 @@ impl DaemonHandle {
         prompt: &str,
         agent: &str,
         tags: Vec<String>,
+        include_runtime_context: bool,
     ) -> String {
         let (tx, rx) = oneshot::channel();
         self.send(Command::CreateTask {
@@ -145,9 +156,16 @@ impl DaemonHandle {
             prompt: prompt.to_string(),
             agent: agent.to_string(),
             tags,
+            include_runtime_context,
             reply: tx,
         })
         .await;
+        rx.await.unwrap_or_default()
+    }
+
+    pub async fn diff(&self, task_id: &str) -> wire::TaskDiff {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GetDiff { task_id: task_id.to_string(), reply: tx }).await;
         rx.await.unwrap_or_default()
     }
 
@@ -457,14 +475,49 @@ impl Daemon {
                 self.agents.kill(&id);
                 self.emit(Event::AgentExited { id });
             }
-            Command::CreateTask { project, prompt, agent, tags, reply } => {
+            Command::CreateTask { project, prompt, agent, tags, include_runtime_context, reply } => {
                 let task = Task::new(&project, &prompt, &agent, tags);
                 let id = task.id.clone();
                 self.tasks.insert(id.clone(), task.clone());
                 self.persist(&task);
                 self.emit(Event::TaskCreated(task));
                 let _ = reply.send(id.clone());
-                self.start_session(&id, &project, &agent, &prompt);
+                self.start_session(&id, &project, &agent, &prompt, include_runtime_context);
+            }
+            Command::GetDiff { task_id, reply } => {
+                // Resolve the repo path (sync) before awaiting git, so no shared
+                // borrow of self is held across the await.
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let files = match repo {
+                    Some(path) => super::diff::working_diff(&path).await.unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                let _ = reply.send(wire::TaskDiff { task_id, files });
+            }
+            Command::ResolveHunk { task_id, file, hunk_index, resolution } => {
+                // accept keeps the change (no-op); only reject touches the tree.
+                if resolution == wire::HunkResolution::Reject {
+                    let repo = self
+                        .tasks
+                        .get(&task_id)
+                        .and_then(|t| self.project_path(&t.project));
+                    if let Some(path) = repo {
+                        if super::diff::reject_hunk(&path, &file, hunk_index).await.is_ok() {
+                            if let Some(task) = self.tasks.get_mut(&task_id) {
+                                task.updated_at = super::task::now_secs();
+                                if task.files_changed > 0 {
+                                    task.files_changed -= 1;
+                                }
+                                let updated = task.clone();
+                                self.persist(&updated);
+                                self.emit(Event::TaskUpdated(updated));
+                            }
+                        }
+                    }
+                }
             }
             Command::CancelTask { id } => {
                 if let Some(handle) = self.sessions.remove(&id) {
@@ -557,15 +610,51 @@ impl Daemon {
         agent.to_string()
     }
 
+    /// A context block describing the project's currently-running services and
+    /// their live URLs — prepended to the agent's first prompt so it knows the
+    /// app is already up and can hit real endpoints / run tests against it.
+    fn runtime_context(&self, project: &str) -> Option<String> {
+        let mut lines: Vec<String> = self
+            .services
+            .all()
+            .filter(|s| {
+                s.project_name == project
+                    && s.allocated_port > 0
+                    && matches!(s.status, ServiceStatus::Running | ServiceStatus::Starting)
+            })
+            .map(|s| format!("- {} → http://localhost:{}", s.name, s.allocated_port))
+            .collect();
+        if lines.is_empty() {
+            return None;
+        }
+        lines.sort();
+        Some(format!(
+            "[warpforge] These services are already running for this project — \
+             you can hit these endpoints and run tests against them:\n{}",
+            lines.join("\n")
+        ))
+    }
+
     /// Spawn an ACP agent session for a task and remember its handle.
-    fn start_session(&mut self, task_id: &str, project: &str, agent: &str, prompt: &str) {
+    fn start_session(
+        &mut self,
+        task_id: &str,
+        project: &str,
+        agent: &str,
+        prompt: &str,
+        include_runtime_context: bool,
+    ) {
         let cwd = self.project_path(project).unwrap_or_else(|| ".".to_string());
         let command = self.resolve_agent_command(project, agent);
+        let full_prompt = match include_runtime_context.then(|| self.runtime_context(project)).flatten() {
+            Some(ctx) => format!("{ctx}\n\n{prompt}"),
+            None => prompt.to_string(),
+        };
         match spawn_acp_session(
             task_id.to_string(),
             command,
             cwd,
-            prompt.to_string(),
+            full_prompt,
             self.acp_tx.clone(),
         ) {
             Ok(handle) => {

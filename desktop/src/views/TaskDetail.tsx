@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, Send, Check, X, ChevronDown } from "lucide-react";
 import { daemon } from "../daemon";
-import { FileDiff, SessionUpdate, TaskDiff, TaskInfo } from "../protocol";
+import { FileDiff, HunkResolution, SessionUpdate, TaskDiff, TaskInfo } from "../protocol";
 import { StreamLine } from "./MissionControl";
 import { taskBadge } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
@@ -25,9 +25,14 @@ interface Props {
 export default function TaskDetail({ task, updates, onClose }: Props) {
   const [diff, setDiff] = useState<TaskDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
+  const [localRes, setLocalRes] = useState<Record<string, HunkResolution>>({});
   const [draft, setDraft] = useState("");
   const streamEnd = useRef<HTMLDivElement>(null);
   const badge = taskBadge(task.status);
+
+  useEffect(() => {
+    setLocalRes({});
+  }, [task.id]);
 
   useEffect(() => {
     setDiff(null);
@@ -49,10 +54,13 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
     setDraft("");
   };
 
-  const resolveHunk = (file: string, hunkIndex: number, resolution: "accept" | "reject") =>
+  const resolveHunk = (file: string, hunkIndex: number, resolution: HunkResolution) => {
+    // Optimistic: mark it now; a reject also revert-refetches via task.updated.
+    setLocalRes((prev) => ({ ...prev, [`${file}#${hunkIndex}`]: resolution }));
     daemon
       .request("diff.resolveHunk", { task_id: task.id, file, hunk_index: hunkIndex, resolution })
       .catch((e: Error) => setDiffError(e.message));
+  };
 
   return (
     <div className="flex h-full flex-col gap-3">
@@ -131,7 +139,12 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
                 <p className="text-sm text-muted-foreground">No changes yet.</p>
               )}
               {diff?.files.map((file) => (
-                <FileDiffView key={file.path} file={file} onResolve={resolveHunk} />
+                <FileDiffView
+                  key={file.path}
+                  file={file}
+                  localRes={localRes}
+                  onResolve={resolveHunk}
+                />
               ))}
             </div>
           </ScrollArea>
@@ -143,10 +156,12 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
 
 function FileDiffView({
   file,
+  localRes,
   onResolve,
 }: {
   file: FileDiff;
-  onResolve: (file: string, hunkIndex: number, r: "accept" | "reject") => void;
+  localRes: Record<string, HunkResolution>;
+  onResolve: (file: string, hunkIndex: number, r: HunkResolution) => void;
 }) {
   const [open, setOpen] = useState(true);
   const statusColor =
@@ -167,13 +182,15 @@ function FileDiffView({
         <span>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</span>
       </button>
       {open &&
-        file.hunks.map((hunk, i) => (
+        file.hunks.map((hunk, i) => {
+          const resolution = hunk.resolution ?? localRes[`${file.path}#${i}`] ?? null;
+          return (
           <div
             key={i}
             className={cn(
               "border-t",
-              hunk.resolution === "accept" && "border-l-2 border-l-ok",
-              hunk.resolution === "reject" && "border-l-2 border-l-destructive opacity-50",
+              resolution === "accept" && "border-l-2 border-l-ok",
+              resolution === "reject" && "border-l-2 border-l-destructive opacity-50",
             )}
           >
             <div className="flex items-center justify-between bg-muted/40 px-3 py-1">
@@ -183,7 +200,7 @@ function FileDiffView({
               <div className="flex gap-1">
                 <Button
                   size="sm"
-                  variant={hunk.resolution === "accept" ? "default" : "outline"}
+                  variant={resolution === "accept" ? "default" : "outline"}
                   className="h-6"
                   onClick={() => onResolve(file.path, i, "accept")}
                 >
@@ -192,7 +209,7 @@ function FileDiffView({
                 </Button>
                 <Button
                   size="sm"
-                  variant={hunk.resolution === "reject" ? "destructive" : "outline"}
+                  variant={resolution === "reject" ? "destructive" : "outline"}
                   className="h-6"
                   onClick={() => onResolve(file.path, i, "reject")}
                 >
@@ -216,7 +233,8 @@ function FileDiffView({
               ))}
             </pre>
           </div>
-        ))}
+          );
+        })}
     </div>
   );
 }
