@@ -109,6 +109,8 @@ pub enum Command {
     SessionPrompt { task_id: String, text: String },
     /// Answer a permission request the agent raised.
     SessionPermission { task_id: String, request_id: String, outcome: String },
+    /// Detect installed ACP-capable agents (runs which/where, returns list).
+    DetectAgents { reply: oneshot::Sender<Vec<wire::DetectedAgent>> },
     /// Save agent configuration from setup wizard or settings.
     UpdateAgents { agents: Vec<wire::AgentConfig> },
     Shutdown,
@@ -239,6 +241,12 @@ impl DaemonHandle {
 
     pub async fn session_prompt(&self, task_id: &str, text: &str) {
         self.send(Command::SessionPrompt { task_id: task_id.into(), text: text.into() }).await;
+    }
+
+    pub async fn detect_agents(&self) -> Vec<wire::DetectedAgent> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::DetectAgents { reply: tx }).await;
+        rx.await.unwrap_or_default()
     }
 
     pub async fn update_agents(&self, agents: Vec<wire::AgentConfig>) {
@@ -761,6 +769,13 @@ impl Daemon {
                 if let Some(handle) = self.sessions.get(&task_id) {
                     handle.answer(request_id, outcome);
                 }
+            }
+            Command::DetectAgents { reply } => {
+                // Spawn blocking so `which` calls don't stall the actor loop.
+                tokio::task::spawn_blocking(move || {
+                    let detected = super::agents::detected_agents();
+                    let _ = reply.send(detected);
+                });
             }
             Command::UpdateAgents { agents } => {
                 if let Some(store) = &self.store {

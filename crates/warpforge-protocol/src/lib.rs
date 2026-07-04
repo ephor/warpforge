@@ -136,6 +136,9 @@ pub enum Method {
     TaskArchive { task_id: String },
 
     // ── Agent registry ──
+    /// Detect installed ACP-capable agents. Returns `{ detected: DetectedAgent[] }`.
+    #[serde(rename = "agents.detect")]
+    AgentsDetect,
     /// Save the user's agent configuration (from setup wizard or settings).
     #[serde(rename = "agents.update")]
     AgentsUpdate { agents: Vec<AgentConfig> },
