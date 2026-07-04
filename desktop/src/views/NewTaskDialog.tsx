@@ -99,7 +99,7 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col overflow-y-auto">
         <DialogHeader>
           <DialogTitle>New task</DialogTitle>
           <DialogDescription>
@@ -212,12 +212,12 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
                     key={`${s.agent}:${s.sessionId}`}
                     type="button"
                     onClick={() => resume(s)}
-                    className="flex w-full items-center gap-2 border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-secondary"
+                    className="flex w-full items-center gap-2 overflow-hidden border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-secondary"
                   >
-                    <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground">
+                    <span className="shrink-0 rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground">
                       {s.agent}
                     </span>
-                    <span className="flex-1 truncate">
+                    <span className="min-w-0 flex-1 truncate">
                       {s.title || `(untitled ${s.sessionId.slice(0, 8)})`}
                     </span>
                     <span className="shrink-0 text-xs text-muted-foreground">
