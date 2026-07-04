@@ -170,6 +170,15 @@ impl Store {
         Ok(())
     }
 
+    /// Delete a task and its session history permanently.
+    pub fn delete_task(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM session_updates WHERE task_id = ?1", rusqlite::params![id])?;
+        self.conn
+            .execute("DELETE FROM tasks WHERE id = ?1", rusqlite::params![id])?;
+        Ok(())
+    }
+
     pub fn save_session_update(&self, task_id: &str, update: &wire::SessionUpdate) -> Result<()> {
         let json = serde_json::to_string(update)?;
         self.conn.execute(

@@ -12,6 +12,7 @@ import {
   DaemonEndpoint,
   DaemonEvent,
   DetectedAgent,
+  ExternalSession,
   EMPTY_SNAPSHOT,
   FileDoc,
   ServerMessage,
@@ -209,6 +210,12 @@ class DaemonClient {
         }));
         return Promise.resolve({});
       }
+      case "task.delete": {
+        this.applyEvent({ event: "task.removed", data: { id: String(p.task_id) } });
+        return Promise.resolve({});
+      }
+      case "sessions.list":
+        return Promise.resolve({ sessions: [] });
       default:
         return Promise.resolve({});
     }
@@ -311,6 +318,14 @@ class DaemonClient {
           },
         });
         break;
+      case "task.removed": {
+        const { [ev.data.id]: _dropped, ...sessionUpdates } = this.state.sessionUpdates;
+        this.setState({
+          snapshot: { ...snap, tasks: snap.tasks.filter((t) => t.id !== ev.data.id) },
+          sessionUpdates,
+        });
+        break;
+      }
       case "session.update": {
         const { task_id, update } = ev.data;
         const existing = this.state.sessionUpdates[task_id] ?? [];
@@ -355,6 +370,33 @@ class DaemonClient {
 
   async saveAgents(agents: AgentConfig[]) {
     await this.request("agents.update", { agents });
+  }
+
+  async deleteTask(taskId: string) {
+    await this.request("task.delete", { task_id: taskId });
+  }
+
+  /** List resumable claude/codex sessions on disk for a project's cwd. */
+  async listSessions(project: string): Promise<ExternalSession[]> {
+    const result = await this.request("sessions.list", { project });
+    const sessions = (result as { sessions?: ExternalSession[] })?.sessions;
+    return Array.isArray(sessions) ? sessions : [];
+  }
+
+  /** Resume an external session as a new task; returns the new task id. */
+  async resumeTask(
+    project: string,
+    agent: string,
+    sessionId: string,
+    title: string,
+  ): Promise<string> {
+    const result = await this.request("task.resume", {
+      project,
+      agent,
+      session_id: sessionId,
+      title,
+    });
+    return (result as { taskId?: string })?.taskId ?? "";
   }
 }
 

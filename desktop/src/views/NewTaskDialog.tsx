@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { Share2 } from "lucide-react";
+import { Share2, History } from "lucide-react";
 import { daemon } from "../daemon";
-import { Snapshot } from "../protocol";
+import { ExternalSession, Snapshot } from "../protocol";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +35,7 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
   const [prompt, setPrompt] = useState(initialPrompt ?? "");
   const [tags, setTags] = useState("");
   const [shareContext, setShareContext] = useState(true);
+  const [sessions, setSessions] = useState<ExternalSession[]>([]);
 
   const projectInfo = snapshot.projects.find((p) => p.name === project);
   // Global agent registry (from setup wizard) takes priority over per-project templates.
@@ -59,6 +60,27 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
     setAgent(agentOptions[0]?.id ?? "claude");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
+
+  // Fetch resumable claude/codex sessions for the selected project.
+  useEffect(() => {
+    if (!open || !project) {
+      setSessions([]);
+      return;
+    }
+    let cancelled = false;
+    daemon
+      .listSessions(project)
+      .then((s) => !cancelled && setSessions(s))
+      .catch(() => !cancelled && setSessions([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [open, project]);
+
+  const resume = (s: ExternalSession) => {
+    void daemon.resumeTask(project, s.agent, s.sessionId, s.title);
+    onOpenChange(false);
+  };
 
   const create = () => {
     if (!prompt.trim() || !project) return;
@@ -177,6 +199,35 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
               </p>
             </div>
           </button>
+          {/* Resume an existing claude/codex session found on disk */}
+          {sessions.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <History className="size-3.5" />
+                Resume a previous session in this project
+              </div>
+              <div className="max-h-40 overflow-y-auto rounded-md border">
+                {sessions.map((s) => (
+                  <button
+                    key={`${s.agent}:${s.sessionId}`}
+                    type="button"
+                    onClick={() => resume(s)}
+                    className="flex w-full items-center gap-2 border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-secondary"
+                  >
+                    <span className="rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground">
+                      {s.agent}
+                    </span>
+                    <span className="flex-1 truncate">
+                      {s.title || `(untitled ${s.sessionId.slice(0, 8)})`}
+                    </span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {new Date(s.updatedAt * 1000).toLocaleDateString()}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <DialogFooter className="gap-2">

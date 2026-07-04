@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, X, ChevronDown } from "lucide-react";
+import { ArrowLeft, Check, X, ChevronDown, Trash2 } from "lucide-react";
 import { daemon } from "../daemon";
 import {
   CommandInfo,
@@ -136,6 +136,19 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
             cancel
           </Button>
         )}
+        <Button
+          variant="ghost"
+          size="sm"
+          title="Delete task and its history"
+          onClick={() => {
+            if (confirm("Delete this task and its session history permanently?")) {
+              void daemon.deleteTask(task.id);
+              onClose();
+            }
+          }}
+        >
+          <Trash2 className="size-4" />
+        </Button>
       </div>
 
       <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1 gap-0">
