@@ -348,6 +348,11 @@ class DaemonClient {
     this.setState({ pendingAgentSetup: null });
   }
 
+  async detectAgents(): Promise<DetectedAgent[]> {
+    const result = await this.request("agents.detect", {});
+    return result as DetectedAgent[];
+  }
+
   async saveAgents(agents: AgentConfig[]) {
     await this.request("agents.update", { agents });
   }

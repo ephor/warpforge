@@ -1,5 +1,6 @@
 import { useState, useSyncExternalStore } from "react";
-import { Anvil, LayoutGrid, KanbanSquare, FolderTree, Plus, Circle } from "lucide-react";
+import { Anvil, LayoutGrid, KanbanSquare, FolderTree, Plus, Circle, Bot } from "lucide-react";
+import { DetectedAgent } from "./protocol";
 import { daemon } from "./daemon";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ export default function App() {
   const [newTaskProject, setNewTaskProject] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [manualDetected, setManualDetected] = useState<DetectedAgent[] | null>(null);
 
   const openTask = state.snapshot.tasks.find((t) => t.id === openTaskId) ?? null;
 
@@ -69,6 +71,14 @@ export default function App() {
           </nav>
 
           <div className="ml-auto flex items-center gap-3">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void daemon.detectAgents().then(setManualDetected)}
+              title="Manage agents"
+            >
+              <Bot className="size-4" />
+            </Button>
             <Button size="sm" onClick={() => startNewTask()}>
               <Plus className="size-4" />
               New task
@@ -117,10 +127,13 @@ export default function App() {
           defaultProject={newTaskProject}
           initialPrompt={newTaskPrompt}
         />
-        {state.pendingAgentSetup && (
+        {(state.pendingAgentSetup ?? manualDetected) && (
           <AgentSetupDialog
-            detected={state.pendingAgentSetup}
-            onClose={() => daemon.dismissAgentSetup()}
+            detected={(state.pendingAgentSetup ?? manualDetected)!}
+            onClose={() => {
+              daemon.dismissAgentSetup();
+              setManualDetected(null);
+            }}
           />
         )}
       </div>
