@@ -88,6 +88,18 @@ pub enum Command {
         reply: oneshot::Sender<String>,
     },
     CancelTask { id: String },
+    /// Delete a task and its session history permanently.
+    DeleteTask { id: String },
+    /// List resumable agent sessions found on disk for a project's cwd.
+    ListSessions { project: String, reply: oneshot::Sender<Vec<wire::ExternalSession>> },
+    /// Resume an external agent session as a new task; replies with its task id.
+    ResumeTask {
+        project: String,
+        agent: String,
+        session_id: String,
+        title: String,
+        reply: oneshot::Sender<String>,
+    },
     /// Compute the task's working-tree diff (git).
     GetDiff { task_id: String, reply: oneshot::Sender<wire::TaskDiff> },
     /// Old (HEAD) + new (working-tree) text of one file.
@@ -132,6 +144,7 @@ pub enum Event {
     AgentExited { id: String },
     TaskCreated(Task),
     TaskUpdated(Task),
+    TaskRemoved { id: String },
     /// Structured ACP session activity for a task (tool calls, agent text,
     /// file edits, permission requests) — already in wire shape.
     SessionUpdate { task_id: String, update: wire::SessionUpdate },
@@ -241,6 +254,31 @@ impl DaemonHandle {
 
     pub async fn session_prompt(&self, task_id: &str, text: &str) {
         self.send(Command::SessionPrompt { task_id: task_id.into(), text: text.into() }).await;
+    }
+
+    pub async fn list_sessions(&self, project: &str) -> Vec<wire::ExternalSession> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::ListSessions { project: project.into(), reply: tx }).await;
+        rx.await.unwrap_or_default()
+    }
+
+    pub async fn resume_task(
+        &self,
+        project: &str,
+        agent: &str,
+        session_id: &str,
+        title: &str,
+    ) -> String {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::ResumeTask {
+            project: project.into(),
+            agent: agent.into(),
+            session_id: session_id.into(),
+            title: title.into(),
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_default()
     }
 
     pub async fn detect_agents(&self) -> Vec<wire::DetectedAgent> {
@@ -665,7 +703,7 @@ impl Daemon {
                 self.persist(&task);
                 self.emit(Event::TaskCreated(task));
                 let _ = reply.send(id.clone());
-                self.start_session(&id, &project, &agent, &prompt, include_runtime_context);
+                self.start_session(&id, &project, &agent, &prompt, include_runtime_context, None);
             }
             Command::GetDiff { task_id, reply } => {
                 // Resolve the repo path (sync) before awaiting git, so no shared
@@ -740,6 +778,43 @@ impl Daemon {
                     self.persist(&updated);
                     self.emit(Event::TaskUpdated(updated));
                 }
+            }
+            Command::DeleteTask { id } => {
+                if let Some(handle) = self.sessions.remove(&id) {
+                    handle.cancel();
+                }
+                if self.tasks.remove(&id).is_some() {
+                    if let Some(store) = &self.store {
+                        let _ = store.delete_task(&id);
+                    }
+                    self.emit(Event::TaskRemoved { id });
+                }
+            }
+            Command::ListSessions { project, reply } => {
+                let path = self.project_path(&project);
+                let agents = self.configured_agents.clone();
+                tokio::task::spawn_blocking(move || {
+                    let sessions = match path {
+                        Some(p) => super::sessions::external_sessions(&p, &agents),
+                        None => Vec::new(),
+                    };
+                    let _ = reply.send(sessions);
+                });
+            }
+            Command::ResumeTask { project, agent, session_id, title, reply } => {
+                let prompt = if title.is_empty() {
+                    format!("Resumed {agent} session")
+                } else {
+                    title
+                };
+                let task = Task::new(&project, &prompt, &agent, vec!["resumed".into()]);
+                let id = task.id.clone();
+                self.tasks.insert(id.clone(), task.clone());
+                self.persist(&task);
+                self.emit(Event::TaskCreated(task));
+                let _ = reply.send(id.clone());
+                // Load history only (empty prompt); user continues via session.prompt.
+                self.start_session(&id, &project, &agent, "", false, Some(session_id));
             }
             Command::SessionPrompt { task_id, text } => {
                 // Always echo the developer's message so every client shows the
@@ -911,7 +986,9 @@ impl Daemon {
         ))
     }
 
-    /// Spawn an ACP agent session for a task and remember its handle.
+    /// Spawn an ACP agent session for a task and remember its handle. When
+    /// `resume` is set, load that native session id (replays history) instead of
+    /// starting fresh.
     fn start_session(
         &mut self,
         task_id: &str,
@@ -919,6 +996,7 @@ impl Daemon {
         agent: &str,
         prompt: &str,
         include_runtime_context: bool,
+        resume: Option<String>,
     ) {
         let cwd = self.project_path(project).unwrap_or_else(|| ".".to_string());
         let command = self.resolve_agent_command(project, agent);
@@ -931,6 +1009,7 @@ impl Daemon {
             command,
             cwd,
             full_prompt,
+            resume,
             self.acp_tx.clone(),
         ) {
             Ok(handle) => {

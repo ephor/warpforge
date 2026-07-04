@@ -79,6 +79,9 @@ pub fn spawn_acp_session(
     command: String,
     cwd: String,
     initial_prompt: String,
+    // When set, resume this native session id via ACP `session/load` instead of
+    // starting a fresh `session/new`. The agent replays history as updates.
+    resume: Option<String>,
     updates: mpsc::UnboundedSender<(String, AcpUpdate)>,
 ) -> anyhow::Result<AcpHandle> {
     let mut child = Command::new("sh")
@@ -248,44 +251,81 @@ pub fn spawn_acp_session(
 
             // initialize — must reply within 15 s or we surface a clear error
             // instead of hanging in Queued forever.
-            if tokio::time::timeout(HS, rpc(&out_tx, &pending, &next_id, "initialize", json!({
+            let init = match tokio::time::timeout(HS, rpc(&out_tx, &pending, &next_id, "initialize", json!({
                 "protocolVersion": 1,
                 "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true } }
-            }))).await.is_err() {
-                let _ = updates.send((task_id.clone(), AcpUpdate::Error(
-                    "ACP handshake timed out — no 'initialize' reply in 15 s. \
-                     The agent command must be an ACP server (JSON-RPC 2.0 over stdio). \
-                     For Claude Code use: npx @agentclientprotocol/claude-agent-acp@latest --acp".into()
-                )));
-                return;
-            }
-
-            let session_id = match tokio::time::timeout(HS, rpc(&out_tx, &pending, &next_id, "session/new", json!({
-                "cwd": cwd, "mcpServers": []
             }))).await {
-                Ok(Some(v)) => v
-                    .get("result")
-                    .and_then(|r| r.get("sessionId"))
-                    .and_then(|s| s.as_str())
-                    .map(String::from)
-                    .unwrap_or_else(|| "unknown".into()),
-                Ok(None) => {
+                Ok(Some(v)) => v,
+                _ => {
                     let _ = updates.send((task_id.clone(), AcpUpdate::Error(
-                        "ACP session/new failed — agent closed the connection.".into()
+                        "ACP handshake timed out — no 'initialize' reply in 15 s. \
+                         The agent command must be an ACP server (JSON-RPC 2.0 over stdio). \
+                         For Claude Code use: npx @agentclientprotocol/claude-agent-acp@latest --acp".into()
                     )));
                     return;
                 }
-                Err(_) => {
+            };
+            let load_supported = init
+                .get("result")
+                .and_then(|r| r.get("agentCapabilities"))
+                .and_then(|c| c.get("loadSession"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            // Resume an existing session (session/load) or start a fresh one
+            // (session/new). Resume replays history back as session/update.
+            let session_id = if let Some(sid) = resume {
+                if !load_supported {
                     let _ = updates.send((task_id.clone(), AcpUpdate::Error(
-                        "ACP handshake timed out — no 'session/new' reply in 15 s.".into()
+                        "This agent does not support resuming sessions \
+                         (no ACP 'loadSession' capability). Start a new task instead.".into()
                     )));
                     return;
+                }
+                match tokio::time::timeout(HS, rpc(&out_tx, &pending, &next_id, "session/load", json!({
+                    "sessionId": sid, "cwd": cwd, "mcpServers": []
+                }))).await {
+                    Ok(Some(_)) => sid,
+                    _ => {
+                        let _ = updates.send((task_id.clone(), AcpUpdate::Error(
+                            format!("ACP session/load failed for session {sid} — the agent \
+                                     could not resume it (it may have been deleted).")
+                        )));
+                        return;
+                    }
+                }
+            } else {
+                match tokio::time::timeout(HS, rpc(&out_tx, &pending, &next_id, "session/new", json!({
+                    "cwd": cwd, "mcpServers": []
+                }))).await {
+                    Ok(Some(v)) => v
+                        .get("result")
+                        .and_then(|r| r.get("sessionId"))
+                        .and_then(|s| s.as_str())
+                        .map(String::from)
+                        .unwrap_or_else(|| "unknown".into()),
+                    Ok(None) => {
+                        let _ = updates.send((task_id.clone(), AcpUpdate::Error(
+                            "ACP session/new failed — agent closed the connection.".into()
+                        )));
+                        return;
+                    }
+                    Err(_) => {
+                        let _ = updates.send((task_id.clone(), AcpUpdate::Error(
+                            "ACP handshake timed out — no 'session/new' reply in 15 s.".into()
+                        )));
+                        return;
+                    }
                 }
             };
 
             let _ = updates.send((task_id.clone(), AcpUpdate::SessionStarted { session_id: session_id.clone() }));
 
-            send_prompt(&out_tx, &pending, &next_id, &updates, &task_id, &session_id, initial_prompt);
+            // On resume with no new instruction we only load history; the user
+            // continues via session.prompt. Otherwise send the initial prompt.
+            if !initial_prompt.is_empty() {
+                send_prompt(&out_tx, &pending, &next_id, &updates, &task_id, &session_id, initial_prompt);
+            }
 
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {

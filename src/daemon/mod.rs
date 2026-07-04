@@ -13,6 +13,7 @@ pub mod actor;
 pub mod agents;
 pub mod diff;
 pub mod server;
+pub mod sessions;
 pub mod store;
 pub mod task;
 pub mod wire;

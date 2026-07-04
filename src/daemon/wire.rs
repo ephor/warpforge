@@ -152,6 +152,7 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
         }),
         Event::TaskCreated(t) => Some(wire::Event::TaskCreated(task_info(t))),
         Event::TaskUpdated(t) => Some(wire::Event::TaskUpdated(task_info(t))),
+        Event::TaskRemoved { id } => Some(wire::Event::TaskRemoved { id: id.clone() }),
         Event::SessionUpdate { task_id, update } => Some(wire::Event::SessionUpdate {
             task_id: task_id.clone(),
             update: update.clone(),

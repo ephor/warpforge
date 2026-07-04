@@ -56,6 +56,7 @@ export type DaemonEvent =
     }
   | { event: "task.created"; data: TaskInfo }
   | { event: "task.updated"; data: TaskInfo }
+  | { event: "task.removed"; data: { id: string } }
   | { event: "session.update"; data: { task_id: string; update: SessionUpdate } }
   | { event: "agents.setup_needed"; data: { detected: DetectedAgent[] } }
   | { event: "agents.updated"; data: { agents: AgentConfig[] } }
@@ -259,6 +260,15 @@ export interface DetectedAgent {
   installed: boolean;
   defaultAcpCommand: string;
   installHint: string;
+}
+
+/** An agent session discovered on disk (claude/codex), resumable via task.resume. */
+export interface ExternalSession {
+  agent: string;
+  sessionId: string;
+  title: string;
+  updatedAt: number;
+  messageCount: number;
 }
 
 // ── Daemon discovery (~/.warpforge/daemon.json) ─────────────────────────────

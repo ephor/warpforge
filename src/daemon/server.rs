@@ -246,6 +246,18 @@ async fn dispatch(
             handle.send(Command::CancelTask { id: task_id }).await;
             Ok(json!(null))
         }
+        TaskDelete { task_id } => {
+            handle.send(Command::DeleteTask { id: task_id }).await;
+            Ok(json!(null))
+        }
+        SessionsList { project } => {
+            let sessions = handle.list_sessions(&project).await;
+            Ok(json!({ "sessions": sessions }))
+        }
+        TaskResume { project, agent, session_id, title } => {
+            let id = handle.resume_task(&project, &agent, &session_id, &title).await;
+            Ok(json!({ "taskId": id }))
+        }
         SessionPrompt { task_id, text } => {
             handle.session_prompt(&task_id, &text).await;
             Ok(json!(null))

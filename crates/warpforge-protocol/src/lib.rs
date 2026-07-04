@@ -134,6 +134,25 @@ pub enum Method {
     /// Archive a finished task off the board.
     #[serde(rename = "task.archive")]
     TaskArchive { task_id: String },
+    /// Delete a task and its persisted session history permanently.
+    #[serde(rename = "task.delete")]
+    TaskDelete { task_id: String },
+
+    // ── External agent sessions (claude/codex on-disk session stores) ──
+    /// List agent sessions found on disk for a project's working directory.
+    /// Returns `{ sessions: ExternalSession[] }`.
+    #[serde(rename = "sessions.list")]
+    SessionsList { project: String },
+    /// Resume an existing external agent session as a new warpforge task.
+    /// Returns `{ taskId }`.
+    #[serde(rename = "task.resume")]
+    TaskResume {
+        project: String,
+        agent: String,
+        session_id: String,
+        #[serde(default)]
+        title: String,
+    },
 
     // ── Agent registry ──
     /// Detect installed ACP-capable agents. Returns `{ detected: DetectedAgent[] }`.
@@ -248,6 +267,9 @@ pub enum Event {
     TaskCreated(TaskInfo),
     #[serde(rename = "task.updated")]
     TaskUpdated(TaskInfo),
+    /// A task was deleted; clients should drop it from all views.
+    #[serde(rename = "task.removed")]
+    TaskRemoved { id: String },
 
     /// Structured ACP session update for a task: tool calls, agent text,
     /// file edits, permission requests. Mirrors ACP `session/update`.
@@ -554,6 +576,23 @@ pub struct DetectedAgent {
     pub installed: bool,
     pub default_acp_command: String,
     pub install_hint: String,
+}
+
+/// An agent session discovered on disk (claude/codex native session store),
+/// resumable via `task.resume` → ACP `session/load`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalSession {
+    /// Agent id this session belongs to ("claude" | "codex").
+    pub agent: String,
+    /// The agent's native session id (uuid) — passed to ACP `session/load`.
+    pub session_id: String,
+    /// Human-readable title (first user prompt or codex thread name); may be empty.
+    pub title: String,
+    /// Unix seconds of last activity (file mtime / index timestamp).
+    pub updated_at: u64,
+    /// Rough message count (0 if unknown).
+    pub message_count: u32,
 }
 
 /// Contents of `~/.warpforge/daemon.json`, written by the daemon on startup
