@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 /** Agent/user messages rendered as GitHub-flavored markdown, tailwind-styled. */
 export function Markdown({ children }: { children: string }) {
   return (
-    <div className="space-y-1 text-sm leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+    <div className="min-w-0 space-y-1 break-words text-sm leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{

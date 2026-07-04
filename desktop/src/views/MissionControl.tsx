@@ -267,7 +267,7 @@ function FocusPane({
   onOpen: () => void;
 }) {
   const [draft, setDraft] = useState("");
-  const recent = updates.slice(-14);
+  const recent = coalesceUpdates(updates).slice(-14);
 
   const send = () => {
     const text = draft.trim();
@@ -312,6 +312,46 @@ function FocusPane({
   );
 }
 
+/**
+ * Fold a raw session stream into what should actually be shown:
+ *  - consecutive `agent_text` / `agent_thought` chunks merge into one block
+ *    (codex-acp streams sub-word deltas; otherwise each renders on its own line);
+ *  - repeated `tool_call` frames for the same `tool_call_id` collapse to a
+ *    single row updated in place (agents re-send a call many times as its status
+ *    moves in_progress → completed).
+ */
+export function coalesceUpdates(updates: SessionUpdate[]): SessionUpdate[] {
+  const out: SessionUpdate[] = [];
+  const toolAt = new Map<string, number>();
+  for (const u of updates) {
+    const prev = out[out.length - 1];
+    if (
+      (u.kind === "agent_text" || u.kind === "agent_thought") &&
+      prev?.kind === u.kind
+    ) {
+      out[out.length - 1] = { ...prev, text: prev.text + u.text };
+    } else if (u.kind === "tool_call") {
+      const at = toolAt.get(u.tool_call_id);
+      const existing = at !== undefined ? out[at] : undefined;
+      if (existing?.kind === "tool_call") {
+        out[at!] = {
+          ...existing,
+          status: u.status,
+          title: u.title || existing.title,
+          tool_kind: u.tool_kind || existing.tool_kind,
+          content: u.content ?? existing.content,
+        };
+      } else {
+        toolAt.set(u.tool_call_id, out.length);
+        out.push(u);
+      }
+    } else {
+      out.push(u);
+    }
+  }
+  return out;
+}
+
 /** Shared renderer for one session-stream update. `compact` = focus pane
  * (plain text, dense); otherwise the full Task Detail (markdown, tool cards). */
 export function StreamLine({ update, compact }: { update: SessionUpdate; compact?: boolean }) {
@@ -351,13 +391,13 @@ export function StreamLine({ update, compact }: { update: SessionUpdate; compact
         <div className="rounded-md border bg-secondary/30">
           <div className="flex items-center gap-2 px-2.5 py-1.5 text-sm">
             <Wrench className={cn("size-3.5 shrink-0", dot)} />
-            <span className="font-medium">{update.title}</span>
+            <span className="min-w-0 flex-1 truncate font-medium">{update.title}</span>
             {update.tool_kind && update.tool_kind !== "other" && (
-              <span className="rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
                 {update.tool_kind}
               </span>
             )}
-            <span className={cn("ml-auto text-xs", dot)}>{update.status.replace("_", " ")}</span>
+            <span className={cn("shrink-0 text-xs", dot)}>{update.status.replace("_", " ")}</span>
           </div>
           {update.content && (
             <pre className="max-h-56 overflow-auto border-t px-2.5 py-2 font-mono text-xs leading-relaxed text-muted-foreground">

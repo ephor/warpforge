@@ -23,6 +23,7 @@ export function Composer({
   const [value, setValue] = useState("");
   const [menuIndex, setMenuIndex] = useState(0);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const activeItem = useRef<HTMLButtonElement>(null);
 
   // Auto-size to content, capped.
   useLayoutEffect(() => {
@@ -39,6 +40,11 @@ export function Composer({
   const menuOpen = matches.length > 0;
 
   useEffect(() => setMenuIndex(0), [value]);
+
+  // Keep the highlighted command visible as you arrow through the menu.
+  useEffect(() => {
+    activeItem.current?.scrollIntoView({ block: "nearest" });
+  }, [menuIndex, menuOpen]);
 
   const send = () => {
     const text = value.trim();
@@ -79,10 +85,11 @@ export function Composer({
   return (
     <div className="relative border-t p-2">
       {menuOpen && (
-        <div className="absolute bottom-full left-2 z-20 mb-1 w-72 overflow-hidden rounded-md border bg-popover shadow-md">
+        <div className="absolute bottom-full left-2 right-2 z-20 mb-1 max-h-[50vh] overflow-y-auto rounded-md border bg-popover shadow-md">
           {matches.map((c, i) => (
             <button
               key={c.name}
+              ref={i === menuIndex ? activeItem : undefined}
               className={cn(
                 "flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left text-sm",
                 i === menuIndex ? "bg-accent" : "hover:bg-accent/50",

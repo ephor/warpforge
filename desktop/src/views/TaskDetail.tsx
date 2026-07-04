@@ -10,7 +10,7 @@ import {
   TaskDiff,
   TaskInfo,
 } from "../protocol";
-import { StreamLine } from "./MissionControl";
+import { StreamLine, coalesceUpdates } from "./MissionControl";
 import { Composer } from "../components/Composer";
 import { MergeDiff } from "../components/MergeDiff";
 import { taskBadge } from "@/lib/status";
@@ -81,6 +81,8 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
       cancelled = true;
     };
   }, [diffView, selectedFile, task.id]);
+
+  const merged = useMemo(() => coalesceUpdates(updates), [updates]);
 
   // Slash-menu commands = the agent's most recent available_commands update.
   const commands = useMemo<CommandInfo[]>(() => {
@@ -159,16 +161,16 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
       <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1 gap-0">
         {/* ── Conversation ── */}
         <ResizablePanel defaultSize={42} minSize={28}>
-          <Card className="flex h-full min-h-0 flex-col">
-            <div className="border-b px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <Card className="flex h-full min-h-0 flex-col border-0 bg-transparent shadow-none">
+            <div className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Conversation
             </div>
             <ScrollArea className="flex-1">
-              <div className="flex flex-col gap-2.5 p-4 text-sm">
-                {updates.length === 0 && (
+              <div className="flex min-w-0 flex-col gap-3 p-4 text-sm">
+                {merged.length === 0 && (
                   <p className="text-muted-foreground">No session activity yet.</p>
                 )}
-                {updates.map((u, i) => (
+                {merged.map((u, i) => (
                   <StreamLine key={i} update={u} />
                 ))}
                 <div ref={streamEnd} />
