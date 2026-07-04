@@ -60,6 +60,12 @@ impl Store {
                 update_json TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS session_updates_task_idx ON session_updates(task_id);
+            CREATE TABLE IF NOT EXISTS agents (
+                id           TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                acp_command  TEXT NOT NULL,
+                enabled      INTEGER NOT NULL DEFAULT 1
+            );
             "#,
         )?;
         Ok(Self { conn })
@@ -128,6 +134,40 @@ impl Store {
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Returns true if the agents table has at least one row.
+    pub fn agents_configured(&self) -> bool {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM agents", [], |row| row.get::<_, i64>(0))
+            .map(|n| n > 0)
+            .unwrap_or(false)
+    }
+
+    pub fn load_agents(&self) -> Result<Vec<wire::AgentConfig>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, display_name, acp_command, enabled FROM agents ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(wire::AgentConfig {
+                id: row.get(0)?,
+                display_name: row.get(1)?,
+                acp_command: row.get(2)?,
+                enabled: row.get::<_, i64>(3)? != 0,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn save_agents(&self, agents: &[wire::AgentConfig]) -> Result<()> {
+        self.conn.execute("DELETE FROM agents", [])?;
+        for a in agents {
+            self.conn.execute(
+                "INSERT INTO agents (id, display_name, acp_command, enabled) VALUES (?1,?2,?3,?4)",
+                rusqlite::params![a.id, a.display_name, a.acp_command, a.enabled as i64],
+            )?;
+        }
+        Ok(())
     }
 
     pub fn save_session_update(&self, task_id: &str, update: &wire::SessionUpdate) -> Result<()> {

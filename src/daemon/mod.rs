@@ -10,6 +10,7 @@
 
 pub mod acp;
 pub mod actor;
+pub mod agents;
 pub mod diff;
 pub mod server;
 pub mod store;

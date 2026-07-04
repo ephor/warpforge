@@ -8,8 +8,10 @@
  */
 
 import {
+  AgentConfig,
   DaemonEndpoint,
   DaemonEvent,
+  DetectedAgent,
   EMPTY_SNAPSHOT,
   FileDoc,
   ServerMessage,
@@ -30,6 +32,8 @@ export interface DaemonState {
   sessionUpdates: Record<string, SessionUpdate[]>;
   /** Service log lines keyed by "project/service", bounded to MAX_SERVICE_LOGS. */
   serviceLogs: Record<string, string[]>;
+  /** Non-null when daemon signals first-run setup is needed. */
+  pendingAgentSetup: DetectedAgent[] | null;
 }
 
 const MAX_SESSION_UPDATES = 500;
@@ -51,6 +55,7 @@ class DaemonClient {
     snapshot: EMPTY_SNAPSHOT,
     sessionUpdates: {},
     serviceLogs: {},
+    pendingAgentSetup: null,
   };
 
   // ── external store interface (for useSyncExternalStore) ──
@@ -322,12 +327,29 @@ class DaemonClient {
         this.setState({ serviceLogs: { ...this.state.serviceLogs, [key]: trimmed } });
         break;
       }
+      case "agents.setup_needed":
+        this.setState({ pendingAgentSetup: ev.data.detected });
+        break;
+      case "agents.updated":
+        this.setState({
+          snapshot: { ...snap, agents: ev.data.agents },
+          pendingAgentSetup: null,
+        });
+        break;
       // High-frequency events with no retained state yet.
       case "portforward.log":
       case "terminal.screen":
       case "terminal.exited":
         break;
     }
+  }
+
+  dismissAgentSetup() {
+    this.setState({ pendingAgentSetup: null });
+  }
+
+  async saveAgents(agents: AgentConfig[]) {
+    await this.request("agents.update", { agents });
   }
 }
 

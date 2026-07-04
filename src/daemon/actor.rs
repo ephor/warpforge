@@ -109,6 +109,8 @@ pub enum Command {
     SessionPrompt { task_id: String, text: String },
     /// Answer a permission request the agent raised.
     SessionPermission { task_id: String, request_id: String, outcome: String },
+    /// Save agent configuration from setup wizard or settings.
+    UpdateAgents { agents: Vec<wire::AgentConfig> },
     Shutdown,
 }
 
@@ -119,6 +121,8 @@ pub enum Event {
     ServiceLog { project: String, service: String, line: String },
     PortForwardStatus { project: String, name: String, status: PfStatus },
     PortForwardLog { project: String, name: String, line: String },
+    AgentsSetupNeeded { detected: Vec<wire::DetectedAgent> },
+    AgentsUpdated { agents: Vec<wire::AgentConfig> },
     /// A PTY agent was created; carries the live vt100 parser so an in-process
     /// client can render it. (Stage 3 replaces this with serialized screens.)
     AgentSpawned { id: String, project: String, screen: Arc<Mutex<vt100::Parser>> },
@@ -237,6 +241,10 @@ impl DaemonHandle {
         self.send(Command::SessionPrompt { task_id: task_id.into(), text: text.into() }).await;
     }
 
+    pub async fn update_agents(&self, agents: Vec<wire::AgentConfig>) {
+        self.send(Command::UpdateAgents { agents }).await;
+    }
+
     pub async fn session_permission(&self, task_id: &str, request_id: &str, outcome: &str) {
         self.send(Command::SessionPermission {
             task_id: task_id.into(),
@@ -271,6 +279,8 @@ impl DaemonHandle {
 pub struct Daemon {
     projects: Vec<ProjectEntry>,
     tasks: HashMap<String, Task>,
+    /// Enabled ACP agent configurations (from SQLite, user-managed).
+    configured_agents: Vec<wire::AgentConfig>,
     /// Live agent sessions keyed by task id. One per task in v1; the map (not a
     /// field on Task) is what keeps multi-session-per-task additive later.
     sessions: HashMap<String, AcpHandle>,
@@ -302,9 +312,17 @@ impl Daemon {
             .map(|t| (t.id.clone(), t))
             .collect();
 
+        let configured_agents = store
+            .as_ref()
+            .and_then(|s| s.load_agents().ok())
+            .unwrap_or_default();
+
+        let needs_setup = store.as_ref().map(|s| !s.agents_configured()).unwrap_or(false);
+
         let daemon = Daemon {
             projects,
             tasks,
+            configured_agents,
             sessions: HashMap::new(),
             agents: AgentManager::new(agent_tx),
             services: ServiceManager::new(service_tx),
@@ -314,9 +332,21 @@ impl Daemon {
             store,
         };
 
+        let handle = DaemonHandle { cmd_tx, event_tx };
+
+        // Detect installed agents in background so it doesn't block startup,
+        // then emit setup_needed if no agents are configured yet.
+        if needs_setup {
+            let ev_tx = handle.event_tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let detected = super::agents::detected_agents();
+                let _ = ev_tx.send(Event::AgentsSetupNeeded { detected });
+            });
+        }
+
         tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx, acp_rx));
 
-        DaemonHandle { cmd_tx, event_tx }
+        handle
     }
 
     fn emit(&self, event: Event) {
@@ -443,6 +473,7 @@ impl Daemon {
             tasks,
             terminals,
             session_history,
+            agents: self.configured_agents.clone(),
         }
     }
 
@@ -731,6 +762,13 @@ impl Daemon {
                     handle.answer(request_id, outcome);
                 }
             }
+            Command::UpdateAgents { agents } => {
+                if let Some(store) = &self.store {
+                    let _ = store.save_agents(&agents);
+                }
+                self.configured_agents = agents.clone();
+                self.emit(Event::AgentsUpdated { agents });
+            }
         }
     }
 
@@ -814,10 +852,14 @@ impl Daemon {
         self.emit_service_status(project, service);
     }
 
-    /// Resolve a task's `agent` to a spawnable ACP command: a named template
-    /// from the project's `.workspace.yaml` wins; otherwise the string is
-    /// treated as a raw command (the protocol allows either).
+    /// Resolve a task's `agent` to a spawnable ACP command.
+    /// Priority: global agent registry → project agentTemplates → raw command.
     fn resolve_agent_command(&self, project: &str, agent: &str) -> String {
+        // 1. Global registry (configured via setup wizard / settings).
+        if let Some(cfg) = self.configured_agents.iter().find(|a| a.id == agent || a.display_name == agent) {
+            return cfg.acp_command.clone();
+        }
+        // 2. Per-project agentTemplates override (legacy / power-user).
         if let Some(path) = self.project_path(project) {
             if let Some(config) = load_workspace_config(std::path::Path::new(&path)) {
                 if let Some(tmpl) = config.agent_templates.and_then(|m| m.get(agent).cloned()) {
@@ -825,6 +867,7 @@ impl Daemon {
                 }
             }
         }
+        // 3. Treat as raw ACP command.
         agent.to_string()
     }
 

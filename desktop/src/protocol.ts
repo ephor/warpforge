@@ -57,6 +57,8 @@ export type DaemonEvent =
   | { event: "task.created"; data: TaskInfo }
   | { event: "task.updated"; data: TaskInfo }
   | { event: "session.update"; data: { task_id: string; update: SessionUpdate } }
+  | { event: "agents.setup_needed"; data: { detected: DetectedAgent[] } }
+  | { event: "agents.updated"; data: { agents: AgentConfig[] } }
   | {
       event: "terminal.screen";
       data: { terminal_id: string; screen: TerminalScreen };
@@ -77,6 +79,8 @@ export interface Snapshot {
   terminals: TerminalInfo[];
   /** Persisted conversation history keyed by task id — loaded on subscribe. */
   sessionHistory?: Record<string, SessionUpdate[]>;
+  /** Configured agents (empty until setup wizard is completed). */
+  agents?: AgentConfig[];
 }
 
 export const EMPTY_SNAPSHOT: Snapshot = {
@@ -238,6 +242,23 @@ export interface StyledSpan {
   bg?: string;
   bold?: boolean;
   inverse?: boolean;
+}
+
+// ── Agent registry ──────────────────────────────────────────────────────────
+
+export interface AgentConfig {
+  id: string;
+  displayName: string;
+  acpCommand: string;
+  enabled: boolean;
+}
+
+export interface DetectedAgent {
+  id: string;
+  displayName: string;
+  installed: boolean;
+  defaultAcpCommand: string;
+  installHint: string;
 }
 
 // ── Daemon discovery (~/.warpforge/daemon.json) ─────────────────────────────
