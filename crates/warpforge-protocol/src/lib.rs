@@ -264,6 +264,11 @@ pub struct Snapshot {
     pub portforwards: Vec<PortForwardInfo>,
     pub tasks: Vec<TaskInfo>,
     pub terminals: Vec<TerminalInfo>,
+    /// Persisted session conversation history keyed by task id. Sent on
+    /// `state.subscribe` so clients can reconstruct conversations without
+    /// polling. Omitted from the wire when empty.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub session_history: HashMap<String, Vec<SessionUpdate>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

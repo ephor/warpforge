@@ -75,6 +75,8 @@ export interface Snapshot {
   portforwards: PortForwardInfo[];
   tasks: TaskInfo[];
   terminals: TerminalInfo[];
+  /** Persisted conversation history keyed by task id — loaded on subscribe. */
+  sessionHistory?: Record<string, SessionUpdate[]>;
 }
 
 export const EMPTY_SNAPSHOT: Snapshot = {
