@@ -295,7 +295,7 @@ async fn dispatch(
             handle.send(Command::KillAgent { id: terminal_id }).await;
             Ok(json!(null))
         }
-        AgentsDetect => {
+        AgentsDetect {} => {
             let detected = handle.detect_agents().await;
             serde_json::to_value(detected).map_err(|e| wire::RpcError {
                 code: wire::ErrorCode::Internal,

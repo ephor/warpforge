@@ -350,7 +350,7 @@ class DaemonClient {
 
   async detectAgents(): Promise<DetectedAgent[]> {
     const result = await this.request("agents.detect", {});
-    return result as DetectedAgent[];
+    return Array.isArray(result) ? (result as DetectedAgent[]) : [];
   }
 
   async saveAgents(agents: AgentConfig[]) {
