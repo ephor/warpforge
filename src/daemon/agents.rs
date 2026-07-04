@@ -1,7 +1,7 @@
 //! Agent registry: detect installed ACP-capable CLIs and persist the user's
-//! enabled set to SQLite. Only agents that speak ACP over stdio are listed —
-//! Codex (app-server), Pi (rpc), OpenCode (HTTP/SSE), Hermes (per-turn CLI)
-//! use incompatible transports and are absent by design.
+//! enabled set to SQLite. Only agents that speak ACP over stdio are listed.
+//! Codex and OpenCode ship ACP adapters (`codex-acp`, `opencode acp`) so they
+//! qualify; Pi (rpc) and Hermes (per-turn CLI) have no ACP bridge and are absent.
 
 use std::collections::HashMap;
 
@@ -26,6 +26,21 @@ pub static KNOWN_AGENTS: &[KnownAgent] = &[
         binary: "claude",
         default_acp_command: "npx @agentclientprotocol/claude-agent-acp@latest --acp",
         install_hint: "npm install -g @anthropic-ai/claude-code",
+    },
+    KnownAgent {
+        id: "codex",
+        display_name: "Codex",
+        binary: "codex",
+        // Codex has no native ACP; the codex-acp adapter bridges it over stdio.
+        default_acp_command: "npx @agentclientprotocol/codex-acp@latest",
+        install_hint: "npm install -g @openai/codex",
+    },
+    KnownAgent {
+        id: "opencode",
+        display_name: "OpenCode",
+        binary: "opencode",
+        default_acp_command: "opencode acp",
+        install_hint: "npm install -g opencode-ai",
     },
     KnownAgent {
         id: "qwen",
