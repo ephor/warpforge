@@ -45,6 +45,7 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
   );
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileDoc, setFileDoc] = useState<FileDoc | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const streamEnd = useRef<HTMLDivElement>(null);
   const badge = taskBadge(task.status);
   const editable = task.status !== "done";
@@ -137,17 +138,21 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
           </Button>
         )}
         <Button
-          variant="ghost"
+          variant={confirmDelete ? "destructive" : "ghost"}
           size="sm"
           title="Delete task and its history"
+          onBlur={() => setConfirmDelete(false)}
           onClick={() => {
-            if (confirm("Delete this task and its session history permanently?")) {
-              void daemon.deleteTask(task.id);
-              onClose();
+            if (!confirmDelete) {
+              setConfirmDelete(true);
+              return;
             }
+            void daemon.deleteTask(task.id);
+            onClose();
           }}
         >
           <Trash2 className="size-4" />
+          {confirmDelete && "confirm delete"}
         </Button>
       </div>
 
