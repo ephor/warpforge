@@ -52,7 +52,21 @@ pub enum Command {
     StartService { project: String, service: String },
     StopService { project: String, service: String },
     RestartService { project: String, service: String },
+    /// Start every declared service for a project (services only, no port-forwards).
+    StartAllServices { project: String },
     StopProject { project: String },
+    /// A window of a service's retained log lines (events only carry the tail).
+    ServiceLogs {
+        project: String,
+        service: String,
+        after: u64,
+        limit: Option<u32>,
+        reply: oneshot::Sender<Vec<String>>,
+    },
+    /// Start every declared port-forward for a project (port-forwards only).
+    StartAllPortForwards { project: String },
+    /// Start a single declared port-forward by its label.
+    StartPortForward { project: String, name: String },
     StopPortForward { project: String, name: String },
     SpawnAgent {
         project: String,
@@ -190,6 +204,33 @@ impl DaemonHandle {
         })
         .await;
         rx.await.ok().flatten()
+    }
+
+    /// A window of a service's retained log lines (for backfill; live tail
+    /// arrives via `ServiceLog` events).
+    pub async fn service_logs(
+        &self,
+        project: &str,
+        service: &str,
+        after: u64,
+        limit: Option<u32>,
+    ) -> Vec<String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::ServiceLogs {
+            project: project.to_string(),
+            service: service.to_string(),
+            after,
+            limit,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_default()
+    }
+
+    /// Ask the daemon to tear down (stop services, port-forwards, agents) and
+    /// end its actor loop. Used on SIGTERM so we don't leave orphans.
+    pub async fn shutdown(&self) {
+        self.send(Command::Shutdown).await;
     }
 
     pub async fn session_prompt(&self, task_id: &str, text: &str) {
@@ -491,9 +532,36 @@ impl Daemon {
                 self.services.stop(&project, &service).await.ok();
                 self.start_one_service(&project, &service).await;
             }
+            Command::StartAllServices { project } => {
+                self.start_services(&project).await;
+            }
             Command::StopProject { project } => {
                 self.services.stop_project(&project).await.ok();
                 self.portforwards.stop_project(&project);
+            }
+            Command::ServiceLogs { project, service, after, limit, reply } => {
+                let lines = self
+                    .services
+                    .get(&project, &service)
+                    .map(|s| {
+                        let start = (after as usize).min(s.logs.len());
+                        let mut window: Vec<String> = s.logs[start..].to_vec();
+                        if let Some(n) = limit {
+                            let n = n as usize;
+                            if window.len() > n {
+                                window = window.split_off(window.len() - n);
+                            }
+                        }
+                        window
+                    })
+                    .unwrap_or_default();
+                let _ = reply.send(lines);
+            }
+            Command::StartAllPortForwards { project } => {
+                self.start_portforwards(&project).await;
+            }
+            Command::StartPortForward { project, name } => {
+                self.start_one_portforward(&project, &name).await;
             }
             Command::StopPortForward { project, name } => {
                 self.portforwards.stop(&project, &name);
@@ -637,7 +705,15 @@ impl Daemon {
         }
     }
 
+    /// "Opening" a project starts both its declared services and port-forwards
+    /// (what entering a project did implicitly in the TUI).
     async fn open_project(&mut self, name: &str) {
+        self.start_services(name).await;
+        self.start_portforwards(name).await;
+    }
+
+    /// Start every declared service for a project (no port-forwards).
+    async fn start_services(&mut self, name: &str) {
         let Some(path) = self.project_path(name) else { return };
         let index = self.project_index(name);
         let Some(config) = load_workspace_config(std::path::Path::new(&path)) else { return };
@@ -660,7 +736,32 @@ impl Daemon {
                 self.emit_service_status(name, &svc_name);
             }
         }
+    }
+
+    /// Start every declared port-forward for a project (no services).
+    async fn start_portforwards(&mut self, name: &str) {
+        let Some(path) = self.project_path(name) else { return };
+        let Some(config) = load_workspace_config(std::path::Path::new(&path)) else { return };
         self.portforwards.start_all(name, &config.portforwards).await;
+    }
+
+    /// Start a single declared port-forward, matched by its label (explicit
+    /// `name:` in config, else the `namespace:pod` fallback the manager uses).
+    async fn start_one_portforward(&mut self, project: &str, label: &str) {
+        let Some(path) = self.project_path(project) else { return };
+        let Some(config) = load_workspace_config(std::path::Path::new(&path)) else { return };
+        let matched: Vec<_> = config
+            .portforwards
+            .into_iter()
+            .filter(|cfg| {
+                let cfg_label = cfg
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("{}:{}", cfg.namespace, cfg.pod));
+                cfg_label == label
+            })
+            .collect();
+        self.portforwards.start_all(project, &matched).await;
     }
 
     async fn start_one_service(&mut self, project: &str, service: &str) {
