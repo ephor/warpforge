@@ -135,6 +135,11 @@ pub enum Method {
     #[serde(rename = "task.archive")]
     TaskArchive { task_id: String },
 
+    // ── Agent registry ──
+    /// Save the user's agent configuration (from setup wizard or settings).
+    #[serde(rename = "agents.update")]
+    AgentsUpdate { agents: Vec<AgentConfig> },
+
     // ── ACP passthrough for a task's agent session ──
     /// Send a follow-up user message into a running session.
     #[serde(rename = "session.prompt")]
@@ -246,6 +251,15 @@ pub enum Event {
     #[serde(rename = "session.update")]
     SessionUpdate { task_id: String, update: SessionUpdate },
 
+    /// Daemon detected installed agents on first start; no agents configured
+    /// yet. Frontend should show the setup wizard.
+    #[serde(rename = "agents.setup_needed")]
+    AgentsSetupNeeded { detected: Vec<DetectedAgent> },
+
+    /// Agent registry updated (after setup wizard or settings change).
+    #[serde(rename = "agents.updated")]
+    AgentsUpdated { agents: Vec<AgentConfig> },
+
     /// Terminal (PTY) screen changed. Carries the rendered screen contents,
     /// not raw bytes — every client sees the same vt100 state.
     #[serde(rename = "terminal.screen")]
@@ -269,6 +283,10 @@ pub struct Snapshot {
     /// polling. Omitted from the wire when empty.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub session_history: HashMap<String, Vec<SessionUpdate>>,
+    /// All configured agents (enabled or not). Empty until the user completes
+    /// the setup wizard.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<AgentConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -509,6 +527,30 @@ pub struct StyledSpan {
     pub bold: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub inverse: bool,
+}
+
+// ─── Agent registry ──────────────────────────────────────────────────────────
+
+/// A user-configured ACP agent (persisted in SQLite, managed via UI).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentConfig {
+    pub id: String,
+    pub display_name: String,
+    /// The ACP server command run as `sh -c <acp_command>`.
+    pub acp_command: String,
+    pub enabled: bool,
+}
+
+/// An agent candidate surfaced by auto-detection (sent in the setup popup).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedAgent {
+    pub id: String,
+    pub display_name: String,
+    pub installed: bool,
+    pub default_acp_command: String,
+    pub install_hint: String,
 }
 
 /// Contents of `~/.warpforge/daemon.json`, written by the daemon on startup

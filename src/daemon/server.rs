@@ -295,6 +295,10 @@ async fn dispatch(
             handle.send(Command::KillAgent { id: terminal_id }).await;
             Ok(json!(null))
         }
+        AgentsUpdate { agents } => {
+            handle.update_agents(agents).await;
+            Ok(json!(null))
+        }
         // Not yet in this build: project.* (use `wf add` + restart) and
         // task.archive. Follow-ups.
         _ => Err(wire::RpcError {

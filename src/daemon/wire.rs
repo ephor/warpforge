@@ -164,6 +164,12 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
             terminal_id: id.clone(),
             code: 0,
         }),
+        Event::AgentsSetupNeeded { detected } => {
+            Some(wire::Event::AgentsSetupNeeded { detected: detected.clone() })
+        }
+        Event::AgentsUpdated { agents } => {
+            Some(wire::Event::AgentsUpdated { agents: agents.clone() })
+        }
         // Internal-only: the wire conveys terminals via screen/exited events.
         Event::AgentSpawned { .. } | Event::AgentStatus { .. } => None,
     }

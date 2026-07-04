@@ -9,6 +9,7 @@ import MissionControl from "./views/MissionControl";
 import Projects from "./views/Projects";
 import TaskDetail from "./views/TaskDetail";
 import NewTaskDialog from "./views/NewTaskDialog";
+import AgentSetupDialog from "./views/AgentSetupDialog";
 
 type View = "control" | "board" | "projects";
 
@@ -116,6 +117,12 @@ export default function App() {
           defaultProject={newTaskProject}
           initialPrompt={newTaskPrompt}
         />
+        {state.pendingAgentSetup && (
+          <AgentSetupDialog
+            detected={state.pendingAgentSetup}
+            onClose={() => daemon.dismissAgentSetup()}
+          />
+        )}
       </div>
     </TooltipProvider>
   );

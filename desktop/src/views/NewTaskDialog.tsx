@@ -37,7 +37,11 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
   const [shareContext, setShareContext] = useState(true);
 
   const projectInfo = snapshot.projects.find((p) => p.name === project);
-  const agentOptions = projectInfo ? Object.keys(projectInfo.agentTemplates) : [];
+  // Global agent registry (from setup wizard) takes priority over per-project templates.
+  const agentOptions =
+    snapshot.agents && snapshot.agents.length > 0
+      ? snapshot.agents.filter((a) => a.enabled).map((a) => ({ id: a.id, label: a.displayName }))
+      : (projectInfo ? Object.keys(projectInfo.agentTemplates) : []).map((id) => ({ id, label: id }));
   const running = snapshot.services.filter(
     (s) => s.project === project && s.status === "running" && s.allocatedPort > 0,
   );
@@ -52,7 +56,7 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
   }, [open, defaultProject, initialPrompt]);
 
   useEffect(() => {
-    setAgent(agentOptions[0] ?? "claude");
+    setAgent(agentOptions[0]?.id ?? "claude");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
 
@@ -105,9 +109,9 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
                   <SelectValue placeholder="Agent" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(agentOptions.length ? agentOptions : ["claude", "codex"]).map((a) => (
-                    <SelectItem key={a} value={a}>
-                      {a}
+                  {(agentOptions.length ? agentOptions : [{ id: "claude", label: "Claude" }]).map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
