@@ -14,6 +14,24 @@ struct DaemonProcess(Mutex<Option<Child>>);
 ///   2. Sibling to current exe (prod app bundle)
 ///   3. workspace/target/debug/warpforge (Tauri dev layout)
 ///   4. "warpforge" on PATH
+/// Check whether a daemon is already listening by reading daemon.json and
+/// attempting a TCP connect to its port. Used to avoid double-spawning.
+fn is_daemon_running() -> bool {
+    (|| -> Option<bool> {
+        let path = dirs::home_dir()?.join(".warpforge").join("daemon.json");
+        let text = std::fs::read_to_string(&path).ok()?;
+        let ep: serde_json::Value = serde_json::from_str(&text).ok()?;
+        // "ws://127.0.0.1:PORT" → "127.0.0.1:PORT"
+        let url = ep["url"].as_str()?;
+        let addr: std::net::SocketAddr = url.trim_start_matches("ws://").parse().ok()?;
+        Some(
+            std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300))
+                .is_ok(),
+        )
+    })()
+    .unwrap_or(false)
+}
+
 fn find_daemon_bin() -> std::path::PathBuf {
     if let Ok(p) = std::env::var("WARPFORGE_DAEMON_BIN") {
         return p.into();
@@ -66,15 +84,19 @@ fn daemon_endpoint() -> Result<DaemonEndpoint, String> {
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            let bin = find_daemon_bin();
-            let child = Command::new(&bin).arg("daemon").spawn();
-            match child {
-                Ok(c) => {
-                    app.manage(DaemonProcess(Mutex::new(Some(c))));
-                }
-                Err(e) => {
-                    eprintln!("warning: could not spawn daemon ({bin:?}): {e}");
-                    app.manage(DaemonProcess(Mutex::new(None)));
+            if is_daemon_running() {
+                eprintln!("warpforge: daemon already running — reusing");
+                app.manage(DaemonProcess(Mutex::new(None)));
+            } else {
+                let bin = find_daemon_bin();
+                match Command::new(&bin).arg("daemon").spawn() {
+                    Ok(c) => {
+                        app.manage(DaemonProcess(Mutex::new(Some(c))));
+                    }
+                    Err(e) => {
+                        eprintln!("warning: could not spawn daemon ({bin:?}): {e}");
+                        app.manage(DaemonProcess(Mutex::new(None)));
+                    }
                 }
             }
             Ok(())
@@ -82,22 +104,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![daemon_endpoint])
         .build(tauri::generate_context!())
         .expect("error building warpforge desktop")
-        .run(|app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
-                if let Ok(mut guard) = app_handle.state::<DaemonProcess>().0.lock() {
-                    if let Some(mut child) = guard.take() {
-                        // SIGTERM → daemon stops services gracefully, then SIGKILL.
-                        #[cfg(unix)]
-                        {
-                            let pid = child.id();
-                            let _ = std::process::Command::new("kill")
-                                .args(["-TERM", &pid.to_string()])
-                                .status();
-                            std::thread::sleep(std::time::Duration::from_millis(800));
-                        }
-                        let _ = child.kill();
-                    }
-                }
-            }
-        });
+        // Daemon is a background service — intentionally left running when the
+        // desktop window closes so ACP sessions and services survive UI restarts.
+        .run(|_app_handle, _event| {});
 }

@@ -244,20 +244,44 @@ pub fn spawn_acp_session(
         let next_id = Arc::clone(&next_id);
         let updates = updates.clone();
         tokio::spawn(async move {
-            rpc(&out_tx, &pending, &next_id, "initialize", json!({
+            const HS: std::time::Duration = std::time::Duration::from_secs(15);
+
+            // initialize — must reply within 15 s or we surface a clear error
+            // instead of hanging in Queued forever.
+            if tokio::time::timeout(HS, rpc(&out_tx, &pending, &next_id, "initialize", json!({
                 "protocolVersion": 1,
                 "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true } }
-            }))
-            .await;
+            }))).await.is_err() {
+                let _ = updates.send((task_id.clone(), AcpUpdate::Error(
+                    "ACP handshake timed out — no 'initialize' reply in 15 s. \
+                     The agent command must be an ACP server (JSON-RPC 2.0 over stdio). \
+                     For Claude Code use: npx @agentclientprotocol/claude-agent-acp@latest --acp".into()
+                )));
+                return;
+            }
 
-            let session_id = rpc(&out_tx, &pending, &next_id, "session/new", json!({
+            let session_id = match tokio::time::timeout(HS, rpc(&out_tx, &pending, &next_id, "session/new", json!({
                 "cwd": cwd, "mcpServers": []
-            }))
-            .await
-            .and_then(|v| {
-                v.get("result")?.get("sessionId")?.as_str().map(String::from)
-            })
-            .unwrap_or_else(|| "unknown".into());
+            }))).await {
+                Ok(Some(v)) => v
+                    .get("result")
+                    .and_then(|r| r.get("sessionId"))
+                    .and_then(|s| s.as_str())
+                    .map(String::from)
+                    .unwrap_or_else(|| "unknown".into()),
+                Ok(None) => {
+                    let _ = updates.send((task_id.clone(), AcpUpdate::Error(
+                        "ACP session/new failed — agent closed the connection.".into()
+                    )));
+                    return;
+                }
+                Err(_) => {
+                    let _ = updates.send((task_id.clone(), AcpUpdate::Error(
+                        "ACP handshake timed out — no 'session/new' reply in 15 s.".into()
+                    )));
+                    return;
+                }
+            };
 
             let _ = updates.send((task_id.clone(), AcpUpdate::SessionStarted { session_id: session_id.clone() }));
 

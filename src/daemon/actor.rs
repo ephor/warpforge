@@ -370,23 +370,45 @@ impl Daemon {
             })
             .collect();
 
-        let portforwards = self
-            .portforwards
-            .forwards
-            .iter()
-            .map(|(key, pf)| {
-                let project = key.split_once('/').map(|(p, _)| p).unwrap_or("").to_string();
-                wire::PortForwardInfo {
-                    project,
-                    name: pf.name.clone(),
-                    namespace: pf.namespace.clone(),
-                    pod: pf.pod_prefix.clone(),
-                    local_port: pf.local_port,
-                    remote_port: pf.remote_port,
-                    status: wireconv::pf_status(&pf.status),
+        // Build portforwards from config first (Stopped), then override with
+        // live state for any that have been started. This ensures portforwards
+        // always appear in the snapshot even before they're started.
+        let mut pf_map: std::collections::HashMap<String, wire::PortForwardInfo> =
+            std::collections::HashMap::new();
+        for p in &self.projects {
+            if let Some(config) = load_workspace_config(std::path::Path::new(&p.path)) {
+                for pf_cfg in &config.portforwards {
+                    let name = pf_cfg
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("{}:{}", pf_cfg.namespace, pf_cfg.pod));
+                    let key = format!("{}/{}", p.name, name);
+                    pf_map.insert(key, wire::PortForwardInfo {
+                        project: p.name.clone(),
+                        name,
+                        namespace: pf_cfg.namespace.clone(),
+                        pod: pf_cfg.pod.clone(),
+                        local_port: pf_cfg.local_port,
+                        remote_port: pf_cfg.remote_port,
+                        status: wire::PortForwardStatus::Stopped,
+                    });
                 }
-            })
-            .collect();
+            }
+        }
+        for (key, pf) in &self.portforwards.forwards {
+            let project = key.split_once('/').map(|(p, _)| p).unwrap_or("").to_string();
+            pf_map.insert(key.clone(), wire::PortForwardInfo {
+                project,
+                name: pf.name.clone(),
+                namespace: pf.namespace.clone(),
+                pod: pf.pod_prefix.clone(),
+                local_port: pf.local_port,
+                remote_port: pf.remote_port,
+                status: wireconv::pf_status(&pf.status),
+            });
+        }
+        let mut portforwards: Vec<wire::PortForwardInfo> = pf_map.into_values().collect();
+        portforwards.sort_by(|a, b| a.name.cmp(&b.name));
 
         let mut tasks: Vec<wire::TaskInfo> =
             self.tasks.values().map(wireconv::task_info).collect();
@@ -408,12 +430,19 @@ impl Daemon {
             })
             .collect();
 
+        let session_history = self
+            .store
+            .as_ref()
+            .and_then(|s| s.load_all_session_updates().ok())
+            .unwrap_or_default();
+
         wire::Snapshot {
             projects,
             services,
             portforwards,
             tasks,
             terminals,
+            session_history,
         }
     }
 
@@ -929,6 +958,9 @@ impl Daemon {
     }
 
     fn emit_session(&self, task_id: &str, update: wire::SessionUpdate) {
+        if let Some(store) = &self.store {
+            let _ = store.save_session_update(task_id, &update);
+        }
         self.emit(Event::SessionUpdate { task_id: task_id.to_string(), update });
     }
 

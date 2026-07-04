@@ -7,7 +7,10 @@
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::path::PathBuf;
+
+use warpforge_protocol as wire;
 
 use super::task::{Task, TaskStatus};
 
@@ -51,6 +54,12 @@ impl Store {
                 files_changed   INTEGER NOT NULL,
                 blocked_reason  TEXT
             );
+            CREATE TABLE IF NOT EXISTS session_updates (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id     TEXT NOT NULL,
+                update_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS session_updates_task_idx ON session_updates(task_id);
             "#,
         )?;
         Ok(Self { conn })
@@ -119,6 +128,32 @@ impl Store {
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn save_session_update(&self, task_id: &str, update: &wire::SessionUpdate) -> Result<()> {
+        let json = serde_json::to_string(update)?;
+        self.conn.execute(
+            "INSERT INTO session_updates (task_id, update_json) VALUES (?1, ?2)",
+            rusqlite::params![task_id, json],
+        )?;
+        Ok(())
+    }
+
+    /// Load all persisted session updates grouped by task id, in insertion order.
+    pub fn load_all_session_updates(&self) -> Result<HashMap<String, Vec<wire::SessionUpdate>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT task_id, update_json FROM session_updates ORDER BY id",
+        )?;
+        let mut map: HashMap<String, Vec<wire::SessionUpdate>> = HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows.filter_map(|r| r.ok()) {
+            if let Ok(update) = serde_json::from_str::<wire::SessionUpdate>(&row.1) {
+                map.entry(row.0).or_default().push(update);
+            }
+        }
+        Ok(map)
     }
 }
 

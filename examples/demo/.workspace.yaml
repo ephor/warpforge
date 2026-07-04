@@ -20,5 +20,5 @@ services:
 
 agentTemplates:
   dev:
-    command: claude
+    command: npx @agentclientprotocol/claude-agent-acp@latest --acp
     description: "dev session"

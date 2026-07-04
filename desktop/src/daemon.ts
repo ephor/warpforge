@@ -233,9 +233,14 @@ class DaemonClient {
   private applyEvent(ev: DaemonEvent) {
     const snap = this.state.snapshot;
     switch (ev.event) {
-      case "state.snapshot":
-        this.setState({ snapshot: ev.data });
+      case "state.snapshot": {
+        const { sessionHistory, ...snap } = ev.data;
+        this.setState({
+          snapshot: snap as Snapshot,
+          ...(sessionHistory ? { sessionUpdates: sessionHistory } : {}),
+        });
         break;
+      }
       case "project.added":
         this.setState({
           snapshot: { ...snap, projects: [...snap.projects, ev.data] },
