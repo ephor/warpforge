@@ -138,7 +138,7 @@ pub enum Method {
     // ── Agent registry ──
     /// Detect installed ACP-capable agents. Returns `{ detected: DetectedAgent[] }`.
     #[serde(rename = "agents.detect")]
-    AgentsDetect,
+    AgentsDetect {},
     /// Save the user's agent configuration (from setup wizard or settings).
     #[serde(rename = "agents.update")]
     AgentsUpdate { agents: Vec<AgentConfig> },
@@ -573,6 +573,16 @@ pub struct DaemonEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agents_detect_roundtrip() {
+        // Struct variant with empty params — client always sends params:{}.
+        let json: serde_json::Value =
+            serde_json::from_str(r#"{"id":1,"method":"agents.detect","params":{}}"#).unwrap();
+        let req: Request = serde_json::from_value(json).unwrap();
+        assert_eq!(req.id, 1);
+        assert!(matches!(req.method, Method::AgentsDetect {}));
+    }
 
     #[test]
     fn request_wire_shape() {

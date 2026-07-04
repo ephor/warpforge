@@ -74,7 +74,11 @@ export default function App() {
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => void daemon.detectAgents().then(setManualDetected)}
+              onClick={() => {
+                daemon.detectAgents()
+                  .then((detected) => setManualDetected(Array.isArray(detected) ? detected : []))
+                  .catch(() => setManualDetected([]));
+              }}
               title="Manage agents"
             >
               <Bot className="size-4" />
