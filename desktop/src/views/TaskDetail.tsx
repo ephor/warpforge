@@ -79,9 +79,10 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diff]);
 
-  // Load the selected file's old/new text for the split editor. Deliberately
-  // NOT keyed on task.updatedAt — a save bumps that, and refetching mid-edit
-  // would clobber the editor.
+  // Load the selected file's old/new text for the split editor. Keyed on
+  // task.updatedAt so an agent editing the open file refetches. MergeDiff
+  // syncs the right pane in place and skips its own save-echo, so this no
+  // longer clobbers unsaved edits.
   useEffect(() => {
     if (diffView !== "split" || !selectedFile) {
       setFileDoc(null);
@@ -95,7 +96,7 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [diffView, selectedFile, task.id]);
+  }, [diffView, selectedFile, task.id, task.updatedAt]);
 
   const merged = useMemo(() => coalesceUpdates(updates), [updates]);
 
@@ -183,7 +184,7 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
             <div className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Conversation
             </div>
-            <ScrollArea className="flex-1">
+            <ScrollArea className="min-h-0 flex-1">
               <div className="flex min-w-0 flex-col gap-3 p-4 text-sm">
                 {merged.length === 0 && (
                   <p className="text-muted-foreground">No session activity yet.</p>
