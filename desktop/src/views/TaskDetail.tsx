@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, X, ChevronDown, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, X, ChevronDown, Trash2, FolderTree } from "lucide-react";
 import { daemon } from "../daemon";
 import {
   CommandInfo,
@@ -13,6 +13,7 @@ import {
 import { StreamLine, coalesceUpdates } from "./MissionControl";
 import { Composer } from "../components/Composer";
 import { MergeDiff } from "../components/MergeDiff";
+import { FileTree } from "../components/FileTree";
 import { taskBadge } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,7 +47,21 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileDoc, setFileDoc] = useState<FileDoc | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showTree, setShowTree] = useState(false);
   const streamEnd = useRef<HTMLDivElement>(null);
+  const unifiedScroll = useRef<HTMLDivElement>(null);
+
+  // Scroll a file's block into view inside the unified diff — only that
+  // viewport, so tree/panels around it don't move.
+  const scrollToFile = (path: string) => {
+    const vp = unifiedScroll.current?.querySelector(
+      "[data-radix-scroll-area-viewport]",
+    ) as HTMLElement | null;
+    const el = vp?.querySelector(`#${CSS.escape(fileAnchor(path))}`) as HTMLElement | null;
+    if (!vp || !el) return;
+    const top = el.getBoundingClientRect().top - vp.getBoundingClientRect().top + vp.scrollTop;
+    vp.scrollTo({ top: top - 8, behavior: "smooth" });
+  };
   const badge = taskBadge(task.status);
   const editable = task.status !== "done";
 
@@ -95,10 +110,13 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
 
   useEffect(() => {
     setLocalRes({});
+    setDiff(null); // clear only when switching tasks, not on every refetch
   }, [task.id]);
 
+  // Refetch the diff on task switch and after edits (updatedAt bumps). Don't
+  // null it out here — replacing in place avoids re-mounting the whole diff
+  // (which flashed the tabs/tree/editor on every ⌘S save).
   useEffect(() => {
-    setDiff(null);
     setDiffError(null);
     daemon
       .request("diff.get", { task_id: task.id })
@@ -196,7 +214,19 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
             {diff && (
               <span className="tnum text-xs text-muted-foreground">{diff.files.length} files</span>
             )}
-            <div className="ml-auto flex rounded-md border p-0.5">
+            <button
+              onClick={() => setShowTree((v) => !v)}
+              title="Toggle changed-files tree"
+              className={cn(
+                "ml-auto rounded-md border px-1.5 py-1 transition-colors",
+                showTree
+                  ? "bg-secondary text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <FolderTree className="size-3.5" />
+            </button>
+            <div className="flex rounded-md border p-0.5">
               {(["unified", "split"] as const).map((v) => (
                 <button
                   key={v}
@@ -214,68 +244,101 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
             </div>
           </div>
 
-          {diffView === "unified" ? (
-            <ScrollArea className="flex-1">
-              <div className="p-3">
-                {diffError && <p className="text-sm text-destructive">{diffError}</p>}
-                {!diff && !diffError && (
-                  <p className="text-sm text-muted-foreground">Loading diff…</p>
-                )}
-                {diff && diff.files.length === 0 && (
-                  <p className="text-sm text-muted-foreground">No changes yet.</p>
-                )}
-                {diff?.files.map((file) => (
-                  <FileDiffView
-                    key={file.path}
-                    file={file}
-                    localRes={localRes}
-                    onResolve={resolveHunk}
-                  />
-                ))}
-              </div>
-            </ScrollArea>
-          ) : (
-            <div className="flex min-h-0 flex-1 flex-col">
-              {diff && diff.files.length > 0 && (
-                <div className="flex gap-1 overflow-x-auto border-b px-2 py-1.5">
-                  {diff.files.map((f) => (
-                    <button
-                      key={f.path}
-                      onClick={() => setSelectedFile(f.path)}
-                      title={f.path}
-                      className={cn(
-                        "shrink-0 rounded px-2 py-1 font-mono text-xs transition-colors",
-                        selectedFile === f.path
-                          ? "bg-secondary text-foreground"
-                          : "text-muted-foreground hover:bg-secondary/50",
-                      )}
-                    >
-                      {f.path.split("/").pop()}
-                    </button>
-                  ))}
-                </div>
+          <div className="flex min-h-0 flex-1">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {diffView === "unified" ? (
+                <ScrollArea ref={unifiedScroll} className="flex-1">
+                  <div className="p-3">
+                    {diffError && <p className="text-sm text-destructive">{diffError}</p>}
+                    {!diff && !diffError && (
+                      <p className="text-sm text-muted-foreground">Loading diff…</p>
+                    )}
+                    {diff && diff.files.length === 0 && (
+                      <p className="text-sm text-muted-foreground">No changes yet.</p>
+                    )}
+                    {diff?.files.map((file) => (
+                      <FileDiffView
+                        key={file.path}
+                        id={fileAnchor(file.path)}
+                        file={file}
+                        localRes={localRes}
+                        onResolve={resolveHunk}
+                      />
+                    ))}
+                  </div>
+                </ScrollArea>
+              ) : (
+                <>
+                  {/* Tab strip — only when the tree is hidden. */}
+                  {!showTree && diff && diff.files.length > 0 && (
+                    <div className="flex gap-1 overflow-x-auto border-b px-2 py-1.5">
+                      {diff.files.map((f) => {
+                        const name = f.path.split("/").pop() ?? f.path;
+                        const dir = f.path.slice(0, f.path.length - name.length).replace(/\/$/, "");
+                        return (
+                          <button
+                            key={f.path}
+                            onClick={() => setSelectedFile(f.path)}
+                            title={f.path}
+                            className={cn(
+                              "flex max-w-[220px] shrink-0 flex-col items-start rounded px-2 py-1 font-mono text-xs transition-colors",
+                              selectedFile === f.path
+                                ? "bg-secondary text-foreground"
+                                : "text-muted-foreground hover:bg-secondary/50",
+                            )}
+                          >
+                            <span className="max-w-full truncate">{name}</span>
+                            {dir && (
+                              <span className="max-w-full truncate text-[10px] text-muted-foreground/70">
+                                {dir}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="min-h-0 flex-1">
+                    {diff && diff.files.length === 0 ? (
+                      <p className="p-3 text-sm text-muted-foreground">No changes yet.</p>
+                    ) : fileDoc ? (
+                      <MergeDiff
+                        doc={fileDoc}
+                        editable={editable}
+                        onSave={(content) =>
+                          void daemon.request("file.save", {
+                            task_id: task.id,
+                            path: fileDoc.path,
+                            content,
+                          })
+                        }
+                      />
+                    ) : (
+                      <p className="p-3 text-sm text-muted-foreground">Loading file…</p>
+                    )}
+                  </div>
+                </>
               )}
-              <div className="min-h-0 flex-1">
-                {diff && diff.files.length === 0 ? (
-                  <p className="p-3 text-sm text-muted-foreground">No changes yet.</p>
-                ) : fileDoc ? (
-                  <MergeDiff
-                    doc={fileDoc}
-                    editable={editable}
-                    onSave={(content) =>
-                      void daemon.request("file.save", {
-                        task_id: task.id,
-                        path: fileDoc.path,
-                        content,
-                      })
-                    }
-                  />
-                ) : (
-                  <p className="p-3 text-sm text-muted-foreground">Loading file…</p>
-                )}
-              </div>
             </div>
-          )}
+
+            {/* Changed-files tree (right), toggled — replaces the tab strip. */}
+            {showTree && diff && diff.files.length > 0 && (
+              <div className="w-56 shrink-0 overflow-auto border-l">
+                <FileTree
+                  files={diff.files}
+                  selected={selectedFile}
+                  onSelect={(path) => {
+                    setSelectedFile(path);
+                    if (diffView === "unified") {
+                      scrollToFile(path);
+                    } else {
+                      setView("split");
+                    }
+                  }}
+                />
+              </div>
+            )}
+          </div>
         </Card>
         </ResizablePanel>
       </ResizablePanelGroup>
@@ -283,11 +346,16 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
   );
 }
 
+/** Stable DOM id for a file's unified-diff block, for tree-click scroll-to. */
+const fileAnchor = (path: string) => `diff-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
+
 function FileDiffView({
+  id,
   file,
   localRes,
   onResolve,
 }: {
+  id?: string;
   file: FileDiff;
   localRes: Record<string, HunkResolution>;
   onResolve: (file: string, hunkIndex: number, r: HunkResolution) => void;
@@ -301,7 +369,7 @@ function FileDiffView({
         : "text-warn";
 
   return (
-    <div className="mb-3 overflow-hidden rounded-md border">
+    <div id={id} className="mb-3 scroll-mt-2 overflow-hidden rounded-md border">
       <button
         className="flex w-full items-center gap-2 bg-secondary/50 px-3 py-2 text-left font-mono text-xs hover:bg-secondary"
         onClick={() => setOpen((o) => !o)}

@@ -59,3 +59,26 @@ body {
 .tnum {
   font-variant-numeric: tabular-nums;
 }
+
+/*
+ * CodeMirror merge — WebStorm-style change highlight: soft full-line tint plus
+ * a stronger token tint on the exact changed words (red on old/left, green on
+ * new/right). Overrides the extension's default 2px bottom-gradient "underline"
+ * (.cm-changedText). Scoped to .cm-merge-a/b so nothing leaks elsewhere;
+ * !important beats the extension's wrapper-scoped rule.
+ */
+.cm-merge-a .cm-changedLine {
+  background-color: hsl(var(--destructive) / 0.08) !important;
+}
+.cm-merge-b .cm-changedLine {
+  background-color: hsl(var(--ok) / 0.08) !important;
+}
+.cm-merge-a .cm-changedText,
+.cm-merge-a .cm-deletedChunk .cm-deletedText {
+  background: hsl(var(--destructive) / 0.30) !important;
+  border-radius: 2px;
+}
+.cm-merge-b .cm-changedText {
+  background: hsl(var(--ok) / 0.20) !important;
+  border-radius: 2px;
+}
