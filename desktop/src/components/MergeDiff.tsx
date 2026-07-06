@@ -60,6 +60,9 @@ export function MergeDiff({
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
+  // Text we last wrote to disk — lets the sync effect tell our own save-echo
+  // (harmless, skip) from a real external/agent edit (apply to the pane).
+  const lastSaved = useRef<string | null>(null);
   const original = doc.newText; // the agent's version, for "discard edits"
   const [status, setStatus] = useState<SaveStatus>("clean");
 
@@ -67,7 +70,9 @@ export function MergeDiff({
     const view = viewRef.current;
     if (!view) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    onSaveRef.current(view.b.state.doc.toString());
+    const text = view.b.state.doc.toString();
+    lastSaved.current = text;
+    onSaveRef.current(text);
     setStatus("saved");
   };
 
@@ -83,6 +88,7 @@ export function MergeDiff({
   useEffect(() => {
     if (!host.current) return;
     setStatus("clean");
+    lastSaved.current = null;
     const lang = langFor(doc.path);
     const common: Extension[] = [lineNumbers(), oneDark, EditorView.lineWrapping, ...lang];
 
@@ -104,6 +110,7 @@ export function MergeDiff({
             if (saveTimer.current) clearTimeout(saveTimer.current);
             const text = u.state.doc.toString();
             saveTimer.current = setTimeout(() => {
+              lastSaved.current = text;
               onSaveRef.current(text);
               setStatus("saved");
             }, 600);
@@ -123,7 +130,24 @@ export function MergeDiff({
       viewRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.path, doc.oldText, doc.newText, editable]);
+  }, [doc.path, doc.oldText, editable]);
+
+  // The right pane changed on disk (agent edited the open file). Apply it in
+  // place — but skip our own save-echo and any content that already matches,
+  // so a user's unsaved edits and cursor survive.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    if (doc.newText === lastSaved.current) return;
+    const cur = view.b.state.doc.toString();
+    if (doc.newText === cur) return;
+    view.b.dispatch({
+      changes: { from: 0, to: view.b.state.doc.length, insert: doc.newText },
+    });
+    setStatus("clean");
+    lastSaved.current = null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc.newText]);
 
   return (
     <div className="flex h-full flex-col">
