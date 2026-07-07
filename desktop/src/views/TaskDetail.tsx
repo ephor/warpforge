@@ -11,7 +11,7 @@ import {
   TaskDiff,
   TaskInfo,
 } from "../protocol";
-import { StreamLine, coalesceUpdates } from "./MissionControl";
+import { StreamLine, coalesceUpdates, streamKey } from "./MissionControl";
 import { Composer } from "../components/Composer";
 import { MergeDiff } from "../components/MergeDiff";
 import { FileTree } from "../components/FileTree";
@@ -210,7 +210,12 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
                   <p className="text-muted-foreground">No session activity yet.</p>
                 )}
                 {merged.map((u, i) => (
-                  <StreamLine key={i} update={u} taskId={task.id} resolved={resolvedPerms} />
+                  <StreamLine
+                    key={streamKey(u, i)}
+                    update={u}
+                    taskId={task.id}
+                    resolved={resolvedPerms}
+                  />
                 ))}
                 <div ref={streamEnd} />
               </div>
