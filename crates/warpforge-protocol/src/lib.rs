@@ -173,6 +173,13 @@ pub enum Method {
         request_id: String,
         outcome: PermissionOutcome,
     },
+    /// Change a session selector (model/mode/…) the agent exposes.
+    #[serde(rename = "session.setConfigOption")]
+    SessionSetConfigOption {
+        task_id: String,
+        config_id: String,
+        value: String,
+    },
 
     // ── Diff / review ──
     #[serde(rename = "diff.get")]
@@ -387,6 +394,10 @@ pub struct TaskInfo {
     pub files_changed: u32,
     /// Set when status == Blocked or Failed.
     pub blocked_reason: Option<String>,
+    /// Session selectors (model/mode/…) reported by the agent. Transient —
+    /// populated from the live ACP session, empty until it reports them.
+    #[serde(default)]
+    pub config_options: Vec<ConfigOption>,
 }
 
 /// Board columns. `Interrupted` covers sessions lost to a daemon restart —
@@ -430,6 +441,12 @@ pub enum SessionUpdate {
         title: String,
         options: Vec<String>,
     },
+    /// A permission request the developer answered — recorded in the stream so
+    /// the resolved state survives reopen/restart (the request itself lingers).
+    PermissionResolved {
+        request_id: String,
+        outcome: String,
+    },
     /// The agent's plan / todo list (ACP `plan` update).
     Plan { entries: Vec<PlanEntry> },
     /// Slash-commands the agent exposes (ACP `available_commands_update`).
@@ -455,6 +472,27 @@ pub struct CommandInfo {
     pub description: String,
 }
 
+/// A session-level selector the agent exposes (ACP `configOptions`): model,
+/// mode, reasoning effort, etc. We surface it read-only for now.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigOption {
+    pub id: String,
+    pub name: String,
+    /// "mode" | "model" | "model_config" | "thought_level" | …
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    pub current_value: String,
+    pub options: Vec<ConfigChoice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigChoice {
+    pub value: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallStatus {
@@ -472,6 +510,9 @@ pub enum ToolCallStatus {
 pub struct TaskDiff {
     pub task_id: String,
     pub files: Vec<FileDiff>,
+    /// Current git branch of the task's project, if it's a repo.
+    #[serde(default)]
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

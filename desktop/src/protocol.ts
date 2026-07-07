@@ -148,6 +148,22 @@ export interface TaskInfo {
   updatedAt: number;
   filesChanged: number;
   blockedReason: string | null;
+  /** Session selectors (model/mode/…) reported by the live ACP session. */
+  configOptions?: ConfigOption[];
+}
+
+export interface ConfigChoice {
+  value: string;
+  name: string;
+}
+
+export interface ConfigOption {
+  id: string;
+  name: string;
+  /** "mode" | "model" | "model_config" | "thought_level" | … */
+  category?: string | null;
+  currentValue: string;
+  options: ConfigChoice[];
 }
 
 export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";
@@ -182,6 +198,7 @@ export type SessionUpdate =
       title: string;
       options: string[];
     }
+  | { kind: "permission_resolved"; request_id: string; outcome: string }
   | { kind: "plan"; entries: PlanEntry[] }
   | { kind: "available_commands"; commands: CommandInfo[] }
   | { kind: "turn_ended"; stop_reason: string };
@@ -193,6 +210,8 @@ export type HunkResolution = "accept" | "reject";
 export interface TaskDiff {
   taskId: string;
   files: FileDiff[];
+  /** Current git branch of the task's project, if it's a repo. */
+  branch?: string | null;
 }
 
 export interface FileDiff {

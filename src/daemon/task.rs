@@ -52,6 +52,9 @@ pub struct Task {
     pub updated_at: u64,
     pub files_changed: u32,
     pub blocked_reason: Option<String>,
+    /// Latest session selectors (model/mode/…) from the live ACP session.
+    /// Transient: not persisted, rebuilt when the session reports them.
+    pub config_options: Vec<warpforge_protocol::ConfigOption>,
 }
 
 impl Task {
@@ -69,6 +72,7 @@ impl Task {
             updated_at: ts,
             files_changed: 0,
             blocked_reason: None,
+            config_options: Vec::new(),
         }
     }
 

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
- * Chat composer: an auto-growing textarea with ⌘↵ to send and a slash-command
+ * Chat composer: an auto-growing textarea with ↵ to send (⇧↵ for a newline) and a slash-command
  * menu fed by the agent's advertised commands (ACP available_commands). Styled
  * to feel like the composers in Claude Code / Codex / t3code.
  */
@@ -14,11 +14,14 @@ export function Composer({
   commands = [],
   placeholder = "Message or steer the agent…",
   disabled = false,
+  toolbar,
 }: {
   onSend: (text: string) => void;
   commands?: CommandInfo[];
   placeholder?: string;
   disabled?: boolean;
+  /** Extra controls (e.g. model/mode selectors) shown under the textarea. */
+  toolbar?: React.ReactNode;
 }) {
   const [value, setValue] = useState("");
   const [menuIndex, setMenuIndex] = useState(0);
@@ -76,14 +79,15 @@ export function Composer({
         return;
       }
     }
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    // Enter sends; Shift+Enter inserts a newline.
+    if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       send();
     }
   };
 
   return (
-    <div className="relative border-t p-2">
+    <div className="relative p-2">
       {menuOpen && (
         <div className="absolute bottom-full left-2 right-2 z-20 mb-1 max-h-[50vh] overflow-y-auto rounded-md border bg-popover shadow-md">
           {matches.map((c, i) => (
@@ -105,24 +109,30 @@ export function Composer({
           ))}
         </div>
       )}
-      <div className="flex items-end gap-2">
+      {/* Zed-style: textarea + a controls row (model/mode selectors, send) in one box. */}
+      <div className="flex flex-col rounded-lg border border-input bg-background focus-within:ring-2 focus-within:ring-ring">
         <textarea
           ref={ref}
-          rows={1}
+          rows={2}
           value={value}
           disabled={disabled}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder={placeholder}
-          className="max-h-[220px] min-h-[38px] flex-1 resize-none rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+          className="max-h-[220px] min-h-[76px] resize-none bg-transparent px-3 py-2.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none disabled:opacity-50"
         />
-        <Button size="icon" onClick={send} disabled={!value.trim() || disabled}>
-          <Send className="size-4" />
-        </Button>
-      </div>
-      <div className="mt-1 flex items-center gap-3 px-1 text-[11px] text-muted-foreground">
-        <span>⌘↵ send</span>
-        {commands.length > 0 && <span>/ for commands</span>}
+        <div className="flex items-center gap-1.5 px-2 pb-2 text-[11px] text-muted-foreground">
+          {toolbar && <div className="flex flex-wrap items-center gap-1">{toolbar}</div>}
+          <span className="ml-auto shrink-0">⇧↵ newline</span>
+          <Button
+            size="icon"
+            className="size-7 shrink-0"
+            onClick={send}
+            disabled={!value.trim() || disabled}
+          >
+            <Send className="size-3.5" />
+          </Button>
+        </div>
       </div>
     </div>
   );

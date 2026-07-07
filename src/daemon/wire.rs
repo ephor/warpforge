@@ -113,6 +113,7 @@ pub fn task_info(t: &Task) -> wire::TaskInfo {
         updated_at: t.updated_at,
         files_changed: t.files_changed,
         blocked_reason: t.blocked_reason.clone(),
+        config_options: t.config_options.clone(),
     }
 }
 

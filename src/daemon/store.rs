@@ -131,6 +131,7 @@ impl Store {
                 updated_at: row.get(8)?,
                 files_changed: row.get::<_, i64>(9)? as u32,
                 blocked_reason: row.get(10)?,
+                config_options: Vec::new(),
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())

@@ -56,6 +56,21 @@ pub async fn working_diff(repo: &str) -> Result<Vec<wire::FileDiff>> {
     Ok(files)
 }
 
+/// Current branch of a git repo (`HEAD` short name), or None if not a repo or
+/// detached.
+pub async fn current_branch(repo: &str) -> Option<String> {
+    let out = Command::new("git")
+        .args(["-C", repo, "symbolic-ref", "--short", "-q", "HEAD"])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
 /// A file's old (HEAD) and new (working-tree) text, for the editable review.
 pub async fn file_doc(repo: &str, path: &str) -> Result<wire::FileDoc> {
     if path.contains("..") {
