@@ -262,6 +262,10 @@ async fn dispatch(
             handle.session_prompt(&task_id, &text).await;
             Ok(json!(null))
         }
+        SessionSetConfigOption { task_id, config_id, value } => {
+            handle.session_set_config_option(&task_id, &config_id, &value).await;
+            Ok(json!(null))
+        }
         SessionPermission { task_id, request_id, outcome } => {
             let outcome = match outcome {
                 wire::PermissionOutcome::Allow => "allow",

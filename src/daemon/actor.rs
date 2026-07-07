@@ -121,6 +121,8 @@ pub enum Command {
     SessionPrompt { task_id: String, text: String },
     /// Answer a permission request the agent raised.
     SessionPermission { task_id: String, request_id: String, outcome: String },
+    /// Change a session selector (model/mode/…) the agent exposes.
+    SessionSetConfigOption { task_id: String, config_id: String, value: String },
     /// Detect installed ACP-capable agents (runs which/where, returns list).
     DetectAgents { reply: oneshot::Sender<Vec<wire::DetectedAgent>> },
     /// Save agent configuration from setup wizard or settings.
@@ -289,6 +291,15 @@ impl DaemonHandle {
 
     pub async fn update_agents(&self, agents: Vec<wire::AgentConfig>) {
         self.send(Command::UpdateAgents { agents }).await;
+    }
+
+    pub async fn session_set_config_option(&self, task_id: &str, config_id: &str, value: &str) {
+        self.send(Command::SessionSetConfigOption {
+            task_id: task_id.into(),
+            config_id: config_id.into(),
+            value: value.into(),
+        })
+        .await;
     }
 
     pub async fn session_permission(&self, task_id: &str, request_id: &str, outcome: &str) {
@@ -712,11 +723,14 @@ impl Daemon {
                     .tasks
                     .get(&task_id)
                     .and_then(|t| self.project_path(&t.project));
-                let files = match repo {
-                    Some(path) => super::diff::working_diff(&path).await.unwrap_or_default(),
-                    None => Vec::new(),
+                let (files, branch) = match repo {
+                    Some(path) => (
+                        super::diff::working_diff(&path).await.unwrap_or_default(),
+                        super::diff::current_branch(&path).await,
+                    ),
+                    None => (Vec::new(), None),
                 };
-                let _ = reply.send(wire::TaskDiff { task_id, files });
+                let _ = reply.send(wire::TaskDiff { task_id, files, branch });
             }
             Command::GetFileContents { task_id, path, reply } => {
                 let repo = self
@@ -842,7 +856,18 @@ impl Daemon {
             }
             Command::SessionPermission { task_id, request_id, outcome } => {
                 if let Some(handle) = self.sessions.get(&task_id) {
-                    handle.answer(request_id, outcome);
+                    handle.answer(request_id.clone(), outcome.clone());
+                }
+                // Record the answer so clients show it resolved even after a
+                // reopen/restart (the request update stays in history).
+                self.emit_session(
+                    &task_id,
+                    wire::SessionUpdate::PermissionResolved { request_id, outcome },
+                );
+            }
+            Command::SessionSetConfigOption { task_id, config_id, value } => {
+                if let Some(handle) = self.sessions.get(&task_id) {
+                    handle.set_config_option(config_id, value);
                 }
             }
             Command::DetectAgents { reply } => {
@@ -1056,6 +1081,15 @@ impl Daemon {
             }
             AcpUpdate::AvailableCommands { commands } => {
                 self.emit_session(&task_id, wire::SessionUpdate::AvailableCommands { commands })
+            }
+            AcpUpdate::ConfigOptions { options } => {
+                // Transient session state (model/mode); reflect on the task so
+                // clients can show it. Not persisted — no store write.
+                if let Some(task) = self.tasks.get_mut(&task_id) {
+                    task.config_options = options;
+                    let updated = task.clone();
+                    self.emit(Event::TaskUpdated(updated));
+                }
             }
             AcpUpdate::FileEdit { path } => {
                 if let Some(task) = self.tasks.get_mut(&task_id) {

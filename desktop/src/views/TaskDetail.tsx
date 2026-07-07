@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Check, X, ChevronDown, Trash2, FolderTree } from "lucide-react";
+import { ArrowLeft, Check, X, ChevronDown, Trash2, FolderTree, GitBranch } from "lucide-react";
 import { daemon } from "../daemon";
 import {
   CommandInfo,
+  ConfigOption,
   FileDiff,
   FileDoc,
   HunkResolution,
@@ -48,6 +49,8 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
   const [fileDoc, setFileDoc] = useState<FileDoc | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showTree, setShowTree] = useState(false);
+  // Bumped on window focus to refetch the diff (terminal edits show on return).
+  const [focusTick, setFocusTick] = useState(0);
   const streamEnd = useRef<HTMLDivElement>(null);
   const unifiedScroll = useRef<HTMLDivElement>(null);
 
@@ -69,6 +72,12 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
     localStorage.setItem("wf-diff-view", v);
     setDiffView(v);
   };
+
+  useEffect(() => {
+    const onFocus = () => setFocusTick((t) => t + 1);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
 
   // Default the split-view selection to the first changed file.
   useEffect(() => {
@@ -96,9 +105,20 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [diffView, selectedFile, task.id, task.updatedAt]);
+  }, [diffView, selectedFile, task.id, task.updatedAt, focusTick]);
 
   const merged = useMemo(() => coalesceUpdates(updates), [updates]);
+
+  // Persisted permission answers (request_id → outcome) so resolved prompts
+  // don't re-show live buttons after a reopen.
+  const resolvedPerms = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const u of updates) {
+      if (u.kind === "permission_resolved") m[u.request_id] = u.outcome;
+    }
+    return m;
+  }, [updates]);
+
 
   // Slash-menu commands = the agent's most recent available_commands update.
   const commands = useMemo<CommandInfo[]>(() => {
@@ -123,7 +143,7 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
       .request("diff.get", { task_id: task.id })
       .then((d) => setDiff(d as TaskDiff))
       .catch((e: Error) => setDiffError(e.message));
-  }, [task.id, task.updatedAt]);
+  }, [task.id, task.updatedAt, focusTick]);
 
   useEffect(() => {
     streamEnd.current?.scrollIntoView({ behavior: "smooth" });
@@ -190,7 +210,7 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
                   <p className="text-muted-foreground">No session activity yet.</p>
                 )}
                 {merged.map((u, i) => (
-                  <StreamLine key={i} update={u} />
+                  <StreamLine key={i} update={u} taskId={task.id} resolved={resolvedPerms} />
                 ))}
                 <div ref={streamEnd} />
               </div>
@@ -199,6 +219,11 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
               commands={commands}
               disabled={task.status === "done"}
               onSend={(text) => void daemon.request("session.prompt", { task_id: task.id, text })}
+              toolbar={
+                task.configOptions && task.configOptions.length > 0 ? (
+                  <ConfigBar taskId={task.id} options={task.configOptions} />
+                ) : undefined
+              }
             />
           </Card>
         </ResizablePanel>
@@ -214,6 +239,15 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
             </span>
             {diff && (
               <span className="tnum text-xs text-muted-foreground">{diff.files.length} files</span>
+            )}
+            {diff?.branch && (
+              <span
+                className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
+                title={diff.branch}
+              >
+                <GitBranch className="size-3 shrink-0" />
+                <span className="truncate font-mono">{diff.branch}</span>
+              </span>
             )}
             <button
               onClick={() => setShowTree((v) => !v)}
@@ -343,6 +377,94 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
         </Card>
         </ResizablePanel>
       </ResizablePanelGroup>
+    </div>
+  );
+}
+
+/** Renders the agent's session selectors, keeping at most one menu open. */
+function ConfigBar({ taskId, options }: { taskId: string; options: ConfigOption[] }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  return (
+    <>
+      {options.map((opt) => (
+        <ConfigSelect
+          key={opt.id}
+          taskId={taskId}
+          opt={opt}
+          open={openId === opt.id}
+          onToggle={() => setOpenId((id) => (id === opt.id ? null : opt.id))}
+          onClose={() => setOpenId((id) => (id === opt.id ? null : id))}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * A session selector the agent exposes (model / mode / reasoning effort). Shows
+ * the current value; opens a menu to switch it via `session.setConfigOption`.
+ * The daemon echoes the change back as a task.updated, so no local value state.
+ */
+function ConfigSelect({
+  taskId,
+  opt,
+  open,
+  onToggle,
+  onClose,
+}: {
+  taskId: string;
+  opt: ConfigOption;
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+}) {
+  const cur = opt.options.find((o) => o.value === opt.currentValue)?.name ?? opt.currentValue;
+  return (
+    <div className="relative">
+      <button
+        onClick={onToggle}
+        onBlur={() => setTimeout(onClose, 120)}
+        title={opt.name}
+        className="flex items-center gap-0.5 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground"
+      >
+        {cur}
+        <ChevronDown className="size-3 opacity-60" />
+      </button>
+      {open && (
+        <div className="absolute bottom-full left-0 z-30 mb-1 max-h-[50vh] min-w-[180px] overflow-y-auto rounded-md border bg-popover shadow-md">
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+            {opt.name}
+          </div>
+          {opt.options.map((o) => (
+            <button
+              key={o.value}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onClose();
+                if (o.value !== opt.currentValue) {
+                  void daemon.request("session.setConfigOption", {
+                    task_id: taskId,
+                    config_id: opt.id,
+                    value: o.value,
+                  });
+                }
+              }}
+              className={cn(
+                "flex w-full items-center gap-2 px-2 py-1 text-left text-xs",
+                o.value === opt.currentValue ? "bg-accent" : "hover:bg-accent/50",
+              )}
+            >
+              <Check
+                className={cn(
+                  "size-3 shrink-0",
+                  o.value === opt.currentValue ? "opacity-100" : "opacity-0",
+                )}
+              />
+              <span className="truncate">{o.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

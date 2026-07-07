@@ -9,6 +9,7 @@ import {
   Send,
   Plus,
   ListTodo,
+  ChevronRight,
 } from "lucide-react";
 import { daemon, DaemonState } from "../daemon";
 import { SessionUpdate, TaskInfo } from "../protocol";
@@ -354,7 +355,126 @@ export function coalesceUpdates(updates: SessionUpdate[]): SessionUpdate[] {
 
 /** Shared renderer for one session-stream update. `compact` = focus pane
  * (plain text, dense); otherwise the full Task Detail (markdown, tool cards). */
-export function StreamLine({ update, compact }: { update: SessionUpdate; compact?: boolean }) {
+/** A tool-call card whose output can be expanded/collapsed. Collapsed by default. */
+function ToolCallLine({
+  update,
+  dot,
+}: {
+  update: Extract<SessionUpdate, { kind: "tool_call" }>;
+  dot: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasContent = !!update.content;
+  return (
+    <div className="rounded-md border bg-secondary/30">
+      <button
+        type="button"
+        disabled={!hasContent}
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm",
+          hasContent && "hover:bg-secondary/50",
+        )}
+      >
+        {hasContent ? (
+          <ChevronRight
+            className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")}
+          />
+        ) : (
+          <Wrench className={cn("size-3.5 shrink-0", dot)} />
+        )}
+        <span className="min-w-0 flex-1 truncate font-medium">{update.title}</span>
+        {update.tool_kind && update.tool_kind !== "other" && (
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            {update.tool_kind}
+          </span>
+        )}
+        <span className={cn("shrink-0 text-xs", dot)}>{update.status.replace("_", " ")}</span>
+      </button>
+      {open && hasContent && (
+        <pre className="max-h-56 overflow-auto border-t px-2.5 py-2 font-mono text-xs leading-relaxed text-muted-foreground">
+          {update.content}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A permission prompt with allow/deny buttons. Once answered it collapses to a
+ * muted "responded" row — the update itself lingers in the stream, so we track
+ * the answer locally to stop showing live buttons.
+ */
+function PermissionLine({
+  update,
+  taskId,
+  resolvedOutcome,
+}: {
+  update: Extract<SessionUpdate, { kind: "permission_request" }>;
+  taskId?: string;
+  /** Outcome recorded in the stream — persists across reopen/restart. */
+  resolvedOutcome?: string;
+}) {
+  const [clicked, setClicked] = useState<string | null>(null);
+  const answered = clicked ?? resolvedOutcome ?? null;
+  return (
+    <div
+      className={cn(
+        "rounded-md border px-2.5 py-2",
+        answered ? "border-border bg-secondary/20" : "border-warn/40 bg-warn/5",
+      )}
+    >
+      <p
+        className={cn(
+          "flex items-center gap-1.5",
+          answered ? "text-muted-foreground" : "mb-2 text-warn",
+        )}
+      >
+        <TriangleAlert className="size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1">{update.title}</span>
+        {answered && <span className="shrink-0 text-xs">✓ {answered.replace("_", " ")}</span>}
+      </p>
+      {!answered &&
+        (taskId ? (
+          <div className="flex flex-wrap gap-1.5">
+            {update.options.map((opt) => (
+              <Button
+                key={opt}
+                size="sm"
+                variant={opt === "deny" ? "destructive" : "default"}
+                onClick={() => {
+                  setClicked(opt);
+                  void daemon.request("session.permission", {
+                    task_id: taskId,
+                    request_id: update.request_id,
+                    outcome: opt,
+                  });
+                }}
+              >
+                {opt.replace("_", " ")}
+              </Button>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">Open the task to respond.</p>
+        ))}
+    </div>
+  );
+}
+
+export function StreamLine({
+  update,
+  compact,
+  taskId,
+  resolved,
+}: {
+  update: SessionUpdate;
+  compact?: boolean;
+  /** When set, permission requests render inline allow/deny buttons. */
+  taskId?: string;
+  /** request_id → recorded outcome, from persisted permission_resolved updates. */
+  resolved?: Record<string, string>;
+}) {
   switch (update.kind) {
     case "user_message":
       return (
@@ -387,25 +507,7 @@ export function StreamLine({ update, compact }: { update: SessionUpdate; compact
           </p>
         );
       }
-      return (
-        <div className="rounded-md border bg-secondary/30">
-          <div className="flex items-center gap-2 px-2.5 py-1.5 text-sm">
-            <Wrench className={cn("size-3.5 shrink-0", dot)} />
-            <span className="min-w-0 flex-1 truncate font-medium">{update.title}</span>
-            {update.tool_kind && update.tool_kind !== "other" && (
-              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                {update.tool_kind}
-              </span>
-            )}
-            <span className={cn("shrink-0 text-xs", dot)}>{update.status.replace("_", " ")}</span>
-          </div>
-          {update.content && (
-            <pre className="max-h-56 overflow-auto border-t px-2.5 py-2 font-mono text-xs leading-relaxed text-muted-foreground">
-              {update.content}
-            </pre>
-          )}
-        </div>
-      );
+      return <ToolCallLine update={update} dot={dot} />;
     }
     case "file_edit":
       return (
@@ -416,11 +518,15 @@ export function StreamLine({ update, compact }: { update: SessionUpdate; compact
       );
     case "permission_request":
       return (
-        <p className="flex items-center gap-1.5 text-warn">
-          <TriangleAlert className="size-3.5 shrink-0" />
-          {update.title}
-        </p>
+        <PermissionLine
+          update={update}
+          taskId={taskId}
+          resolvedOutcome={resolved?.[update.request_id]}
+        />
       );
+    case "permission_resolved":
+      // Metadata only — folded into the permission_request row above.
+      return null;
     case "plan":
       if (compact) {
         const done = update.entries.filter((e) => e.status === "completed").length;

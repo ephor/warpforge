@@ -34,6 +34,7 @@ pub enum AcpUpdate {
     PermissionRequest { request_id: String, title: String, options: Vec<String> },
     Plan { entries: Vec<wire::PlanEntry> },
     AvailableCommands { commands: Vec<wire::CommandInfo> },
+    ConfigOptions { options: Vec<wire::ConfigOption> },
     TurnEnded { stop_reason: String },
     Error(String),
 }
@@ -41,6 +42,7 @@ pub enum AcpUpdate {
 pub enum AcpCommand {
     Prompt(String),
     AnswerPermission { request_id: String, outcome: String },
+    SetConfigOption { config_id: String, value: String },
     Cancel,
 }
 
@@ -56,6 +58,9 @@ impl AcpHandle {
     }
     pub fn answer(&self, request_id: String, outcome: String) {
         let _ = self.cmd_tx.send(AcpCommand::AnswerPermission { request_id, outcome });
+    }
+    pub fn set_config_option(&self, config_id: String, value: String) {
+        let _ = self.cmd_tx.send(AcpCommand::SetConfigOption { config_id, value });
     }
     pub fn cancel(&self) {
         let _ = self.cmd_tx.send(AcpCommand::Cancel);
@@ -298,12 +303,20 @@ pub fn spawn_acp_session(
                 match tokio::time::timeout(HS, rpc(&out_tx, &pending, &next_id, "session/new", json!({
                     "cwd": cwd, "mcpServers": []
                 }))).await {
-                    Ok(Some(v)) => v
-                        .get("result")
-                        .and_then(|r| r.get("sessionId"))
-                        .and_then(|s| s.as_str())
-                        .map(String::from)
-                        .unwrap_or_else(|| "unknown".into()),
+                    Ok(Some(v)) => {
+                        // Model/mode selectors the agent advertises up-front.
+                        if let Some(result) = v.get("result") {
+                            let opts = parse_config_options(result.get("configOptions"));
+                            if !opts.is_empty() {
+                                let _ = updates.send((task_id.clone(), AcpUpdate::ConfigOptions { options: opts }));
+                            }
+                        }
+                        v.get("result")
+                            .and_then(|r| r.get("sessionId"))
+                            .and_then(|s| s.as_str())
+                            .map(String::from)
+                            .unwrap_or_else(|| "unknown".into())
+                    }
                     Ok(None) => {
                         let _ = updates.send((task_id.clone(), AcpUpdate::Error(
                             "ACP session/new failed — agent closed the connection.".into()
@@ -342,6 +355,27 @@ pub fn spawn_acp_session(
                                 json!({"jsonrpc":"2.0","id":p.agent_id,"result":result}).to_string(),
                             );
                         }
+                    }
+                    AcpCommand::SetConfigOption { config_id, value } => {
+                        let out_tx = out_tx.clone();
+                        let pending = Arc::clone(&pending);
+                        let next_id = Arc::clone(&next_id);
+                        let updates = updates.clone();
+                        let task_id = task_id.clone();
+                        let session_id = session_id.clone();
+                        tokio::spawn(async move {
+                            let res = rpc(&out_tx, &pending, &next_id, "session/set_config_option", json!({
+                                "sessionId": session_id, "configId": config_id, "value": value
+                            }))
+                            .await;
+                            // The reply carries the full updated configOptions.
+                            if let Some(result) = res.as_ref().and_then(|v| v.get("result")) {
+                                let opts = parse_config_options(result.get("configOptions"));
+                                if !opts.is_empty() {
+                                    let _ = updates.send((task_id, AcpUpdate::ConfigOptions { options: opts }));
+                                }
+                            }
+                        });
                     }
                     AcpCommand::Cancel => {
                         let _ = out_tx.send(
@@ -473,8 +507,48 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
                 .collect();
             Some(AcpUpdate::AvailableCommands { commands })
         }
+        "config_option_update" => {
+            Some(AcpUpdate::ConfigOptions { options: parse_config_options(update.get("configOptions")) })
+        }
         _ => None, // user_message_chunk (our own echo), current_mode_update, etc.
     }
+}
+
+/// Parse an ACP `configOptions` array (model/mode/reasoning selectors).
+fn parse_config_options(v: Option<&Value>) -> Vec<wire::ConfigOption> {
+    let Some(arr) = v.and_then(|x| x.as_array()) else { return Vec::new() };
+    arr.iter()
+        .filter_map(|o| {
+            Some(wire::ConfigOption {
+                id: o.get("id")?.as_str()?.to_string(),
+                name: o.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                category: o.get("category").and_then(|x| x.as_str()).map(String::from),
+                current_value: o
+                    .get("currentValue")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                options: o
+                    .get("options")
+                    .and_then(|x| x.as_array())
+                    .map(|opts| {
+                        opts.iter()
+                            .filter_map(|c| {
+                                Some(wire::ConfigChoice {
+                                    value: c.get("value")?.as_str()?.to_string(),
+                                    name: c
+                                        .get("name")
+                                        .and_then(|x| x.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
 }
 
 /// Concatenate any text output attached to a tool call (ACP ToolCallContent
