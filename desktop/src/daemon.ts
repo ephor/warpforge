@@ -37,7 +37,6 @@ export interface DaemonState {
   pendingAgentSetup: DetectedAgent[] | null;
 }
 
-const MAX_SESSION_UPDATES = 500;
 const MAX_SERVICE_LOGS = 1000;
 
 type Listener = () => void;
@@ -327,11 +326,13 @@ class DaemonClient {
         break;
       }
       case "session.update": {
+        // No cap: the snapshot loads the full persisted history unbounded, so
+        // trimming here only chops long codex chats the moment a new update
+        // (e.g. a permission answer) arrives — inconsistent and lossy.
         const { task_id, update } = ev.data;
         const existing = this.state.sessionUpdates[task_id] ?? [];
-        const trimmed = [...existing, update].slice(-MAX_SESSION_UPDATES);
         this.setState({
-          sessionUpdates: { ...this.state.sessionUpdates, [task_id]: trimmed },
+          sessionUpdates: { ...this.state.sessionUpdates, [task_id]: [...existing, update] },
         });
         break;
       }
