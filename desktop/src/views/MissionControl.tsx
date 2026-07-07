@@ -64,8 +64,11 @@ function attentionQueue(state: DaemonState): AttentionItem[] {
 }
 
 function activityLine(updates: SessionUpdate[]): string {
-  for (let i = updates.length - 1; i >= 0; i--) {
-    const u = updates[i];
+  // Coalesce first so a merged agent_text block is one line, not the last
+  // sub-word chunk codex-acp streams.
+  const merged = coalesceUpdates(updates);
+  for (let i = merged.length - 1; i >= 0; i--) {
+    const u = merged[i];
     if (u.kind === "tool_call") return `⚙ ${u.title}`;
     if (u.kind === "file_edit") return `✎ ${u.path}`;
     if (u.kind === "agent_text") return u.text;
@@ -293,7 +296,7 @@ function FocusPane({
         <div className="flex flex-col gap-1.5 p-3 text-xs">
           {recent.length === 0 && <p className="text-muted-foreground">waiting for agent…</p>}
           {recent.map((u, i) => (
-            <StreamLine key={i} update={u} compact />
+            <StreamLine key={streamKey(u, i)} update={u} compact />
           ))}
         </div>
       </ScrollArea>
@@ -321,6 +324,20 @@ function FocusPane({
  *    single row updated in place (agents re-send a call many times as its status
  *    moves in_progress → completed).
  */
+/**
+ * A React key that stays stable across streaming/coalescing for updates that
+ * hold local UI state (permission buttons, expandable tool cards). Coalescing
+ * changes element counts, so an index key would remount these and reset their
+ * state; keying by the update's own id avoids that. Stateless blocks fall back
+ * to the index.
+ */
+export function streamKey(u: SessionUpdate, i: number): string {
+  if (u.kind === "tool_call") return `tool:${u.tool_call_id}`;
+  if (u.kind === "permission_request") return `perm:${u.request_id}`;
+  if (u.kind === "permission_resolved") return `res:${u.request_id}`;
+  return `i:${i}`;
+}
+
 export function coalesceUpdates(updates: SessionUpdate[]): SessionUpdate[] {
   const out: SessionUpdate[] = [];
   const toolAt = new Map<string, number>();
