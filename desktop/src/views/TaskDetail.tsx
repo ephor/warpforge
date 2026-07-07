@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowLeft, Check, X, ChevronDown, Trash2, FolderTree, GitBranch } from "lucide-react";
 import { daemon } from "../daemon";
 import {
@@ -51,7 +52,7 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
   const [showTree, setShowTree] = useState(false);
   // Bumped on window focus to refetch the diff (terminal edits show on return).
   const [focusTick, setFocusTick] = useState(0);
-  const streamEnd = useRef<HTMLDivElement>(null);
+  const streamParent = useRef<HTMLDivElement>(null);
   const unifiedScroll = useRef<HTMLDivElement>(null);
 
   // Scroll a file's block into view inside the unified diff — only that
@@ -145,9 +146,22 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
       .catch((e: Error) => setDiffError(e.message));
   }, [task.id, task.updatedAt, focusTick]);
 
+  // Virtualize the conversation — histories run to thousands of updates
+  // (codex re-sends every tool_call frame), so only mount what's on screen.
+  const streamVirtualizer = useVirtualizer({
+    count: merged.length,
+    getScrollElement: () => streamParent.current,
+    estimateSize: () => 72,
+    overscan: 12,
+    getItemKey: (i) => streamKey(merged[i], i),
+  });
+
   useEffect(() => {
-    streamEnd.current?.scrollIntoView({ behavior: "smooth" });
-  }, [updates.length]);
+    if (merged.length > 0) {
+      streamVirtualizer.scrollToIndex(merged.length - 1, { align: "end" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [merged.length]);
 
   const resolveHunk = (file: string, hunkIndex: number, resolution: HunkResolution) => {
     // Optimistic: mark it now; a reject also revert-refetches via task.updated.
@@ -204,22 +218,32 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
             <div className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Conversation
             </div>
-            <ScrollArea className="min-h-0 flex-1">
-              <div className="flex min-w-0 flex-col gap-3 p-4 text-sm">
-                {merged.length === 0 && (
-                  <p className="text-muted-foreground">No session activity yet.</p>
-                )}
-                {merged.map((u, i) => (
-                  <StreamLine
-                    key={streamKey(u, i)}
-                    update={u}
-                    taskId={task.id}
-                    resolved={resolvedPerms}
-                  />
-                ))}
-                <div ref={streamEnd} />
-              </div>
-            </ScrollArea>
+            <div ref={streamParent} className="min-w-0 flex-1 overflow-y-auto px-4 py-4 text-sm">
+              {merged.length === 0 ? (
+                <p className="text-muted-foreground">No session activity yet.</p>
+              ) : (
+                <div
+                  className="relative w-full"
+                  style={{ height: streamVirtualizer.getTotalSize() }}
+                >
+                  {streamVirtualizer.getVirtualItems().map((vi) => (
+                    <div
+                      key={vi.key}
+                      data-index={vi.index}
+                      ref={streamVirtualizer.measureElement}
+                      className="absolute left-0 top-0 w-full pb-3"
+                      style={{ transform: `translateY(${vi.start}px)` }}
+                    >
+                      <StreamLine
+                        update={merged[vi.index]}
+                        taskId={task.id}
+                        resolved={resolvedPerms}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             <Composer
               commands={commands}
               disabled={task.status === "done"}
