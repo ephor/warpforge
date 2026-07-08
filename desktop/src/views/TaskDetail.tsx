@@ -28,8 +28,7 @@ import { StreamLine, coalesceUpdates, streamKey } from "./MissionControl";
 import { useUi } from "../store/ui";
 import { Composer } from "../components/Composer";
 import { MergeDiff } from "../components/MergeDiff";
-import { FileTree } from "../components/FileTree";
-import { CommitBox } from "../components/CommitBox";
+import { ChangesRail } from "../components/ChangesRail";
 import { taskBadge } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -269,7 +268,7 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
         {/* ── Conversation ── */}
         {showChat && (
         <ResizablePanel id="chat" order={1} defaultSize={showDiff ? 42 : 100} minSize={28}>
-          <Card className="flex h-full min-h-0 flex-col border-0 bg-transparent shadow-none">
+          <Card className="flex h-full min-h-0 flex-col overflow-hidden">
             <div className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Conversation
             </div>
@@ -396,7 +395,6 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
               Editor coming soon — file tree + in-place editing.
             </div>
           ) : (
-          <div className="flex min-h-0 flex-1">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               {diffView === "unified" ? (
                 <ScrollArea ref={unifiedScroll} className="flex-1">
@@ -472,32 +470,6 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
                 </>
               )}
             </div>
-
-            {/* Changed-files tree (right), toggled — with an inline commit box. */}
-            {showTree && diff && diff.files.length > 0 && (
-              <div className="flex w-64 shrink-0 flex-col border-l">
-                <div className="min-h-0 flex-1 overflow-auto">
-                  <FileTree
-                    files={diff.files}
-                    selected={selectedFile}
-                    onSelect={(path) => {
-                      setSelectedFile(path);
-                      if (diffView === "unified") {
-                        scrollToFile(path);
-                      } else {
-                        setView("split");
-                      }
-                    }}
-                  />
-                </div>
-                <CommitBox
-                  taskId={task.id}
-                  files={diff.files.map((f) => f.path)}
-                  onCommitted={() => setFocusTick((t) => t + 1)}
-                />
-              </div>
-            )}
-          </div>
           )}
           {runtimeOpen && (
             <div className="max-h-48 shrink-0 overflow-auto border-t">
@@ -509,6 +481,31 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
           )}
         </Card>
         </ResizablePanel>
+        )}
+
+        {showTree && diff && diff.files.length > 0 && (
+          <>
+            {(showChat || showDiff) && <ResizableHandle withHandle className="mx-2" />}
+            <ResizablePanel id="changes" order={3} defaultSize={26} minSize={16} maxSize={44}>
+              <Card className="flex h-full min-h-0 flex-col overflow-hidden">
+                <ChangesRail
+                  project={task.project}
+                  files={diff.files}
+                  selected={selectedFile}
+                  taskId={task.id}
+                  onCommitted={() => setFocusTick((t) => t + 1)}
+                  onSelect={(path) => {
+                    setSelectedFile(path);
+                    if (diffView === "unified") {
+                      scrollToFile(path);
+                    } else {
+                      setView("split");
+                    }
+                  }}
+                />
+              </Card>
+            </ResizablePanel>
+          </>
         )}
       </ResizablePanelGroup>
     </div>
