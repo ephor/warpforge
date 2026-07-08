@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowLeft, Check, X, ChevronDown, Trash2, FolderTree, GitBranch } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  X,
+  ChevronDown,
+  Trash2,
+  FolderTree,
+  GitBranch,
+  MessagesSquare,
+  Columns2,
+} from "lucide-react";
 import { daemon } from "../daemon";
 import {
   CommandInfo,
@@ -49,7 +59,14 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileDoc, setFileDoc] = useState<FileDoc | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [showTree, setShowTree] = useState(false);
+  const showChat = useUi((s) => s.showChat);
+  const showDiff = useUi((s) => s.showDiff);
+  const showTree = useUi((s) => s.showTree);
+  const centerTab = useUi((s) => s.centerTab);
+  const toggleChat = useUi((s) => s.toggleChat);
+  const toggleDiff = useUi((s) => s.toggleDiff);
+  const toggleTree = useUi((s) => s.toggleTree);
+  const setCenterTab = useUi((s) => s.setCenterTab);
   // Bumped on window focus to refetch the diff (terminal edits show on return).
   const [focusTick, setFocusTick] = useState(0);
   const streamParent = useRef<HTMLDivElement>(null);
@@ -180,6 +197,28 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
         <span className="text-xs text-muted-foreground">
           {task.project} · {task.agent}
         </span>
+        <div className="flex rounded-md border p-0.5">
+          <button
+            onClick={toggleChat}
+            title="Toggle chat"
+            className={cn(
+              "rounded px-1.5 py-1 transition-colors",
+              showChat ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <MessagesSquare className="size-3.5" />
+          </button>
+          <button
+            onClick={toggleDiff}
+            title="Toggle changes / editor"
+            className={cn(
+              "rounded px-1.5 py-1 transition-colors",
+              showDiff ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Columns2 className="size-3.5" />
+          </button>
+        </div>
         {(task.status === "running" || task.status === "queued") && (
           <Button
             variant="destructive"
@@ -210,7 +249,8 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
 
       <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1 gap-0">
         {/* ── Conversation ── */}
-        <ResizablePanel defaultSize={42} minSize={28}>
+        {showChat && (
+        <ResizablePanel id="chat" order={1} defaultSize={showDiff ? 42 : 100} minSize={28}>
           <Card className="flex h-full min-h-0 flex-col border-0 bg-transparent shadow-none">
             <div className="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Conversation
@@ -253,17 +293,41 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
             />
           </Card>
         </ResizablePanel>
+        )}
 
-        <ResizableHandle withHandle className="mx-2" />
+        {showChat && showDiff && <ResizableHandle withHandle className="mx-2" />}
 
-        {/* ── Diff ── */}
-        <ResizablePanel defaultSize={58} minSize={30}>
+        {/* ── Center: Changes / Editor ── */}
+        {showDiff && (
+        <ResizablePanel id="center" order={2} defaultSize={showChat ? 58 : 100} minSize={30}>
         <Card className="flex h-full min-h-0 flex-col">
           <div className="flex items-center gap-2 border-b px-4 py-2">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Changes
-            </span>
-            {diff && (
+            <div className="flex rounded-md border p-0.5 text-xs">
+              <button
+                onClick={() => setCenterTab("changes")}
+                className={cn(
+                  "rounded px-2 py-0.5 transition-colors",
+                  centerTab === "changes"
+                    ? "bg-secondary text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                Changes
+              </button>
+              <button
+                disabled
+                title="Editor — coming soon"
+                className={cn(
+                  "rounded px-2 py-0.5 transition-colors",
+                  centerTab === "editor"
+                    ? "bg-secondary text-foreground"
+                    : "text-muted-foreground/50",
+                )}
+              >
+                Editor
+              </button>
+            </div>
+            {diff && centerTab === "changes" && (
               <span className="tnum text-xs text-muted-foreground">{diff.files.length} files</span>
             )}
             {diff?.branch && (
@@ -275,36 +339,45 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
                 <span className="truncate font-mono">{diff.branch}</span>
               </span>
             )}
-            <button
-              onClick={() => setShowTree((v) => !v)}
-              title="Toggle changed-files tree"
-              className={cn(
-                "ml-auto rounded-md border px-1.5 py-1 transition-colors",
-                showTree
-                  ? "bg-secondary text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <FolderTree className="size-3.5" />
-            </button>
-            <div className="flex rounded-md border p-0.5">
-              {(["unified", "split"] as const).map((v) => (
+            {centerTab === "changes" && (
+              <div className="ml-auto flex items-center gap-2">
                 <button
-                  key={v}
-                  onClick={() => setView(v)}
+                  onClick={toggleTree}
+                  title="Toggle changed-files tree"
                   className={cn(
-                    "rounded px-2 py-0.5 text-xs capitalize transition-colors",
-                    diffView === v
+                    "rounded-md border px-1.5 py-1 transition-colors",
+                    showTree
                       ? "bg-secondary text-foreground"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
-                  {v}
+                  <FolderTree className="size-3.5" />
                 </button>
-              ))}
-            </div>
+                <div className="flex rounded-md border p-0.5">
+                  {(["unified", "split"] as const).map((v) => (
+                    <button
+                      key={v}
+                      onClick={() => setView(v)}
+                      className={cn(
+                        "rounded px-2 py-0.5 text-xs capitalize transition-colors",
+                        diffView === v
+                          ? "bg-secondary text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
+          {centerTab === "editor" ? (
+            <div className="flex flex-1 items-center justify-center p-6 text-center text-sm text-muted-foreground">
+              Editor coming soon — file tree + in-place editing.
+            </div>
+          ) : (
           <div className="flex min-h-0 flex-1">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               {diffView === "unified" ? (
@@ -400,8 +473,10 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
               </div>
             )}
           </div>
+          )}
         </Card>
         </ResizablePanel>
+        )}
       </ResizablePanelGroup>
     </div>
   );
