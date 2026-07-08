@@ -1,8 +1,9 @@
 import { useState, useSyncExternalStore } from "react";
-import { Anvil, LayoutGrid, KanbanSquare, FolderTree, Plus, Circle, Bot } from "lucide-react";
+import { Anvil, LayoutGrid, KanbanSquare, FolderTree, Plus, Circle, Bot, PanelLeft } from "lucide-react";
 import { DetectedAgent } from "./protocol";
 import { daemon } from "./daemon";
 import { useUi, type View } from "./store/ui";
+import AttentionRail from "./components/AttentionRail";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -25,6 +26,8 @@ export default function App() {
   const setView = useUi((s) => s.setView);
   const openTaskId = useUi((s) => s.openTaskId);
   const setOpenTaskId = useUi((s) => s.openTask);
+  const attentionOpen = useUi((s) => s.attentionOpen);
+  const toggleAttention = useUi((s) => s.toggleAttention);
   const [newTaskProject, setNewTaskProject] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
@@ -46,6 +49,16 @@ export default function App() {
             <Anvil className="size-4 text-primary" />
             warpforge
           </div>
+
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={toggleAttention}
+            title="Toggle attention sidebar"
+            className={cn(attentionOpen && "text-foreground")}
+          >
+            <PanelLeft className="size-4" />
+          </Button>
 
           <nav className="flex items-center gap-1">
             {NAV.map((n) => {
@@ -105,25 +118,28 @@ export default function App() {
           </div>
         </header>
 
-        <main className="min-h-0 flex-1 overflow-hidden p-4">
-          {openTask ? (
-            <TaskDetail
-              task={openTask}
-              updates={state.sessionUpdates[openTask.id] ?? []}
-              onClose={() => setOpenTaskId(null)}
-            />
-          ) : view === "control" ? (
-            <MissionControl state={state} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
-          ) : view === "board" ? (
-            <Board snapshot={state.snapshot} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
-          ) : (
-            <Projects
-              snapshot={state.snapshot}
-              onOpenTask={setOpenTaskId}
-              onNewTask={startNewTask}
-            />
-          )}
-        </main>
+        <div className="flex min-h-0 flex-1 gap-4 overflow-hidden p-4">
+          {attentionOpen && <AttentionRail state={state} onOpenTask={setOpenTaskId} />}
+          <main className="min-h-0 flex-1 overflow-hidden">
+            {openTask ? (
+              <TaskDetail
+                task={openTask}
+                updates={state.sessionUpdates[openTask.id] ?? []}
+                onClose={() => setOpenTaskId(null)}
+              />
+            ) : view === "control" ? (
+              <MissionControl state={state} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
+            ) : view === "board" ? (
+              <Board snapshot={state.snapshot} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
+            ) : (
+              <Projects
+                snapshot={state.snapshot}
+                onOpenTask={setOpenTaskId}
+                onNewTask={startNewTask}
+              />
+            )}
+          </main>
+        </div>
 
         <NewTaskDialog
           open={newTaskOpen}
