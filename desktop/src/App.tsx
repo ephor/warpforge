@@ -125,6 +125,7 @@ export default function App() {
               <TaskDetail
                 task={openTask}
                 updates={state.sessionUpdates[openTask.id] ?? []}
+                state={state}
                 onClose={() => setOpenTaskId(null)}
               />
             ) : view === "control" ? (

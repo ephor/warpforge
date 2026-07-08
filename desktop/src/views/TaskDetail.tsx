@@ -10,8 +10,10 @@ import {
   GitBranch,
   MessagesSquare,
   Columns2,
+  Server,
 } from "lucide-react";
-import { daemon } from "../daemon";
+import { RuntimePanel } from "../components/RuntimePanel";
+import { daemon, DaemonState } from "../daemon";
 import {
   CommandInfo,
   ConfigOption,
@@ -43,6 +45,7 @@ import { cn } from "@/lib/utils";
 interface Props {
   task: TaskInfo;
   updates: SessionUpdate[];
+  state: DaemonState;
   onClose: () => void;
 }
 
@@ -51,7 +54,7 @@ interface Props {
  * left, multi-file diff with per-hunk accept/reject on the right — Zed's
  * agent-panel review is the bar.
  */
-export default function TaskDetail({ task, updates, onClose }: Props) {
+export default function TaskDetail({ task, updates, state, onClose }: Props) {
   const [diff, setDiff] = useState<TaskDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [localRes, setLocalRes] = useState<Record<string, HunkResolution>>({});
@@ -68,6 +71,10 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
   const toggleDiff = useUi((s) => s.toggleDiff);
   const toggleTree = useUi((s) => s.toggleTree);
   const setCenterTab = useUi((s) => s.setCenterTab);
+  const runtimeOpen = useUi((s) => s.runtimeOpen);
+  const toggleRuntime = useUi((s) => s.toggleRuntime);
+  const services = state.snapshot.services.filter((s) => s.project === task.project);
+  const portforwards = state.snapshot.portforwards.filter((p) => p.project === task.project);
   // Bumped on window focus to refetch the diff (terminal edits show on return).
   const [focusTick, setFocusTick] = useState(0);
   const streamParent = useRef<HTMLDivElement>(null);
@@ -218,6 +225,16 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
             )}
           >
             <Columns2 className="size-3.5" />
+          </button>
+          <button
+            onClick={toggleRuntime}
+            title="Toggle services & port-forwards"
+            className={cn(
+              "rounded px-1.5 py-1 transition-colors",
+              runtimeOpen ? "bg-secondary text-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Server className="size-3.5" />
           </button>
         </div>
         {(task.status === "running" || task.status === "queued") && (
@@ -481,6 +498,14 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
               </div>
             )}
           </div>
+          )}
+          {runtimeOpen && (
+            <div className="max-h-48 shrink-0 overflow-auto border-t">
+              <div className="px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Runtime
+              </div>
+              <RuntimePanel services={services} portforwards={portforwards} />
+            </div>
           )}
         </Card>
         </ResizablePanel>
