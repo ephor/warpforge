@@ -152,8 +152,19 @@ class DaemonClient {
         return Promise.resolve(this.demoDiff!(String(p.task_id)));
       case "file.contents":
         return Promise.resolve(this.demoFileDoc!(String(p.path)));
+      case "file.list": {
+        const diff = this.demoDiff!(String(p.task_id));
+        const files = diff.files.map((f) => ({ path: f.path, changed: true }));
+        return Promise.resolve(files);
+      }
       case "file.save":
         return Promise.resolve({});
+      case "service.logs":
+        return Promise.resolve([
+          `[${String(p.service)}] starting process`,
+          `[${String(p.service)}] loading workspace config`,
+          `[${String(p.service)}] listening on allocated port`,
+        ]);
       case "session.permission": {
         const taskId = String(p.task_id);
         this.appendUpdate(taskId, {

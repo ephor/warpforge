@@ -238,6 +238,11 @@ export interface FileDoc {
   newText: string;
 }
 
+export interface ProjectFile {
+  path: string;
+  changed: boolean;
+}
+
 // ── Terminals ───────────────────────────────────────────────────────────────
 
 export interface TerminalInfo {

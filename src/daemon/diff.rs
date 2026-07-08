@@ -12,6 +12,65 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use warpforge_protocol as wire;
 
+/// Project files for the editor tree. Prefer git's view (tracked +
+/// untracked, honoring .gitignore); fall back to a small filesystem walk for
+/// non-git projects.
+pub async fn list_files(repo: &str) -> Result<Vec<wire::ProjectFile>> {
+    let out = Command::new("git")
+        .args(["-C", repo, "ls-files", "--cached", "--others", "--exclude-standard"])
+        .output()
+        .await?;
+
+    if out.status.success() {
+        let changed = working_diff(repo)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| f.path)
+            .collect::<std::collections::HashSet<_>>();
+        let mut files = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| {
+                let path = line.trim();
+                (!path.is_empty()).then(|| wire::ProjectFile {
+                    path: path.to_string(),
+                    changed: changed.contains(path),
+                })
+            })
+            .collect::<Vec<_>>();
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        return Ok(files);
+    }
+
+    let mut files = Vec::new();
+    walk_files(std::path::Path::new(repo), std::path::Path::new(repo), &mut files)?;
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
+fn walk_files(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<wire::ProjectFile>) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if matches!(name.as_ref(), ".git" | "node_modules" | "target" | "dist" | ".next") {
+            continue;
+        }
+        if path.is_dir() {
+            walk_files(root, &path, out)?;
+        } else if path.is_file() {
+            if let Ok(rel) = path.strip_prefix(root) {
+                out.push(wire::ProjectFile {
+                    path: rel.to_string_lossy().replace('\\', "/"),
+                    changed: false,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Working-tree diff for a git repo. Returns empty (Ok) if it isn't a repo.
 pub async fn working_diff(repo: &str) -> Result<Vec<wire::FileDiff>> {
     let out = Command::new("git")

@@ -8,38 +8,38 @@
  * now — this is a developer tool that lives next to a terminal.
  */
 :root {
-  --background: 222 16% 9%;
-  --foreground: 220 14% 85%;
+  --background: 220 10% 5%;
+  --foreground: 220 12% 86%;
 
-  --card: 222 15% 12%;
+  --card: 220 10% 10%;
   --card-foreground: 220 14% 85%;
 
-  --popover: 222 16% 11%;
+  --popover: 220 10% 9%;
   --popover-foreground: 220 14% 85%;
 
   --primary: 222 89% 73%;
   --primary-foreground: 222 47% 11%;
 
-  --secondary: 222 14% 18%;
+  --secondary: 220 9% 17%;
   --secondary-foreground: 220 14% 85%;
 
-  --muted: 222 14% 16%;
+  --muted: 220 9% 15%;
   --muted-foreground: 220 9% 60%;
 
-  --accent: 222 14% 20%;
+  --accent: 220 9% 19%;
   --accent-foreground: 220 14% 90%;
 
   --destructive: 348 80% 62%;
   --destructive-foreground: 0 0% 100%;
 
-  --border: 222 13% 22%;
-  --input: 222 13% 22%;
+  --border: 220 9% 19%;
+  --input: 220 9% 22%;
   --ring: 222 89% 73%;
 
   --ok: 92 45% 60%;
   --warn: 37 62% 62%;
 
-  --radius: 0.6rem;
+  --radius: 0.5rem;
 }
 
 * {
@@ -53,6 +53,12 @@ body {
   font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+textarea {
+  letter-spacing: 0;
 }
 
 /* Tabular numerals wherever digits line up (ports, counts, timers). */

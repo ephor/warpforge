@@ -195,6 +195,9 @@ pub enum Method {
     /// editable side-by-side (CodeMirror merge) review.
     #[serde(rename = "file.contents")]
     FileContents { task_id: String, path: String },
+    /// List files in the task's project working tree.
+    #[serde(rename = "file.list")]
+    FileList { task_id: String },
     /// Write new contents to a file in the task's working tree (in-review edit).
     #[serde(rename = "file.save")]
     FileSave { task_id: String, path: String, content: String },
@@ -565,6 +568,15 @@ pub struct FileDoc {
     pub status: FileDiffStatus,
     pub old_text: String,
     pub new_text: String,
+}
+
+/// Result of `file.list`: project files available to open in the editor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectFile {
+    pub path: String,
+    #[serde(default)]
+    pub changed: bool,
 }
 
 // ─── Terminal agents (legacy PTY path) ───────────────────────────────────────

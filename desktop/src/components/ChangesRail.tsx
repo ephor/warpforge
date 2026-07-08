@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, GitCommitVertical } from "lucide-react";
+import { ChevronRight, GitCommitVertical, RefreshCw, Sparkles, Undo2 } from "lucide-react";
 import { FileDiff } from "../protocol";
 import { daemon } from "../daemon";
 import { Button } from "@/components/ui/button";
@@ -114,28 +114,31 @@ function Row({
     return (
       <div
         className={cn(
-          "group flex items-center gap-1.5 py-0.5 pr-2 text-xs",
-          selected === node.path ? "bg-secondary" : "hover:bg-secondary/50",
+          "group flex h-7 items-center gap-1.5 pr-2 text-xs",
+          selected === node.path ? "bg-secondary text-foreground" : "hover:bg-secondary/50",
         )}
         style={pad}
       >
         <input
+          aria-label={`Stage ${node.path}`}
           type="checkbox"
           checked={on}
           onChange={() => onToggle([node.path!], !on)}
-          className="size-3 shrink-0"
+          className="size-3 shrink-0 accent-primary"
         />
-        <span className={cn("w-3 shrink-0 text-center font-mono font-semibold", s.color)}>
+        <span className={cn("w-3 shrink-0 text-center font-mono text-[11px] font-semibold", s.color)}>
           {s.glyph}
         </span>
         <button
+          type="button"
           onClick={() => onSelect(node.path!)}
           title={node.path}
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
           <span className="truncate">{node.name}</span>
           <span className="tnum ml-auto shrink-0 font-mono text-[10px]">
-            {st.adds > 0 && <span className="text-ok">+{st.adds}</span>}{" "}
+            {st.adds > 0 && <span className="text-ok">+{st.adds}</span>}
+            {st.adds > 0 && st.dels > 0 && " "}
             {st.dels > 0 && <span className="text-destructive">-{st.dels}</span>}
           </span>
         </button>
@@ -149,21 +152,23 @@ function Row({
   const state = on === 0 ? "off" : on === paths.length ? "on" : "some";
   return (
     <>
-      <div className="flex items-center gap-1.5 py-0.5 pr-2 text-xs text-muted-foreground" style={pad}>
+      <div className="flex h-7 items-center gap-1.5 pr-2 text-xs text-muted-foreground" style={pad}>
         <input
+          aria-label={`Stage ${node.name}`}
           type="checkbox"
           checked={state === "on"}
           ref={(el) => el && (el.indeterminate = state === "some")}
           onChange={() => onToggle(paths, state !== "on")}
-          className="size-3 shrink-0"
+          className="size-3 shrink-0 accent-primary"
         />
         <button
+          type="button"
           onClick={() => setOpen((o) => !o)}
           className="flex min-w-0 flex-1 items-center gap-1 text-left hover:text-foreground"
         >
           <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
           <span className="truncate">{node.name}</span>
-          <span className="ml-1 shrink-0 text-[10px] text-muted-foreground/60">
+          <span className="ml-1 shrink-0 text-[10px] text-muted-foreground/70">
             {paths.length} files
           </span>
         </button>
@@ -191,6 +196,7 @@ export function ChangesRail({
   onSelect,
   taskId,
   onCommitted,
+  onRefresh,
 }: {
   project: string;
   files: FileDiff[];
@@ -198,18 +204,24 @@ export function ChangesRail({
   onSelect: (path: string) => void;
   taskId: string;
   onCommitted: () => void;
+  onRefresh: () => void;
 }) {
   const allPaths = useMemo(() => files.map((f) => f.path), [files]);
+  const filesByPath = useMemo(() => new Map(files.map((f) => [f.path, f])), [files]);
   const [staged, setStaged] = useState<Set<string>>(() => new Set(allPaths));
   const [message, setMessage] = useState("");
   const [amend, setAmend] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [rollbackBusy, setRollbackBusy] = useState(false);
+  const [rollbackConfirm, setRollbackConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Re-sync selection as the diff's file set changes (keep prior choices).
   useEffect(() => {
     setStaged((prev) => new Set(allPaths.filter((p) => prev.has(p) || prev.size === 0)));
   }, [allPaths]);
+
+  useEffect(() => setRollbackConfirm(false), [allPaths, staged.size]);
 
   // Wrap the project's files under a single root labelled with the project.
   const root = useMemo(() => {
@@ -225,6 +237,7 @@ export function ChangesRail({
     });
 
   const canCommit = !busy && staged.size > 0 && (message.trim().length > 0 || amend);
+  const canRollback = !rollbackBusy && staged.size > 0;
 
   const commit = async () => {
     setBusy(true);
@@ -247,23 +260,82 @@ export function ChangesRail({
     }
   };
 
+  const rollbackChecked = async () => {
+    if (!canRollback) return;
+    if (!rollbackConfirm) {
+      setRollbackConfirm(true);
+      return;
+    }
+    setRollbackBusy(true);
+    setError(null);
+    try {
+      for (const path of [...staged]) {
+        const file = filesByPath.get(path);
+        if (!file) continue;
+        const indices =
+          file.status === "added"
+            ? [0]
+            : file.hunks.map((_, i) => i).reverse();
+        for (const hunkIndex of indices) {
+          await daemon.request("diff.resolveHunk", {
+            task_id: taskId,
+            file: path,
+            hunk_index: hunkIndex,
+            resolution: "reject",
+          });
+        }
+      }
+      setRollbackConfirm(false);
+      onRefresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRollbackBusy(false);
+    }
+  };
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="px-3 py-2.5 text-sm font-semibold">Changes</div>
-      <div className="flex items-center gap-2 border-y bg-secondary/40 px-3 py-1 text-xs text-muted-foreground">
+    <div className="flex h-full min-h-0 flex-col bg-card">
+      <div className="flex h-11 items-center gap-2 border-b px-3 text-sm font-semibold">
+        <span className="min-w-0 flex-1 truncate">Changes</span>
+        <button
+          type="button"
+          aria-label="Refresh changes"
+          title="Refresh changes"
+          onClick={onRefresh}
+          className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+        >
+          <RefreshCw className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          aria-label={rollbackConfirm ? "Confirm rollback checked files" : "Rollback checked files"}
+          title={rollbackConfirm ? "Click again to rollback checked files" : "Rollback checked files"}
+          disabled={!canRollback}
+          onClick={rollbackChecked}
+          className={cn(
+            "rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-40",
+            rollbackConfirm && "text-destructive hover:text-destructive",
+          )}
+        >
+          <Undo2 className="size-3.5" />
+        </button>
+      </div>
+      <div className="flex h-8 items-center gap-2 border-b bg-secondary/55 px-3 text-xs text-muted-foreground">
         <input
+          aria-label="Stage all files"
           type="checkbox"
           checked={staged.size === allPaths.length && allPaths.length > 0}
           ref={(el) => el && (el.indeterminate = staged.size > 0 && staged.size < allPaths.length)}
           onChange={(e) => setStaged(e.target.checked ? new Set(allPaths) : new Set())}
-          className="size-3"
+          className="size-3 accent-primary"
         />
         <span className="tnum">
           {staged.size}/{allPaths.length} files
         </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto py-1">
+      <div className="min-h-0 flex-1 overflow-auto py-1.5">
         <Row
           node={root}
           depth={0}
@@ -274,13 +346,13 @@ export function ChangesRail({
         />
       </div>
 
-      <div className="flex flex-col gap-2 border-t p-2">
+      <div className="flex flex-col gap-2 border-t bg-background/30 p-2.5">
         <textarea
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           placeholder="Commit message"
           rows={3}
-          className="w-full resize-none rounded-md border bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
+          className="min-h-20 w-full resize-none rounded-md border bg-background/70 px-2 py-1.5 text-xs outline-none placeholder:text-muted-foreground/80 focus:ring-1 focus:ring-ring"
         />
         {error && <p className="text-xs text-destructive">{error}</p>}
         <div className="flex items-center gap-2">
@@ -289,13 +361,16 @@ export function ChangesRail({
               type="checkbox"
               checked={amend}
               onChange={(e) => setAmend(e.target.checked)}
-              className="size-3"
+              className="size-3 accent-primary"
             />
             amend
           </label>
-          <Button size="sm" className="ml-auto h-7" disabled={!canCommit} onClick={commit}>
+          <Button type="button" size="sm" className="ml-auto h-7" disabled={!canCommit} onClick={commit}>
             <GitCommitVertical className="size-3.5" />
             {busy ? "…" : amend ? "Amend" : "Commit"}
+          </Button>
+          <Button type="button" size="icon" variant="ghost" className="size-7" title="Generate commit message">
+            <Sparkles className="size-3.5" />
           </Button>
         </div>
       </div>

@@ -238,6 +238,13 @@ async fn dispatch(
                 message: format!("cannot read {path}"),
             }),
         },
+        FileList { task_id } => {
+            let files = handle.list_files(&task_id).await;
+            serde_json::to_value(files).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
         FileSave { task_id, path, content } => {
             handle.send(Command::SaveFile { task_id, path, content }).await;
             Ok(json!(null))

@@ -9,6 +9,7 @@ import { persist } from "zustand/middleware";
 export type View = "control" | "board" | "projects";
 export type CenterTab = "changes" | "editor";
 export type DiffView = "unified" | "split";
+export type RightPanel = "changes" | "files" | null;
 
 interface UiState {
   // Navigation
@@ -22,17 +23,23 @@ interface UiState {
   showTree: boolean;
   centerTab: CenterTab;
   diffView: DiffView;
+  rightPanel: RightPanel;
   runtimeOpen: boolean;
+  pinnedTaskIds: string[];
 
   setView: (v: View) => void;
   openTask: (id: string | null) => void;
   toggleAttention: () => void;
   toggleChat: () => void;
   toggleDiff: () => void;
+  setShowDiff: (open: boolean) => void;
   toggleTree: () => void;
   setCenterTab: (t: CenterTab) => void;
   setDiffView: (v: DiffView) => void;
+  setRightPanel: (panel: RightPanel) => void;
   toggleRuntime: () => void;
+  setRuntimeOpen: (open: boolean) => void;
+  togglePinnedTask: (id: string) => void;
 }
 
 export const useUi = create<UiState>()(
@@ -46,7 +53,9 @@ export const useUi = create<UiState>()(
       showTree: false,
       centerTab: "changes",
       diffView: "split",
+      rightPanel: "changes",
       runtimeOpen: false,
+      pinnedTaskIds: [],
 
       setView: (view) => set({ view, openTaskId: null }),
       openTask: (openTaskId) => set({ openTaskId }),
@@ -55,10 +64,19 @@ export const useUi = create<UiState>()(
       // sub-panel of Center, so it toggles freely.
       toggleChat: () => set((s) => (!s.showChat || s.showDiff ? { showChat: !s.showChat } : s)),
       toggleDiff: () => set((s) => (!s.showDiff || s.showChat ? { showDiff: !s.showDiff } : s)),
+      setShowDiff: (showDiff) => set((s) => (!showDiff && !s.showChat ? s : { showDiff })),
       toggleTree: () => set((s) => ({ showTree: !s.showTree })),
       setCenterTab: (centerTab) => set({ centerTab }),
       setDiffView: (diffView) => set({ diffView }),
+      setRightPanel: (rightPanel) => set({ rightPanel }),
       toggleRuntime: () => set((s) => ({ runtimeOpen: !s.runtimeOpen })),
+      setRuntimeOpen: (runtimeOpen) => set({ runtimeOpen }),
+      togglePinnedTask: (id) =>
+        set((s) => ({
+          pinnedTaskIds: s.pinnedTaskIds.includes(id)
+            ? s.pinnedTaskIds.filter((x) => x !== id)
+            : [...s.pinnedTaskIds, id],
+        })),
     }),
     {
       name: "wf-ui",

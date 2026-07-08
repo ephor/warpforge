@@ -1,11 +1,15 @@
+import { Maximize2, Pin } from "lucide-react";
 import { daemon, DaemonState } from "../daemon";
 import { SessionUpdate, TaskInfo } from "../protocol";
-import { taskBadge } from "@/lib/status";
+import { coalesceUpdates, StreamLine, streamKey } from "../views/MissionControl";
+import { useUi } from "../store/ui";
+import { elapsed, taskBadge, taskEdge } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
 
 /**
  * "Needs you" rail — tasks blocked on a human (pending permission, review,
@@ -17,6 +21,12 @@ type PermissionUpdate = Extract<SessionUpdate, { kind: "permission_request" }>;
 function pendingPermission(updates: SessionUpdate[]): PermissionUpdate | undefined {
   const last = updates[updates.length - 1];
   return last?.kind === "permission_request" ? last : undefined;
+}
+
+function previewableUpdate(update: SessionUpdate): boolean {
+  return update.kind !== "available_commands"
+    && update.kind !== "permission_request"
+    && update.kind !== "permission_resolved";
 }
 
 interface AttentionItem {
@@ -47,74 +57,157 @@ interface Props {
 }
 
 export default function AttentionRail({ state, onOpenTask }: Props) {
+  const pinned = useUi((s) => s.pinnedTaskIds);
+  const togglePin = useUi((s) => s.togglePinnedTask);
   const queue = attentionQueue(state);
-  const working = state.snapshot.tasks.filter((t) => t.status === "running").length;
+  const attentionIds = new Set(queue.map((item) => item.task.id));
+  const permissions = new Map(queue.flatMap((item) => (item.permission ? [[item.task.id, item.permission]] : [])));
+  const reasons = new Map(queue.map((item) => [item.task.id, item.reason]));
+  const live = state.snapshot.tasks
+    .filter((t) => t.status !== "done")
+    .sort((a, b) => {
+      const ap = attentionIds.has(a.id) ? 0 : 1;
+      const bp = attentionIds.has(b.id) ? 0 : 1;
+      return ap - bp || b.updatedAt - a.updatedAt;
+    });
 
   return (
-    <Card className="flex min-h-0 w-[300px] shrink-0 flex-col">
-      <div className="flex items-center justify-between px-4 py-3">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Needs you
+    <Card className="flex min-h-0 w-[340px] shrink-0 flex-col overflow-hidden bg-card/90">
+      <div className="flex h-11 items-center justify-between px-4">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+          Sessions
         </span>
         {queue.length > 0 && (
-          <span className="tnum flex size-5 items-center justify-center rounded-full bg-destructive text-xs font-bold text-destructive-foreground">
+          <span className="tnum flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive/90 px-1.5 text-xs font-semibold text-destructive-foreground">
             {queue.length}
           </span>
         )}
       </div>
       <Separator />
       <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-2 p-3">
-          {queue.length === 0 ? (
+        <div className="flex flex-col gap-2 p-2.5">
+          {live.length === 0 ? (
             <div className="mt-10 px-4 text-center text-sm leading-relaxed text-muted-foreground">
               <p className="mb-1 text-foreground">All quiet.</p>
-              {working} agent{working === 1 ? "" : "s"} working. Nothing needs you.
+              No live sessions.
             </div>
           ) : (
-            queue.map((item) => (
-              <Card
-                key={item.task.id}
-                className="border-warn/40 bg-warn/5 p-3 transition-colors hover:border-warn"
-              >
-                <button
-                  className="mb-1.5 flex w-full items-center justify-between text-xs"
-                  onClick={() => onOpenTask(item.task.id)}
-                >
-                  <span className="font-semibold">{item.task.project}</span>
-                  <Badge variant={taskBadge(item.task.status).variant}>
-                    {taskBadge(item.task.status).label}
-                  </Badge>
-                </button>
-                <p className="mb-2 text-sm">{item.reason}</p>
-                {item.permission ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {item.permission.options.map((opt) => (
-                      <Button
-                        key={opt}
-                        size="sm"
-                        variant={opt === "deny" ? "destructive" : "default"}
-                        onClick={() =>
-                          void daemon.request("session.permission", {
-                            task_id: item.task.id,
-                            request_id: item.permission!.request_id,
-                            outcome: opt,
-                          })
-                        }
-                      >
-                        {opt}
-                      </Button>
-                    ))}
-                  </div>
-                ) : (
-                  <Button size="sm" variant="outline" onClick={() => onOpenTask(item.task.id)}>
-                    {item.task.status === "needs_review" ? "review diff" : "open"}
-                  </Button>
-                )}
-              </Card>
+            live.map((task) => (
+              <SessionRailCard
+                key={task.id}
+                task={task}
+                updates={state.sessionUpdates[task.id] ?? []}
+                pinned={pinned.includes(task.id)}
+                attention={attentionIds.has(task.id)}
+                reason={reasons.get(task.id)}
+                permission={permissions.get(task.id)}
+                onPin={() => togglePin(task.id)}
+                onOpen={() => onOpenTask(task.id)}
+              />
             ))
           )}
         </div>
       </ScrollArea>
+    </Card>
+  );
+}
+
+function SessionRailCard({
+  task,
+  updates,
+  pinned,
+  attention,
+  reason,
+  permission,
+  onPin,
+  onOpen,
+}: {
+  task: TaskInfo;
+  updates: SessionUpdate[];
+  pinned: boolean;
+  attention: boolean;
+  reason?: string;
+  permission?: PermissionUpdate;
+  onPin: () => void;
+  onOpen: () => void;
+}) {
+  const badge = taskBadge(task.status);
+  const recent = coalesceUpdates(updates).filter(previewableUpdate).slice(-4);
+
+  return (
+    <Card
+      className={cn(
+        "group flex cursor-pointer flex-col border-l-2 bg-card/70 p-3 transition-colors hover:border-primary/60 hover:bg-secondary/20",
+        taskEdge(task.status),
+        attention && "border-warn/40 bg-card",
+      )}
+      onClick={onOpen}
+    >
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="min-w-0 truncate font-semibold text-foreground">{task.project}</span>
+        <span className="shrink-0 font-mono">{task.agent}</span>
+        <span className="tnum ml-auto shrink-0">{elapsed(task.createdAt)}</span>
+        <button
+          type="button"
+          className={cn("rounded p-0.5 opacity-70 hover:bg-secondary hover:opacity-100", pinned && "text-primary opacity-100")}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPin();
+          }}
+          title={pinned ? "Unpin from Mission Control" : "Pin to Mission Control"}
+        >
+          <Pin className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          className="rounded p-0.5 opacity-70 hover:bg-secondary hover:opacity-100"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpen();
+          }}
+          title="Open full detail"
+        >
+          <Maximize2 className="size-3.5" />
+        </button>
+      </div>
+      <p className="mt-2 line-clamp-2 text-sm font-medium leading-snug">{task.prompt}</p>
+      {reason && <p className="mt-1 truncate text-xs text-warn/90">{reason}</p>}
+
+      {recent.length > 0 && (
+        <div className="mt-2 max-h-24 overflow-hidden rounded-md border border-border/50 bg-background/35 px-2.5 py-2">
+          <div className="flex flex-col gap-1 text-xs leading-relaxed text-muted-foreground" onClick={(e) => e.stopPropagation()}>
+            {recent.map((u, i) => <StreamLine key={streamKey(u, i)} update={u} compact />)}
+          </div>
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center gap-2">
+        <Badge variant={badge.variant}>{badge.label}</Badge>
+        {task.filesChanged > 0 && (
+          <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
+        )}
+      </div>
+
+      {permission && (
+        <div className="mt-2 flex flex-wrap gap-1.5" onClick={(e) => e.stopPropagation()}>
+          {permission.options.map((opt) => (
+            <Button
+              key={opt}
+              size="sm"
+              variant={opt === "deny" ? "destructive" : "default"}
+              onClick={() =>
+                void daemon.request("session.permission", {
+                  task_id: task.id,
+                  request_id: permission.request_id,
+                  outcome: opt,
+                })
+              }
+            >
+              {opt}
+            </Button>
+          ))}
+        </div>
+      )}
     </Card>
   );
 }
