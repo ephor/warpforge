@@ -2,6 +2,7 @@ import { useState, useSyncExternalStore } from "react";
 import { Anvil, LayoutGrid, KanbanSquare, FolderTree, Plus, Circle, Bot } from "lucide-react";
 import { DetectedAgent } from "./protocol";
 import { daemon } from "./daemon";
+import { useUi, type View } from "./store/ui";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -12,8 +13,6 @@ import TaskDetail from "./views/TaskDetail";
 import NewTaskDialog from "./views/NewTaskDialog";
 import AgentSetupDialog from "./views/AgentSetupDialog";
 
-type View = "control" | "board" | "projects";
-
 const NAV: { id: View; label: string; icon: typeof LayoutGrid }[] = [
   { id: "control", label: "Mission Control", icon: LayoutGrid },
   { id: "board", label: "Board", icon: KanbanSquare },
@@ -22,8 +21,10 @@ const NAV: { id: View; label: string; icon: typeof LayoutGrid }[] = [
 
 export default function App() {
   const state = useSyncExternalStore(daemon.subscribe, daemon.getState);
-  const [view, setView] = useState<View>("control");
-  const [openTaskId, setOpenTaskId] = useState<string | null>(null);
+  const view = useUi((s) => s.view);
+  const setView = useUi((s) => s.setView);
+  const openTaskId = useUi((s) => s.openTaskId);
+  const setOpenTaskId = useUi((s) => s.openTask);
   const [newTaskProject, setNewTaskProject] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
