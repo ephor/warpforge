@@ -117,6 +117,52 @@ pub fn save_file(repo: &str, path: &str, content: &str) -> Result<()> {
     Ok(())
 }
 
+/// Stage files (all changes if `files` is None, else exactly those paths) and
+/// commit them. `amend` rewrites the previous commit instead of creating a new
+/// one. Returns git's stderr on failure.
+pub async fn commit(
+    repo: &str,
+    message: &str,
+    files: Option<&[String]>,
+    amend: bool,
+) -> Result<()> {
+    // Stage.
+    let mut add = Command::new("git");
+    add.args(["-C", repo, "add", "--"]);
+    match files {
+        Some(paths) if !paths.is_empty() => {
+            for p in paths {
+                if p.contains("..") {
+                    bail!("refusing path with ..: {p}");
+                }
+                add.arg(p);
+            }
+        }
+        _ => {
+            add.arg(".");
+        }
+    }
+    let out = add.output().await?;
+    if !out.status.success() {
+        bail!("git add failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+    }
+
+    // Commit.
+    let mut ci = Command::new("git");
+    ci.args(["-C", repo, "commit", "-m", message]);
+    if amend {
+        ci.arg("--amend");
+    }
+    let out = ci.output().await?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let msg = if stderr.trim().is_empty() { stdout } else { stderr };
+        bail!("git commit failed: {}", msg.trim());
+    }
+    Ok(())
+}
+
 /// Revert exactly one hunk of one file in the working tree.
 pub async fn reject_hunk(repo: &str, file: &str, hunk_index: u32) -> Result<()> {
     let files = working_diff(repo).await?;

@@ -27,6 +27,7 @@ import { useUi } from "../store/ui";
 import { Composer } from "../components/Composer";
 import { MergeDiff } from "../components/MergeDiff";
 import { FileTree } from "../components/FileTree";
+import { CommitBox } from "../components/CommitBox";
 import { taskBadge } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -455,20 +456,27 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
               )}
             </div>
 
-            {/* Changed-files tree (right), toggled — replaces the tab strip. */}
+            {/* Changed-files tree (right), toggled — with an inline commit box. */}
             {showTree && diff && diff.files.length > 0 && (
-              <div className="w-56 shrink-0 overflow-auto border-l">
-                <FileTree
-                  files={diff.files}
-                  selected={selectedFile}
-                  onSelect={(path) => {
-                    setSelectedFile(path);
-                    if (diffView === "unified") {
-                      scrollToFile(path);
-                    } else {
-                      setView("split");
-                    }
-                  }}
+              <div className="flex w-64 shrink-0 flex-col border-l">
+                <div className="min-h-0 flex-1 overflow-auto">
+                  <FileTree
+                    files={diff.files}
+                    selected={selectedFile}
+                    onSelect={(path) => {
+                      setSelectedFile(path);
+                      if (diffView === "unified") {
+                        scrollToFile(path);
+                      } else {
+                        setView("split");
+                      }
+                    }}
+                  />
+                </div>
+                <CommitBox
+                  taskId={task.id}
+                  files={diff.files.map((f) => f.path)}
+                  onCommitted={() => setFocusTick((t) => t + 1)}
                 />
               </div>
             )}

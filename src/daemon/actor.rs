@@ -117,6 +117,14 @@ pub enum Command {
         hunk_index: u32,
         resolution: wire::HunkResolution,
     },
+    /// Stage (optionally a subset of) files and commit them in the task's repo.
+    GitCommit {
+        task_id: String,
+        message: String,
+        files: Option<Vec<String>>,
+        amend: bool,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Send a follow-up prompt into a task's running agent session.
     SessionPrompt { task_id: String, text: String },
     /// Answer a permission request the agent raised.
@@ -225,6 +233,25 @@ impl DaemonHandle {
         })
         .await;
         rx.await.ok().flatten()
+    }
+
+    pub async fn git_commit(
+        &self,
+        task_id: &str,
+        message: &str,
+        files: Option<Vec<String>>,
+        amend: bool,
+    ) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitCommit {
+            task_id: task_id.to_string(),
+            message: message.to_string(),
+            files,
+            amend,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| Err("daemon dropped the commit request".into()))
     }
 
     /// A window of a service's retained log lines (for backfill; live tail
@@ -781,6 +808,28 @@ impl Daemon {
                         }
                     }
                 }
+            }
+            Command::GitCommit { task_id, message, files, amend, reply } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let result = match repo {
+                    Some(p) => super::diff::commit(&p, &message, files.as_deref(), amend)
+                        .await
+                        .map_err(|e| e.to_string()),
+                    None => Err(format!("no repo for task {task_id}")),
+                };
+                if result.is_ok() {
+                    if let Some(task) = self.tasks.get_mut(&task_id) {
+                        task.updated_at = super::task::now_secs();
+                        task.files_changed = 0;
+                        let updated = task.clone();
+                        self.persist(&updated);
+                        self.emit(Event::TaskUpdated(updated));
+                    }
+                }
+                let _ = reply.send(result);
             }
             Command::CancelTask { id } => {
                 if let Some(handle) = self.sessions.remove(&id) {
