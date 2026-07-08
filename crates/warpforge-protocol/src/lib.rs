@@ -198,6 +198,17 @@ pub enum Method {
     /// Write new contents to a file in the task's working tree (in-review edit).
     #[serde(rename = "file.save")]
     FileSave { task_id: String, path: String, content: String },
+    /// Stage files and commit them in the task's repo. `files=None` stages all
+    /// changes; `amend` rewrites the previous commit.
+    #[serde(rename = "git.commit")]
+    GitCommit {
+        task_id: String,
+        message: String,
+        #[serde(default)]
+        files: Option<Vec<String>>,
+        #[serde(default)]
+        amend: bool,
+    },
 
     // ── Raw terminal agents (legacy PTY sessions, kept for the TUI) ──
     #[serde(rename = "terminal.spawn")]

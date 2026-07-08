@@ -242,6 +242,12 @@ async fn dispatch(
             handle.send(Command::SaveFile { task_id, path, content }).await;
             Ok(json!(null))
         }
+        GitCommit { task_id, message, files, amend } => {
+            handle.git_commit(&task_id, &message, files, amend).await.map_err(|e| {
+                wire::RpcError { code: wire::ErrorCode::Internal, message: e }
+            })?;
+            Ok(json!(null))
+        }
         TaskCancel { task_id } => {
             handle.send(Command::CancelTask { id: task_id }).await;
             Ok(json!(null))
