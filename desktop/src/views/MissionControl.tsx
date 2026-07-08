@@ -33,21 +33,6 @@ interface Props {
   onNewTask: (project?: string) => void;
 }
 
-function activityLine(updates: SessionUpdate[]): string {
-  // Coalesce first so a merged agent_text block is one line, not the last
-  // sub-word chunk codex-acp streams.
-  const merged = coalesceUpdates(updates);
-  for (let i = merged.length - 1; i >= 0; i--) {
-    const u = merged[i];
-    if (u.kind === "tool_call") return `⚙ ${u.title}`;
-    if (u.kind === "file_edit") return `✎ ${u.path}`;
-    if (u.kind === "agent_text") return u.text;
-    if (u.kind === "user_message") return `› ${u.text}`;
-    if (u.kind === "permission_request") return `⚠ ${u.title}`;
-    if (u.kind === "turn_ended") return `— turn ended (${u.stop_reason})`;
-  }
-  return "waiting for agent…";
-}
 
 export default function MissionControl({ state, onOpenTask, onNewTask }: Props) {
   const [pinned, setPinned] = useState<string[]>([]);
@@ -59,6 +44,8 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
   const pinnedTasks = pinned
     .map((id) => live.find((t) => t.id === id))
     .filter((t): t is TaskInfo => !!t);
+  // Pinned tasks live in the focus row, so drop them from the grid below.
+  const gridTasks = live.filter((t) => !pinned.includes(t.id));
 
   return (
     <ScrollArea className="h-full min-h-0">
@@ -86,18 +73,19 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
               </Button>
             </div>
           ) : (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-3">
-              {live.map((task) => (
-                <SessionTile
-                  key={task.id}
-                  task={task}
-                  updates={state.sessionUpdates[task.id] ?? []}
-                  pinned={pinned.includes(task.id)}
-                  onPin={() => togglePin(task.id)}
-                  onOpen={() => onOpenTask(task.id)}
-                />
-              ))}
-            </div>
+            gridTasks.length > 0 && (
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
+                {gridTasks.map((task) => (
+                  <SessionTile
+                    key={task.id}
+                    task={task}
+                    updates={state.sessionUpdates[task.id] ?? []}
+                    onPin={() => togglePin(task.id)}
+                    onOpen={() => onOpenTask(task.id)}
+                  />
+                ))}
+              </div>
+            )
           )}
       </div>
     </ScrollArea>
@@ -107,30 +95,39 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
 function SessionTile({
   task,
   updates,
-  pinned,
   onPin,
   onOpen,
 }: {
   task: TaskInfo;
   updates: SessionUpdate[];
-  pinned: boolean;
   onPin: () => void;
   onOpen: () => void;
 }) {
   const badge = taskBadge(task.status);
+  const recent = coalesceUpdates(updates).slice(-5);
   return (
     <Card
       className={cn(
-        "cursor-pointer border-l-[3px] p-3 transition-colors hover:border-primary/60",
+        "flex cursor-pointer flex-col border-l-[3px] p-3 transition-colors hover:border-primary/60",
         taskEdge(task.status),
-        pinned && "ring-1 ring-primary",
       )}
       onClick={onPin}
+      title="Click to pin"
     >
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span className="font-semibold text-foreground">{task.project}</span>
         <span>{task.agent}</span>
         <span className="tnum ml-auto">{elapsed(task.createdAt)}</span>
+        <button
+          className="rounded p-0.5 hover:bg-secondary"
+          onClick={(e) => {
+            e.stopPropagation();
+            onPin();
+          }}
+          title="Pin to focus row"
+        >
+          <Pin className="size-3.5" />
+        </button>
         <button
           className="rounded p-0.5 hover:bg-secondary"
           onClick={(e) => {
@@ -143,15 +140,24 @@ function SessionTile({
         </button>
       </div>
       <p className="mt-2 truncate text-sm font-medium">{task.prompt}</p>
-      <p className="mt-1 truncate font-mono text-xs text-muted-foreground">
-        {activityLine(updates)}
-      </p>
+
+      {/* Live conversation preview — same coalesced stream as the focus pane. */}
+      <div className="relative mt-2 h-28 overflow-hidden rounded-md bg-secondary/20 p-2">
+        <div className="flex flex-col gap-1 text-xs" onClick={(e) => e.stopPropagation()}>
+          {recent.length === 0 ? (
+            <p className="text-muted-foreground">waiting for agent…</p>
+          ) : (
+            recent.map((u, i) => <StreamLine key={streamKey(u, i)} update={u} compact />)
+          )}
+        </div>
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-card to-transparent" />
+      </div>
+
       <div className="mt-2 flex items-center gap-2">
         <Badge variant={badge.variant}>{badge.label}</Badge>
         {task.filesChanged > 0 && (
           <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
         )}
-        {pinned && <Pin className="ml-auto size-3.5 text-primary" />}
       </div>
     </Card>
   );
