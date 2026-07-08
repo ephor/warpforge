@@ -13,6 +13,7 @@ import {
   TaskInfo,
 } from "../protocol";
 import { StreamLine, coalesceUpdates, streamKey } from "./MissionControl";
+import { useUi } from "../store/ui";
 import { Composer } from "../components/Composer";
 import { MergeDiff } from "../components/MergeDiff";
 import { FileTree } from "../components/FileTree";
@@ -43,9 +44,8 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
   const [diff, setDiff] = useState<TaskDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [localRes, setLocalRes] = useState<Record<string, HunkResolution>>({});
-  const [diffView, setDiffView] = useState<"unified" | "split">(
-    () => (localStorage.getItem("wf-diff-view") as "unified" | "split") || "split",
-  );
+  const diffView = useUi((s) => s.diffView);
+  const setDiffView = useUi((s) => s.setDiffView);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileDoc, setFileDoc] = useState<FileDoc | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -69,10 +69,7 @@ export default function TaskDetail({ task, updates, onClose }: Props) {
   const badge = taskBadge(task.status);
   const editable = task.status !== "done";
 
-  const setView = (v: "unified" | "split") => {
-    localStorage.setItem("wf-diff-view", v);
-    setDiffView(v);
-  };
+  const setView = (v: "unified" | "split") => setDiffView(v);
 
   useEffect(() => {
     const onFocus = () => setFocusTick((t) => t + 1);
