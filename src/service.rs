@@ -3,9 +3,12 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::process::Command;
 use tokio::sync::mpsc;
+use tokio::time::{sleep, timeout};
 
 use crate::ports;
 
@@ -50,6 +53,50 @@ pub struct ManagedService {
 pub enum ServiceEvent {
     Log { key: String, line: String },
     StatusChange { key: String, status: ServiceStatus },
+}
+
+fn line_indicates_ready(line: &str, ready_pattern: Option<&str>) -> bool {
+    if ready_pattern.is_some_and(|pat| line.contains(pat)) {
+        return true;
+    }
+    let lower = line.to_ascii_lowercase();
+    lower.contains("ready in")
+        || lower.contains("listening on")
+        || lower.contains("server running")
+        || lower.contains("started server")
+        || lower.contains("local:")
+        || lower.contains("localhost:")
+        || lower.contains("0.0.0.0:")
+}
+
+fn spawn_port_ready_probe(
+    tx: mpsc::UnboundedSender<ServiceEvent>,
+    key: String,
+    port: u16,
+    stopping: Arc<AtomicBool>,
+) {
+    if port == 0 {
+        return;
+    }
+    tokio::spawn(async move {
+        for _ in 0..600 {
+            if stopping.load(Ordering::SeqCst) {
+                return;
+            }
+            let addr = ("127.0.0.1", port);
+            if matches!(
+                timeout(Duration::from_millis(250), TcpStream::connect(addr)).await,
+                Ok(Ok(_))
+            ) {
+                let _ = tx.send(ServiceEvent::StatusChange {
+                    key,
+                    status: ServiceStatus::Running,
+                });
+                return;
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    });
 }
 
 /// Kill the entire process group so that sh→npm→node (etc.) all die together.
@@ -159,6 +206,13 @@ impl ServiceManager {
 
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
+        let stopping = Arc::new(AtomicBool::new(false));
+        spawn_port_ready_probe(
+            self.event_tx.clone(),
+            key.clone(),
+            allocated_port,
+            Arc::clone(&stopping),
+        );
 
         // Stream stdout
         if let Some(stdout) = stdout {
@@ -168,13 +222,11 @@ impl ServiceManager {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    if let Some(ref pat) = pattern {
-                        if line.contains(pat.as_str()) {
-                            let _ = tx.send(ServiceEvent::StatusChange {
-                                key: k.clone(),
-                                status: ServiceStatus::Running,
-                            });
-                        }
+                    if line_indicates_ready(&line, pattern.as_deref()) {
+                        let _ = tx.send(ServiceEvent::StatusChange {
+                            key: k.clone(),
+                            status: ServiceStatus::Running,
+                        });
                     }
                     let _ = tx.send(ServiceEvent::Log { key: k.clone(), line });
                 }
@@ -190,13 +242,11 @@ impl ServiceManager {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    if let Some(ref pat) = pattern {
-                        if line.contains(pat.as_str()) {
-                            let _ = tx.send(ServiceEvent::StatusChange {
-                                key: k.clone(),
-                                status: ServiceStatus::Running,
-                            });
-                        }
+                    if line_indicates_ready(&line, pattern.as_deref()) {
+                        let _ = tx.send(ServiceEvent::StatusChange {
+                            key: k.clone(),
+                            status: ServiceStatus::Running,
+                        });
                     }
                     let _ = tx.send(ServiceEvent::Log {
                         key: k.clone(),
@@ -209,7 +259,6 @@ impl ServiceManager {
         // Exit waiter — actually detects the process ending (previously a no-op,
         // so a crashed service showed "running" forever). Reports Stopped for an
         // intentional stop, Failed for an unexpected exit.
-        let stopping = Arc::new(AtomicBool::new(false));
         {
             let tx = self.event_tx.clone();
             let k = key.clone();
@@ -377,5 +426,36 @@ mod tests {
             }
         }
         assert!(saw_stopped, "expected a Stopped status change for a clean exit");
+    }
+
+    /// Readiness must not depend on framework-specific log text. If a declared
+    /// service port starts accepting TCP connections, the service is running.
+    #[tokio::test]
+    async fn open_port_reports_running_without_logs() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+
+        spawn_port_ready_probe(
+            tx,
+            "p/web".to_string(),
+            port,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let mut saw_running = false;
+        while let Ok(Some(ev)) = timeout(Duration::from_secs(5), rx.recv()).await {
+            if let ServiceEvent::StatusChange { status: ServiceStatus::Running, .. } = ev {
+                saw_running = true;
+                break;
+            }
+        }
+        assert!(saw_running, "expected a Running status change for an open port");
     }
 }

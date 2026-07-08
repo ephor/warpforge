@@ -1,5 +1,15 @@
 import { useState, useSyncExternalStore } from "react";
-import { Anvil, LayoutGrid, KanbanSquare, FolderTree, Plus, Circle, Bot, PanelLeft } from "lucide-react";
+import {
+  Anvil,
+  LayoutGrid,
+  KanbanSquare,
+  FolderTree,
+  Plus,
+  Circle,
+  Bot,
+  PanelLeft,
+  PanelRight,
+} from "lucide-react";
 import { DetectedAgent } from "./protocol";
 import { daemon } from "./daemon";
 import { useUi, type View } from "./store/ui";
@@ -28,6 +38,8 @@ export default function App() {
   const setOpenTaskId = useUi((s) => s.openTask);
   const attentionOpen = useUi((s) => s.attentionOpen);
   const toggleAttention = useUi((s) => s.toggleAttention);
+  const rightPanel = useUi((s) => s.rightPanel);
+  const setRightPanel = useUi((s) => s.setRightPanel);
   const [newTaskProject, setNewTaskProject] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
@@ -43,24 +55,30 @@ export default function App() {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex h-screen flex-col">
-        <header className="flex items-center gap-4 border-b bg-card px-4 py-2">
-          <div className="flex items-center gap-2 font-semibold">
+      <div className="flex h-screen flex-col bg-background">
+        <header className="flex h-11 items-center gap-3 border-b border-border/70 bg-card/80 px-2.5">
+          <div className="flex items-center gap-2 px-1 text-sm font-semibold">
             <Anvil className="size-4 text-primary" />
             warpforge
           </div>
 
           <Button
-            size="sm"
+            size="icon"
             variant="ghost"
             onClick={toggleAttention}
+            aria-label="Toggle attention sidebar"
             title="Toggle attention sidebar"
-            className={cn(attentionOpen && "text-foreground")}
+            type="button"
+            className={cn("size-7", attentionOpen && "bg-secondary text-foreground")}
           >
             <PanelLeft className="size-4" />
           </Button>
 
-          <nav className="flex items-center gap-1">
+          <Button type="button" aria-label="New task" size="icon" variant="ghost" onClick={() => startNewTask()} className="size-7">
+            <Plus className="size-4" />
+          </Button>
+
+          <nav className="flex items-center gap-1 border-l border-border/70 pl-3">
             {NAV.map((n) => {
               const active = view === n.id && !openTask;
               return (
@@ -70,8 +88,9 @@ export default function App() {
                     setView(n.id);
                     setOpenTaskId(null);
                   }}
+                  type="button"
                   className={cn(
-                    "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
+                    "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm transition-colors",
                     active
                       ? "bg-secondary text-foreground"
                       : "text-muted-foreground hover:text-foreground",
@@ -86,20 +105,35 @@ export default function App() {
 
           <div className="ml-auto flex items-center gap-3">
             <Button
-              size="sm"
+              size="icon"
               variant="ghost"
               onClick={() => {
                 daemon.detectAgents()
                   .then((detected) => setManualDetected(Array.isArray(detected) ? detected : []))
                   .catch(() => setManualDetected([]));
               }}
+              aria-label="Manage agents"
               title="Manage agents"
+              type="button"
+              className="size-7"
             >
               <Bot className="size-4" />
             </Button>
-            <Button size="sm" onClick={() => startNewTask()}>
+            <Button type="button" size="sm" onClick={() => startNewTask()}>
               <Plus className="size-4" />
               New task
+            </Button>
+            <Button
+              type="button"
+              aria-label="Right tool window"
+              size="icon"
+              variant="ghost"
+              title="Right tool window"
+              disabled={!openTask}
+              onClick={() => setRightPanel(rightPanel ? null : "changes")}
+              className={cn("size-7", rightPanel && openTask && "bg-secondary text-foreground")}
+            >
+              <PanelRight className="size-4" />
             </Button>
             <span
               className={cn(
@@ -118,11 +152,12 @@ export default function App() {
           </div>
         </header>
 
-        <div className="flex min-h-0 flex-1 gap-4 overflow-hidden p-4">
+        <div className="flex min-h-0 flex-1 gap-3 overflow-hidden p-3">
           {attentionOpen && <AttentionRail state={state} onOpenTask={setOpenTaskId} />}
           <main className="min-h-0 flex-1 overflow-hidden">
             {openTask ? (
               <TaskDetail
+                key={openTask.id}
                 task={openTask}
                 updates={state.sessionUpdates[openTask.id] ?? []}
                 state={state}

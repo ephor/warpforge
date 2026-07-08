@@ -1,0 +1,28 @@
+# .workspace.yaml — Warpforge project configuration
+# Place this file in your project root
+
+name: my-project
+
+services:
+  app:
+    command: bun run dev
+    port: 3000
+    env:
+      DATABASE_URL: postgres://localhost:${db.port}/mydb
+    healthcheck:
+      url: http://localhost:${app.port}/api/health
+      interval: 5s
+
+  db:
+    command: docker compose up postgres
+    port: 5432
+    readyPattern: "database system is ready to accept connections"
+
+# Optional: predefined agent templates
+agentTemplates:
+  review:
+    command: claude --print
+    description: "Quick code review"
+  dev:
+    command: claude
+    description: "Interactive development session"

@@ -1,7 +1,6 @@
 import { useState } from "react";
 import {
   Maximize2,
-  Pin,
   X,
   Wrench,
   FilePen,
@@ -13,9 +12,9 @@ import {
 } from "lucide-react";
 import { daemon, DaemonState } from "../daemon";
 import { SessionUpdate, TaskInfo } from "../protocol";
+import { useUi } from "../store/ui";
 import { Markdown } from "../components/Markdown";
-import { taskBadge, taskEdge, elapsed } from "@/lib/status";
-import { Badge } from "@/components/ui/badge";
+import { taskEdge } from "@/lib/status";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -35,23 +34,19 @@ interface Props {
 
 
 export default function MissionControl({ state, onOpenTask, onNewTask }: Props) {
-  const [pinned, setPinned] = useState<string[]>([]);
+  const pinned = useUi((s) => s.pinnedTaskIds);
+  const togglePin = useUi((s) => s.togglePinnedTask);
   const live = state.snapshot.tasks.filter((t) => t.status !== "done");
-
-  const togglePin = (id: string) =>
-    setPinned((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p.slice(-3), id]));
 
   const pinnedTasks = pinned
     .map((id) => live.find((t) => t.id === id))
     .filter((t): t is TaskInfo => !!t);
-  // Pinned tasks live in the focus row, so drop them from the grid below.
-  const gridTasks = live.filter((t) => !pinned.includes(t.id));
 
   return (
     <ScrollArea className="h-full min-h-0">
       <div className="flex flex-col gap-4 pr-3">
-          {pinnedTasks.length > 0 && (
-            <div className="grid grid-flow-col auto-cols-fr gap-3">
+          {pinnedTasks.length > 0 ? (
+            <div className="grid grid-cols-2 gap-3">
               {pinnedTasks.map((task) => (
                 <FocusPane
                   key={task.id}
@@ -62,7 +57,14 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
                 />
               ))}
             </div>
-          )}
+          ) : live.length > 0 ? (
+            <div className="mt-16 flex flex-col items-center gap-2 text-center text-muted-foreground">
+              <p className="text-foreground">No pinned sessions.</p>
+              <p className="max-w-md text-sm">
+                Pin sessions from the sidebar when you want them on the Mission Control board.
+              </p>
+            </div>
+          ) : null}
 
           {live.length === 0 ? (
             <div className="mt-16 flex flex-col items-center gap-3 text-muted-foreground">
@@ -72,94 +74,9 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
                 Start a task
               </Button>
             </div>
-          ) : (
-            gridTasks.length > 0 && (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-3">
-                {gridTasks.map((task) => (
-                  <SessionTile
-                    key={task.id}
-                    task={task}
-                    updates={state.sessionUpdates[task.id] ?? []}
-                    onPin={() => togglePin(task.id)}
-                    onOpen={() => onOpenTask(task.id)}
-                  />
-                ))}
-              </div>
-            )
-          )}
+          ) : null}
       </div>
     </ScrollArea>
-  );
-}
-
-function SessionTile({
-  task,
-  updates,
-  onPin,
-  onOpen,
-}: {
-  task: TaskInfo;
-  updates: SessionUpdate[];
-  onPin: () => void;
-  onOpen: () => void;
-}) {
-  const badge = taskBadge(task.status);
-  const recent = coalesceUpdates(updates).slice(-5);
-  return (
-    <Card
-      className={cn(
-        "flex cursor-pointer flex-col border-l-[3px] p-3 transition-colors hover:border-primary/60",
-        taskEdge(task.status),
-      )}
-      onClick={onPin}
-      title="Click to pin"
-    >
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="font-semibold text-foreground">{task.project}</span>
-        <span>{task.agent}</span>
-        <span className="tnum ml-auto">{elapsed(task.createdAt)}</span>
-        <button
-          className="rounded p-0.5 hover:bg-secondary"
-          onClick={(e) => {
-            e.stopPropagation();
-            onPin();
-          }}
-          title="Pin to focus row"
-        >
-          <Pin className="size-3.5" />
-        </button>
-        <button
-          className="rounded p-0.5 hover:bg-secondary"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpen();
-          }}
-          title="Open full detail"
-        >
-          <Maximize2 className="size-3.5" />
-        </button>
-      </div>
-      <p className="mt-2 truncate text-sm font-medium">{task.prompt}</p>
-
-      {/* Live conversation preview — same coalesced stream as the focus pane. */}
-      <div className="relative mt-2 h-28 overflow-hidden rounded-md bg-secondary/20 p-2">
-        <div className="flex flex-col gap-1 text-xs" onClick={(e) => e.stopPropagation()}>
-          {recent.length === 0 ? (
-            <p className="text-muted-foreground">waiting for agent…</p>
-          ) : (
-            recent.map((u, i) => <StreamLine key={streamKey(u, i)} update={u} compact />)
-          )}
-        </div>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-card to-transparent" />
-      </div>
-
-      <div className="mt-2 flex items-center gap-2">
-        <Badge variant={badge.variant}>{badge.label}</Badge>
-        {task.filesChanged > 0 && (
-          <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
-        )}
-      </div>
-    </Card>
   );
 }
 
@@ -175,7 +92,7 @@ function FocusPane({
   onOpen: () => void;
 }) {
   const [draft, setDraft] = useState("");
-  const recent = coalesceUpdates(updates).slice(-14);
+  const recent = coalesceUpdates(updates).slice(-40);
 
   const send = () => {
     const text = draft.trim();
@@ -187,17 +104,17 @@ function FocusPane({
   return (
     <Card className={cn("flex max-h-[340px] flex-col border-l-[3px]", taskEdge(task.status))}>
       <div className="flex items-center gap-2 border-b px-3 py-2">
-        <span className="text-xs font-semibold">{task.project}</span>
-        <span className="truncate text-xs text-muted-foreground">{task.prompt}</span>
+        <span className="text-sm font-semibold">{task.project}</span>
+        <span className="truncate text-sm text-muted-foreground">{task.prompt}</span>
         <button className="ml-auto rounded p-0.5 hover:bg-secondary" onClick={onOpen} title="Full detail">
-          <Maximize2 className="size-3.5" />
+          <Maximize2 className="size-4" />
         </button>
         <button className="rounded p-0.5 hover:bg-secondary" onClick={onUnpin} title="Unpin">
-          <X className="size-3.5" />
+          <X className="size-4" />
         </button>
       </div>
       <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-1.5 p-3 text-xs">
+        <div className="flex flex-col gap-2 p-3 text-sm leading-relaxed">
           {recent.length === 0 && <p className="text-muted-foreground">waiting for agent…</p>}
           {recent.map((u, i) => (
             <StreamLine key={streamKey(u, i)} update={u} compact />
@@ -210,10 +127,10 @@ function FocusPane({
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
           placeholder="Steer this session…"
-          className="h-7 flex-1 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="h-8 flex-1 rounded-md border border-input bg-background px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
-        <Button size="icon" className="size-7" onClick={send} disabled={!draft.trim()}>
-          <Send className="size-3.5" />
+        <Button size="icon" className="size-8" onClick={send} disabled={!draft.trim()}>
+          <Send className="size-4" />
         </Button>
       </div>
     </Card>
@@ -400,18 +317,20 @@ export function StreamLine({
     case "user_message":
       return (
         <div className={cn("rounded-md bg-primary/10 px-2.5 py-1.5 text-primary", compact && "text-xs")}>
-          {compact ? `› ${update.text}` : <Markdown>{update.text}</Markdown>}
+          {compact ? <Markdown className="text-current">{`› ${update.text}`}</Markdown> : <Markdown>{update.text}</Markdown>}
         </div>
       );
     case "agent_text":
       return compact ? (
-        <p>{update.text}</p>
+        <Markdown className="text-current">{update.text}</Markdown>
       ) : (
         <Markdown>{update.text}</Markdown>
       );
     case "agent_thought":
-      return (
-        <p className="italic text-muted-foreground">{compact ? update.text : `💭 ${update.text}`}</p>
+      return compact ? (
+        <Markdown className="italic text-muted-foreground">{update.text}</Markdown>
+      ) : (
+        <p className="italic text-muted-foreground">💭 {update.text}</p>
       );
     case "tool_call": {
       const dot =

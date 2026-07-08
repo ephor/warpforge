@@ -3,9 +3,14 @@ import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 
 /** Agent/user messages rendered as GitHub-flavored markdown, tailwind-styled. */
-export function Markdown({ children }: { children: string }) {
+export function Markdown({ children, className }: { children: string; className?: string }) {
   return (
-    <div className="min-w-0 space-y-1 break-words text-sm leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+    <div
+      className={cn(
+        "min-w-0 space-y-1 break-words text-sm leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        className,
+      )}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
