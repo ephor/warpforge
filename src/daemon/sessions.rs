@@ -21,7 +21,10 @@ use warpforge_protocol as wire;
 /// List resumable sessions for a project's working directory, newest first.
 /// Only scans stores for agents that are configured and enabled (so a resume
 /// can actually resolve to an ACP command).
-pub fn external_sessions(project_path: &str, agents: &[wire::AgentConfig]) -> Vec<wire::ExternalSession> {
+pub fn external_sessions(
+    project_path: &str,
+    agents: &[wire::AgentConfig],
+) -> Vec<wire::ExternalSession> {
     let enabled: Vec<&str> = agents
         .iter()
         .filter(|a| a.enabled)
@@ -74,12 +77,16 @@ fn claude_dir_name(project_path: &str) -> String {
 }
 
 fn claude_sessions(project_path: &str) -> Vec<wire::ExternalSession> {
-    let Some(home) = home() else { return Vec::new() };
+    let Some(home) = home() else {
+        return Vec::new();
+    };
     let dir = home
         .join(".claude")
         .join("projects")
         .join(claude_dir_name(project_path));
-    let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
 
     let mut out = Vec::new();
     for entry in entries.flatten() {
@@ -87,7 +94,9 @@ fn claude_sessions(project_path: &str) -> Vec<wire::ExternalSession> {
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
             continue;
         }
-        let Some(session_id) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        let Some(session_id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
         let (title, count) = claude_summary(&path);
         out.push(wire::ExternalSession {
             agent: "claude".into(),
@@ -103,13 +112,17 @@ fn claude_sessions(project_path: &str) -> Vec<wire::ExternalSession> {
 /// Read a claude session file for a title (a `summary`, else the first user
 /// message) and a rough message count.
 fn claude_summary(path: &Path) -> (String, u32) {
-    let Ok(text) = std::fs::read_to_string(path) else { return (String::new(), 0) };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return (String::new(), 0);
+    };
     let mut summary: Option<String> = None;
     let mut first_user: Option<String> = None;
     let mut count: u32 = 0;
 
     for line in text.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         match v.get("type").and_then(|t| t.as_str()) {
             Some("summary") => {
                 if let Some(s) = v.get("summary").and_then(|s| s.as_str()) {
@@ -158,7 +171,9 @@ fn message_text(message: Option<&Value>) -> Option<String> {
 // ── Codex ─────────────────────────────────────────────────────────────────
 
 fn codex_sessions(project_path: &str) -> Vec<wire::ExternalSession> {
-    let Some(home) = home() else { return Vec::new() };
+    let Some(home) = home() else {
+        return Vec::new();
+    };
     let sessions_dir = home.join(".codex").join("sessions");
     if !sessions_dir.is_dir() {
         return Vec::new();
@@ -170,7 +185,9 @@ fn codex_sessions(project_path: &str) -> Vec<wire::ExternalSession> {
 
     let mut out = Vec::new();
     for path in files {
-        let Some((id, cwd)) = codex_meta(&path) else { continue };
+        let Some((id, cwd)) = codex_meta(&path) else {
+            continue;
+        };
         if cwd != project_path {
             continue;
         }
@@ -190,9 +207,13 @@ fn codex_sessions(project_path: &str) -> Vec<wire::ExternalSession> {
 fn codex_titles(home: &Path) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let index = home.join(".codex").join("session_index.jsonl");
-    let Ok(text) = std::fs::read_to_string(index) else { return map };
+    let Ok(text) = std::fs::read_to_string(index) else {
+        return map;
+    };
     for line in text.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         if let (Some(id), Some(name)) = (
             v.get("id").and_then(|s| s.as_str()),
             v.get("thread_name").and_then(|s| s.as_str()),
@@ -221,7 +242,9 @@ fn codex_meta(path: &Path) -> Option<(String, String)> {
 
 /// Recursively collect `*.jsonl` paths under `dir`.
 fn collect_jsonl(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {

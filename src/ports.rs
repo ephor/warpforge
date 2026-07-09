@@ -57,7 +57,10 @@ pub fn release(project_name: &str, service_name: &str) {
 /// Release all ports for a project.
 pub fn release_project(project_name: &str) {
     let prefix = format!("{project_name}/");
-    alloc_map().lock().unwrap().retain(|_, v| !v.starts_with(&prefix));
+    alloc_map()
+        .lock()
+        .unwrap()
+        .retain(|_, v| !v.starts_with(&prefix));
 }
 
 /// Replace `${service.port}` placeholders in env values.

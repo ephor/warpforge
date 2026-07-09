@@ -1,3 +1,4 @@
+mod agent;
 mod app;
 mod client;
 mod config;
@@ -5,7 +6,6 @@ mod daemon;
 mod portforward;
 mod ports;
 mod registry;
-mod agent;
 mod service;
 mod tui;
 
@@ -13,7 +13,10 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "warpforge", about = "Workspace orchestrator with embedded agent terminals")]
+#[command(
+    name = "warpforge",
+    about = "Workspace orchestrator with embedded agent terminals"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,

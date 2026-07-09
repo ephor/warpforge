@@ -140,9 +140,7 @@ fn auto_detect(project_path: &Path) -> Option<WorkspaceConfig> {
         let compose_path = project_path.join(compose_name);
         if compose_path.exists() {
             if let Ok(text) = fs::read_to_string(&compose_path) {
-                if let Ok(compose) =
-                    serde_yaml::from_str::<serde_yaml::Value>(&text)
-                {
+                if let Ok(compose) = serde_yaml::from_str::<serde_yaml::Value>(&text) {
                     if let Some(svcs) = compose["services"].as_mapping() {
                         for (k, v) in svcs {
                             let svc_name = k.as_str().unwrap_or_default().to_string();

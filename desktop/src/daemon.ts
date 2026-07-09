@@ -165,6 +165,8 @@ class DaemonClient {
           `[${String(p.service)}] loading workspace config`,
           `[${String(p.service)}] listening on allocated port`,
         ]);
+      case "runtime.stopAll":
+        return Promise.resolve({});
       case "session.permission": {
         const taskId = String(p.task_id);
         this.appendUpdate(taskId, {
@@ -386,6 +388,38 @@ class DaemonClient {
 
   async deleteTask(taskId: string) {
     await this.request("task.delete", { task_id: taskId });
+  }
+
+  async stopRuntime() {
+    await this.request("runtime.stopAll", {});
+  }
+
+  async fetchServiceLogs(
+    project: string,
+    service: string,
+    options: { after?: number; limit?: number } = {},
+  ): Promise<string[]> {
+    const result = await this.request("service.logs", {
+      project,
+      service,
+      after: options.after ?? 0,
+      limit: options.limit ?? 300,
+    });
+    const payload = result as { lines?: unknown };
+    const rawLines = Array.isArray(result)
+      ? result
+      : Array.isArray(payload?.lines)
+        ? payload.lines
+        : [];
+    const lines = rawLines.map(String);
+    const key = `${project}/${service}`;
+    this.setState({
+      serviceLogs: {
+        ...this.state.serviceLogs,
+        [key]: lines.slice(-MAX_SERVICE_LOGS),
+      },
+    });
+    return lines;
   }
 
   /** List resumable claude/codex sessions on disk for a project's cwd. */

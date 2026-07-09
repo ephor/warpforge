@@ -1,20 +1,24 @@
 import { useState } from "react";
 import {
+  Activity,
+  Clock3,
+  FileText,
   Maximize2,
   X,
   Wrench,
   FilePen,
   TriangleAlert,
-  Send,
   Plus,
   ListTodo,
   ChevronRight,
 } from "lucide-react";
 import { daemon, DaemonState } from "../daemon";
-import { SessionUpdate, TaskInfo } from "../protocol";
+import { CommandInfo, SessionUpdate, TaskInfo } from "../protocol";
 import { useUi } from "../store/ui";
 import { Markdown } from "../components/Markdown";
-import { taskEdge } from "@/lib/status";
+import { AgentConfigBar } from "../components/AgentConfigBar";
+import { Composer } from "../components/Composer";
+import { elapsed, taskBadge } from "@/lib/status";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -32,6 +36,7 @@ interface Props {
   onNewTask: (project?: string) => void;
 }
 
+const PINNED_PREVIEW_LIMIT = 18;
 
 export default function MissionControl({ state, onOpenTask, onNewTask }: Props) {
   const pinned = useUi((s) => s.pinnedTaskIds);
@@ -91,50 +96,309 @@ function FocusPane({
   onUnpin: () => void;
   onOpen: () => void;
 }) {
-  const [draft, setDraft] = useState("");
-  const recent = coalesceUpdates(updates).slice(-40);
-
-  const send = () => {
-    const text = draft.trim();
-    if (!text) return;
-    void daemon.request("session.prompt", { task_id: task.id, text });
-    setDraft("");
-  };
+  const stream = coalesceUpdates(updates);
+  const resolved = resolvedPermissions(stream);
+  const pending = pendingPermission(stream, resolved);
+  const preview = pinnedPreview(stream, PINNED_PREVIEW_LIMIT);
+  const tools = summarizeTools(stream);
+  const files = summarizeFiles(stream);
+  const commands = latestCommands(updates);
+  const badge = pending
+    ? { variant: "warn" as const, label: "permission" }
+    : taskBadge(task.status);
 
   return (
-    <Card className={cn("flex max-h-[340px] flex-col border-l-[3px]", taskEdge(task.status))}>
-      <div className="flex items-center gap-2 border-b px-3 py-2">
-        <span className="text-sm font-semibold">{task.project}</span>
-        <span className="truncate text-sm text-muted-foreground">{task.prompt}</span>
-        <button className="ml-auto rounded p-0.5 hover:bg-secondary" onClick={onOpen} title="Full detail">
-          <Maximize2 className="size-4" />
-        </button>
-        <button className="rounded p-0.5 hover:bg-secondary" onClick={onUnpin} title="Unpin">
-          <X className="size-4" />
-        </button>
+    <Card
+      className={cn(
+        "group flex max-h-[400px] min-h-[300px] flex-col overflow-hidden border border-border/70 bg-card/95 shadow-[0_12px_28px_rgb(0_0_0/0.18)]",
+        "transition-colors hover:border-border",
+      )}
+    >
+      <div className="border-b border-border/70 px-3 py-2.5">
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="mb-1 flex min-w-0 items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+              <span className="truncate font-semibold text-foreground/90">{task.project}</span>
+              <span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+              <span className="truncate">{task.agent}</span>
+              <span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+              <span className="tnum shrink-0">{elapsed(task.updatedAt)}</span>
+            </div>
+            <button
+              type="button"
+              onClick={onOpen}
+              className="block max-w-full truncate text-left text-[15px] font-semibold leading-5 text-foreground hover:text-primary"
+              title={task.prompt}
+            >
+              {task.prompt}
+            </button>
+          </div>
+          <StatusPill variant={badge.variant} label={badge.label} />
+          <button
+            type="button"
+            aria-label="Open task details"
+            className="rounded p-1 text-muted-foreground opacity-80 hover:bg-secondary hover:text-foreground"
+            onClick={onOpen}
+            title="Full detail"
+          >
+            <Maximize2 className="size-4" />
+          </button>
+          <button
+            type="button"
+            aria-label="Unpin task"
+            className="rounded p-1 text-muted-foreground opacity-80 hover:bg-secondary hover:text-foreground"
+            onClick={onUnpin}
+            title="Unpin"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+          <ActivityChip icon={<Activity />} label={`${stream.length} events`} />
+          {tools.total > 0 && (
+            <ActivityChip
+              icon={<Wrench />}
+              label={`${tools.total} tools`}
+              tone={tools.active > 0 ? "warn" : "muted"}
+              detail={[
+                tools.active > 0 ? `${tools.active} active` : null,
+                tools.failed > 0 ? `${tools.failed} failed` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            />
+          )}
+          {files.length > 0 && (
+            <ActivityChip
+              icon={<FileText />}
+              label={`${files.length} files`}
+              detail={files.slice(0, 2).join(", ")}
+            />
+          )}
+        </div>
       </div>
+
+      {pending && (
+        <div className="border-b border-warn/20 bg-warn/[0.06] px-3 py-2">
+          <PermissionLine update={pending} taskId={task.id} resolvedOutcome={resolved[pending.request_id]} />
+        </div>
+      )}
+
       <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-2 p-3 text-sm leading-relaxed">
-          {recent.length === 0 && <p className="text-muted-foreground">waiting for agent…</p>}
-          {recent.map((u, i) => (
-            <StreamLine key={streamKey(u, i)} update={u} compact />
+        <div className="flex flex-col gap-2.5 p-3 text-[13px] leading-6">
+          {preview.hidden > 0 && (
+            <button
+              type="button"
+              onClick={onOpen}
+              className="flex items-center justify-between rounded-md border border-border/70 bg-background/35 px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+            >
+              <span>{preview.hidden} earlier updates hidden here</span>
+              <span className="text-primary">more in details</span>
+            </button>
+          )}
+          {preview.items.length === 0 && (
+            <div className="flex items-center gap-2 rounded-md border border-dashed border-border/80 px-3 py-4 text-muted-foreground">
+              <Clock3 className="size-4" />
+              waiting for agent activity...
+            </div>
+          )}
+          {preview.items.map((u, i) => (
+            <PinnedStreamLine
+              key={streamKey(u, i + preview.hidden)}
+              update={u}
+              taskId={task.id}
+              resolved={resolved}
+              compact
+            />
           ))}
         </div>
       </ScrollArea>
-      <div className="flex items-center gap-2 border-t p-2">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder="Steer this session…"
-          className="h-8 flex-1 rounded-md border border-input bg-background px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+
+      <div className="border-t border-border/70 bg-background/35">
+        <Composer
+          commands={commands}
+          disabled={task.status === "done"}
+          placeholder="Steer this session..."
+          onSend={(text) => void daemon.request("session.prompt", { task_id: task.id, text })}
+          toolbar={
+            task.configOptions && task.configOptions.length > 0 ? (
+              <AgentConfigBar taskId={task.id} options={task.configOptions} />
+            ) : undefined
+          }
         />
-        <Button size="icon" className="size-8" onClick={send} disabled={!draft.trim()}>
-          <Send className="size-4" />
-        </Button>
       </div>
     </Card>
   );
+}
+
+function latestCommands(updates: SessionUpdate[]): CommandInfo[] {
+  for (let i = updates.length - 1; i >= 0; i -= 1) {
+    const update = updates[i];
+    if (update.kind === "available_commands") {
+      return update.commands;
+    }
+  }
+  return [];
+}
+
+function resolvedPermissions(updates: SessionUpdate[]): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  for (const update of updates) {
+    if (update.kind === "permission_resolved") {
+      resolved[update.request_id] = update.outcome;
+    }
+  }
+  return resolved;
+}
+
+function pendingPermission(
+  updates: SessionUpdate[],
+  resolved: Record<string, string>,
+): Extract<SessionUpdate, { kind: "permission_request" }> | null {
+  for (let i = updates.length - 1; i >= 0; i -= 1) {
+    const update = updates[i];
+    if (update.kind === "permission_request" && !resolved[update.request_id]) {
+      return update;
+    }
+  }
+  return null;
+}
+
+function pinnedPreview(updates: SessionUpdate[], limit: number): {
+  items: SessionUpdate[];
+  hidden: number;
+} {
+  const items = updates.filter((update) => {
+    if (update.kind === "available_commands" || update.kind === "permission_resolved") {
+      return false;
+    }
+    if (update.kind === "permission_request") {
+      return false;
+    }
+    if (update.kind === "tool_call") {
+      return update.status === "in_progress" || update.status === "failed";
+    }
+    if (update.kind === "turn_ended") {
+      return false;
+    }
+    return true;
+  });
+  return {
+    items: items.slice(-limit),
+    hidden: Math.max(0, items.length - limit),
+  };
+}
+
+function summarizeTools(updates: SessionUpdate[]): { total: number; active: number; failed: number } {
+  const tools = updates.filter((u): u is Extract<SessionUpdate, { kind: "tool_call" }> => u.kind === "tool_call");
+  return {
+    total: tools.length,
+    active: tools.filter((t) => t.status === "pending" || t.status === "in_progress").length,
+    failed: tools.filter((t) => t.status === "failed").length,
+  };
+}
+
+function summarizeFiles(updates: SessionUpdate[]): string[] {
+  const seen = new Set<string>();
+  for (const update of updates) {
+    if (update.kind === "file_edit") {
+      seen.add(update.path.split("/").pop() || update.path);
+    }
+  }
+  return Array.from(seen);
+}
+
+function StatusPill({
+  variant,
+  label,
+}: {
+  variant: ReturnType<typeof taskBadge>["variant"] | "warn";
+  label: string;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium",
+        variant === "ok" && "border-ok/35 bg-ok/10 text-ok",
+        variant === "warn" && "border-warn/40 bg-warn/10 text-warn",
+        variant === "destructive" && "border-destructive/40 bg-destructive/10 text-destructive",
+        (variant === "default" || variant === "outline") &&
+          "border-border bg-secondary/40 text-muted-foreground",
+      )}
+    >
+      <span
+        className={cn(
+          "size-1.5 rounded-full",
+          variant === "ok" && "bg-ok",
+          variant === "warn" && "bg-warn",
+          variant === "destructive" && "bg-destructive",
+          (variant === "default" || variant === "outline") && "bg-muted-foreground",
+        )}
+      />
+      {label}
+    </span>
+  );
+}
+
+function ActivityChip({
+  icon,
+  label,
+  detail,
+  tone = "muted",
+}: {
+  icon: React.ReactElement;
+  label: string;
+  detail?: string;
+  tone?: "muted" | "warn";
+}) {
+  return (
+    <span
+      className={cn(
+        "flex min-w-0 max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-xs [&_svg]:size-3.5 [&_svg]:shrink-0",
+        tone === "muted" && "border-border/70 bg-background/35 text-muted-foreground",
+        tone === "warn" && "border-warn/30 bg-warn/10 text-warn",
+      )}
+      title={detail || label}
+    >
+      {icon}
+      <span className="shrink-0">{label}</span>
+      {detail && <span className="min-w-0 truncate opacity-70">{detail}</span>}
+    </span>
+  );
+}
+
+function PinnedStreamLine({
+  update,
+  compact,
+  taskId,
+  resolved,
+}: {
+  update: SessionUpdate;
+  compact?: boolean;
+  taskId?: string;
+  resolved?: Record<string, string>;
+}) {
+  if (update.kind === "agent_text" || update.kind === "agent_thought") {
+    return (
+      <div
+        className={cn(
+          "rounded-md border border-transparent px-0.5",
+          update.kind === "agent_thought" && "text-muted-foreground",
+        )}
+      >
+        <StreamLine update={update} compact={compact} taskId={taskId} resolved={resolved} />
+      </div>
+    );
+  }
+  if (update.kind === "user_message") {
+    return (
+      <div className="rounded-md border border-primary/20 bg-primary/[0.07]">
+        <StreamLine update={update} compact={compact} taskId={taskId} resolved={resolved} />
+      </div>
+    );
+  }
+  return <StreamLine update={update} compact={compact} taskId={taskId} resolved={resolved} />;
 }
 
 /**
@@ -383,8 +647,11 @@ export function StreamLine({
             <ListTodo className="size-3.5" /> Plan
           </div>
           <ul className="space-y-1 text-sm">
-            {update.entries.map((e, i) => (
-              <li key={i} className="flex items-start gap-2">
+            {update.entries.map((e) => (
+              <li
+                key={`${e.status}:${e.priority ?? ""}:${e.content}`}
+                className="flex items-start gap-2"
+              >
                 <span
                   className={cn(
                     "mt-0.5",
@@ -409,9 +676,10 @@ export function StreamLine({
       // Metadata for the composer's slash menu — not shown inline.
       return null;
     case "turn_ended":
+      if (compact) return null;
       return (
         <p className="text-center text-xs text-muted-foreground">
-          — turn ended ({update.stop_reason}) —
+          Agent is waiting for the next instruction.
         </p>
       );
   }

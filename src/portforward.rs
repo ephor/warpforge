@@ -20,11 +20,11 @@ pub enum PfStatus {
 impl std::fmt::Display for PfStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PfStatus::Starting   => write!(f, "starting"),
-            PfStatus::Active     => write!(f, "active"),
+            PfStatus::Starting => write!(f, "starting"),
+            PfStatus::Active => write!(f, "active"),
             PfStatus::Restarting => write!(f, "restarting"),
-            PfStatus::Failed     => write!(f, "failed"),
-            PfStatus::Stopped    => write!(f, "stopped"),
+            PfStatus::Failed => write!(f, "failed"),
+            PfStatus::Stopped => write!(f, "stopped"),
         }
     }
 }
@@ -37,10 +37,26 @@ impl std::fmt::Display for PfStatus {
 /// and misattributing them across project switches.)
 #[derive(Debug, Clone)]
 pub enum PfEvent {
-    Active     { project: String, name: String, local_port: u16 },
-    Restarted  { project: String, name: String, local_port: u16 },
-    Failed     { project: String, name: String, local_port: u16 },
-    Log        { project: String, name: String, line: String },
+    Active {
+        project: String,
+        name: String,
+        local_port: u16,
+    },
+    Restarted {
+        project: String,
+        name: String,
+        local_port: u16,
+    },
+    Failed {
+        project: String,
+        name: String,
+        local_port: u16,
+    },
+    Log {
+        project: String,
+        name: String,
+        line: String,
+    },
 }
 
 impl PfEvent {
@@ -88,45 +104,68 @@ pub struct PortForwardManager {
 
 impl PortForwardManager {
     pub fn new(event_tx: mpsc::UnboundedSender<PfEvent>) -> Self {
-        Self { forwards: HashMap::new(), event_tx }
+        Self {
+            forwards: HashMap::new(),
+            event_tx,
+        }
     }
 
     pub async fn start_all(&mut self, project_name: &str, configs: &[PortForwardConfig]) {
         for cfg in configs {
-            let label = cfg.name.clone()
+            let label = cfg
+                .name
+                .clone()
                 .unwrap_or_else(|| format!("{}:{}", cfg.namespace, cfg.pod));
             let key = format!("{}/{}", project_name, label);
 
             if let Some(pf) = self.forwards.get(&key) {
-                if matches!(pf.status, PfStatus::Active | PfStatus::Starting | PfStatus::Restarting) {
+                if matches!(
+                    pf.status,
+                    PfStatus::Active | PfStatus::Starting | PfStatus::Restarting
+                ) {
                     continue;
                 }
             }
 
             let stop = Arc::new(Notify::new());
-            self.forwards.insert(key.clone(), ManagedPortForward {
-                name: label.clone(),
-                namespace: cfg.namespace.clone(),
-                pod_prefix: cfg.pod.clone(),
-                local_port: cfg.local_port,
-                remote_port: cfg.remote_port,
-                status: PfStatus::Starting,
-                last_event: None,
-                logs: vec![format!("Starting port-forward {}:{} → {}:{} ...",
-                    cfg.namespace, cfg.pod, cfg.local_port, cfg.remote_port)],
-                stop: Arc::clone(&stop),
-            });
+            self.forwards.insert(
+                key.clone(),
+                ManagedPortForward {
+                    name: label.clone(),
+                    namespace: cfg.namespace.clone(),
+                    pod_prefix: cfg.pod.clone(),
+                    local_port: cfg.local_port,
+                    remote_port: cfg.remote_port,
+                    status: PfStatus::Starting,
+                    last_event: None,
+                    logs: vec![format!(
+                        "Starting port-forward {}:{} → {}:{} ...",
+                        cfg.namespace, cfg.pod, cfg.local_port, cfg.remote_port
+                    )],
+                    stop: Arc::clone(&stop),
+                },
+            );
 
-            let project     = project_name.to_string();
-            let namespace   = cfg.namespace.clone();
-            let pod_prefix  = cfg.pod.clone();
-            let local_port  = cfg.local_port;
+            let project = project_name.to_string();
+            let namespace = cfg.namespace.clone();
+            let pod_prefix = cfg.pod.clone();
+            let local_port = cfg.local_port;
             let remote_port = cfg.remote_port;
-            let event_tx    = self.event_tx.clone();
-            let name_clone  = label.clone();
+            let event_tx = self.event_tx.clone();
+            let name_clone = label.clone();
 
             tokio::spawn(async move {
-                watch_portforward(project, name_clone, namespace, pod_prefix, local_port, remote_port, event_tx, stop).await;
+                watch_portforward(
+                    project,
+                    name_clone,
+                    namespace,
+                    pod_prefix,
+                    local_port,
+                    remote_port,
+                    event_tx,
+                    stop,
+                )
+                .await;
             });
         }
     }
@@ -152,14 +191,17 @@ impl PortForwardManager {
                 if let Some(pf) = self.forwards.get_mut(&key) {
                     pf.status = PfStatus::Active;
                     pf.last_event = Some(format!("⟳ restarted :{local_port}"));
-                    pf.logs.push(format!("⟳ Restarted port-forward :{local_port}"));
+                    pf.logs
+                        .push(format!("⟳ Restarted port-forward :{local_port}"));
                 }
             }
             PfEvent::Failed { local_port, .. } => {
                 if let Some(pf) = self.forwards.get_mut(&key) {
                     pf.status = PfStatus::Failed;
                     pf.last_event = Some(format!("✗ failed :{local_port}"));
-                    pf.logs.push(format!("✗ Port-forward :{local_port} gave up after max retries"));
+                    pf.logs.push(format!(
+                        "✗ Port-forward :{local_port} gave up after max retries"
+                    ));
                 }
             }
         }
@@ -199,7 +241,9 @@ impl PortForwardManager {
     #[allow(dead_code)] // retained for symmetry with the other managers
     pub fn list_for_project(&self, project_name: &str) -> Vec<&ManagedPortForward> {
         let prefix = format!("{project_name}/");
-        let mut list: Vec<&ManagedPortForward> = self.forwards.iter()
+        let mut list: Vec<&ManagedPortForward> = self
+            .forwards
+            .iter()
             .filter(|(k, _)| k.starts_with(&prefix))
             .map(|(_, v)| v)
             .collect();
@@ -241,7 +285,11 @@ async fn watch_portforward(
                 }
                 attempt += 1;
                 if attempt >= max_retries {
-                    let _ = event_tx.send(PfEvent::Failed { project, name, local_port });
+                    let _ = event_tx.send(PfEvent::Failed {
+                        project,
+                        name,
+                        local_port,
+                    });
                     return;
                 }
                 continue;
@@ -251,12 +299,20 @@ async fn watch_portforward(
         let _ = event_tx.send(PfEvent::Log {
             project: project.clone(),
             name: name.clone(),
-            line: format!("[attempt {attempt}] kubectl port-forward pod/{pod} {local_port}:{remote_port}"),
+            line: format!(
+                "[attempt {attempt}] kubectl port-forward pod/{pod} {local_port}:{remote_port}"
+            ),
         });
 
         let port_arg = format!("{local_port}:{remote_port}");
         let mut child = match Command::new("kubectl")
-            .args(["port-forward", "-n", &namespace, &format!("pod/{pod}"), &port_arg])
+            .args([
+                "port-forward",
+                "-n",
+                &namespace,
+                &format!("pod/{pod}"),
+                &port_arg,
+            ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -269,7 +325,11 @@ async fn watch_portforward(
                     name: name.clone(),
                     line: format!("[error] Failed to spawn kubectl: {e}"),
                 });
-                let _ = event_tx.send(PfEvent::Failed { project, name, local_port });
+                let _ = event_tx.send(PfEvent::Failed {
+                    project,
+                    name,
+                    local_port,
+                });
                 return;
             }
         };
@@ -282,7 +342,11 @@ async fn watch_portforward(
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = tx.send(PfEvent::Log { project: pr.clone(), name: n.clone(), line });
+                    let _ = tx.send(PfEvent::Log {
+                        project: pr.clone(),
+                        name: n.clone(),
+                        line,
+                    });
                 }
             });
         }
@@ -295,7 +359,11 @@ async fn watch_portforward(
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = tx.send(PfEvent::Log { project: pr.clone(), name: n.clone(), line: format!("[err] {line}") });
+                    let _ = tx.send(PfEvent::Log {
+                        project: pr.clone(),
+                        name: n.clone(),
+                        line: format!("[err] {line}"),
+                    });
                 }
             });
         }
@@ -304,9 +372,17 @@ async fn watch_portforward(
         tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
 
         if attempt == 0 {
-            let _ = event_tx.send(PfEvent::Active { project: project.clone(), name: name.clone(), local_port });
+            let _ = event_tx.send(PfEvent::Active {
+                project: project.clone(),
+                name: name.clone(),
+                local_port,
+            });
         } else {
-            let _ = event_tx.send(PfEvent::Restarted { project: project.clone(), name: name.clone(), local_port });
+            let _ = event_tx.send(PfEvent::Restarted {
+                project: project.clone(),
+                name: name.clone(),
+                local_port,
+            });
         }
 
         // Wait for the child to exit OR a stop request. On stop, dropping the
@@ -321,11 +397,19 @@ async fn watch_portforward(
 
         attempt += 1;
         if attempt >= max_retries {
-            let _ = event_tx.send(PfEvent::Failed { project, name, local_port });
+            let _ = event_tx.send(PfEvent::Failed {
+                project,
+                name,
+                local_port,
+            });
             return;
         }
 
-        let delay = match attempt { 1 => 2, 2..=3 => 5, _ => 10 };
+        let delay = match attempt {
+            1 => 2,
+            2..=3 => 5,
+            _ => 10,
+        };
         let _ = event_tx.send(PfEvent::Log {
             project: project.clone(),
             name: name.clone(),
@@ -372,7 +456,8 @@ async fn resolve_pod(
     }
 
     let text = String::from_utf8_lossy(&out.stdout);
-    let pods: Vec<&str> = text.lines()
+    let pods: Vec<&str> = text
+        .lines()
         .filter_map(|l| l.strip_prefix("pod/"))
         .collect();
 
@@ -399,7 +484,10 @@ async fn resolve_pod(
     let _ = event_tx.send(PfEvent::Log {
         project: project.to_string(),
         name: name.to_string(),
-        line: format!("[warn] No pod matching '{pod_prefix}' — available: {}", pods.join(", ")),
+        line: format!(
+            "[warn] No pod matching '{pod_prefix}' — available: {}",
+            pods.join(", ")
+        ),
     });
     None
 }

@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   Plus,
   Play,
@@ -72,6 +72,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
               return (
                 <button
                   key={p.name}
+                  type="button"
                   onClick={() => setSelected(p.name)}
                   className={cn(
                     "flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
@@ -300,6 +301,24 @@ function ServiceRow({
 
   const badge = serviceBadge(svc?.status ?? "stopped");
   const logText = logs.join("\n");
+  const canStop = svc?.status === "running" || svc?.status === "starting";
+  const canRestart = svc?.status === "running" || svc?.status === "starting";
+  const primaryAction = canRestart
+    ? {
+        label: `Restart ${name}`,
+        icon: <RotateCw className="size-3" />,
+        action: "service.restart",
+      }
+    : {
+        label: `Start ${name}`,
+        icon: <Play className="size-3" />,
+        action: "service.start",
+      };
+
+  useEffect(() => {
+    if (!open) return;
+    void daemon.fetchServiceLogs(project, name, { after: 0, limit: 300 });
+  }, [open, project, name, svc?.logSeq]);
 
   return (
     <div>
@@ -325,14 +344,19 @@ function ServiceRow({
             variant="outline"
             size="sm"
             className="h-7"
-            onClick={() => void daemon.request("service.restart", { project, service: name })}
+            title={primaryAction.label}
+            aria-label={primaryAction.label}
+            onClick={() => void daemon.request(primaryAction.action, { project, service: name })}
           >
-            <RotateCw className="size-3" />
+            {primaryAction.icon}
           </Button>
           <Button
             variant="destructive"
             size="sm"
             className="h-7"
+            disabled={!canStop}
+            title={`Stop ${name}`}
+            aria-label={`Stop ${name}`}
             onClick={() => void daemon.request("service.stop", { project, service: name })}
           >
             <Square className="size-3" />
@@ -345,12 +369,14 @@ function ServiceRow({
           <div className="mb-2 flex items-center gap-2">
             <span className="text-xs text-muted-foreground">{logs.length} lines</span>
             <button
+              type="button"
               className="ml-auto flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
               onClick={() => void navigator.clipboard.writeText(logText)}
             >
               <Copy className="size-3" /> copy
             </button>
             <button
+              type="button"
               className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
               onClick={() =>
                 onSendToAgent(project, `Logs for service "${name}":\n\`\`\`\n${logText}\n\`\`\``)

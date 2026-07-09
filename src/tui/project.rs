@@ -1,9 +1,9 @@
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
+    Frame,
 };
 
 use crate::agent::AgentStatus;
@@ -22,7 +22,11 @@ pub fn render(
     project_name: &str,
 ) {
     let area = frame.area();
-    let focus = state.project_focus.get(project_name).cloned().unwrap_or(ProjectFocus::Agents);
+    let focus = state
+        .project_focus
+        .get(project_name)
+        .cloned()
+        .unwrap_or(ProjectFocus::Agents);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -35,17 +39,40 @@ pub fn render(
 
     // ── Header ───────────────────────────────────────────────────────────────
     let mode_label = match (&focus, &state.input_mode) {
-        (_, InputMode::Terminal)          => Span::styled(" TERMINAL ",     Style::default().fg(Color::Black).bg(Color::Yellow)),
-        (ProjectFocus::Agents, _)         => Span::styled(" AGENTS ",       Style::default().fg(Color::Black).bg(Color::Green)),
-        (ProjectFocus::ServicesBrowse, _) => Span::styled(" SERVICES ",     Style::default().fg(Color::Black).bg(Color::Cyan)),
-        (ProjectFocus::ServiceDetail, _)  => Span::styled(" SERVICE LOGS ", Style::default().fg(Color::Black).bg(Color::Cyan)),
-        (ProjectFocus::PfBrowse, _)       => Span::styled(" PORT-FWD ",     Style::default().fg(Color::Black).bg(Color::Magenta)),
-        (ProjectFocus::PfDetail, _)       => Span::styled(" PORT-FWD LOGS ",Style::default().fg(Color::Black).bg(Color::Magenta)),
+        (_, InputMode::Terminal) => Span::styled(
+            " TERMINAL ",
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        ),
+        (ProjectFocus::Agents, _) => Span::styled(
+            " AGENTS ",
+            Style::default().fg(Color::Black).bg(Color::Green),
+        ),
+        (ProjectFocus::ServicesBrowse, _) => Span::styled(
+            " SERVICES ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        (ProjectFocus::ServiceDetail, _) => Span::styled(
+            " SERVICE LOGS ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        (ProjectFocus::PfBrowse, _) => Span::styled(
+            " PORT-FWD ",
+            Style::default().fg(Color::Black).bg(Color::Magenta),
+        ),
+        (ProjectFocus::PfDetail, _) => Span::styled(
+            " PORT-FWD LOGS ",
+            Style::default().fg(Color::Black).bg(Color::Magenta),
+        ),
     };
 
     let header = Paragraph::new(Line::from(vec![
         Span::styled("⚡ ", Style::default().fg(Color::Yellow)),
-        Span::styled(project_name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            project_name,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("  "),
         mode_label,
     ]))
@@ -58,20 +85,44 @@ pub fn render(
         .constraints([Constraint::Length(28), Constraint::Min(0)])
         .split(chunks[1]);
 
-    render_sidebar(frame, state, agents, services, portforwards, project_name, &focus, main_chunks[0]);
+    render_sidebar(
+        frame,
+        state,
+        agents,
+        services,
+        portforwards,
+        project_name,
+        &focus,
+        main_chunks[0],
+    );
 
     match &focus {
-        ProjectFocus::Agents         => render_agent_pane(frame, state, agents, project_name, main_chunks[1]),
-        ProjectFocus::ServicesBrowse => render_log_tail(frame, state, services, project_name, main_chunks[1]),
-        ProjectFocus::ServiceDetail  => render_log_detail(frame, state, services, project_name, main_chunks[1]),
-        ProjectFocus::PfBrowse       => render_pf_tail(frame, state, portforwards, project_name, main_chunks[1]),
-        ProjectFocus::PfDetail       => render_pf_detail(frame, state, portforwards, project_name, main_chunks[1]),
+        ProjectFocus::Agents => {
+            render_agent_pane(frame, state, agents, project_name, main_chunks[1])
+        }
+        ProjectFocus::ServicesBrowse => {
+            render_log_tail(frame, state, services, project_name, main_chunks[1])
+        }
+        ProjectFocus::ServiceDetail => {
+            render_log_detail(frame, state, services, project_name, main_chunks[1])
+        }
+        ProjectFocus::PfBrowse => {
+            render_pf_tail(frame, state, portforwards, project_name, main_chunks[1])
+        }
+        ProjectFocus::PfDetail => {
+            render_pf_detail(frame, state, portforwards, project_name, main_chunks[1])
+        }
     }
 
     // ── Help bar ─────────────────────────────────────────────────────────────
     let help = if state.input_mode == InputMode::Terminal {
         Paragraph::new(Line::from(vec![
-            Span::styled("TERMINAL  ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "TERMINAL  ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             help_key("Esc / Ctrl+B", "exit"),
             Span::raw("   "),
             help_key("Ctrl+C", "quit app"),
@@ -168,9 +219,17 @@ fn render_sidebar(
     let svc_list = services.list_for_project(project_name);
     let agent_list = agents.list_for_project(project_name);
     let pf_list = portforwards.list_for_project(project_name);
-    let selected_svc = state.selected_service.get(project_name).copied().unwrap_or(0);
+    let selected_svc = state
+        .selected_service
+        .get(project_name)
+        .copied()
+        .unwrap_or(0);
 
-    let pf_height = if pf_list.is_empty() { 0 } else { pf_list.len() as u16 + 2 };
+    let pf_height = if pf_list.is_empty() {
+        0
+    } else {
+        pf_list.len() as u16 + 2
+    };
     let svc_height = (svc_list.len() as u16 + 2).max(3);
     let sidebar_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -182,8 +241,15 @@ fn render_sidebar(
         .split(area);
 
     // ── Services list ─────────────────────────────────────────────────────────
-    let svc_focused = matches!(focus, ProjectFocus::ServicesBrowse | ProjectFocus::ServiceDetail);
-    let svc_border = if svc_focused { Color::Cyan } else { Color::DarkGray };
+    let svc_focused = matches!(
+        focus,
+        ProjectFocus::ServicesBrowse | ProjectFocus::ServiceDetail
+    );
+    let svc_border = if svc_focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
 
     let mut sorted_svcs = svc_list.clone();
     sorted_svcs.sort_by_key(|s| &s.name);
@@ -192,10 +258,10 @@ fn render_sidebar(
         .iter()
         .map(|svc| {
             let (icon, icon_color) = match svc.status {
-                ServiceStatus::Running  => ("● ", Color::Green),
+                ServiceStatus::Running => ("● ", Color::Green),
                 ServiceStatus::Starting => ("◌ ", Color::Yellow),
-                ServiceStatus::Failed   => ("✗ ", Color::Red),
-                ServiceStatus::Stopped  => ("○ ", Color::DarkGray),
+                ServiceStatus::Failed => ("✗ ", Color::Red),
+                ServiceStatus::Stopped => ("○ ", Color::DarkGray),
             };
             let port_label = if svc.allocated_port > 0 {
                 if svc.original_port > 0 && svc.original_port != svc.allocated_port {
@@ -215,15 +281,27 @@ fn render_sidebar(
         .collect();
 
     let svc_title = if svc_focused {
-        format!(" Services ({}/{}) ", selected_svc + 1, sorted_svcs.len().max(1))
+        format!(
+            " Services ({}/{}) ",
+            selected_svc + 1,
+            sorted_svcs.len().max(1)
+        )
     } else {
         " Services ".to_string()
     };
 
     let svc_widget = List::new(svc_items)
-        .block(Block::default().title(svc_title).borders(Borders::ALL)
-            .border_style(Style::default().fg(svc_border)))
-        .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        .block(
+            Block::default()
+                .title(svc_title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(svc_border)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("▶ ");
     let mut svc_state = ListState::default();
     if !sorted_svcs.is_empty() {
@@ -234,23 +312,30 @@ fn render_sidebar(
     // ── Port-forwards ─────────────────────────────────────────────────────────
     if !pf_list.is_empty() {
         let pf_focused = matches!(focus, ProjectFocus::PfBrowse | ProjectFocus::PfDetail);
-        let pf_border = if pf_focused { Color::Magenta } else { Color::DarkGray };
+        let pf_border = if pf_focused {
+            Color::Magenta
+        } else {
+            Color::DarkGray
+        };
         let selected_pf = state.selected_pf.get(project_name).copied().unwrap_or(0);
 
-        let pf_items: Vec<ListItem> = pf_list.iter().map(|pf| {
-            let (icon, color) = match pf.status {
-                PfStatus::Active     => ("⇌ ", Color::Green),
-                PfStatus::Starting   => ("◌ ", Color::Yellow),
-                PfStatus::Restarting => ("⟳ ", Color::Yellow),
-                PfStatus::Failed     => ("✗ ", Color::Red),
-                PfStatus::Stopped    => ("○ ", Color::DarkGray),
-            };
-            let label = format!(":{} {}", pf.local_port, pf.name);
-            ListItem::new(Line::from(vec![
-                Span::styled(icon, Style::default().fg(color)),
-                Span::raw(label),
-            ]))
-        }).collect();
+        let pf_items: Vec<ListItem> = pf_list
+            .iter()
+            .map(|pf| {
+                let (icon, color) = match pf.status {
+                    PfStatus::Active => ("⇌ ", Color::Green),
+                    PfStatus::Starting => ("◌ ", Color::Yellow),
+                    PfStatus::Restarting => ("⟳ ", Color::Yellow),
+                    PfStatus::Failed => ("✗ ", Color::Red),
+                    PfStatus::Stopped => ("○ ", Color::DarkGray),
+                };
+                let label = format!(":{} {}", pf.local_port, pf.name);
+                ListItem::new(Line::from(vec![
+                    Span::styled(icon, Style::default().fg(color)),
+                    Span::raw(label),
+                ]))
+            })
+            .collect();
 
         let pf_title = if pf_focused {
             format!(" Port-fwd ({}/{}) ", selected_pf + 1, pf_list.len())
@@ -259,9 +344,17 @@ fn render_sidebar(
         };
 
         let pf_widget = List::new(pf_items)
-            .block(Block::default().title(pf_title).borders(Borders::ALL)
-                .border_style(Style::default().fg(pf_border)))
-            .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+            .block(
+                Block::default()
+                    .title(pf_title)
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(pf_border)),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
             .highlight_symbol("▶ ");
         let mut pf_state = ListState::default();
         if !pf_list.is_empty() {
@@ -272,28 +365,46 @@ fn render_sidebar(
 
     // ── Agents list ───────────────────────────────────────────────────────────
     let agent_focused = matches!(focus, ProjectFocus::Agents);
-    let agent_border = if agent_focused { Color::Green } else { Color::DarkGray };
-    let active_tab = state.active_agent_tab.get(project_name).copied().unwrap_or(0);
+    let agent_border = if agent_focused {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
+    let active_tab = state
+        .active_agent_tab
+        .get(project_name)
+        .copied()
+        .unwrap_or(0);
 
-    let agent_items: Vec<ListItem> = agent_list.iter().enumerate().map(|(i, a)| {
-        let (icon, color) = match a.status {
-            AgentStatus::Running     => ("▶ ", Color::Green),
-            AgentStatus::NeedsReview => ("● ", Color::Yellow),
-            AgentStatus::Completed   => ("✓ ", Color::DarkGray),
-            AgentStatus::Failed      => ("✗ ", Color::Red),
-            AgentStatus::Spawning    => ("◌ ", Color::Cyan),
-        };
-        let label = if a.description.is_empty() { &a.command } else { &a.description };
-        let text_style = if i == active_tab && agent_focused {
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        ListItem::new(Line::from(vec![
-            Span::styled(icon, Style::default().fg(color)),
-            Span::styled(label.as_str(), text_style),
-        ]))
-    }).collect();
+    let agent_items: Vec<ListItem> = agent_list
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let (icon, color) = match a.status {
+                AgentStatus::Running => ("▶ ", Color::Green),
+                AgentStatus::NeedsReview => ("● ", Color::Yellow),
+                AgentStatus::Completed => ("✓ ", Color::DarkGray),
+                AgentStatus::Failed => ("✗ ", Color::Red),
+                AgentStatus::Spawning => ("◌ ", Color::Cyan),
+            };
+            let label = if a.description.is_empty() {
+                &a.command
+            } else {
+                &a.description
+            };
+            let text_style = if i == active_tab && agent_focused {
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(icon, Style::default().fg(color)),
+                Span::styled(label.as_str(), text_style),
+            ]))
+        })
+        .collect();
 
     let agents_title = if agent_list.is_empty() {
         " Agents ".to_string()
@@ -301,9 +412,12 @@ fn render_sidebar(
         format!(" Agents ({}/{}) ", active_tab + 1, agent_list.len())
     };
 
-    let agents_widget = List::new(agent_items)
-        .block(Block::default().title(agents_title).borders(Borders::ALL)
-            .border_style(Style::default().fg(agent_border)));
+    let agents_widget = List::new(agent_items).block(
+        Block::default()
+            .title(agents_title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(agent_border)),
+    );
     frame.render_widget(agents_widget, sidebar_chunks[2]);
 }
 
@@ -321,15 +435,29 @@ fn render_agent_pane(
     if agent_list.is_empty() {
         let hint = Paragraph::new(vec![
             Line::raw(""),
-            Line::from(Span::styled("  No agents running.", Style::default().fg(Color::DarkGray))),
-            Line::from(Span::styled("  [n] spawn claude   [s] view services", Style::default().fg(Color::DarkGray))),
+            Line::from(Span::styled(
+                "  No agents running.",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                "  [n] spawn claude   [s] view services",
+                Style::default().fg(Color::DarkGray),
+            )),
         ])
-        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray)));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
         frame.render_widget(hint, area);
         return;
     }
 
-    let active_tab = state.active_agent_tab.get(project_name).copied().unwrap_or(0)
+    let active_tab = state
+        .active_agent_tab
+        .get(project_name)
+        .copied()
+        .unwrap_or(0)
         .min(agent_list.len().saturating_sub(1));
 
     // Tab bar (only when >1 agent)
@@ -339,19 +467,39 @@ fn render_agent_pane(
             .constraints([Constraint::Length(1), Constraint::Min(0)])
             .split(area);
 
-        let tab_titles: Vec<Line> = agent_list.iter().enumerate().map(|(i, a)| {
-            let label = format!(" {} ", if a.description.is_empty() { &a.command } else { &a.description });
-            if i == active_tab {
-                Line::from(Span::styled(label, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)))
-            } else {
-                Line::from(Span::styled(label, Style::default().fg(Color::DarkGray)))
-            }
-        }).collect();
+        let tab_titles: Vec<Line> = agent_list
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let label = format!(
+                    " {} ",
+                    if a.description.is_empty() {
+                        &a.command
+                    } else {
+                        &a.description
+                    }
+                );
+                if i == active_tab {
+                    Line::from(Span::styled(
+                        label,
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                } else {
+                    Line::from(Span::styled(label, Style::default().fg(Color::DarkGray)))
+                }
+            })
+            .collect();
 
         let tabs = Tabs::new(tab_titles)
             .select(active_tab)
             .style(Style::default().fg(Color::DarkGray))
-            .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            );
         frame.render_widget(tabs, split[0]);
         split[1]
     } else {
@@ -363,7 +511,9 @@ fn render_agent_pane(
     } else {
         Style::default().fg(Color::Green)
     };
-    let block = Block::default().borders(Borders::ALL).border_style(border_style);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style);
     let inner = block.inner(content_area);
     frame.render_widget(block, content_area);
 
@@ -371,7 +521,10 @@ fn render_agent_pane(
         match &agent.screen {
             Some(screen) => frame.render_widget(WireTerminalPane::new(screen), inner),
             None => frame.render_widget(
-                Paragraph::new(Span::styled("  connecting…", Style::default().fg(Color::DarkGray))),
+                Paragraph::new(Span::styled(
+                    "  connecting…",
+                    Style::default().fg(Color::DarkGray),
+                )),
                 inner,
             ),
         }
@@ -389,13 +542,21 @@ fn render_log_tail(
 ) {
     let mut svc_list = services.list_for_project(project_name);
     svc_list.sort_by_key(|s| &s.name);
-    let selected = _state.selected_service.get(project_name).copied().unwrap_or(0);
+    let selected = _state
+        .selected_service
+        .get(project_name)
+        .copied()
+        .unwrap_or(0);
 
     if svc_list.is_empty() {
         let hint = Paragraph::new(" No services.  [u] start   [Esc] back to agents")
             .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().title(" Logs ").borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)));
+            .block(
+                Block::default()
+                    .title(" Logs ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            );
         frame.render_widget(hint, area);
         return;
     }
@@ -411,15 +572,22 @@ fn render_log_tail(
     let log_lines: Vec<Line> = svc.logs[start..]
         .iter()
         .map(|l| {
-            let color = if l.contains("[err]") { Color::Red } else { Color::Reset };
+            let color = if l.contains("[err]") {
+                Color::Red
+            } else {
+                Color::Reset
+            };
             Line::from(Span::styled(l.as_str(), Style::default().fg(color)))
         })
         .collect();
 
     let title = format!(" {} — tail  [Enter] scroll & actions ", svc.name);
-    let widget = Paragraph::new(log_lines)
-        .block(Block::default().title(title).borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)));
+    let widget = Paragraph::new(log_lines).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
     frame.render_widget(widget, area);
 }
 
@@ -434,7 +602,11 @@ fn render_log_detail(
 ) {
     let mut svc_list = services.list_for_project(project_name);
     svc_list.sort_by_key(|s| &s.name);
-    let selected = state.selected_service.get(project_name).copied().unwrap_or(0);
+    let selected = state
+        .selected_service
+        .get(project_name)
+        .copied()
+        .unwrap_or(0);
 
     if svc_list.is_empty() {
         frame.render_widget(
@@ -455,13 +627,21 @@ fn render_log_detail(
     let inner_width = area.width.saturating_sub(2) as usize;
 
     let total_visual = if wrap {
-        svc.logs.iter().map(|l| visual_rows(l, inner_width)).sum::<usize>()
+        svc.logs
+            .iter()
+            .map(|l| visual_rows(l, inner_width))
+            .sum::<usize>()
     } else {
         svc.logs.len()
     };
 
     let max_scroll = total_visual.saturating_sub(inner_height);
-    let scroll_up = state.log_scroll.get(project_name).copied().unwrap_or(0).min(max_scroll);
+    let scroll_up = state
+        .log_scroll
+        .get(project_name)
+        .copied()
+        .unwrap_or(0)
+        .min(max_scroll);
     let offset = max_scroll.saturating_sub(scroll_up) as u16;
 
     let scroll_info = if total_visual > inner_height {
@@ -473,22 +653,40 @@ fn render_log_detail(
     let wrap_indicator = if wrap { " [wrap]" } else { "" };
 
     let status_color = match svc.status {
-        ServiceStatus::Running  => Color::Green,
+        ServiceStatus::Running => Color::Green,
         ServiceStatus::Starting => Color::Yellow,
-        ServiceStatus::Failed   => Color::Red,
-        ServiceStatus::Stopped  => Color::DarkGray,
+        ServiceStatus::Failed => Color::Red,
+        ServiceStatus::Stopped => Color::DarkGray,
     };
-    let title = format!(" {} [{}]{}{} ", svc.name, svc.status, scroll_info, wrap_indicator);
+    let title = format!(
+        " {} [{}]{}{} ",
+        svc.name, svc.status, scroll_info, wrap_indicator
+    );
 
-    let log_lines: Vec<Line> = svc.logs.iter().map(|l| {
-        let color = if l.contains("[err]") { Color::Red } else { Color::Reset };
-        Line::from(Span::styled(l.as_str(), Style::default().fg(color)))
-    }).collect();
+    let log_lines: Vec<Line> = svc
+        .logs
+        .iter()
+        .map(|l| {
+            let color = if l.contains("[err]") {
+                Color::Red
+            } else {
+                Color::Reset
+            };
+            Line::from(Span::styled(l.as_str(), Style::default().fg(color)))
+        })
+        .collect();
 
-    let widget = Paragraph::new(log_lines).scroll((offset, 0))
-        .block(Block::default().title(title).borders(Borders::ALL)
-            .border_style(Style::default().fg(status_color)));
-    let widget = if wrap { widget.wrap(Wrap { trim: false }) } else { widget };
+    let widget = Paragraph::new(log_lines).scroll((offset, 0)).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(status_color)),
+    );
+    let widget = if wrap {
+        widget.wrap(Wrap { trim: false })
+    } else {
+        widget
+    };
     frame.render_widget(widget, area);
 }
 
@@ -509,8 +707,12 @@ fn render_pf_tail(
     if pf_list.is_empty() {
         let hint = Paragraph::new(" No port-forwards configured in .workspace.yaml")
             .style(Style::default().fg(Color::DarkGray))
-            .block(Block::default().title(" Port-forward Logs ").borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)));
+            .block(
+                Block::default()
+                    .title(" Port-forward Logs ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            );
         frame.render_widget(hint, area);
         return;
     }
@@ -522,18 +724,29 @@ fn render_pf_tail(
 
     let inner_height = area.height.saturating_sub(2) as usize;
     let start = pf.logs.len().saturating_sub(inner_height);
-    let log_lines: Vec<Line> = pf.logs[start..].iter().map(|l| {
-        let color = if l.contains("[err]") || l.contains("[error]") { Color::Red }
-                    else if l.contains("[warn]") { Color::Yellow }
-                    else if l.contains("✓") { Color::Green }
-                    else { Color::Reset };
-        Line::from(Span::styled(l.as_str(), Style::default().fg(color)))
-    }).collect();
+    let log_lines: Vec<Line> = pf.logs[start..]
+        .iter()
+        .map(|l| {
+            let color = if l.contains("[err]") || l.contains("[error]") {
+                Color::Red
+            } else if l.contains("[warn]") {
+                Color::Yellow
+            } else if l.contains("✓") {
+                Color::Green
+            } else {
+                Color::Reset
+            };
+            Line::from(Span::styled(l.as_str(), Style::default().fg(color)))
+        })
+        .collect();
 
     let title = format!(" {} [{}]  [Enter] scroll ", pf.name, pf.status);
-    let widget = Paragraph::new(log_lines)
-        .block(Block::default().title(title).borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Magenta)));
+    let widget = Paragraph::new(log_lines).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta)),
+    );
     frame.render_widget(widget, area);
 }
 
@@ -568,13 +781,21 @@ fn render_pf_detail(
     let inner_width = area.width.saturating_sub(2) as usize;
 
     let total_visual = if wrap {
-        pf.logs.iter().map(|l| visual_rows(l, inner_width)).sum::<usize>()
+        pf.logs
+            .iter()
+            .map(|l| visual_rows(l, inner_width))
+            .sum::<usize>()
     } else {
         pf.logs.len()
     };
 
     let max_scroll = total_visual.saturating_sub(inner_height);
-    let scroll_up = state.log_scroll.get(project_name).copied().unwrap_or(0).min(max_scroll);
+    let scroll_up = state
+        .log_scroll
+        .get(project_name)
+        .copied()
+        .unwrap_or(0)
+        .min(max_scroll);
     let offset = max_scroll.saturating_sub(scroll_up) as u16;
 
     let scroll_info = if total_visual > inner_height {
@@ -586,25 +807,44 @@ fn render_pf_detail(
     let wrap_indicator = if wrap { " [wrap]" } else { "" };
 
     let status_color = match pf.status {
-        PfStatus::Active     => Color::Green,
+        PfStatus::Active => Color::Green,
         PfStatus::Starting | PfStatus::Restarting => Color::Yellow,
-        PfStatus::Failed     => Color::Red,
-        PfStatus::Stopped    => Color::DarkGray,
+        PfStatus::Failed => Color::Red,
+        PfStatus::Stopped => Color::DarkGray,
     };
-    let title = format!(" {} [{}]{}{} ", pf.name, pf.status, scroll_info, wrap_indicator);
+    let title = format!(
+        " {} [{}]{}{} ",
+        pf.name, pf.status, scroll_info, wrap_indicator
+    );
 
-    let log_lines: Vec<Line> = pf.logs.iter().map(|l| {
-        let color = if l.contains("[err]") || l.contains("[error]") { Color::Red }
-                    else if l.contains("[warn]") { Color::Yellow }
-                    else if l.contains("✓") || l.contains("Forwarding") { Color::Green }
-                    else { Color::Reset };
-        Line::from(Span::styled(l.as_str(), Style::default().fg(color)))
-    }).collect();
+    let log_lines: Vec<Line> = pf
+        .logs
+        .iter()
+        .map(|l| {
+            let color = if l.contains("[err]") || l.contains("[error]") {
+                Color::Red
+            } else if l.contains("[warn]") {
+                Color::Yellow
+            } else if l.contains("✓") || l.contains("Forwarding") {
+                Color::Green
+            } else {
+                Color::Reset
+            };
+            Line::from(Span::styled(l.as_str(), Style::default().fg(color)))
+        })
+        .collect();
 
-    let widget = Paragraph::new(log_lines).scroll((offset, 0))
-        .block(Block::default().title(title).borders(Borders::ALL)
-            .border_style(Style::default().fg(status_color)));
-    let widget = if wrap { widget.wrap(Wrap { trim: false }) } else { widget };
+    let widget = Paragraph::new(log_lines).scroll((offset, 0)).block(
+        Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(status_color)),
+    );
+    let widget = if wrap {
+        widget.wrap(Wrap { trim: false })
+    } else {
+        widget
+    };
     frame.render_widget(widget, area);
 }
 
@@ -617,17 +857,32 @@ fn render_spawn_picker(frame: &mut Frame, options: &[SpawnOption], parent: Rect)
     // Center horizontally, place in upper third vertically
     let x = parent.x + parent.width.saturating_sub(width) / 2;
     let y = parent.y + parent.height / 4;
-    let area = Rect { x, y, width: width.min(parent.width), height: height.min(parent.height) };
+    let area = Rect {
+        x,
+        y,
+        width: width.min(parent.width),
+        height: height.min(parent.height),
+    };
 
-    let items: Vec<ListItem> = options.iter().enumerate().map(|(i, opt)| {
-        let key_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-        let desc = if opt.description.is_empty() { opt.command.as_str() } else { opt.description.as_str() };
-        ListItem::new(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(format!("[{}]", i + 1), key_style),
-            Span::raw(format!("  {:<12} {}", opt.command, desc)),
-        ]))
-    }).collect();
+    let items: Vec<ListItem> = options
+        .iter()
+        .enumerate()
+        .map(|(i, opt)| {
+            let key_style = Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD);
+            let desc = if opt.description.is_empty() {
+                opt.command.as_str()
+            } else {
+                opt.description.as_str()
+            };
+            ListItem::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("[{}]", i + 1), key_style),
+                Span::raw(format!("  {:<12} {}", opt.command, desc)),
+            ]))
+        })
+        .collect();
 
     let block = Block::default()
         .title(" New agent ")
@@ -646,14 +901,19 @@ fn render_spawn_picker(frame: &mut Frame, options: &[SpawnOption], parent: Rect)
     frame.render_widget(block, area);
     frame.render_widget(List::new(items), inner[0]);
     frame.render_widget(
-        Paragraph::new(Span::styled("  Esc to cancel", Style::default().fg(Color::DarkGray))),
+        Paragraph::new(Span::styled(
+            "  Esc to cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
         inner[1],
     );
 }
 
 /// Number of visual rows a log line occupies given the available width.
 fn visual_rows(line: &str, width: usize) -> usize {
-    if width == 0 || line.is_empty() { return 1; }
+    if width == 0 || line.is_empty() {
+        return 1;
+    }
     (line.len() + width - 1) / width
 }
 
@@ -664,6 +924,8 @@ fn help_key<'a>(key: &'a str, desc: &'a str) -> Span<'a> {
 fn help_active<'a>(key: &'a str, desc: &'a str) -> Span<'a> {
     Span::styled(
         format!("[{key}] {desc}"),
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
     )
 }

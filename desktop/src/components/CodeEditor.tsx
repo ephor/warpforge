@@ -1,39 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { EditorState, Extension } from "@codemirror/state";
+import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { javascript } from "@codemirror/lang-javascript";
-import { rust } from "@codemirror/lang-rust";
-import { json } from "@codemirror/lang-json";
-import { python } from "@codemirror/lang-python";
-import { go } from "@codemirror/lang-go";
 import { Check, Save } from "lucide-react";
 import { FileDoc } from "../protocol";
 import { cn } from "@/lib/utils";
-
-function langFor(path: string): Extension[] {
-  const ext = path.split(".").pop()?.toLowerCase();
-  switch (ext) {
-    case "ts":
-    case "tsx":
-      return [javascript({ jsx: true, typescript: true })];
-    case "js":
-    case "jsx":
-    case "mjs":
-    case "cjs":
-      return [javascript({ jsx: true })];
-    case "rs":
-      return [rust()];
-    case "go":
-      return [go()];
-    case "json":
-      return [json()];
-    case "py":
-      return [python()];
-    default:
-      return [];
-  }
-}
+import { codemirrorLanguageForPath } from "@/lib/codemirrorLanguages";
 
 type SaveStatus = "clean" | "unsaved" | "saved";
 
@@ -77,7 +49,7 @@ export function CodeEditor({
           lineNumbers(),
           oneDark,
           EditorView.lineWrapping,
-          ...langFor(doc.path),
+          ...codemirrorLanguageForPath(doc.path),
           EditorState.readOnly.of(!editable),
           keymap.of([{ key: "Mod-s", run: flushSave }]),
           EditorView.updateListener.of((u) => {

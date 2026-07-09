@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { PlugZap, RefreshCw, Server, TerminalSquare } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { Play, PlugZap, RefreshCw, RotateCw, Server, Square, TerminalSquare } from "lucide-react";
 import { daemon } from "../daemon";
 import { PortForwardInfo, ServiceInfo } from "../protocol";
 import { pfBadge, serviceBadge } from "@/lib/status";
@@ -33,6 +33,7 @@ export function RuntimePanel({
 
   const activeService =
     active?.kind === "service" ? services.find((s) => s.name === active.name) : null;
+  const activeServiceName = activeService?.name ?? null;
   const activePortForward =
     active?.kind === "portforward" ? portforwards.find((p) => p.name === active.name) : null;
   const liveLogs = useSyncExternalStore(
@@ -54,25 +55,20 @@ export function RuntimePanel({
     }
   }, [active, tabs]);
 
-  const fetchLogs = () => {
-    if (!activeService) {
+  const fetchLogs = useCallback(() => {
+    if (!activeServiceName) {
       setLogs([]);
       setError(null);
       return;
     }
     setError(null);
     daemon
-      .request("service.logs", {
-        project,
-        service: activeService.name,
-        after: 0,
-        limit: 300,
-      })
-      .then((d) => setLogs(Array.isArray(d) ? d.map(String) : []))
+      .fetchServiceLogs(project, activeServiceName, { after: 0, limit: 300 })
+      .then(setLogs)
       .catch((e: Error) => setError(e.message));
-  };
+  }, [activeServiceName, project]);
 
-  useEffect(fetchLogs, [project, activeService?.name, activeService?.logSeq]);
+  useEffect(fetchLogs, [fetchLogs, activeService?.logSeq]);
 
   if (tabs.length === 0) {
     return (
@@ -119,6 +115,7 @@ export function RuntimePanel({
           disabled={!activeService}
           className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-40"
           title="Refresh logs"
+          aria-label="Refresh logs"
         >
           <RefreshCw className="size-3.5" />
         </button>
@@ -130,10 +127,11 @@ export function RuntimePanel({
             <span className={statusDot(serviceBadge(activeService.status).variant)} />
             <span>{activeService.status}</span>
             <span className="text-border">|</span>
-            <span className="truncate">{activeService.command}</span>
+            <span className="min-w-0 flex-1 truncate">{activeService.command}</span>
             {activeService.allocatedPort > 0 && (
-              <span className="ml-auto shrink-0 text-primary">:{activeService.allocatedPort}</span>
+              <span className="shrink-0 text-primary">:{activeService.allocatedPort}</span>
             )}
+            <ServiceRuntimeControls project={project} service={activeService} />
           </>
         ) : activePortForward ? (
           <>
@@ -176,6 +174,43 @@ Port-forward logs will appear here when daemon streaming is wired to this panel.
           </pre>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+function ServiceRuntimeControls({
+  project,
+  service,
+}: {
+  project: string;
+  service: ServiceInfo;
+}) {
+  const canStop = service.status === "running" || service.status === "starting";
+  const canRestart = service.status === "running" || service.status === "starting";
+  const action = canRestart ? "service.restart" : "service.start";
+  const label = canRestart ? `Restart ${service.name}` : `Start ${service.name}`;
+
+  return (
+    <div className="ml-1 flex shrink-0 items-center gap-1">
+      <button
+        type="button"
+        title={label}
+        aria-label={label}
+        onClick={() => void daemon.request(action, { project, service: service.name })}
+        className="rounded border border-border/80 p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+      >
+        {canRestart ? <RotateCw className="size-3.5" /> : <Play className="size-3.5" />}
+      </button>
+      <button
+        type="button"
+        title={`Stop ${service.name}`}
+        aria-label={`Stop ${service.name}`}
+        disabled={!canStop}
+        onClick={() => void daemon.request("service.stop", { project, service: service.name })}
+        className="rounded border border-destructive/40 p-1 text-destructive hover:bg-destructive/15 disabled:border-border/60 disabled:text-muted-foreground disabled:opacity-40"
+      >
+        <Square className="size-3.5" />
+      </button>
     </div>
   );
 }

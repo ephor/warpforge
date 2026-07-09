@@ -18,7 +18,6 @@ import { RuntimePanel } from "../components/RuntimePanel";
 import { daemon, DaemonState } from "../daemon";
 import {
   CommandInfo,
-  ConfigOption,
   FileDiff,
   FileDoc,
   HunkResolution,
@@ -30,6 +29,7 @@ import {
 import { StreamLine, coalesceUpdates, streamKey } from "./MissionControl";
 import { useUi } from "../store/ui";
 import { Composer } from "../components/Composer";
+import { AgentConfigBar } from "../components/AgentConfigBar";
 import { CodeEditor } from "../components/CodeEditor";
 import { MergeDiff } from "../components/MergeDiff";
 import { ChangesRail } from "../components/ChangesRail";
@@ -98,6 +98,20 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     setActiveTab({ kind: "file", path });
     setShowDiff(true);
     setCenterTab("editor");
+  };
+  const openDiffFile = (path: string) => {
+    setSelectedFile(path);
+    setActiveTab({ kind: "changes" });
+    setShowDiff(true);
+    setCenterTab("changes");
+    if (diffView === "unified") {
+      requestAnimationFrame(() => {
+        document.getElementById(fileAnchor(path))?.scrollIntoView({
+          block: "start",
+          behavior: "smooth",
+        });
+      });
+    }
   };
   const openChangesTab = () => {
     setActiveTab({ kind: "changes" });
@@ -297,7 +311,7 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
               onSend={(text) => void daemon.request("session.prompt", { task_id: task.id, text })}
               toolbar={
                 task.configOptions && task.configOptions.length > 0 ? (
-                  <ConfigBar taskId={task.id} options={task.configOptions} />
+                  <AgentConfigBar taskId={task.id} options={task.configOptions} />
                 ) : undefined
               }
             />
@@ -515,7 +529,7 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
                       taskId={task.id}
                       onCommitted={() => setFocusTick((t) => t + 1)}
                       onRefresh={() => setFocusTick((t) => t + 1)}
-                      onSelect={(path) => openFileTab(path)}
+                      onSelect={openDiffFile}
                     />
                   ) : (
                     <p className="p-3 text-sm text-muted-foreground">Loading changes…</p>
@@ -604,96 +618,6 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
         </button>
       </div>
       </div>
-    </div>
-  );
-}
-
-/** Renders the agent's session selectors, keeping at most one menu open. */
-function ConfigBar({ taskId, options }: { taskId: string; options: ConfigOption[] }) {
-  const [openId, setOpenId] = useState<string | null>(null);
-  return (
-    <>
-      {options.map((opt) => (
-        <ConfigSelect
-          key={opt.id}
-          taskId={taskId}
-          opt={opt}
-          open={openId === opt.id}
-          onToggle={() => setOpenId((id) => (id === opt.id ? null : opt.id))}
-          onClose={() => setOpenId((id) => (id === opt.id ? null : id))}
-        />
-      ))}
-    </>
-  );
-}
-
-/**
- * A session selector the agent exposes (model / mode / reasoning effort). Shows
- * the current value; opens a menu to switch it via `session.setConfigOption`.
- * The daemon echoes the change back as a task.updated, so no local value state.
- */
-function ConfigSelect({
-  taskId,
-  opt,
-  open,
-  onToggle,
-  onClose,
-}: {
-  taskId: string;
-  opt: ConfigOption;
-  open: boolean;
-  onToggle: () => void;
-  onClose: () => void;
-}) {
-  const cur = opt.options.find((o) => o.value === opt.currentValue)?.name ?? opt.currentValue;
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={onToggle}
-        onBlur={() => setTimeout(onClose, 120)}
-        title={opt.name}
-        className="flex items-center gap-0.5 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground"
-      >
-        {cur}
-        <ChevronDown className="size-3 opacity-60" />
-      </button>
-      {open && (
-        <div className="absolute bottom-full left-0 z-30 mb-1 max-h-[50vh] min-w-[180px] overflow-y-auto rounded-md border bg-popover shadow-md">
-          <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-            {opt.name}
-          </div>
-          {opt.options.map((o) => (
-            <button
-              type="button"
-              key={o.value}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                onClose();
-                if (o.value !== opt.currentValue) {
-                  void daemon.request("session.setConfigOption", {
-                    task_id: taskId,
-                    config_id: opt.id,
-                    value: o.value,
-                  });
-                }
-              }}
-              className={cn(
-                "flex w-full items-center gap-2 px-2 py-1 text-left text-xs",
-                o.value === opt.currentValue ? "bg-accent" : "hover:bg-accent/50",
-              )}
-            >
-              <Check
-                className={cn(
-                  "size-3 shrink-0",
-                  o.value === opt.currentValue ? "opacity-100" : "opacity-0",
-                )}
-              />
-              <span className="truncate">{o.name}</span>
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

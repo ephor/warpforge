@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,8 +31,7 @@ fn load() -> Result<ProjectsData> {
     if !path.exists() {
         return Ok(ProjectsData::default());
     }
-    let text = fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_str(&text).context("parsing projects.json")
 }
 
@@ -50,9 +49,12 @@ pub fn add_project(path: &str, name: Option<&str>) -> Result<ProjectEntry> {
         .with_context(|| format!("path does not exist: {path}"))?;
 
     let abs_str = abs.to_string_lossy().to_string();
-    let project_name = name
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| abs.file_name().unwrap_or_default().to_string_lossy().to_string());
+    let project_name = name.map(|s| s.to_string()).unwrap_or_else(|| {
+        abs.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    });
 
     let mut data = load()?;
 

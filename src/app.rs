@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent,
-    KeyModifiers, MouseEventKind,
+    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent, KeyModifiers,
+    MouseEventKind,
 };
 use futures::StreamExt;
 use ratatui::DefaultTerminal;
@@ -84,7 +84,10 @@ impl AppState {
     }
 
     fn project_path(&self, name: &str) -> Option<String> {
-        self.projects.iter().find(|p| p.name == name).map(|p| p.path.clone())
+        self.projects
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.path.clone())
     }
 }
 
@@ -158,9 +161,10 @@ async fn os_shutdown_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
-        if let (Ok(mut term), Ok(mut hup)) =
-            (signal(SignalKind::terminate()), signal(SignalKind::hangup()))
-        {
+        if let (Ok(mut term), Ok(mut hup)) = (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::hangup()),
+        ) {
             tokio::select! {
                 _ = term.recv() => {}
                 _ = hup.recv() => {}
@@ -173,13 +177,24 @@ async fn os_shutdown_signal() {
 
 /// Names of a project's terminals (in list order), for tab indexing.
 fn terminal_ids(client: &Arc<Client>, project: &str) -> Vec<String> {
-    client.state().agents.list_for_project(project).iter().map(|t| t.id.clone()).collect()
+    client
+        .state()
+        .agents
+        .list_for_project(project)
+        .iter()
+        .map(|t| t.id.clone())
+        .collect()
 }
 
 /// Sorted service names for a project (matches the sidebar order).
 fn service_names(client: &Arc<Client>, project: &str) -> Vec<String> {
-    let mut names: Vec<String> =
-        client.state().services.list_for_project(project).iter().map(|s| s.name.clone()).collect();
+    let mut names: Vec<String> = client
+        .state()
+        .services
+        .list_for_project(project)
+        .iter()
+        .map(|s| s.name.clone())
+        .collect();
     names.sort();
     names
 }
@@ -217,9 +232,10 @@ async fn handle_key(key: KeyEvent, state: &mut AppState, client: &Arc<Client>) -
             KeyCode::Char(c) if c.is_ascii_digit() && c != '0' => {
                 let idx = (c as usize) - ('1' as usize);
                 let options = state.spawn_picker.take().unwrap();
-                if let (Some(opt), Some(project)) =
-                    (options.get(idx), state.active_project_name().map(str::to_string))
-                {
+                if let (Some(opt), Some(project)) = (
+                    options.get(idx),
+                    state.active_project_name().map(str::to_string),
+                ) {
                     spawn_terminal(client, &project, &opt.command).await;
                     state.project_focus.insert(project, ProjectFocus::Agents);
                 }
@@ -235,7 +251,11 @@ async fn handle_key(key: KeyEvent, state: &mut AppState, client: &Arc<Client>) -
     }
 }
 
-async fn handle_dashboard_key(key: KeyEvent, state: &mut AppState, client: &Arc<Client>) -> Result<bool> {
+async fn handle_dashboard_key(
+    key: KeyEvent,
+    state: &mut AppState,
+    client: &Arc<Client>,
+) -> Result<bool> {
     match key.code {
         KeyCode::Char('q') => return Ok(true),
         KeyCode::Up | KeyCode::Char('k') => {
@@ -261,18 +281,28 @@ async fn handle_dashboard_key(key: KeyEvent, state: &mut AppState, client: &Arc<
     Ok(false)
 }
 
-async fn handle_project_key(key: KeyEvent, state: &mut AppState, client: &Arc<Client>) -> Result<bool> {
+async fn handle_project_key(
+    key: KeyEvent,
+    state: &mut AppState,
+    client: &Arc<Client>,
+) -> Result<bool> {
     let project = match &state.screen {
         Screen::Project(n) => n.clone(),
         _ => return Ok(false),
     };
-    let focus = state.project_focus.get(&project).cloned().unwrap_or(ProjectFocus::Agents);
+    let focus = state
+        .project_focus
+        .get(&project)
+        .cloned()
+        .unwrap_or(ProjectFocus::Agents);
 
     match focus {
         ProjectFocus::ServiceDetail => {
             match key.code {
                 KeyCode::Esc => {
-                    state.project_focus.insert(project, ProjectFocus::ServicesBrowse);
+                    state
+                        .project_focus
+                        .insert(project, ProjectFocus::ServicesBrowse);
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     *state.log_scroll.entry(project).or_insert(0) += 1;
@@ -311,20 +341,26 @@ async fn handle_project_key(key: KeyEvent, state: &mut AppState, client: &Arc<Cl
                 }
                 KeyCode::Enter => {
                     state.log_scroll.remove(&project);
-                    state.project_focus.insert(project, ProjectFocus::ServiceDetail);
+                    state
+                        .project_focus
+                        .insert(project, ProjectFocus::ServiceDetail);
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
                     let count = client.state().services.list_for_project(&project).len();
                     if count > 0 {
                         let sel = state.selected_service.entry(project).or_insert(0);
-                        if *sel > 0 { *sel -= 1; }
+                        if *sel > 0 {
+                            *sel -= 1;
+                        }
                     }
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     let count = client.state().services.list_for_project(&project).len();
                     if count > 0 {
                         let sel = state.selected_service.entry(project).or_insert(0);
-                        if *sel + 1 < count { *sel += 1; }
+                        if *sel + 1 < count {
+                            *sel += 1;
+                        }
                     }
                 }
                 KeyCode::Char('R') => client.restart_all(&project),
@@ -346,14 +382,18 @@ async fn handle_project_key(key: KeyEvent, state: &mut AppState, client: &Arc<Cl
                     let count = client.state().portforwards.list_for_project(&project).len();
                     if count > 0 {
                         let sel = state.selected_pf.entry(project).or_insert(0);
-                        if *sel > 0 { *sel -= 1; }
+                        if *sel > 0 {
+                            *sel -= 1;
+                        }
                     }
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     let count = client.state().portforwards.list_for_project(&project).len();
                     if count > 0 {
                         let sel = state.selected_pf.entry(project).or_insert(0);
-                        if *sel + 1 < count { *sel += 1; }
+                        if *sel + 1 < count {
+                            *sel += 1;
+                        }
                     }
                 }
                 _ => {}
@@ -390,7 +430,9 @@ async fn handle_project_key(key: KeyEvent, state: &mut AppState, client: &Arc<Cl
             state.screen = Screen::Dashboard;
         }
         KeyCode::Char('s') => {
-            state.project_focus.insert(project, ProjectFocus::ServicesBrowse);
+            state
+                .project_focus
+                .insert(project, ProjectFocus::ServicesBrowse);
         }
         KeyCode::Char('p') => {
             state.project_focus.insert(project, ProjectFocus::PfBrowse);
@@ -411,7 +453,10 @@ async fn handle_project_key(key: KeyEvent, state: &mut AppState, client: &Arc<Cl
         KeyCode::Char('n') => {
             let templates = agent_templates(state, &project);
             if templates.len() <= 1 {
-                let cmd = templates.first().map(|t| t.command.clone()).unwrap_or_else(|| "claude".into());
+                let cmd = templates
+                    .first()
+                    .map(|t| t.command.clone())
+                    .unwrap_or_else(|| "claude".into());
                 spawn_terminal(client, &project, &cmd).await;
                 state.project_focus.insert(project, ProjectFocus::Agents);
             } else {
@@ -430,7 +475,9 @@ async fn handle_project_key(key: KeyEvent, state: &mut AppState, client: &Arc<Cl
             if let Some(id) = ids.get(tab) {
                 client.terminal_kill(id);
                 let tab = state.active_agent_tab.entry(project).or_insert(0);
-                if *tab > 0 { *tab -= 1; }
+                if *tab > 0 {
+                    *tab -= 1;
+                }
             }
         }
         _ => {}
@@ -447,17 +494,29 @@ fn handle_mouse(mouse: crossterm::event::MouseEvent, state: &mut AppState, clien
                     let tab = state.active_agent_tab.get(project).copied().unwrap_or(0);
                     let ids = terminal_ids(client, project);
                     if let Some(id) = ids.get(tab) {
-                        let bytes: &[u8] = if up { b"\x1b[A\x1b[A\x1b[A" } else { b"\x1b[B\x1b[B\x1b[B" };
+                        let bytes: &[u8] = if up {
+                            b"\x1b[A\x1b[A\x1b[A"
+                        } else {
+                            b"\x1b[B\x1b[B\x1b[B"
+                        };
                         client.terminal_input(id, bytes);
                     }
                 }
                 return;
             }
             if let Some(project) = state.active_project_name().map(str::to_string) {
-                let focus = state.project_focus.get(&project).cloned().unwrap_or(ProjectFocus::Agents);
+                let focus = state
+                    .project_focus
+                    .get(&project)
+                    .cloned()
+                    .unwrap_or(ProjectFocus::Agents);
                 if matches!(focus, ProjectFocus::ServiceDetail | ProjectFocus::PfDetail) {
                     let off = state.log_scroll.entry(project).or_insert(0);
-                    if up { *off += 3; } else { *off = off.saturating_sub(3); }
+                    if up {
+                        *off += 3;
+                    } else {
+                        *off = off.saturating_sub(3);
+                    }
                 }
             }
         }
@@ -474,7 +533,9 @@ fn selected_service_name(state: &AppState, client: &Arc<Client>, project: &str) 
 }
 
 fn agent_templates(state: &AppState, project: &str) -> Vec<SpawnOption> {
-    let Some(path) = state.project_path(project) else { return Vec::new() };
+    let Some(path) = state.project_path(project) else {
+        return Vec::new();
+    };
     load_workspace_config(std::path::Path::new(&path))
         .and_then(|c| c.agent_templates)
         .map(|tmpl| {
