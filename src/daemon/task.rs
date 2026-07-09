@@ -52,8 +52,8 @@ pub struct Task {
     pub updated_at: u64,
     pub files_changed: u32,
     pub blocked_reason: Option<String>,
-    /// Latest session selectors (model/mode/…) from the live ACP session.
-    /// Transient: not persisted, rebuilt when the session reports them.
+    /// Latest session selectors (model/mode/…) from the ACP session. Persisted
+    /// so resumed/interrupted tasks keep the last known controls after restart.
     pub config_options: Vec<warpforge_protocol::ConfigOption>,
 }
 

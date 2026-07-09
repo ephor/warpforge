@@ -49,10 +49,18 @@ fn write_endpoint(addr: SocketAddr, token: &str) -> Result<()> {
 /// Bind, publish the endpoint, and serve forever. `dev` disables the auth token
 /// so a browser (vite dev, no Tauri) can connect to a known address.
 pub async fn serve(handle: DaemonHandle, dev: bool) -> Result<()> {
-    let bind = if dev { "127.0.0.1:61814" } else { "127.0.0.1:0" };
+    let bind = if dev {
+        "127.0.0.1:61814"
+    } else {
+        "127.0.0.1:0"
+    };
     let listener = TcpListener::bind(bind).await?;
     let addr = listener.local_addr()?;
-    let token = if dev { String::new() } else { Uuid::new_v4().to_string() };
+    let token = if dev {
+        String::new()
+    } else {
+        Uuid::new_v4().to_string()
+    };
     write_endpoint(addr, &token)?;
     eprintln!("warpforge daemon listening on ws://{addr}");
 
@@ -177,12 +185,23 @@ async fn dispatch(
     use wire::Method::*;
     match method {
         StateSubscribe { .. } => Ok(json!(null)), // handled by caller
-        ServiceLogs { project, service, after, limit } => {
+        RuntimeStopAll {} => {
+            handle.send(Command::StopRuntime).await;
+            Ok(json!(null))
+        }
+        ServiceLogs {
+            project,
+            service,
+            after,
+            limit,
+        } => {
             let lines = handle.service_logs(&project, &service, after, limit).await;
             Ok(json!({ "lines": lines }))
         }
         ServiceStart { project, service } => {
-            handle.send(Command::StartService { project, service }).await;
+            handle
+                .send(Command::StartService { project, service })
+                .await;
             Ok(json!(null))
         }
         ServiceStop { project, service } => {
@@ -190,7 +209,9 @@ async fn dispatch(
             Ok(json!(null))
         }
         ServiceRestart { project, service } => {
-            handle.send(Command::RestartService { project, service }).await;
+            handle
+                .send(Command::RestartService { project, service })
+                .await;
             Ok(json!(null))
         }
         ServiceStartAll { project } => {
@@ -206,10 +227,18 @@ async fn dispatch(
             Ok(json!(null))
         }
         PortForwardStart { project, name } => {
-            handle.send(Command::StartPortForward { project, name }).await;
+            handle
+                .send(Command::StartPortForward { project, name })
+                .await;
             Ok(json!(null))
         }
-        TaskCreate { project, prompt, agent, tags, include_runtime_context } => {
+        TaskCreate {
+            project,
+            prompt,
+            agent,
+            tags,
+            include_runtime_context,
+        } => {
             let id = handle
                 .create_task(&project, &prompt, &agent, tags, include_runtime_context)
                 .await;
@@ -222,9 +251,19 @@ async fn dispatch(
                 message: e.to_string(),
             })
         }
-        DiffResolveHunk { task_id, file, hunk_index, resolution } => {
+        DiffResolveHunk {
+            task_id,
+            file,
+            hunk_index,
+            resolution,
+        } => {
             handle
-                .send(Command::ResolveHunk { task_id, file, hunk_index, resolution })
+                .send(Command::ResolveHunk {
+                    task_id,
+                    file,
+                    hunk_index,
+                    resolution,
+                })
                 .await;
             Ok(json!(null))
         }
@@ -245,14 +284,33 @@ async fn dispatch(
                 message: e.to_string(),
             })
         }
-        FileSave { task_id, path, content } => {
-            handle.send(Command::SaveFile { task_id, path, content }).await;
+        FileSave {
+            task_id,
+            path,
+            content,
+        } => {
+            handle
+                .send(Command::SaveFile {
+                    task_id,
+                    path,
+                    content,
+                })
+                .await;
             Ok(json!(null))
         }
-        GitCommit { task_id, message, files, amend } => {
-            handle.git_commit(&task_id, &message, files, amend).await.map_err(|e| {
-                wire::RpcError { code: wire::ErrorCode::Internal, message: e }
-            })?;
+        GitCommit {
+            task_id,
+            message,
+            files,
+            amend,
+        } => {
+            handle
+                .git_commit(&task_id, &message, files, amend)
+                .await
+                .map_err(|e| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message: e,
+                })?;
             Ok(json!(null))
         }
         TaskCancel { task_id } => {
@@ -267,29 +325,50 @@ async fn dispatch(
             let sessions = handle.list_sessions(&project).await;
             Ok(json!({ "sessions": sessions }))
         }
-        TaskResume { project, agent, session_id, title } => {
-            let id = handle.resume_task(&project, &agent, &session_id, &title).await;
+        TaskResume {
+            project,
+            agent,
+            session_id,
+            title,
+        } => {
+            let id = handle
+                .resume_task(&project, &agent, &session_id, &title)
+                .await;
             Ok(json!({ "taskId": id }))
         }
         SessionPrompt { task_id, text } => {
             handle.session_prompt(&task_id, &text).await;
             Ok(json!(null))
         }
-        SessionSetConfigOption { task_id, config_id, value } => {
-            handle.session_set_config_option(&task_id, &config_id, &value).await;
+        SessionSetConfigOption {
+            task_id,
+            config_id,
+            value,
+        } => {
+            handle
+                .session_set_config_option(&task_id, &config_id, &value)
+                .await;
             Ok(json!(null))
         }
-        SessionPermission { task_id, request_id, outcome } => {
+        SessionPermission {
+            task_id,
+            request_id,
+            outcome,
+        } => {
             let outcome = match outcome {
                 wire::PermissionOutcome::Allow => "allow",
                 wire::PermissionOutcome::AllowAlways => "allow_always",
                 wire::PermissionOutcome::Deny => "deny",
             };
-            handle.session_permission(&task_id, &request_id, outcome).await;
+            handle
+                .session_permission(&task_id, &request_id, outcome)
+                .await;
             Ok(json!(null))
         }
         PortForwardStop { project, name } => {
-            handle.send(Command::StopPortForward { project, name }).await;
+            handle
+                .send(Command::StopPortForward { project, name })
+                .await;
             Ok(json!(null))
         }
         // ── Legacy PTY terminals (the TUI's live agent panes) ──
@@ -303,11 +382,19 @@ async fn dispatch(
                 })?;
             Ok(json!({ "terminalId": id }))
         }
-        TerminalInput { terminal_id, data_b64 } => {
+        TerminalInput {
+            terminal_id,
+            data_b64,
+        } => {
             use base64::Engine;
             match base64::engine::general_purpose::STANDARD.decode(&data_b64) {
                 Ok(data) => {
-                    handle.send(Command::WriteAgent { id: terminal_id, data }).await;
+                    handle
+                        .send(Command::WriteAgent {
+                            id: terminal_id,
+                            data,
+                        })
+                        .await;
                     Ok(json!(null))
                 }
                 Err(e) => Err(wire::RpcError {
@@ -316,8 +403,18 @@ async fn dispatch(
                 }),
             }
         }
-        TerminalResize { terminal_id, cols, rows } => {
-            handle.send(Command::ResizeAgent { id: terminal_id, cols, rows }).await;
+        TerminalResize {
+            terminal_id,
+            cols,
+            rows,
+        } => {
+            handle
+                .send(Command::ResizeAgent {
+                    id: terminal_id,
+                    cols,
+                    rows,
+                })
+                .await;
             Ok(json!(null))
         }
         TerminalKill { terminal_id } => {
@@ -456,9 +553,13 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(run(listener, handle.clone(), String::new()));
 
-        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}")).await.unwrap();
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}"))
+            .await
+            .unwrap();
         ws.send(Message::Text(
-            json!({ "id": 1, "method": "state.subscribe", "params": {} }).to_string().into(),
+            json!({ "id": 1, "method": "state.subscribe", "params": {} })
+                .to_string()
+                .into(),
         ))
         .await
         .unwrap();
@@ -493,6 +594,9 @@ mod tests {
                 }
             }
         }
-        assert!(saw_marker, "expected a terminal.screen event containing the printed marker");
+        assert!(
+            saw_marker,
+            "expected a terminal.screen event containing the printed marker"
+        );
     }
 }

@@ -92,6 +92,7 @@ export function Composer({
         <div className="absolute bottom-full left-2 right-2 z-20 mb-1 max-h-[50vh] overflow-y-auto rounded-md border bg-popover shadow-md">
           {matches.map((c, i) => (
             <button
+              type="button"
               key={c.name}
               ref={i === menuIndex ? activeItem : undefined}
               className={cn(
@@ -125,6 +126,7 @@ export function Composer({
           {toolbar && <div className="flex flex-wrap items-center gap-1">{toolbar}</div>}
           <span className="ml-auto shrink-0">⇧↵ newline</span>
           <Button
+            type="button"
             size="icon"
             className="size-7 shrink-0"
             onClick={send}

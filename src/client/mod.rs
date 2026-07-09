@@ -121,11 +121,17 @@ impl Client {
 
         // Auth then subscribe.
         if !endpoint.token.is_empty() {
-            let _ = sink.send(Message::Text(json!({ "auth": endpoint.token }).to_string().into())).await;
+            let _ = sink
+                .send(Message::Text(
+                    json!({ "auth": endpoint.token }).to_string().into(),
+                ))
+                .await;
         }
         let _ = sink
             .send(Message::Text(
-                json!({ "id": 0, "method": "state.subscribe", "params": {} }).to_string().into(),
+                json!({ "id": 0, "method": "state.subscribe", "params": {} })
+                    .to_string()
+                    .into(),
             ))
             .await;
 
@@ -146,7 +152,9 @@ impl Client {
             tokio::spawn(async move {
                 while let Some(Ok(msg)) = stream.next().await {
                     let Message::Text(text) = msg else { continue };
-                    let Ok(v) = serde_json::from_str::<Value>(text.as_str()) else { continue };
+                    let Ok(v) = serde_json::from_str::<Value>(text.as_str()) else {
+                        continue;
+                    };
                     if let Some(id) = v.get("id").and_then(Value::as_u64) {
                         if v.get("event").is_none() {
                             if let Some(tx) = pending.lock().unwrap().remove(&id) {
@@ -179,15 +187,23 @@ impl Client {
     }
 
     fn notify(&self, method: &str, params: Value) {
-        let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let _ = self.out_tx.send(json!({ "id": id, "method": method, "params": params }).to_string());
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = self
+            .out_tx
+            .send(json!({ "id": id, "method": method, "params": params }).to_string());
     }
 
     async fn request(&self, method: &str, params: Value) -> Option<Value> {
-        let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap().insert(id, tx);
-        let _ = self.out_tx.send(json!({ "id": id, "method": method, "params": params }).to_string());
+        let _ = self
+            .out_tx
+            .send(json!({ "id": id, "method": method, "params": params }).to_string());
         rx.await.ok()
     }
 
@@ -196,13 +212,22 @@ impl Client {
         self.notify("service.startAll", json!({ "project": project }));
     }
     pub fn start_service(&self, project: &str, service: &str) {
-        self.notify("service.start", json!({ "project": project, "service": service }));
+        self.notify(
+            "service.start",
+            json!({ "project": project, "service": service }),
+        );
     }
     pub fn stop_service(&self, project: &str, service: &str) {
-        self.notify("service.stop", json!({ "project": project, "service": service }));
+        self.notify(
+            "service.stop",
+            json!({ "project": project, "service": service }),
+        );
     }
     pub fn restart_service(&self, project: &str, service: &str) {
-        self.notify("service.restart", json!({ "project": project, "service": service }));
+        self.notify(
+            "service.restart",
+            json!({ "project": project, "service": service }),
+        );
     }
     pub fn stop_all_services(&self, project: &str) {
         self.notify("service.stopAll", json!({ "project": project }));
@@ -214,16 +239,28 @@ impl Client {
 
     pub async fn spawn_terminal(&self, project: &str, command: &str) -> Option<String> {
         let resp = self
-            .request("terminal.spawn", json!({ "project": project, "command": command }))
+            .request(
+                "terminal.spawn",
+                json!({ "project": project, "command": command }),
+            )
             .await?;
-        resp.get("result")?.get("terminalId")?.as_str().map(String::from)
+        resp.get("result")?
+            .get("terminalId")?
+            .as_str()
+            .map(String::from)
     }
     pub fn terminal_input(&self, terminal_id: &str, data: &[u8]) {
         let data_b64 = base64::engine::general_purpose::STANDARD.encode(data);
-        self.notify("terminal.input", json!({ "terminalId": terminal_id, "dataB64": data_b64 }));
+        self.notify(
+            "terminal.input",
+            json!({ "terminalId": terminal_id, "dataB64": data_b64 }),
+        );
     }
     pub fn terminal_resize(&self, terminal_id: &str, cols: u16, rows: u16) {
-        self.notify("terminal.resize", json!({ "terminalId": terminal_id, "cols": cols, "rows": rows }));
+        self.notify(
+            "terminal.resize",
+            json!({ "terminalId": terminal_id, "cols": cols, "rows": rows }),
+        );
     }
     pub fn terminal_kill(&self, terminal_id: &str) {
         self.notify("terminal.kill", json!({ "terminalId": terminal_id }));
@@ -236,8 +273,18 @@ fn apply_event(state: &Arc<Mutex<ClientState>>, ev: wire::Event) {
     let mut s = state.lock().unwrap();
     match ev {
         wire::Event::Snapshot(snap) => *s = from_snapshot(snap),
-        wire::Event::ServiceStatus { project, service, status, allocated_port } => {
-            match s.services.items.iter_mut().find(|x| x.project == project && x.name == service) {
+        wire::Event::ServiceStatus {
+            project,
+            service,
+            status,
+            allocated_port,
+        } => {
+            match s
+                .services
+                .items
+                .iter_mut()
+                .find(|x| x.project == project && x.name == service)
+            {
                 Some(v) => {
                     v.status = service_status(status);
                     v.allocated_port = allocated_port;
@@ -252,35 +299,65 @@ fn apply_event(state: &Arc<Mutex<ClientState>>, ev: wire::Event) {
                 }),
             }
         }
-        wire::Event::ServiceLog { project, service, line, .. } => {
-            if let Some(v) = s.services.items.iter_mut().find(|x| x.project == project && x.name == service) {
+        wire::Event::ServiceLog {
+            project,
+            service,
+            line,
+            ..
+        } => {
+            if let Some(v) = s
+                .services
+                .items
+                .iter_mut()
+                .find(|x| x.project == project && x.name == service)
+            {
                 push_log(&mut v.logs, line);
             }
         }
-        wire::Event::PortForwardStatus { project, name, status } => {
-            if let Some(v) = s.portforwards.items.iter_mut().find(|x| x.project == project && x.name == name) {
+        wire::Event::PortForwardStatus {
+            project,
+            name,
+            status,
+        } => {
+            if let Some(v) = s
+                .portforwards
+                .items
+                .iter_mut()
+                .find(|x| x.project == project && x.name == name)
+            {
                 v.status = pf_status(status);
             }
         }
-        wire::Event::PortForwardLog { project, name, line, .. } => {
-            if let Some(v) = s.portforwards.items.iter_mut().find(|x| x.project == project && x.name == name) {
+        wire::Event::PortForwardLog {
+            project,
+            name,
+            line,
+            ..
+        } => {
+            if let Some(v) = s
+                .portforwards
+                .items
+                .iter_mut()
+                .find(|x| x.project == project && x.name == name)
+            {
                 push_log(&mut v.logs, line);
             }
         }
-        wire::Event::TerminalScreen { terminal_id, screen } => {
-            match s.agents.items.iter_mut().find(|t| t.id == terminal_id) {
-                Some(t) => t.screen = Some(screen),
-                None => s.agents.items.push(TermView {
-                    id: terminal_id,
-                    project: String::new(),
-                    command: String::new(),
-                    description: String::new(),
-                    status: AgentStatus::Running,
-                    started_at: 0,
-                    screen: Some(screen),
-                }),
-            }
-        }
+        wire::Event::TerminalScreen {
+            terminal_id,
+            screen,
+        } => match s.agents.items.iter_mut().find(|t| t.id == terminal_id) {
+            Some(t) => t.screen = Some(screen),
+            None => s.agents.items.push(TermView {
+                id: terminal_id,
+                project: String::new(),
+                command: String::new(),
+                description: String::new(),
+                status: AgentStatus::Running,
+                started_at: 0,
+                screen: Some(screen),
+            }),
+        },
         wire::Event::TerminalExited { terminal_id, .. } => {
             s.agents.items.retain(|t| t.id != terminal_id);
         }
@@ -299,7 +376,11 @@ fn from_snapshot(snap: wire::Snapshot) -> ClientState {
         projects: snap
             .projects
             .iter()
-            .map(|p| ProjectEntry { name: p.name.clone(), path: p.path.clone(), added_at: String::new() })
+            .map(|p| ProjectEntry {
+                name: p.name.clone(),
+                path: p.path.clone(),
+                added_at: String::new(),
+            })
             .collect(),
         services: ServiceProjection {
             items: snap

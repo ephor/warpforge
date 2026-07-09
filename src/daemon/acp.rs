@@ -26,16 +26,38 @@ use warpforge_protocol as wire;
 /// `(task_id, AcpUpdate)`.
 #[derive(Debug, Clone)]
 pub enum AcpUpdate {
-    SessionStarted { session_id: String },
+    SessionStarted {
+        session_id: String,
+    },
     AgentText(String),
     AgentThought(String),
-    ToolCall { id: String, title: String, status: String, kind: String, content: Option<String> },
-    FileEdit { path: String },
-    PermissionRequest { request_id: String, title: String, options: Vec<String> },
-    Plan { entries: Vec<wire::PlanEntry> },
-    AvailableCommands { commands: Vec<wire::CommandInfo> },
-    ConfigOptions { options: Vec<wire::ConfigOption> },
-    TurnEnded { stop_reason: String },
+    ToolCall {
+        id: String,
+        title: String,
+        status: String,
+        kind: String,
+        content: Option<String>,
+    },
+    FileEdit {
+        path: String,
+    },
+    PermissionRequest {
+        request_id: String,
+        title: String,
+        options: Vec<String>,
+    },
+    Plan {
+        entries: Vec<wire::PlanEntry>,
+    },
+    AvailableCommands {
+        commands: Vec<wire::CommandInfo>,
+    },
+    ConfigOptions {
+        options: Vec<wire::ConfigOption>,
+    },
+    TurnEnded {
+        stop_reason: String,
+    },
     Error(String),
 }
 
@@ -57,10 +79,15 @@ impl AcpHandle {
         let _ = self.cmd_tx.send(AcpCommand::Prompt(text));
     }
     pub fn answer(&self, request_id: String, outcome: String) {
-        let _ = self.cmd_tx.send(AcpCommand::AnswerPermission { request_id, outcome });
+        let _ = self.cmd_tx.send(AcpCommand::AnswerPermission {
+            request_id,
+            outcome,
+        });
     }
     pub fn set_config_option(&self, config_id: String, value: String) {
-        let _ = self.cmd_tx.send(AcpCommand::SetConfigOption { config_id, value });
+        let _ = self
+            .cmd_tx
+            .send(AcpCommand::SetConfigOption { config_id, value });
     }
     pub fn cancel(&self) {
         let _ = self.cmd_tx.send(AcpCommand::Cancel);
@@ -130,7 +157,9 @@ pub fn spawn_acp_session(
                 if debug {
                     eprintln!("[acp {tid} >>] {line}");
                 }
-                if stdin.write_all(line.as_bytes()).await.is_err() || stdin.write_all(b"\n").await.is_err() {
+                if stdin.write_all(line.as_bytes()).await.is_err()
+                    || stdin.write_all(b"\n").await.is_err()
+                {
                     break;
                 }
                 let _ = stdin.flush().await;
@@ -184,7 +213,9 @@ pub fn spawn_acp_session(
                     continue;
                 }
 
-                let Some(method) = msg.get("method").and_then(|m| m.as_str()) else { continue };
+                let Some(method) = msg.get("method").and_then(|m| m.as_str()) else {
+                    continue;
+                };
                 let id = msg.get("id").cloned();
                 let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
 
@@ -194,7 +225,9 @@ pub fn spawn_acp_session(
                             let _ = updates.send((task_id.clone(), update));
                         }
                         None if debug => {
-                            eprintln!("[acp {task_id} <<?] unhandled session/update shape: {params}");
+                            eprintln!(
+                                "[acp {task_id} <<?] unhandled session/update shape: {params}"
+                            );
                         }
                         None => {}
                     },
@@ -204,20 +237,29 @@ pub fn spawn_acp_session(
                         let request_id = compact_id(&agent_id);
                         perms.lock().unwrap().insert(
                             request_id.clone(),
-                            PendingPerm { agent_id, options: map },
+                            PendingPerm {
+                                agent_id,
+                                options: map,
+                            },
                         );
                         let _ = updates.send((
                             task_id.clone(),
-                            AcpUpdate::PermissionRequest { request_id, title, options },
+                            AcpUpdate::PermissionRequest {
+                                request_id,
+                                title,
+                                options,
+                            },
                         ));
                         // reply is deferred until the human answers
                     }
                     "fs/read_text_file" => {
                         let path = params.get("path").and_then(|p| p.as_str()).unwrap_or("");
-                        let content = std::fs::read_to_string(resolve(&cwd, path)).unwrap_or_default();
+                        let content =
+                            std::fs::read_to_string(resolve(&cwd, path)).unwrap_or_default();
                         if let Some(id) = id {
                             let _ = out_tx.send(
-                                json!({"jsonrpc":"2.0","id":id,"result":{"content":content}}).to_string(),
+                                json!({"jsonrpc":"2.0","id":id,"result":{"content":content}})
+                                    .to_string(),
                             );
                         }
                     }
@@ -226,7 +268,8 @@ pub fn spawn_acp_session(
                         let content = params.get("content").and_then(|c| c.as_str()).unwrap_or("");
                         let _ = std::fs::write(resolve(&cwd, path), content);
                         if let Some(id) = id {
-                            let _ = out_tx.send(json!({"jsonrpc":"2.0","id":id,"result":null}).to_string());
+                            let _ = out_tx
+                                .send(json!({"jsonrpc":"2.0","id":id,"result":null}).to_string());
                         }
                     }
                     _ => {
@@ -240,7 +283,9 @@ pub fn spawn_acp_session(
             }
             let _ = updates.send((
                 task_id.clone(),
-                AcpUpdate::TurnEnded { stop_reason: "disconnected".into() },
+                AcpUpdate::TurnEnded {
+                    stop_reason: "disconnected".into(),
+                },
             ));
         });
     }
@@ -281,34 +326,66 @@ pub fn spawn_acp_session(
             // (session/new). Resume replays history back as session/update.
             let session_id = if let Some(sid) = resume {
                 if !load_supported {
-                    let _ = updates.send((task_id.clone(), AcpUpdate::Error(
-                        "This agent does not support resuming sessions \
-                         (no ACP 'loadSession' capability). Start a new task instead.".into()
-                    )));
+                    let _ = updates.send((
+                        task_id.clone(),
+                        AcpUpdate::Error(
+                            "This agent does not support resuming sessions \
+                         (no ACP 'loadSession' capability). Start a new task instead."
+                                .into(),
+                        ),
+                    ));
                     return;
                 }
-                match tokio::time::timeout(HS, rpc(&out_tx, &pending, &next_id, "session/load", json!({
-                    "sessionId": sid, "cwd": cwd, "mcpServers": []
-                }))).await {
+                match tokio::time::timeout(
+                    HS,
+                    rpc(
+                        &out_tx,
+                        &pending,
+                        &next_id,
+                        "session/load",
+                        json!({
+                            "sessionId": sid, "cwd": cwd, "mcpServers": []
+                        }),
+                    ),
+                )
+                .await
+                {
                     Ok(Some(_)) => sid,
                     _ => {
-                        let _ = updates.send((task_id.clone(), AcpUpdate::Error(
-                            format!("ACP session/load failed for session {sid} — the agent \
-                                     could not resume it (it may have been deleted).")
-                        )));
+                        let _ = updates.send((
+                            task_id.clone(),
+                            AcpUpdate::Error(format!(
+                                "ACP session/load failed for session {sid} — the agent \
+                                     could not resume it (it may have been deleted)."
+                            )),
+                        ));
                         return;
                     }
                 }
             } else {
-                match tokio::time::timeout(HS, rpc(&out_tx, &pending, &next_id, "session/new", json!({
-                    "cwd": cwd, "mcpServers": []
-                }))).await {
+                match tokio::time::timeout(
+                    HS,
+                    rpc(
+                        &out_tx,
+                        &pending,
+                        &next_id,
+                        "session/new",
+                        json!({
+                            "cwd": cwd, "mcpServers": []
+                        }),
+                    ),
+                )
+                .await
+                {
                     Ok(Some(v)) => {
                         // Model/mode selectors the agent advertises up-front.
                         if let Some(result) = v.get("result") {
                             let opts = parse_config_options(result.get("configOptions"));
                             if !opts.is_empty() {
-                                let _ = updates.send((task_id.clone(), AcpUpdate::ConfigOptions { options: opts }));
+                                let _ = updates.send((
+                                    task_id.clone(),
+                                    AcpUpdate::ConfigOptions { options: opts },
+                                ));
                             }
                         }
                         v.get("result")
@@ -318,41 +395,74 @@ pub fn spawn_acp_session(
                             .unwrap_or_else(|| "unknown".into())
                     }
                     Ok(None) => {
-                        let _ = updates.send((task_id.clone(), AcpUpdate::Error(
-                            "ACP session/new failed — agent closed the connection.".into()
-                        )));
+                        let _ = updates.send((
+                            task_id.clone(),
+                            AcpUpdate::Error(
+                                "ACP session/new failed — agent closed the connection.".into(),
+                            ),
+                        ));
                         return;
                     }
                     Err(_) => {
-                        let _ = updates.send((task_id.clone(), AcpUpdate::Error(
-                            "ACP handshake timed out — no 'session/new' reply in 15 s.".into()
-                        )));
+                        let _ = updates.send((
+                            task_id.clone(),
+                            AcpUpdate::Error(
+                                "ACP handshake timed out — no 'session/new' reply in 15 s.".into(),
+                            ),
+                        ));
                         return;
                     }
                 }
             };
 
-            let _ = updates.send((task_id.clone(), AcpUpdate::SessionStarted { session_id: session_id.clone() }));
+            let _ = updates.send((
+                task_id.clone(),
+                AcpUpdate::SessionStarted {
+                    session_id: session_id.clone(),
+                },
+            ));
 
             // On resume with no new instruction we only load history; the user
             // continues via session.prompt. Otherwise send the initial prompt.
             if !initial_prompt.is_empty() {
-                send_prompt(&out_tx, &pending, &next_id, &updates, &task_id, &session_id, initial_prompt);
+                send_prompt(
+                    &out_tx,
+                    &pending,
+                    &next_id,
+                    &updates,
+                    &task_id,
+                    &session_id,
+                    initial_prompt,
+                );
             }
 
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
                     AcpCommand::Prompt(text) => {
-                        send_prompt(&out_tx, &pending, &next_id, &updates, &task_id, &session_id, text);
+                        send_prompt(
+                            &out_tx,
+                            &pending,
+                            &next_id,
+                            &updates,
+                            &task_id,
+                            &session_id,
+                            text,
+                        );
                     }
-                    AcpCommand::AnswerPermission { request_id, outcome } => {
+                    AcpCommand::AnswerPermission {
+                        request_id,
+                        outcome,
+                    } => {
                         if let Some(p) = perms.lock().unwrap().remove(&request_id) {
                             let result = match p.options.get(&outcome) {
-                                Some(opt) => json!({ "outcome": { "outcome": "selected", "optionId": opt } }),
+                                Some(opt) => {
+                                    json!({ "outcome": { "outcome": "selected", "optionId": opt } })
+                                }
                                 None => json!({ "outcome": { "outcome": "cancelled" } }),
                             };
                             let _ = out_tx.send(
-                                json!({"jsonrpc":"2.0","id":p.agent_id,"result":result}).to_string(),
+                                json!({"jsonrpc":"2.0","id":p.agent_id,"result":result})
+                                    .to_string(),
                             );
                         }
                     }
@@ -364,15 +474,24 @@ pub fn spawn_acp_session(
                         let task_id = task_id.clone();
                         let session_id = session_id.clone();
                         tokio::spawn(async move {
-                            let res = rpc(&out_tx, &pending, &next_id, "session/set_config_option", json!({
-                                "sessionId": session_id, "configId": config_id, "value": value
-                            }))
+                            let res = rpc(
+                                &out_tx,
+                                &pending,
+                                &next_id,
+                                "session/set_config_option",
+                                json!({
+                                    "sessionId": session_id, "configId": config_id, "value": value
+                                }),
+                            )
                             .await;
                             // The reply carries the full updated configOptions.
                             if let Some(result) = res.as_ref().and_then(|v| v.get("result")) {
                                 let opts = parse_config_options(result.get("configOptions"));
                                 if !opts.is_empty() {
-                                    let _ = updates.send((task_id, AcpUpdate::ConfigOptions { options: opts }));
+                                    let _ = updates.send((
+                                        task_id,
+                                        AcpUpdate::ConfigOptions { options: opts },
+                                    ));
                                 }
                             }
                         });
@@ -410,13 +529,24 @@ fn send_prompt(
     let task_id = task_id.to_string();
     let session_id = session_id.to_string();
     tokio::spawn(async move {
-        let res = rpc(&out_tx, &pending, &next_id, "session/prompt", json!({
-            "sessionId": session_id,
-            "prompt": [{ "type": "text", "text": text }]
-        }))
+        let res = rpc(
+            &out_tx,
+            &pending,
+            &next_id,
+            "session/prompt",
+            json!({
+                "sessionId": session_id,
+                "prompt": [{ "type": "text", "text": text }]
+            }),
+        )
         .await;
         let stop = res
-            .and_then(|v| v.get("result")?.get("stopReason")?.as_str().map(String::from))
+            .and_then(|v| {
+                v.get("result")?
+                    .get("stopReason")?
+                    .as_str()
+                    .map(String::from)
+            })
             .unwrap_or_else(|| "end_turn".into());
         let _ = updates.send((task_id, AcpUpdate::TurnEnded { stop_reason: stop }));
     });
@@ -464,11 +594,25 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
     let kind = update.get("sessionUpdate")?.as_str()?;
     match kind {
         "agent_message_chunk" => Some(AcpUpdate::AgentText(content_text(update.get("content")?)?)),
-        "agent_thought_chunk" => Some(AcpUpdate::AgentThought(content_text(update.get("content")?)?)),
+        "agent_thought_chunk" => Some(AcpUpdate::AgentThought(content_text(
+            update.get("content")?,
+        )?)),
         "tool_call" | "tool_call_update" => {
-            let id = update.get("toolCallId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("in_progress").to_string();
-            let kind = update.get("kind").and_then(|v| v.as_str()).unwrap_or("other").to_string();
+            let id = update
+                .get("toolCallId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let status = update
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("in_progress")
+                .to_string();
+            let kind = update
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("other")
+                .to_string();
             // A file edit still emits a dedicated FileEdit for the diff badge…
             if kind == "edit" {
                 if let Some(path) = edit_path(update) {
@@ -480,7 +624,13 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
                 .and_then(|v| v.as_str())
                 .map(String::from)
                 .unwrap_or_else(|| id.clone());
-            Some(AcpUpdate::ToolCall { id, title, status, kind, content: tool_content(update) })
+            Some(AcpUpdate::ToolCall {
+                id,
+                title,
+                status,
+                kind,
+                content: tool_content(update),
+            })
         }
         "plan" => {
             let entries = update
@@ -488,8 +638,16 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
                 .as_array()?
                 .iter()
                 .map(|e| wire::PlanEntry {
-                    content: e.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    status: e.get("status").and_then(|v| v.as_str()).unwrap_or("pending").to_string(),
+                    content: e
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    status: e
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("pending")
+                        .to_string(),
                     priority: e.get("priority").and_then(|v| v.as_str()).map(String::from),
                 })
                 .collect();
@@ -501,27 +659,41 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
                 .as_array()?
                 .iter()
                 .map(|c| wire::CommandInfo {
-                    name: c.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    description: c.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    name: c
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    description: c
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                 })
                 .collect();
             Some(AcpUpdate::AvailableCommands { commands })
         }
-        "config_option_update" => {
-            Some(AcpUpdate::ConfigOptions { options: parse_config_options(update.get("configOptions")) })
-        }
+        "config_option_update" => Some(AcpUpdate::ConfigOptions {
+            options: parse_config_options(update.get("configOptions")),
+        }),
         _ => None, // user_message_chunk (our own echo), current_mode_update, etc.
     }
 }
 
 /// Parse an ACP `configOptions` array (model/mode/reasoning selectors).
 fn parse_config_options(v: Option<&Value>) -> Vec<wire::ConfigOption> {
-    let Some(arr) = v.and_then(|x| x.as_array()) else { return Vec::new() };
+    let Some(arr) = v.and_then(|x| x.as_array()) else {
+        return Vec::new();
+    };
     arr.iter()
         .filter_map(|o| {
             Some(wire::ConfigOption {
                 id: o.get("id")?.as_str()?.to_string(),
-                name: o.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                name: o
+                    .get("name")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 category: o.get("category").and_then(|x| x.as_str()).map(String::from),
                 current_value: o
                     .get("currentValue")
@@ -594,7 +766,11 @@ fn content_text(content: &Value) -> Option<String> {
 /// or a diff in `content`.
 fn edit_path(update: &Value) -> Option<String> {
     if let Some(loc) = update.get("locations").and_then(|l| l.as_array()) {
-        if let Some(p) = loc.first().and_then(|e| e.get("path")).and_then(|p| p.as_str()) {
+        if let Some(p) = loc
+            .first()
+            .and_then(|e| e.get("path"))
+            .and_then(|p| p.as_str())
+        {
             return Some(p.to_string());
         }
     }
@@ -631,7 +807,8 @@ fn parse_permission(params: &Value) -> (String, Vec<String>, HashMap<String, Str
                 "reject_once" | "reject_always" => "deny",
                 _ => continue,
             };
-            map.entry(label.to_string()).or_insert_with(|| option_id.to_string());
+            map.entry(label.to_string())
+                .or_insert_with(|| option_id.to_string());
         }
     }
 

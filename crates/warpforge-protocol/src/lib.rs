@@ -78,6 +78,12 @@ pub enum Method {
     #[serde(rename = "project.remove")]
     ProjectRemove { name: String },
 
+    // ── Runtime lifecycle ──
+    /// Stop all running dev services and port-forwards without shutting down
+    /// the daemon or killing agent sessions.
+    #[serde(rename = "runtime.stopAll")]
+    RuntimeStopAll {},
+
     // ── Dev servers (existing ServiceManager behaviour, exposed) ──
     #[serde(rename = "service.start")]
     ServiceStart { project: String, service: String },
@@ -200,7 +206,11 @@ pub enum Method {
     FileList { task_id: String },
     /// Write new contents to a file in the task's working tree (in-review edit).
     #[serde(rename = "file.save")]
-    FileSave { task_id: String, path: String, content: String },
+    FileSave {
+        task_id: String,
+        path: String,
+        content: String,
+    },
     /// Stage files and commit them in the task's repo. `files=None` stages all
     /// changes; `amend` rewrites the previous commit.
     #[serde(rename = "git.commit")]
@@ -223,7 +233,11 @@ pub enum Method {
         data_b64: String,
     },
     #[serde(rename = "terminal.resize")]
-    TerminalResize { terminal_id: String, cols: u16, rows: u16 },
+    TerminalResize {
+        terminal_id: String,
+        cols: u16,
+        rows: u16,
+    },
     #[serde(rename = "terminal.kill")]
     TerminalKill { terminal_id: String },
 }
@@ -282,7 +296,12 @@ pub enum Event {
         status: PortForwardStatus,
     },
     #[serde(rename = "portforward.log")]
-    PortForwardLog { project: String, name: String, seq: u64, line: String },
+    PortForwardLog {
+        project: String,
+        name: String,
+        seq: u64,
+        line: String,
+    },
 
     #[serde(rename = "task.created")]
     TaskCreated(TaskInfo),
@@ -295,7 +314,10 @@ pub enum Event {
     /// Structured ACP session update for a task: tool calls, agent text,
     /// file edits, permission requests. Mirrors ACP `session/update`.
     #[serde(rename = "session.update")]
-    SessionUpdate { task_id: String, update: SessionUpdate },
+    SessionUpdate {
+        task_id: String,
+        update: SessionUpdate,
+    },
 
     /// Daemon detected installed agents on first start; no agents configured
     /// yet. Frontend should show the setup wizard.
@@ -309,7 +331,10 @@ pub enum Event {
     /// Terminal (PTY) screen changed. Carries the rendered screen contents,
     /// not raw bytes — every client sees the same vt100 state.
     #[serde(rename = "terminal.screen")]
-    TerminalScreen { terminal_id: String, screen: TerminalScreen },
+    TerminalScreen {
+        terminal_id: String,
+        screen: TerminalScreen,
+    },
     #[serde(rename = "terminal.exited")]
     TerminalExited { terminal_id: String, code: i32 },
 }
@@ -408,8 +433,9 @@ pub struct TaskInfo {
     pub files_changed: u32,
     /// Set when status == Blocked or Failed.
     pub blocked_reason: Option<String>,
-    /// Session selectors (model/mode/…) reported by the agent. Transient —
-    /// populated from the live ACP session, empty until it reports them.
+    /// Session selectors (model/mode/…) reported by the agent. The daemon
+    /// persists the last known set so resumed/interrupted tasks can still show
+    /// their controls after a restart.
     #[serde(default)]
     pub config_options: Vec<ConfigOption>,
 }
@@ -435,9 +461,15 @@ pub enum TaskStatus {
 pub enum SessionUpdate {
     /// The developer's own prompt, echoed by the daemon into the stream so
     /// every attached client shows the same conversation.
-    UserMessage { text: String },
-    AgentText { text: String },
-    AgentThought { text: String },
+    UserMessage {
+        text: String,
+    },
+    AgentText {
+        text: String,
+    },
+    AgentThought {
+        text: String,
+    },
     ToolCall {
         tool_call_id: String,
         title: String,
@@ -449,7 +481,9 @@ pub enum SessionUpdate {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         content: Option<String>,
     },
-    FileEdit { path: String },
+    FileEdit {
+        path: String,
+    },
     PermissionRequest {
         request_id: String,
         title: String,
@@ -462,10 +496,16 @@ pub enum SessionUpdate {
         outcome: String,
     },
     /// The agent's plan / todo list (ACP `plan` update).
-    Plan { entries: Vec<PlanEntry> },
+    Plan {
+        entries: Vec<PlanEntry>,
+    },
     /// Slash-commands the agent exposes (ACP `available_commands_update`).
-    AvailableCommands { commands: Vec<CommandInfo> },
-    TurnEnded { stop_reason: String },
+    AvailableCommands {
+        commands: Vec<CommandInfo>,
+    },
+    TurnEnded {
+        stop_reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

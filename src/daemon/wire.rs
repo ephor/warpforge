@@ -46,7 +46,13 @@ pub fn terminal_screen(parser: &vt100::Parser) -> wire::TerminalScreen {
                 Some(cell) => {
                     let t = cell.contents();
                     let t = if t.is_empty() { " ".to_string() } else { t };
-                    (t, color_str(cell.fgcolor()), color_str(cell.bgcolor()), cell.bold(), cell.inverse())
+                    (
+                        t,
+                        color_str(cell.fgcolor()),
+                        color_str(cell.bgcolor()),
+                        cell.bold(),
+                        cell.inverse(),
+                    )
                 }
                 None => (" ".to_string(), None, None, false, false),
             };
@@ -58,7 +64,13 @@ pub fn terminal_screen(parser: &vt100::Parser) -> wire::TerminalScreen {
                     if let Some(s) = run.take() {
                         spans.push(s);
                     }
-                    run = Some(wire::StyledSpan { text, fg, bg, bold, inverse });
+                    run = Some(wire::StyledSpan {
+                        text,
+                        fg,
+                        bg,
+                        bold,
+                        inverse,
+                    });
                 }
             }
         }
@@ -68,7 +80,12 @@ pub fn terminal_screen(parser: &vt100::Parser) -> wire::TerminalScreen {
         rows_content.push(spans);
     }
 
-    wire::TerminalScreen { cols, rows, cursor: (cur_row, cur_col), rows_content }
+    wire::TerminalScreen {
+        cols,
+        rows,
+        cursor: (cur_row, cur_col),
+        rows_content,
+    }
 }
 
 /// Encode a vt100 colour compactly: `None` = default, `#rrggbb` = truecolor,
@@ -124,28 +141,41 @@ pub fn task_info(t: &Task) -> wire::TaskInfo {
 /// serialized `TerminalScreen` events for the TUI-over-socket case.
 pub fn to_wire(ev: &Event) -> Option<wire::Event> {
     match ev {
-        Event::ServiceStatus { project, service, status, allocated_port } => {
-            Some(wire::Event::ServiceStatus {
-                project: project.clone(),
-                service: service.clone(),
-                status: service_status(status),
-                allocated_port: *allocated_port,
-            })
-        }
-        Event::ServiceLog { project, service, line } => Some(wire::Event::ServiceLog {
+        Event::ServiceStatus {
+            project,
+            service,
+            status,
+            allocated_port,
+        } => Some(wire::Event::ServiceStatus {
+            project: project.clone(),
+            service: service.clone(),
+            status: service_status(status),
+            allocated_port: *allocated_port,
+        }),
+        Event::ServiceLog {
+            project,
+            service,
+            line,
+        } => Some(wire::Event::ServiceLog {
             project: project.clone(),
             service: service.clone(),
             seq: 0,
             line: line.clone(),
         }),
-        Event::PortForwardStatus { project, name, status } => {
-            Some(wire::Event::PortForwardStatus {
-                project: project.clone(),
-                name: name.clone(),
-                status: pf_status(status),
-            })
-        }
-        Event::PortForwardLog { project, name, line } => Some(wire::Event::PortForwardLog {
+        Event::PortForwardStatus {
+            project,
+            name,
+            status,
+        } => Some(wire::Event::PortForwardStatus {
+            project: project.clone(),
+            name: name.clone(),
+            status: pf_status(status),
+        }),
+        Event::PortForwardLog {
+            project,
+            name,
+            line,
+        } => Some(wire::Event::PortForwardLog {
             project: project.clone(),
             name: name.clone(),
             seq: 0,
@@ -158,7 +188,10 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
             task_id: task_id.clone(),
             update: update.clone(),
         }),
-        Event::TerminalScreen { terminal_id, screen } => Some(wire::Event::TerminalScreen {
+        Event::TerminalScreen {
+            terminal_id,
+            screen,
+        } => Some(wire::Event::TerminalScreen {
             terminal_id: terminal_id.clone(),
             screen: screen.clone(),
         }),
@@ -166,12 +199,12 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
             terminal_id: id.clone(),
             code: 0,
         }),
-        Event::AgentsSetupNeeded { detected } => {
-            Some(wire::Event::AgentsSetupNeeded { detected: detected.clone() })
-        }
-        Event::AgentsUpdated { agents } => {
-            Some(wire::Event::AgentsUpdated { agents: agents.clone() })
-        }
+        Event::AgentsSetupNeeded { detected } => Some(wire::Event::AgentsSetupNeeded {
+            detected: detected.clone(),
+        }),
+        Event::AgentsUpdated { agents } => Some(wire::Event::AgentsUpdated {
+            agents: agents.clone(),
+        }),
         // Internal-only: the wire conveys terminals via screen/exited events.
         Event::AgentSpawned { .. } | Event::AgentStatus { .. } => None,
     }

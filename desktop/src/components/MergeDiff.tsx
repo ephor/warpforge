@@ -3,39 +3,10 @@ import { MergeView } from "@codemirror/merge";
 import { EditorState, Extension } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { javascript } from "@codemirror/lang-javascript";
-import { rust } from "@codemirror/lang-rust";
-import { json } from "@codemirror/lang-json";
-import { python } from "@codemirror/lang-python";
-import { go } from "@codemirror/lang-go";
 import { Undo2, Check } from "lucide-react";
 import { FileDoc } from "../protocol";
 import { cn } from "@/lib/utils";
-
-/** Pick a CodeMirror language extension by file extension. */
-function langFor(path: string): Extension[] {
-  const ext = path.split(".").pop()?.toLowerCase();
-  switch (ext) {
-    case "ts":
-    case "tsx":
-      return [javascript({ jsx: true, typescript: true })];
-    case "js":
-    case "jsx":
-    case "mjs":
-    case "cjs":
-      return [javascript({ jsx: true })];
-    case "rs":
-      return [rust()];
-    case "go":
-      return [go()];
-    case "json":
-      return [json()];
-    case "py":
-      return [python()];
-    default:
-      return [];
-  }
-}
+import { codemirrorLanguageForPath } from "@/lib/codemirrorLanguages";
 
 type SaveStatus = "clean" | "unsaved" | "saved";
 
@@ -89,7 +60,7 @@ export function MergeDiff({
     if (!host.current) return;
     setStatus("clean");
     lastSaved.current = null;
-    const lang = langFor(doc.path);
+    const lang = codemirrorLanguageForPath(doc.path);
     const common: Extension[] = [lineNumbers(), oneDark, EditorView.lineWrapping, ...lang];
 
     const view = new MergeView({
@@ -172,6 +143,7 @@ export function MergeDiff({
             )}
           </span>
           <button
+            type="button"
             onClick={discard}
             className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground"
             title="Restore this file to how the agent left it"

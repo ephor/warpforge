@@ -48,13 +48,31 @@ pub enum Command {
     Snapshot(oneshot::Sender<wire::Snapshot>),
     /// Start every declared service + port-forward for a project (what "opening"
     /// a project used to do implicitly in the TUI — now explicit).
-    OpenProject { name: String },
-    StartService { project: String, service: String },
-    StopService { project: String, service: String },
-    RestartService { project: String, service: String },
+    OpenProject {
+        name: String,
+    },
+    StartService {
+        project: String,
+        service: String,
+    },
+    StopService {
+        project: String,
+        service: String,
+    },
+    RestartService {
+        project: String,
+        service: String,
+    },
     /// Start every declared service for a project (services only, no port-forwards).
-    StartAllServices { project: String },
-    StopProject { project: String },
+    StartAllServices {
+        project: String,
+    },
+    StopProject {
+        project: String,
+    },
+    /// Stop every service and port-forward while keeping the daemon and agent
+    /// sessions alive. Used when the desktop UI closes.
+    StopRuntime,
     /// A window of a service's retained log lines (events only carry the tail).
     ServiceLogs {
         project: String,
@@ -64,10 +82,18 @@ pub enum Command {
         reply: oneshot::Sender<Vec<String>>,
     },
     /// Start every declared port-forward for a project (port-forwards only).
-    StartAllPortForwards { project: String },
+    StartAllPortForwards {
+        project: String,
+    },
     /// Start a single declared port-forward by its label.
-    StartPortForward { project: String, name: String },
-    StopPortForward { project: String, name: String },
+    StartPortForward {
+        project: String,
+        name: String,
+    },
+    StopPortForward {
+        project: String,
+        name: String,
+    },
     SpawnAgent {
         project: String,
         command: String,
@@ -76,9 +102,18 @@ pub enum Command {
         rows: u16,
         reply: oneshot::Sender<Result<String>>,
     },
-    WriteAgent { id: String, data: Vec<u8> },
-    ResizeAgent { id: String, cols: u16, rows: u16 },
-    KillAgent { id: String },
+    WriteAgent {
+        id: String,
+        data: Vec<u8>,
+    },
+    ResizeAgent {
+        id: String,
+        cols: u16,
+        rows: u16,
+    },
+    KillAgent {
+        id: String,
+    },
     CreateTask {
         project: String,
         prompt: String,
@@ -87,11 +122,18 @@ pub enum Command {
         include_runtime_context: bool,
         reply: oneshot::Sender<String>,
     },
-    CancelTask { id: String },
+    CancelTask {
+        id: String,
+    },
     /// Delete a task and its session history permanently.
-    DeleteTask { id: String },
+    DeleteTask {
+        id: String,
+    },
     /// List resumable agent sessions found on disk for a project's cwd.
-    ListSessions { project: String, reply: oneshot::Sender<Vec<wire::ExternalSession>> },
+    ListSessions {
+        project: String,
+        reply: oneshot::Sender<Vec<wire::ExternalSession>>,
+    },
     /// Resume an external agent session as a new task; replies with its task id.
     ResumeTask {
         project: String,
@@ -101,7 +143,10 @@ pub enum Command {
         reply: oneshot::Sender<String>,
     },
     /// Compute the task's working-tree diff (git).
-    GetDiff { task_id: String, reply: oneshot::Sender<wire::TaskDiff> },
+    GetDiff {
+        task_id: String,
+        reply: oneshot::Sender<wire::TaskDiff>,
+    },
     /// Old (HEAD) + new (working-tree) text of one file.
     GetFileContents {
         task_id: String,
@@ -114,7 +159,11 @@ pub enum Command {
         reply: oneshot::Sender<Vec<wire::ProjectFile>>,
     },
     /// Write new contents to a file in the task's working tree.
-    SaveFile { task_id: String, path: String, content: String },
+    SaveFile {
+        task_id: String,
+        path: String,
+        content: String,
+    },
     /// Accept (keep) or reject (revert) a single hunk in the working tree.
     ResolveHunk {
         task_id: String,
@@ -131,41 +180,94 @@ pub enum Command {
         reply: oneshot::Sender<Result<(), String>>,
     },
     /// Send a follow-up prompt into a task's running agent session.
-    SessionPrompt { task_id: String, text: String },
+    SessionPrompt {
+        task_id: String,
+        text: String,
+    },
     /// Answer a permission request the agent raised.
-    SessionPermission { task_id: String, request_id: String, outcome: String },
+    SessionPermission {
+        task_id: String,
+        request_id: String,
+        outcome: String,
+    },
     /// Change a session selector (model/mode/…) the agent exposes.
-    SessionSetConfigOption { task_id: String, config_id: String, value: String },
+    SessionSetConfigOption {
+        task_id: String,
+        config_id: String,
+        value: String,
+    },
     /// Detect installed ACP-capable agents (runs which/where, returns list).
-    DetectAgents { reply: oneshot::Sender<Vec<wire::DetectedAgent>> },
+    DetectAgents {
+        reply: oneshot::Sender<Vec<wire::DetectedAgent>>,
+    },
     /// Save agent configuration from setup wizard or settings.
-    UpdateAgents { agents: Vec<wire::AgentConfig> },
+    UpdateAgents {
+        agents: Vec<wire::AgentConfig>,
+    },
     Shutdown,
 }
 
 /// State deltas broadcast to every subscribed client.
 #[derive(Clone)]
 pub enum Event {
-    ServiceStatus { project: String, service: String, status: ServiceStatus, allocated_port: u16 },
-    ServiceLog { project: String, service: String, line: String },
-    PortForwardStatus { project: String, name: String, status: PfStatus },
-    PortForwardLog { project: String, name: String, line: String },
-    AgentsSetupNeeded { detected: Vec<wire::DetectedAgent> },
-    AgentsUpdated { agents: Vec<wire::AgentConfig> },
+    ServiceStatus {
+        project: String,
+        service: String,
+        status: ServiceStatus,
+        allocated_port: u16,
+    },
+    ServiceLog {
+        project: String,
+        service: String,
+        line: String,
+    },
+    PortForwardStatus {
+        project: String,
+        name: String,
+        status: PfStatus,
+    },
+    PortForwardLog {
+        project: String,
+        name: String,
+        line: String,
+    },
+    AgentsSetupNeeded {
+        detected: Vec<wire::DetectedAgent>,
+    },
+    AgentsUpdated {
+        agents: Vec<wire::AgentConfig>,
+    },
     /// A PTY agent was created; carries the live vt100 parser so an in-process
     /// client can render it. (Stage 3 replaces this with serialized screens.)
-    AgentSpawned { id: String, project: String, screen: Arc<Mutex<vt100::Parser>> },
-    AgentStatus { id: String, status: AgentStatus },
-    AgentExited { id: String },
+    AgentSpawned {
+        id: String,
+        project: String,
+        screen: Arc<Mutex<vt100::Parser>>,
+    },
+    AgentStatus {
+        id: String,
+        status: AgentStatus,
+    },
+    AgentExited {
+        id: String,
+    },
     TaskCreated(Task),
     TaskUpdated(Task),
-    TaskRemoved { id: String },
+    TaskRemoved {
+        id: String,
+    },
     /// Structured ACP session activity for a task (tool calls, agent text,
     /// file edits, permission requests) — already in wire shape.
-    SessionUpdate { task_id: String, update: wire::SessionUpdate },
+    SessionUpdate {
+        task_id: String,
+        update: wire::SessionUpdate,
+    },
     /// A PTY terminal's rendered screen changed (serialized, so clients need no
     /// terminal emulator — the daemon owns the one authoritative vt100 parser).
-    TerminalScreen { terminal_id: String, screen: wire::TerminalScreen },
+    TerminalScreen {
+        terminal_id: String,
+        screen: wire::TerminalScreen,
+    },
 }
 
 /// Cloneable handle clients use to talk to the daemon.
@@ -225,7 +327,11 @@ impl DaemonHandle {
 
     pub async fn diff(&self, task_id: &str) -> wire::TaskDiff {
         let (tx, rx) = oneshot::channel();
-        self.send(Command::GetDiff { task_id: task_id.to_string(), reply: tx }).await;
+        self.send(Command::GetDiff {
+            task_id: task_id.to_string(),
+            reply: tx,
+        })
+        .await;
         rx.await.unwrap_or_default()
     }
 
@@ -266,7 +372,8 @@ impl DaemonHandle {
             reply: tx,
         })
         .await;
-        rx.await.unwrap_or_else(|_| Err("daemon dropped the commit request".into()))
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the commit request".into()))
     }
 
     /// A window of a service's retained log lines (for backfill; live tail
@@ -297,12 +404,20 @@ impl DaemonHandle {
     }
 
     pub async fn session_prompt(&self, task_id: &str, text: &str) {
-        self.send(Command::SessionPrompt { task_id: task_id.into(), text: text.into() }).await;
+        self.send(Command::SessionPrompt {
+            task_id: task_id.into(),
+            text: text.into(),
+        })
+        .await;
     }
 
     pub async fn list_sessions(&self, project: &str) -> Vec<wire::ExternalSession> {
         let (tx, rx) = oneshot::channel();
-        self.send(Command::ListSessions { project: project.into(), reply: tx }).await;
+        self.send(Command::ListSessions {
+            project: project.into(),
+            reply: tx,
+        })
+        .await;
         rx.await.unwrap_or_default()
     }
 
@@ -371,7 +486,8 @@ impl DaemonHandle {
             reply: tx,
         })
         .await;
-        rx.await.unwrap_or_else(|_| Err(anyhow::anyhow!("daemon closed")))
+        rx.await
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("daemon closed")))
     }
 }
 
@@ -416,7 +532,10 @@ impl Daemon {
             .and_then(|s| s.load_agents().ok())
             .unwrap_or_default();
 
-        let needs_setup = store.as_ref().map(|s| !s.agents_configured()).unwrap_or(false);
+        let needs_setup = store
+            .as_ref()
+            .map(|s| !s.agents_configured())
+            .unwrap_or(false);
 
         let daemon = Daemon {
             projects,
@@ -468,8 +587,7 @@ impl Daemon {
             .map(|(i, p)| {
                 let (start, end) = crate::ports::port_range(i);
                 let config = load_workspace_config(std::path::Path::new(&p.path));
-                let declared_services =
-                    config.as_ref().map(sorted_services).unwrap_or_default();
+                let declared_services = config.as_ref().map(sorted_services).unwrap_or_default();
                 let agent_templates = config
                     .as_ref()
                     .and_then(|c| c.agent_templates.clone())
@@ -512,35 +630,44 @@ impl Daemon {
                         .clone()
                         .unwrap_or_else(|| format!("{}:{}", pf_cfg.namespace, pf_cfg.pod));
                     let key = format!("{}/{}", p.name, name);
-                    pf_map.insert(key, wire::PortForwardInfo {
-                        project: p.name.clone(),
-                        name,
-                        namespace: pf_cfg.namespace.clone(),
-                        pod: pf_cfg.pod.clone(),
-                        local_port: pf_cfg.local_port,
-                        remote_port: pf_cfg.remote_port,
-                        status: wire::PortForwardStatus::Stopped,
-                    });
+                    pf_map.insert(
+                        key,
+                        wire::PortForwardInfo {
+                            project: p.name.clone(),
+                            name,
+                            namespace: pf_cfg.namespace.clone(),
+                            pod: pf_cfg.pod.clone(),
+                            local_port: pf_cfg.local_port,
+                            remote_port: pf_cfg.remote_port,
+                            status: wire::PortForwardStatus::Stopped,
+                        },
+                    );
                 }
             }
         }
         for (key, pf) in &self.portforwards.forwards {
-            let project = key.split_once('/').map(|(p, _)| p).unwrap_or("").to_string();
-            pf_map.insert(key.clone(), wire::PortForwardInfo {
-                project,
-                name: pf.name.clone(),
-                namespace: pf.namespace.clone(),
-                pod: pf.pod_prefix.clone(),
-                local_port: pf.local_port,
-                remote_port: pf.remote_port,
-                status: wireconv::pf_status(&pf.status),
-            });
+            let project = key
+                .split_once('/')
+                .map(|(p, _)| p)
+                .unwrap_or("")
+                .to_string();
+            pf_map.insert(
+                key.clone(),
+                wire::PortForwardInfo {
+                    project,
+                    name: pf.name.clone(),
+                    namespace: pf.namespace.clone(),
+                    pod: pf.pod_prefix.clone(),
+                    local_port: pf.local_port,
+                    remote_port: pf.remote_port,
+                    status: wireconv::pf_status(&pf.status),
+                },
+            );
         }
         let mut portforwards: Vec<wire::PortForwardInfo> = pf_map.into_values().collect();
         portforwards.sort_by(|a, b| a.name.cmp(&b.name));
 
-        let mut tasks: Vec<wire::TaskInfo> =
-            self.tasks.values().map(wireconv::task_info).collect();
+        let mut tasks: Vec<wire::TaskInfo> = self.tasks.values().map(wireconv::task_info).collect();
         tasks.sort_by_key(|t| t.created_at);
 
         let terminals = self
@@ -577,11 +704,17 @@ impl Daemon {
     }
 
     fn project_path(&self, name: &str) -> Option<String> {
-        self.projects.iter().find(|p| p.name == name).map(|p| p.path.clone())
+        self.projects
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| p.path.clone())
     }
 
     fn project_index(&self, name: &str) -> usize {
-        self.projects.iter().position(|p| p.name == name).unwrap_or(0)
+        self.projects
+            .iter()
+            .position(|p| p.name == name)
+            .unwrap_or(0)
     }
 
     async fn run(
@@ -618,11 +751,17 @@ impl Daemon {
         match ev {
             AgentEvent::Data { id, .. } => {
                 if let Some(agent) = self.agents.get(&id) {
-                    self.emit(Event::AgentStatus { id: id.clone(), status: agent.status.clone() });
+                    self.emit(Event::AgentStatus {
+                        id: id.clone(),
+                        status: agent.status.clone(),
+                    });
                     // Serialize and push the terminal screen for remote clients.
                     if let Ok(parser) = agent.screen.lock() {
                         let screen = wireconv::terminal_screen(&parser);
-                        self.emit(Event::TerminalScreen { terminal_id: id, screen });
+                        self.emit(Event::TerminalScreen {
+                            terminal_id: id,
+                            screen,
+                        });
                     }
                 }
             }
@@ -632,23 +771,34 @@ impl Daemon {
 
     fn handle_service_event(&mut self, ev: ServiceEvent) {
         let broadcast = match &ev {
-            ServiceEvent::Log { key, line } => {
+            ServiceEvent::Log { key, line, .. } => {
                 let (project, service) = split_key(key);
-                Event::ServiceLog { project, service, line: line.clone() }
+                Event::ServiceLog {
+                    project,
+                    service,
+                    line: line.clone(),
+                }
             }
-            ServiceEvent::StatusChange { key, status } => {
+            ServiceEvent::StatusChange { key, status, .. } => {
                 let (project, service) = split_key(key);
                 let allocated_port = self
                     .services
                     .get(&project, &service)
                     .map(|s| s.allocated_port)
                     .unwrap_or(0);
-                Event::ServiceStatus { project, service, status: status.clone(), allocated_port }
+                Event::ServiceStatus {
+                    project,
+                    service,
+                    status: status.clone(),
+                    allocated_port,
+                }
             }
         };
         self.services.apply_event(ev);
         match &broadcast {
-            Event::ServiceStatus { project, service, .. } => {
+            Event::ServiceStatus {
+                project, service, ..
+            } => {
                 self.emit_service_status(project, service);
             }
             _ => self.emit(broadcast),
@@ -657,15 +807,27 @@ impl Daemon {
 
     fn handle_pf_event(&mut self, ev: PfEvent) {
         let broadcast = match &ev {
-            PfEvent::Log { project, name, line } => {
-                Event::PortForwardLog { project: project.clone(), name: name.clone(), line: line.clone() }
-            }
+            PfEvent::Log {
+                project,
+                name,
+                line,
+            } => Event::PortForwardLog {
+                project: project.clone(),
+                name: name.clone(),
+                line: line.clone(),
+            },
             PfEvent::Active { project, name, .. } | PfEvent::Restarted { project, name, .. } => {
-                Event::PortForwardStatus { project: project.clone(), name: name.clone(), status: PfStatus::Active }
+                Event::PortForwardStatus {
+                    project: project.clone(),
+                    name: name.clone(),
+                    status: PfStatus::Active,
+                }
             }
-            PfEvent::Failed { project, name, .. } => {
-                Event::PortForwardStatus { project: project.clone(), name: name.clone(), status: PfStatus::Failed }
-            }
+            PfEvent::Failed { project, name, .. } => Event::PortForwardStatus {
+                project: project.clone(),
+                name: name.clone(),
+                status: PfStatus::Failed,
+            },
         };
         self.portforwards.apply_event(ev);
         self.emit(broadcast);
@@ -691,19 +853,39 @@ impl Daemon {
             }
             Command::StopService { project, service } => {
                 self.services.stop(&project, &service).await.ok();
+                self.emit_service_status(&project, &service);
             }
             Command::RestartService { project, service } => {
                 self.services.stop(&project, &service).await.ok();
+                self.emit_service_status(&project, &service);
                 self.start_one_service(&project, &service).await;
             }
             Command::StartAllServices { project } => {
                 self.start_services(&project).await;
             }
             Command::StopProject { project } => {
+                let services: Vec<String> = self
+                    .services
+                    .list_for_project(&project)
+                    .into_iter()
+                    .map(|svc| svc.name.clone())
+                    .collect();
                 self.services.stop_project(&project).await.ok();
                 self.portforwards.stop_project(&project);
+                for service in services {
+                    self.emit_service_status(&project, &service);
+                }
             }
-            Command::ServiceLogs { project, service, after, limit, reply } => {
+            Command::StopRuntime => {
+                self.stop_runtime().await;
+            }
+            Command::ServiceLogs {
+                project,
+                service,
+                after,
+                limit,
+                reply,
+            } => {
                 let lines = self
                     .services
                     .get(&project, &service)
@@ -730,11 +912,19 @@ impl Daemon {
             Command::StopPortForward { project, name } => {
                 self.portforwards.stop(&project, &name);
             }
-            Command::SpawnAgent { project, command, description, cols, rows, reply } => {
+            Command::SpawnAgent {
+                project,
+                command,
+                description,
+                cols,
+                rows,
+                reply,
+            } => {
                 let result = match self.project_path(&project) {
-                    Some(path) => self
-                        .agents
-                        .spawn(&project, &path, &command, &description, cols, rows),
+                    Some(path) => {
+                        self.agents
+                            .spawn(&project, &path, &command, &description, cols, rows)
+                    }
                     None => Err(anyhow::anyhow!("unknown project: {project}")),
                 };
                 if let Ok(ref id) = result {
@@ -754,14 +944,28 @@ impl Daemon {
                 self.agents.kill(&id);
                 self.emit(Event::AgentExited { id });
             }
-            Command::CreateTask { project, prompt, agent, tags, include_runtime_context, reply } => {
+            Command::CreateTask {
+                project,
+                prompt,
+                agent,
+                tags,
+                include_runtime_context,
+                reply,
+            } => {
                 let task = Task::new(&project, &prompt, &agent, tags);
                 let id = task.id.clone();
                 self.tasks.insert(id.clone(), task.clone());
                 self.persist(&task);
                 self.emit(Event::TaskCreated(task));
                 let _ = reply.send(id.clone());
-                self.start_session(&id, &project, &agent, &prompt, include_runtime_context, None);
+                self.start_session(
+                    &id,
+                    &project,
+                    &agent,
+                    &prompt,
+                    include_runtime_context,
+                    None,
+                );
             }
             Command::GetDiff { task_id, reply } => {
                 // Resolve the repo path (sync) before awaiting git, so no shared
@@ -777,9 +981,17 @@ impl Daemon {
                     ),
                     None => (Vec::new(), None),
                 };
-                let _ = reply.send(wire::TaskDiff { task_id, files, branch });
+                let _ = reply.send(wire::TaskDiff {
+                    task_id,
+                    files,
+                    branch,
+                });
             }
-            Command::GetFileContents { task_id, path, reply } => {
+            Command::GetFileContents {
+                task_id,
+                path,
+                reply,
+            } => {
                 let repo = self
                     .tasks
                     .get(&task_id)
@@ -801,7 +1013,11 @@ impl Daemon {
                 };
                 let _ = reply.send(files);
             }
-            Command::SaveFile { task_id, path, content } => {
+            Command::SaveFile {
+                task_id,
+                path,
+                content,
+            } => {
                 let repo = self
                     .tasks
                     .get(&task_id)
@@ -818,7 +1034,12 @@ impl Daemon {
                     }
                 }
             }
-            Command::ResolveHunk { task_id, file, hunk_index, resolution } => {
+            Command::ResolveHunk {
+                task_id,
+                file,
+                hunk_index,
+                resolution,
+            } => {
                 // accept keeps the change (no-op); only reject touches the tree.
                 if resolution == wire::HunkResolution::Reject {
                     let repo = self
@@ -826,7 +1047,10 @@ impl Daemon {
                         .get(&task_id)
                         .and_then(|t| self.project_path(&t.project));
                     if let Some(path) = repo {
-                        if super::diff::reject_hunk(&path, &file, hunk_index).await.is_ok() {
+                        if super::diff::reject_hunk(&path, &file, hunk_index)
+                            .await
+                            .is_ok()
+                        {
                             if let Some(task) = self.tasks.get_mut(&task_id) {
                                 task.updated_at = super::task::now_secs();
                                 if task.files_changed > 0 {
@@ -840,7 +1064,13 @@ impl Daemon {
                     }
                 }
             }
-            Command::GitCommit { task_id, message, files, amend, reply } => {
+            Command::GitCommit {
+                task_id,
+                message,
+                files,
+                amend,
+                reply,
+            } => {
                 let repo = self
                     .tasks
                     .get(&task_id)
@@ -895,7 +1125,13 @@ impl Daemon {
                     let _ = reply.send(sessions);
                 });
             }
-            Command::ResumeTask { project, agent, session_id, title, reply } => {
+            Command::ResumeTask {
+                project,
+                agent,
+                session_id,
+                title,
+                reply,
+            } => {
                 let prompt = if title.is_empty() {
                     format!("Resumed {agent} session")
                 } else {
@@ -934,7 +1170,11 @@ impl Daemon {
                     }
                 }
             }
-            Command::SessionPermission { task_id, request_id, outcome } => {
+            Command::SessionPermission {
+                task_id,
+                request_id,
+                outcome,
+            } => {
                 if let Some(handle) = self.sessions.get(&task_id) {
                     handle.answer(request_id.clone(), outcome.clone());
                 }
@@ -942,10 +1182,17 @@ impl Daemon {
                 // reopen/restart (the request update stays in history).
                 self.emit_session(
                     &task_id,
-                    wire::SessionUpdate::PermissionResolved { request_id, outcome },
+                    wire::SessionUpdate::PermissionResolved {
+                        request_id,
+                        outcome,
+                    },
                 );
             }
-            Command::SessionSetConfigOption { task_id, config_id, value } => {
+            Command::SessionSetConfigOption {
+                task_id,
+                config_id,
+                value,
+            } => {
                 if let Some(handle) = self.sessions.get(&task_id) {
                     handle.set_config_option(config_id, value);
                 }
@@ -976,9 +1223,13 @@ impl Daemon {
 
     /// Start every declared service for a project (no port-forwards).
     async fn start_services(&mut self, name: &str) {
-        let Some(path) = self.project_path(name) else { return };
+        let Some(path) = self.project_path(name) else {
+            return;
+        };
         let index = self.project_index(name);
-        let Some(config) = load_workspace_config(std::path::Path::new(&path)) else { return };
+        let Some(config) = load_workspace_config(std::path::Path::new(&path)) else {
+            return;
+        };
 
         for svc_name in sorted_services(&config) {
             if let Some(svc) = config.services.get(&svc_name) {
@@ -1002,16 +1253,26 @@ impl Daemon {
 
     /// Start every declared port-forward for a project (no services).
     async fn start_portforwards(&mut self, name: &str) {
-        let Some(path) = self.project_path(name) else { return };
-        let Some(config) = load_workspace_config(std::path::Path::new(&path)) else { return };
-        self.portforwards.start_all(name, &config.portforwards).await;
+        let Some(path) = self.project_path(name) else {
+            return;
+        };
+        let Some(config) = load_workspace_config(std::path::Path::new(&path)) else {
+            return;
+        };
+        self.portforwards
+            .start_all(name, &config.portforwards)
+            .await;
     }
 
     /// Start a single declared port-forward, matched by its label (explicit
     /// `name:` in config, else the `namespace:pod` fallback the manager uses).
     async fn start_one_portforward(&mut self, project: &str, label: &str) {
-        let Some(path) = self.project_path(project) else { return };
-        let Some(config) = load_workspace_config(std::path::Path::new(&path)) else { return };
+        let Some(path) = self.project_path(project) else {
+            return;
+        };
+        let Some(config) = load_workspace_config(std::path::Path::new(&path)) else {
+            return;
+        };
         let matched: Vec<_> = config
             .portforwards
             .into_iter()
@@ -1027,10 +1288,16 @@ impl Daemon {
     }
 
     async fn start_one_service(&mut self, project: &str, service: &str) {
-        let Some(path) = self.project_path(project) else { return };
+        let Some(path) = self.project_path(project) else {
+            return;
+        };
         let index = self.project_index(project);
-        let Some(config) = load_workspace_config(std::path::Path::new(&path)) else { return };
-        let Some(svc) = config.services.get(service) else { return };
+        let Some(config) = load_workspace_config(std::path::Path::new(&path)) else {
+            return;
+        };
+        let Some(svc) = config.services.get(service) else {
+            return;
+        };
         self.services
             .start(
                 project,
@@ -1051,7 +1318,11 @@ impl Daemon {
     /// Priority: global agent registry → project agentTemplates → raw command.
     fn resolve_agent_command(&self, project: &str, agent: &str) -> String {
         // 1. Global registry (configured via setup wizard / settings).
-        if let Some(cfg) = self.configured_agents.iter().find(|a| a.id == agent || a.display_name == agent) {
+        if let Some(cfg) = self
+            .configured_agents
+            .iter()
+            .find(|a| a.id == agent || a.display_name == agent)
+        {
             return cfg.acp_command.clone();
         }
         // 2. Per-project agentTemplates override (legacy / power-user).
@@ -1103,9 +1374,14 @@ impl Daemon {
         include_runtime_context: bool,
         resume: Option<String>,
     ) {
-        let cwd = self.project_path(project).unwrap_or_else(|| ".".to_string());
+        let cwd = self
+            .project_path(project)
+            .unwrap_or_else(|| ".".to_string());
         let command = self.resolve_agent_command(project, agent);
-        let full_prompt = match include_runtime_context.then(|| self.runtime_context(project)).flatten() {
+        let full_prompt = match include_runtime_context
+            .then(|| self.runtime_context(project))
+            .flatten()
+        {
             Some(ctx) => format!("{ctx}\n\n{prompt}"),
             None => prompt.to_string(),
         };
@@ -1142,11 +1418,19 @@ impl Daemon {
                     self.emit(Event::TaskUpdated(updated));
                 }
             }
-            AcpUpdate::AgentText(text) => self.emit_session(&task_id, wire::SessionUpdate::AgentText { text }),
+            AcpUpdate::AgentText(text) => {
+                self.emit_session(&task_id, wire::SessionUpdate::AgentText { text })
+            }
             AcpUpdate::AgentThought(text) => {
                 self.emit_session(&task_id, wire::SessionUpdate::AgentThought { text })
             }
-            AcpUpdate::ToolCall { id, title, status, kind, content } => self.emit_session(
+            AcpUpdate::ToolCall {
+                id,
+                title,
+                status,
+                kind,
+                content,
+            } => self.emit_session(
                 &task_id,
                 wire::SessionUpdate::ToolCall {
                     tool_call_id: id,
@@ -1159,15 +1443,15 @@ impl Daemon {
             AcpUpdate::Plan { entries } => {
                 self.emit_session(&task_id, wire::SessionUpdate::Plan { entries })
             }
-            AcpUpdate::AvailableCommands { commands } => {
-                self.emit_session(&task_id, wire::SessionUpdate::AvailableCommands { commands })
-            }
+            AcpUpdate::AvailableCommands { commands } => self.emit_session(
+                &task_id,
+                wire::SessionUpdate::AvailableCommands { commands },
+            ),
             AcpUpdate::ConfigOptions { options } => {
-                // Transient session state (model/mode); reflect on the task so
-                // clients can show it. Not persisted — no store write.
                 if let Some(task) = self.tasks.get_mut(&task_id) {
                     task.config_options = options;
                     let updated = task.clone();
+                    self.persist(&updated);
                     self.emit(Event::TaskUpdated(updated));
                 }
             }
@@ -1180,9 +1464,17 @@ impl Daemon {
                 }
                 self.emit_session(&task_id, wire::SessionUpdate::FileEdit { path });
             }
-            AcpUpdate::PermissionRequest { request_id, title, options } => self.emit_session(
+            AcpUpdate::PermissionRequest {
+                request_id,
+                title,
+                options,
+            } => self.emit_session(
                 &task_id,
-                wire::SessionUpdate::PermissionRequest { request_id, title, options },
+                wire::SessionUpdate::PermissionRequest {
+                    request_id,
+                    title,
+                    options,
+                },
             ),
             AcpUpdate::TurnEnded { stop_reason } => {
                 self.emit_session(&task_id, wire::SessionUpdate::TurnEnded { stop_reason });
@@ -1212,7 +1504,10 @@ impl Daemon {
         if let Some(store) = &self.store {
             let _ = store.save_session_update(task_id, &update);
         }
-        self.emit(Event::SessionUpdate { task_id: task_id.to_string(), update });
+        self.emit(Event::SessionUpdate {
+            task_id: task_id.to_string(),
+            update,
+        });
     }
 
     /// Broadcast a service's current status. Emitted right after a start so a
@@ -1226,6 +1521,20 @@ impl Daemon {
                 status: svc.status.clone(),
                 allocated_port: svc.allocated_port,
             });
+        }
+    }
+
+    async fn stop_runtime(&mut self) {
+        let services: Vec<(String, String)> = self
+            .services
+            .list()
+            .into_iter()
+            .map(|svc| (svc.project_name.clone(), svc.name.clone()))
+            .collect();
+        self.services.stop_all().await.ok();
+        self.portforwards.stop_all().await.ok();
+        for (project, service) in services {
+            self.emit_service_status(&project, &service);
         }
     }
 }

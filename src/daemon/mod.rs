@@ -95,9 +95,14 @@ mod tests {
         let mut events = daemon.subscribe();
 
         // Agent is a raw command (not a template): our mock ACP agent.
-        let mock = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mock-acp-agent.mjs");
+        let mock = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/mock-acp-agent.mjs"
+        );
         let agent = format!("node {mock}");
-        let task_id = daemon.create_task("demo", "fix the thing", &agent, vec![], false).await;
+        let task_id = daemon
+            .create_task("demo", "fix the thing", &agent, vec![], false)
+            .await;
 
         let mut saw_running = false;
         let mut saw_agent_text = false;
@@ -122,13 +127,20 @@ mod tests {
                         saw_needs_review = true;
                     }
                 }
-                Event::SessionUpdate { task_id: tid, update } if tid == task_id => match update {
+                Event::SessionUpdate {
+                    task_id: tid,
+                    update,
+                } if tid == task_id => match update {
                     wire::SessionUpdate::AgentText { .. } => saw_agent_text = true,
                     wire::SessionUpdate::FileEdit { path } => {
                         assert_eq!(path, "src/main.rs");
                         saw_file_edit = true;
                     }
-                    wire::SessionUpdate::PermissionRequest { request_id, options, .. } => {
+                    wire::SessionUpdate::PermissionRequest {
+                        request_id,
+                        options,
+                        ..
+                    } => {
                         assert!(options.contains(&"allow".to_string()));
                         permission_request_id = Some(request_id);
                     }
@@ -151,20 +163,34 @@ mod tests {
             }
         }
 
-        assert!(saw_running, "task should go Running when the session starts");
+        assert!(
+            saw_running,
+            "task should go Running when the session starts"
+        );
         assert!(saw_agent_text, "should stream agent text");
         assert!(saw_file_edit, "should report the file edit");
-        assert!(permission_request_id.is_some(), "should surface a permission request");
+        assert!(
+            permission_request_id.is_some(),
+            "should surface a permission request"
+        );
         assert!(answered, "should have answered the permission");
-        assert!(saw_turn_ended, "turn should end after the permission is answered");
-        assert!(saw_needs_review, "task should land in NeedsReview after the turn");
+        assert!(
+            saw_turn_ended,
+            "turn should end after the permission is answered"
+        );
+        assert!(
+            saw_needs_review,
+            "task should land in NeedsReview after the turn"
+        );
     }
 
     #[tokio::test]
     async fn cancel_task_marks_done() {
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let daemon = Daemon::spawn(test_projects(), store);
-        let id = daemon.create_task("demo", "p", "claude", vec![], false).await;
+        let id = daemon
+            .create_task("demo", "p", "claude", vec![], false)
+            .await;
         let mut events = daemon.subscribe();
 
         daemon.send(Command::CancelTask { id: id.clone() }).await;

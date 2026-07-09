@@ -104,7 +104,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![daemon_endpoint])
         .build(tauri::generate_context!())
         .expect("error building warpforge desktop")
-        // Daemon is a background service — intentionally left running when the
-        // desktop window closes so ACP sessions and services survive UI restarts.
+        // Daemon remains a background service so ACP sessions can survive UI
+        // restarts. The web UI asks before closing with running services and
+        // sends `runtime.stopAll` when the user confirms.
         .run(|_app_handle, _event| {});
 }

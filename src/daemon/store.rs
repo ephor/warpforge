@@ -52,7 +52,8 @@ impl Store {
                 created_at      INTEGER NOT NULL,
                 updated_at      INTEGER NOT NULL,
                 files_changed   INTEGER NOT NULL,
-                blocked_reason  TEXT
+                blocked_reason  TEXT,
+                config_options  TEXT NOT NULL DEFAULT '[]'
             );
             CREATE TABLE IF NOT EXISTS session_updates (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,24 +69,32 @@ impl Store {
             );
             "#,
         )?;
+        // Existing databases from before config selector persistence won't have
+        // this column. Ignore the duplicate-column error on newer DBs.
+        let _ = conn.execute(
+            "ALTER TABLE tasks ADD COLUMN config_options TEXT NOT NULL DEFAULT '[]'",
+            [],
+        );
         Ok(Self { conn })
     }
 
     pub fn upsert_task(&self, task: &Task) -> Result<()> {
         let tags = serde_json::to_string(&task.tags)?;
+        let config_options = serde_json::to_string(&task.config_options)?;
         self.conn.execute(
             r#"
             INSERT INTO tasks
                 (id, session_id, project, prompt, agent, status, tags,
-                 created_at, updated_at, files_changed, blocked_reason)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+                 created_at, updated_at, files_changed, blocked_reason, config_options)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
             ON CONFLICT(id) DO UPDATE SET
                 session_id=excluded.session_id,
                 status=excluded.status,
                 tags=excluded.tags,
                 updated_at=excluded.updated_at,
                 files_changed=excluded.files_changed,
-                blocked_reason=excluded.blocked_reason
+                blocked_reason=excluded.blocked_reason,
+                config_options=excluded.config_options
             "#,
             rusqlite::params![
                 task.id,
@@ -99,6 +108,7 @@ impl Store {
                 task.updated_at,
                 task.files_changed,
                 task.blocked_reason,
+                config_options,
             ],
         )?;
         Ok(())
@@ -110,11 +120,12 @@ impl Store {
     pub fn load_tasks(&self) -> Result<Vec<Task>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, project, prompt, agent, status, tags, \
-             created_at, updated_at, files_changed, blocked_reason FROM tasks",
+             created_at, updated_at, files_changed, blocked_reason, config_options FROM tasks",
         )?;
         let rows = stmt.query_map([], |row| {
             let tags_json: String = row.get(6)?;
             let status_str: String = row.get(5)?;
+            let config_options_json: String = row.get(11)?;
             let mut status = parse_status(&status_str);
             if matches!(status, TaskStatus::Running | TaskStatus::Queued) {
                 status = TaskStatus::Interrupted;
@@ -131,7 +142,7 @@ impl Store {
                 updated_at: row.get(8)?,
                 files_changed: row.get::<_, i64>(9)? as u32,
                 blocked_reason: row.get(10)?,
-                config_options: Vec::new(),
+                config_options: serde_json::from_str(&config_options_json).unwrap_or_default(),
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -140,15 +151,17 @@ impl Store {
     /// Returns true if the agents table has at least one row.
     pub fn agents_configured(&self) -> bool {
         self.conn
-            .query_row("SELECT COUNT(*) FROM agents", [], |row| row.get::<_, i64>(0))
+            .query_row("SELECT COUNT(*) FROM agents", [], |row| {
+                row.get::<_, i64>(0)
+            })
             .map(|n| n > 0)
             .unwrap_or(false)
     }
 
     pub fn load_agents(&self) -> Result<Vec<wire::AgentConfig>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, display_name, acp_command, enabled FROM agents ORDER BY id",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, display_name, acp_command, enabled FROM agents ORDER BY id")?;
         let rows = stmt.query_map([], |row| {
             Ok(wire::AgentConfig {
                 id: row.get(0)?,
@@ -173,8 +186,10 @@ impl Store {
 
     /// Delete a task and its session history permanently.
     pub fn delete_task(&self, id: &str) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM session_updates WHERE task_id = ?1", rusqlite::params![id])?;
+        self.conn.execute(
+            "DELETE FROM session_updates WHERE task_id = ?1",
+            rusqlite::params![id],
+        )?;
         self.conn
             .execute("DELETE FROM tasks WHERE id = ?1", rusqlite::params![id])?;
         Ok(())
@@ -191,9 +206,9 @@ impl Store {
 
     /// Load all persisted session updates grouped by task id, in insertion order.
     pub fn load_all_session_updates(&self) -> Result<HashMap<String, Vec<wire::SessionUpdate>>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT task_id, update_json FROM session_updates ORDER BY id",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT task_id, update_json FROM session_updates ORDER BY id")?;
         let mut map: HashMap<String, Vec<wire::SessionUpdate>> = HashMap::new();
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -228,6 +243,16 @@ mod tests {
         let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
         let mut task = Task::new("demo", "do a thing", "claude", vec!["x".into()]);
         task.attach_session("sess-1".into()); // -> Running
+        task.config_options = vec![wire::ConfigOption {
+            id: "model".into(),
+            name: "Model".into(),
+            category: Some("model".into()),
+            current_value: "opus".into(),
+            options: vec![wire::ConfigChoice {
+                value: "opus".into(),
+                name: "Opus".into(),
+            }],
+        }];
         store.upsert_task(&task).unwrap();
 
         let loaded = store.load_tasks().unwrap();
@@ -237,5 +262,6 @@ mod tests {
         assert_eq!(loaded[0].id, task.id);
         assert_eq!(loaded[0].session_id.as_deref(), Some("sess-1"));
         assert_eq!(loaded[0].tags, vec!["x".to_string()]);
+        assert_eq!(loaded[0].config_options, task.config_options);
     }
 }

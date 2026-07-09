@@ -1,9 +1,9 @@
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Margin},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    Frame,
 };
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -23,15 +23,20 @@ pub fn render(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // header
-            Constraint::Min(0),     // project list
-            Constraint::Length(2),  // help bar
+            Constraint::Length(3), // header
+            Constraint::Min(0),    // project list
+            Constraint::Length(2), // help bar
         ])
         .split(area);
 
     // ── Header ───────────────────────────────────────────────────────────────
     let header = Paragraph::new(Line::from(vec![
-        Span::styled("⚡ WarpForge", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "⚡ WarpForge",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("  workspace orchestrator"),
     ]))
     .block(Block::default().borders(Borders::BOTTOM));
@@ -48,7 +53,12 @@ pub fn render(
         .iter()
         .map(|p| {
             let mut lines = vec![Line::from(vec![
-                Span::styled(&p.name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    &p.name,
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw("  "),
                 Span::styled(&p.path, Style::default().fg(Color::DarkGray)),
             ])];
@@ -57,14 +67,17 @@ pub fn render(
             let agent_list = agents.list_for_project(&p.name);
 
             if svc_list.is_empty() && agent_list.is_empty() {
-                lines.push(Line::from(Span::styled("    ○ idle", Style::default().fg(Color::DarkGray))));
+                lines.push(Line::from(Span::styled(
+                    "    ○ idle",
+                    Style::default().fg(Color::DarkGray),
+                )));
             } else {
                 for svc in &svc_list {
                     let (icon, color) = match svc.status {
-                        ServiceStatus::Running  => ("●", Color::Green),
+                        ServiceStatus::Running => ("●", Color::Green),
                         ServiceStatus::Starting => ("◌", Color::Yellow),
-                        ServiceStatus::Failed   => ("✗", Color::Red),
-                        ServiceStatus::Stopped  => ("○", Color::DarkGray),
+                        ServiceStatus::Failed => ("✗", Color::Red),
+                        ServiceStatus::Stopped => ("○", Color::DarkGray),
                     };
                     let port_str = if svc.allocated_port > 0 {
                         if svc.original_port > 0 && svc.original_port != svc.allocated_port {
@@ -72,7 +85,9 @@ pub fn render(
                         } else {
                             format!(" :{}", svc.allocated_port)
                         }
-                    } else { String::new() };
+                    } else {
+                        String::new()
+                    };
                     lines.push(Line::from(vec![
                         Span::raw("    "),
                         Span::styled(icon, Style::default().fg(color)),
@@ -83,13 +98,20 @@ pub fn render(
                 }
                 for agent in &agent_list {
                     let elapsed_min = now_secs.saturating_sub(agent.started_at) / 60;
-                    let elapsed_str = if elapsed_min > 0 { format!("{}m", elapsed_min) } else { "<1m".to_string() };
+                    let elapsed_str = if elapsed_min > 0 {
+                        format!("{}m", elapsed_min)
+                    } else {
+                        "<1m".to_string()
+                    };
                     lines.push(Line::from(vec![
                         Span::raw("    "),
                         Span::styled("▶", Style::default().fg(Color::Green)),
                         Span::raw(" agent "),
                         Span::styled(&agent.description, Style::default().fg(Color::Yellow)),
-                        Span::styled(format!(" ({})", elapsed_str), Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            format!(" ({})", elapsed_str),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                     ]));
                 }
             }

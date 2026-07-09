@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
-use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtyPair, PtySize, PtySystem};
+use portable_pty::{
+    Child, CommandBuilder, MasterPty, NativePtySystem, PtyPair, PtySize, PtySystem,
+};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -61,8 +63,15 @@ impl Agent {
 
 /// Notification sent from PTY reader to UI event loop
 pub enum AgentEvent {
-    Data { id: String, needs_review: bool },
-    Exit { id: String, #[allow(dead_code)] code: i32 },
+    Data {
+        id: String,
+        needs_review: bool,
+    },
+    Exit {
+        id: String,
+        #[allow(dead_code)]
+        code: i32,
+    },
 }
 
 #[allow(dead_code)]
@@ -104,7 +113,12 @@ impl AgentManager {
         let pty_system = NativePtySystem::default();
 
         let pair: PtyPair = pty_system
-            .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .context("failed to open PTY")?;
 
         let mut cmd = CommandBuilder::new("sh");
@@ -146,7 +160,10 @@ impl AgentManager {
             loop {
                 match pty_reader.read(&mut buf) {
                     Ok(0) | Err(_) => {
-                        let _ = event_tx.send(AgentEvent::Exit { id: agent_id, code: 0 });
+                        let _ = event_tx.send(AgentEvent::Exit {
+                            id: agent_id,
+                            code: 0,
+                        });
                         break;
                     }
                     Ok(n) => {
@@ -158,7 +175,9 @@ impl AgentManager {
                             recent.push_str(text);
                             if recent.len() > 2000 {
                                 let cut = recent.len() - 2000;
-                                let start = (cut..).find(|&i| recent.is_char_boundary(i)).unwrap_or(recent.len());
+                                let start = (cut..)
+                                    .find(|&i| recent.is_char_boundary(i))
+                                    .unwrap_or(recent.len());
                                 recent = recent[start..].to_string();
                             }
                         }
@@ -215,7 +234,12 @@ impl AgentManager {
             agent.screen.lock().unwrap().set_size(rows, cols);
             // Also resize the real PTY so the child program reflows — previously
             // only the vt100 parser was resized, leaving the child at old dims.
-            let _ = agent.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+            let _ = agent.master.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
         }
     }
 

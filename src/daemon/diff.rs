@@ -17,7 +17,14 @@ use warpforge_protocol as wire;
 /// non-git projects.
 pub async fn list_files(repo: &str) -> Result<Vec<wire::ProjectFile>> {
     let out = Command::new("git")
-        .args(["-C", repo, "ls-files", "--cached", "--others", "--exclude-standard"])
+        .args([
+            "-C",
+            repo,
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
         .output()
         .await?;
 
@@ -43,18 +50,29 @@ pub async fn list_files(repo: &str) -> Result<Vec<wire::ProjectFile>> {
     }
 
     let mut files = Vec::new();
-    walk_files(std::path::Path::new(repo), std::path::Path::new(repo), &mut files)?;
+    walk_files(
+        std::path::Path::new(repo),
+        std::path::Path::new(repo),
+        &mut files,
+    )?;
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
 }
 
-fn walk_files(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<wire::ProjectFile>) -> Result<()> {
+fn walk_files(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    out: &mut Vec<wire::ProjectFile>,
+) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if matches!(name.as_ref(), ".git" | "node_modules" | "target" | "dist" | ".next") {
+        if matches!(
+            name.as_ref(),
+            ".git" | "node_modules" | "target" | "dist" | ".next"
+        ) {
             continue;
         }
         if path.is_dir() {
@@ -160,7 +178,12 @@ pub async fn file_doc(repo: &str, path: &str) -> Result<wire::FileDoc> {
         (true, false) => wire::FileDiffStatus::Deleted,
         (false, false) => wire::FileDiffStatus::Modified,
     };
-    Ok(wire::FileDoc { path: path.to_string(), status, old_text, new_text })
+    Ok(wire::FileDoc {
+        path: path.to_string(),
+        status,
+        old_text,
+        new_text,
+    })
 }
 
 /// Write new contents to a file in the working tree (an in-review edit).
@@ -203,7 +226,10 @@ pub async fn commit(
     }
     let out = add.output().await?;
     if !out.status.success() {
-        bail!("git add failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "git add failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
 
     // Commit.
@@ -216,7 +242,11 @@ pub async fn commit(
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let stdout = String::from_utf8_lossy(&out.stdout);
-        let msg = if stderr.trim().is_empty() { stdout } else { stderr };
+        let msg = if stderr.trim().is_empty() {
+            stdout
+        } else {
+            stderr
+        };
         bail!("git commit failed: {}", msg.trim());
     }
     Ok(())
@@ -243,7 +273,15 @@ pub async fn reject_hunk(repo: &str, file: &str, hunk_index: u32) -> Result<()> 
 
     let patch = build_patch(f, hunk);
     let mut child = Command::new("git")
-        .args(["-C", repo, "apply", "-R", "--recount", "--unidiff-zero", "-"])
+        .args([
+            "-C",
+            repo,
+            "apply",
+            "-R",
+            "--recount",
+            "--unidiff-zero",
+            "-",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -255,7 +293,10 @@ pub async fn reject_hunk(repo: &str, file: &str, hunk_index: u32) -> Result<()> 
     }
     let out = child.wait_with_output().await?;
     if !out.status.success() {
-        bail!("git apply -R failed: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            "git apply -R failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
     Ok(())
 }
@@ -351,8 +392,12 @@ fn parse_unified(text: &str) -> Vec<wire::FileDiff> {
 
 fn header_paths(rest: &str) -> (Option<String>, Option<String>) {
     let mut it = rest.split_whitespace();
-    let a = it.next().map(|s| s.strip_prefix("a/").unwrap_or(s).to_string());
-    let b = it.next().map(|s| s.strip_prefix("b/").unwrap_or(s).to_string());
+    let a = it
+        .next()
+        .map(|s| s.strip_prefix("a/").unwrap_or(s).to_string());
+    let b = it
+        .next()
+        .map(|s| s.strip_prefix("b/").unwrap_or(s).to_string());
     (a, b)
 }
 
@@ -362,7 +407,14 @@ fn parse_hunk_header(line: &str) -> Option<wire::Hunk> {
     let mut parts = core[..end].split_whitespace();
     let (old_start, old_lines) = parse_range(parts.next()?.strip_prefix('-')?);
     let (new_start, new_lines) = parse_range(parts.next()?.strip_prefix('+')?);
-    Some(wire::Hunk { old_start, old_lines, new_start, new_lines, lines: Vec::new(), resolution: None })
+    Some(wire::Hunk {
+        old_start,
+        old_lines,
+        new_start,
+        new_lines,
+        lines: Vec::new(),
+        resolution: None,
+    })
 }
 
 fn parse_range(s: &str) -> (u32, u32) {
@@ -384,7 +436,12 @@ mod tests {
             .output()
             .await
             .unwrap();
-        assert!(status.status.success(), "git {:?} failed: {}", args, String::from_utf8_lossy(&status.stderr));
+        assert!(
+            status.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&status.stderr)
+        );
     }
 
     #[tokio::test]
@@ -414,8 +471,14 @@ mod tests {
 
         // Reject the hunk -> file returns to its committed content.
         reject_hunk(repo, "a.txt", 0).await.unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "one\ntwo\nthree\n");
-        assert!(working_diff(repo).await.unwrap().is_empty(), "no changes after reject");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\ntwo\nthree\n"
+        );
+        assert!(
+            working_diff(repo).await.unwrap().is_empty(),
+            "no changes after reject"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
