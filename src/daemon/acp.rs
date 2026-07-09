@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -170,6 +171,10 @@ pub fn spawn_acp_session(
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
     let perms: Arc<Mutex<HashMap<String, PendingPerm>>> = Arc::new(Mutex::new(HashMap::new()));
     let next_id = Arc::new(AtomicU64::new(1));
+    let permission_run_id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos().to_string())
+        .unwrap_or_else(|_| "0".into());
 
     // Reader: route agent → daemon frames.
     {
@@ -179,6 +184,7 @@ pub fn spawn_acp_session(
         let out_tx = out_tx.clone();
         let task_id = task_id.clone();
         let cwd = cwd.clone();
+        let permission_run_id = permission_run_id.clone();
         tokio::spawn(async move {
             let _child = child; // hold so kill_on_drop fires when the reader ends
             let mut lines = BufReader::new(stdout).lines();
@@ -234,7 +240,8 @@ pub fn spawn_acp_session(
                     "session/request_permission" => {
                         let Some(agent_id) = id else { continue };
                         let (title, options, map) = parse_permission(&params);
-                        let request_id = compact_id(&agent_id);
+                        let request_id =
+                            format!("{task_id}:{permission_run_id}:{}", compact_id(&agent_id));
                         perms.lock().unwrap().insert(
                             request_id.clone(),
                             PendingPerm {

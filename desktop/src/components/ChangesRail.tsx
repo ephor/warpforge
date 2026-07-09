@@ -218,10 +218,16 @@ export function ChangesRail({
 
   // Re-sync selection as the diff's file set changes (keep prior choices).
   useEffect(() => {
-    setStaged((prev) => new Set(allPaths.filter((p) => prev.has(p) || prev.size === 0)));
+    setStaged((prev) => {
+      const next = new Set(allPaths.filter((p) => prev.has(p) || prev.size === 0));
+      if (next.size === prev.size && [...next].every((path) => prev.has(path))) return prev;
+      return next;
+    });
   }, [allPaths]);
 
-  useEffect(() => setRollbackConfirm(false), [allPaths, staged.size]);
+  useEffect(() => {
+    setRollbackConfirm((current) => (current ? false : current));
+  }, [allPaths, staged.size]);
 
   // Wrap the project's files under a single root labelled with the project.
   const root = useMemo(() => {

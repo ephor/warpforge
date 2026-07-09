@@ -15,9 +15,12 @@ import {
 import { daemon, DaemonState } from "../daemon";
 import { CommandInfo, SessionUpdate, TaskInfo } from "../protocol";
 import { useUi } from "../store/ui";
-import { Markdown } from "../components/Markdown";
+import { FileLinkResolver, Markdown } from "../components/Markdown";
 import { AgentConfigBar } from "../components/AgentConfigBar";
 import { Composer } from "../components/Composer";
+import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
+import { sessionActivity } from "@/lib/sessionActivity";
+import { pendingPermission, resolvedPermissions } from "@/lib/sessionPermissions";
 import { elapsed, taskBadge } from "@/lib/status";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -103,6 +106,7 @@ function FocusPane({
   const tools = summarizeTools(stream);
   const files = summarizeFiles(stream);
   const commands = latestCommands(updates);
+  const activity = sessionActivity(task, stream);
   const badge = pending
     ? { variant: "warn" as const, label: "permission" }
     : taskBadge(task.status);
@@ -197,7 +201,7 @@ function FocusPane({
               <span className="text-primary">more in details</span>
             </button>
           )}
-          {preview.items.length === 0 && (
+          {preview.items.length === 0 && !activity && (
             <div className="flex items-center gap-2 rounded-md border border-dashed border-border/80 px-3 py-4 text-muted-foreground">
               <Clock3 className="size-4" />
               waiting for agent activity...
@@ -212,6 +216,7 @@ function FocusPane({
               compact
             />
           ))}
+          {activity && <AgentActivityIndicator activity={activity} compact />}
         </div>
       </ScrollArea>
 
@@ -240,29 +245,6 @@ function latestCommands(updates: SessionUpdate[]): CommandInfo[] {
     }
   }
   return [];
-}
-
-function resolvedPermissions(updates: SessionUpdate[]): Record<string, string> {
-  const resolved: Record<string, string> = {};
-  for (const update of updates) {
-    if (update.kind === "permission_resolved") {
-      resolved[update.request_id] = update.outcome;
-    }
-  }
-  return resolved;
-}
-
-function pendingPermission(
-  updates: SessionUpdate[],
-  resolved: Record<string, string>,
-): Extract<SessionUpdate, { kind: "permission_request" }> | null {
-  for (let i = updates.length - 1; i >= 0; i -= 1) {
-    const update = updates[i];
-    if (update.kind === "permission_request" && !resolved[update.request_id]) {
-      return update;
-    }
-  }
-  return null;
 }
 
 function pinnedPreview(updates: SessionUpdate[], limit: number): {
@@ -468,7 +450,7 @@ function ToolCallLine({
   const [open, setOpen] = useState(false);
   const hasContent = !!update.content;
   return (
-    <div className="rounded-md border bg-secondary/30">
+    <div className="min-w-0 overflow-hidden rounded-md border bg-secondary/30">
       <button
         type="button"
         disabled={!hasContent}
@@ -485,7 +467,9 @@ function ToolCallLine({
         ) : (
           <Wrench className={cn("size-3.5 shrink-0", dot)} />
         )}
-        <span className="min-w-0 flex-1 truncate font-medium">{update.title}</span>
+        <span className="min-w-0 flex-1 truncate font-medium" title={update.title}>
+          {update.title}
+        </span>
         {update.tool_kind && update.tool_kind !== "other" && (
           <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
             {update.tool_kind}
@@ -494,7 +478,7 @@ function ToolCallLine({
         <span className={cn("shrink-0 text-xs", dot)}>{update.status.replace("_", " ")}</span>
       </button>
       {open && hasContent && (
-        <pre className="max-h-56 overflow-auto border-t px-2.5 py-2 font-mono text-xs leading-relaxed text-muted-foreground">
+        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words border-t px-2.5 py-2 font-mono text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
           {update.content}
         </pre>
       )}
@@ -522,19 +506,25 @@ function PermissionLine({
   return (
     <div
       className={cn(
-        "rounded-md border px-2.5 py-2",
+        "min-w-0 overflow-hidden rounded-md border px-2.5 py-2",
         answered ? "border-border bg-secondary/20" : "border-warn/40 bg-warn/5",
       )}
     >
       <p
         className={cn(
-          "flex items-center gap-1.5",
+          "flex min-w-0 items-start gap-1.5",
           answered ? "text-muted-foreground" : "mb-2 text-warn",
         )}
       >
-        <TriangleAlert className="size-3.5 shrink-0" />
-        <span className="min-w-0 flex-1">{update.title}</span>
-        {answered && <span className="shrink-0 text-xs">✓ {answered.replace("_", " ")}</span>}
+        <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
+          {update.title}
+        </span>
+        {answered && (
+          <span className="shrink-0 whitespace-nowrap text-xs">
+            ✓ {answered.replace("_", " ")}
+          </span>
+        )}
       </p>
       {!answered &&
         (taskId ? (
@@ -569,6 +559,8 @@ export function StreamLine({
   compact,
   taskId,
   resolved,
+  resolveFilePath,
+  onOpenFile,
 }: {
   update: SessionUpdate;
   compact?: boolean;
@@ -576,23 +568,45 @@ export function StreamLine({
   taskId?: string;
   /** request_id → recorded outcome, from persisted permission_resolved updates. */
   resolved?: Record<string, string>;
+  resolveFilePath?: FileLinkResolver;
+  onOpenFile?: (path: string) => void;
 }) {
   switch (update.kind) {
     case "user_message":
       return (
         <div className={cn("rounded-md bg-primary/10 px-2.5 py-1.5 text-primary", compact && "text-xs")}>
-          {compact ? <Markdown className="text-current">{`› ${update.text}`}</Markdown> : <Markdown>{update.text}</Markdown>}
+          <Markdown
+            className={compact ? "text-current" : undefined}
+            resolveFilePath={resolveFilePath}
+            onOpenFile={onOpenFile}
+          >
+            {compact ? `› ${update.text}` : update.text}
+          </Markdown>
         </div>
       );
     case "agent_text":
       return compact ? (
-        <Markdown className="text-current">{update.text}</Markdown>
+        <Markdown
+          className="text-current"
+          resolveFilePath={resolveFilePath}
+          onOpenFile={onOpenFile}
+        >
+          {update.text}
+        </Markdown>
       ) : (
-        <Markdown>{update.text}</Markdown>
+        <Markdown resolveFilePath={resolveFilePath} onOpenFile={onOpenFile}>
+          {update.text}
+        </Markdown>
       );
     case "agent_thought":
       return compact ? (
-        <Markdown className="italic text-muted-foreground">{update.text}</Markdown>
+        <Markdown
+          className="italic text-muted-foreground"
+          resolveFilePath={resolveFilePath}
+          onOpenFile={onOpenFile}
+        >
+          {update.text}
+        </Markdown>
       ) : (
         <p className="italic text-muted-foreground">💭 {update.text}</p>
       );
@@ -605,19 +619,35 @@ export function StreamLine({
             : "text-warn";
       if (compact) {
         return (
-          <p className="flex items-center gap-1.5 text-muted-foreground">
+          <p className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
             <Wrench className={cn("size-3.5 shrink-0", dot)} />
-            <span className="text-foreground">{update.title}</span>
+            <span className="min-w-0 truncate text-foreground" title={update.title}>
+              {update.title}
+            </span>
           </p>
         );
       }
       return <ToolCallLine update={update} dot={dot} />;
     }
     case "file_edit":
+      const filePath = resolveFilePath?.(update.path) ?? null;
       return (
-        <p className="flex items-center gap-1.5 font-mono text-xs">
+        <p className="flex min-w-0 items-center gap-1.5 font-mono text-xs">
           <FilePen className="size-3.5 shrink-0 text-primary" />
-          {update.path}
+          {filePath && onOpenFile ? (
+            <button
+              type="button"
+              onClick={() => onOpenFile(filePath)}
+              className="min-w-0 truncate text-left text-primary hover:underline"
+              title={`Open ${filePath}`}
+            >
+              {update.path}
+            </button>
+          ) : (
+            <span className="min-w-0 truncate" title={update.path}>
+              {update.path}
+            </span>
+          )}
         </p>
       );
     case "permission_request":

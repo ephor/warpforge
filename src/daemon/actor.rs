@@ -12,7 +12,7 @@
 //! live vt100 parser. Stage 2 adds a thin translation from this to the wire
 //! type for the socket.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -24,7 +24,7 @@ use crate::agent::{AgentEvent, AgentManager, AgentStatus};
 use crate::config::{load_workspace_config, sorted_services};
 use crate::portforward::{PfEvent, PfStatus, PortForwardManager};
 use crate::registry::ProjectEntry;
-use crate::service::{ServiceEvent, ServiceManager, ServiceStatus};
+use crate::service::{kill_listeners_in_ranges, ServiceEvent, ServiceManager, ServiceStatus};
 
 use super::acp::{spawn_acp_session, AcpHandle, AcpUpdate};
 use super::store::Store;
@@ -37,6 +37,24 @@ fn split_key(key: &str) -> (String, String) {
     match key.split_once('/') {
         Some((p, s)) => (p.to_string(), s.to_string()),
         None => (String::new(), key.to_string()),
+    }
+}
+
+fn is_acp_replay_update(update: &wire::SessionUpdate) -> bool {
+    match update {
+        wire::SessionUpdate::UserMessage { .. }
+        | wire::SessionUpdate::PermissionResolved { .. } => false,
+        wire::SessionUpdate::AgentText { text } => {
+            text != "Reconnecting to the saved agent session…"
+                && !text.starts_with("⚠ No live agent session")
+        }
+        wire::SessionUpdate::AgentThought { .. }
+        | wire::SessionUpdate::ToolCall { .. }
+        | wire::SessionUpdate::FileEdit { .. }
+        | wire::SessionUpdate::PermissionRequest { .. }
+        | wire::SessionUpdate::Plan { .. }
+        | wire::SessionUpdate::AvailableCommands { .. }
+        | wire::SessionUpdate::TurnEnded { .. } => true,
     }
 }
 
@@ -505,6 +523,10 @@ pub struct Daemon {
     event_tx: broadcast::Sender<Event>,
     acp_tx: mpsc::UnboundedSender<(String, AcpUpdate)>,
     store: Option<Store>,
+    /// `session/load` may replay already persisted ACP updates. While the
+    /// replay matches local history in order, drop it; the first mismatch is
+    /// new live output and disables the guard.
+    resume_replay: HashMap<String, VecDeque<wire::SessionUpdate>>,
 }
 
 impl Daemon {
@@ -548,6 +570,7 @@ impl Daemon {
             event_tx: event_tx.clone(),
             acp_tx,
             store,
+            resume_replay: HashMap::new(),
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -743,6 +766,7 @@ impl Daemon {
         // Teardown — stop everything we started.
         self.services.stop_all().await.ok();
         self.portforwards.stop_all().await.ok();
+        kill_listeners_in_ranges(&self.project_port_ranges()).await;
         self.agents.kill_all();
     }
 
@@ -872,6 +896,9 @@ impl Daemon {
                     .collect();
                 self.services.stop_project(&project).await.ok();
                 self.portforwards.stop_project(&project);
+                if let Some(index) = self.projects.iter().position(|p| p.name == project) {
+                    kill_listeners_in_ranges(&[crate::ports::port_range(index)]).await;
+                }
                 for service in services {
                     self.emit_service_status(&project, &service);
                 }
@@ -1147,26 +1174,58 @@ impl Daemon {
                 self.start_session(&id, &project, &agent, "", false, Some(session_id));
             }
             Command::SessionPrompt { task_id, text } => {
-                // Always echo the developer's message so every client shows the
-                // same conversation.
-                self.emit(Event::SessionUpdate {
-                    task_id: task_id.clone(),
-                    update: wire::SessionUpdate::UserMessage { text: text.clone() },
-                });
-                match self.sessions.get(&task_id) {
-                    Some(handle) => handle.prompt(text),
+                let user_update = wire::SessionUpdate::UserMessage { text: text.clone() };
+                match self.sessions.get(&task_id).cloned() {
+                    Some(handle) => {
+                        self.mark_task_running(&task_id);
+                        // Echo the developer's message through the same
+                        // persisted stream as agent updates. If a reconnect
+                        // retry submits the same text again after the first
+                        // attempt was already recorded, keep the transcript
+                        // readable by dropping only that exact consecutive
+                        // duplicate.
+                        self.emit_session_unless_last_duplicate(&task_id, user_update);
+                        handle.prompt(text);
+                    }
                     None => {
-                        // No live session (interrupted after a restart, or the
-                        // agent exited). Say so instead of dropping the message.
-                        self.emit(Event::SessionUpdate {
-                            task_id: task_id.clone(),
-                            update: wire::SessionUpdate::AgentText {
-                                text: "⚠ No live agent session for this task — its \
-                                       session ended (e.g. daemon restart). Re-run \
-                                       the task to continue."
-                                    .into(),
-                            },
+                        let resume = self.tasks.get(&task_id).and_then(|task| {
+                            task.session_id.as_ref().map(|session_id| {
+                                (task.project.clone(), task.agent.clone(), session_id.clone())
+                            })
                         });
+
+                        if let Some((project, agent, session_id)) = resume {
+                            self.mark_task_running(&task_id);
+                            self.prepare_resume_replay_guard(&task_id);
+                            self.emit_session_unless_last_duplicate(&task_id, user_update);
+                            self.emit_session(
+                                &task_id,
+                                wire::SessionUpdate::AgentText {
+                                    text: "Reconnecting to the saved agent session…".into(),
+                                },
+                            );
+                            self.start_session(
+                                &task_id,
+                                &project,
+                                &agent,
+                                &text,
+                                false,
+                                Some(session_id),
+                            );
+                        } else {
+                            // No live session and no persisted native session id
+                            // to load. Say so instead of dropping the message.
+                            self.emit_session_unless_last_duplicate(&task_id, user_update);
+                            self.emit_session(
+                                &task_id,
+                                wire::SessionUpdate::AgentText {
+                                    text: "⚠ No live agent session for this task — its \
+                                           session ended and there is no saved session id \
+                                           to resume. Start or resume a new task to continue."
+                                        .into(),
+                                },
+                            );
+                        }
                     }
                 }
             }
@@ -1363,8 +1422,10 @@ impl Daemon {
     }
 
     /// Spawn an ACP agent session for a task and remember its handle. When
-    /// `resume` is set, load that native session id (replays history) instead of
-    /// starting fresh.
+    /// `resume` is set, load that native session id instead of starting fresh.
+    /// Some agents replay prior history as `session/update`; the frontend stream
+    /// is append-only today, so this path is used primarily to regain a live
+    /// handle and deliver a new prompt after daemon restarts.
     fn start_session(
         &mut self,
         task_id: &str,
@@ -1419,10 +1480,10 @@ impl Daemon {
                 }
             }
             AcpUpdate::AgentText(text) => {
-                self.emit_session(&task_id, wire::SessionUpdate::AgentText { text })
+                self.emit_acp_session(&task_id, wire::SessionUpdate::AgentText { text })
             }
             AcpUpdate::AgentThought(text) => {
-                self.emit_session(&task_id, wire::SessionUpdate::AgentThought { text })
+                self.emit_acp_session(&task_id, wire::SessionUpdate::AgentThought { text })
             }
             AcpUpdate::ToolCall {
                 id,
@@ -1430,7 +1491,7 @@ impl Daemon {
                 status,
                 kind,
                 content,
-            } => self.emit_session(
+            } => self.emit_acp_session(
                 &task_id,
                 wire::SessionUpdate::ToolCall {
                     tool_call_id: id,
@@ -1441,9 +1502,9 @@ impl Daemon {
                 },
             ),
             AcpUpdate::Plan { entries } => {
-                self.emit_session(&task_id, wire::SessionUpdate::Plan { entries })
+                self.emit_acp_session(&task_id, wire::SessionUpdate::Plan { entries })
             }
-            AcpUpdate::AvailableCommands { commands } => self.emit_session(
+            AcpUpdate::AvailableCommands { commands } => self.emit_acp_session(
                 &task_id,
                 wire::SessionUpdate::AvailableCommands { commands },
             ),
@@ -1456,19 +1517,23 @@ impl Daemon {
                 }
             }
             AcpUpdate::FileEdit { path } => {
+                let update = wire::SessionUpdate::FileEdit { path };
+                if self.should_skip_resume_replay(&task_id, &update) {
+                    return;
+                }
                 if let Some(task) = self.tasks.get_mut(&task_id) {
                     task.files_changed += 1;
                     let updated = task.clone();
                     self.persist(&updated);
                     self.emit(Event::TaskUpdated(updated));
                 }
-                self.emit_session(&task_id, wire::SessionUpdate::FileEdit { path });
+                self.emit_session(&task_id, update);
             }
             AcpUpdate::PermissionRequest {
                 request_id,
                 title,
                 options,
-            } => self.emit_session(
+            } => self.emit_acp_session(
                 &task_id,
                 wire::SessionUpdate::PermissionRequest {
                     request_id,
@@ -1477,7 +1542,11 @@ impl Daemon {
                 },
             ),
             AcpUpdate::TurnEnded { stop_reason } => {
-                self.emit_session(&task_id, wire::SessionUpdate::TurnEnded { stop_reason });
+                let update = wire::SessionUpdate::TurnEnded { stop_reason };
+                if self.should_skip_resume_replay(&task_id, &update) {
+                    return;
+                }
+                self.emit_session(&task_id, update);
                 // A finished turn with edits is ready for review.
                 if let Some(task) = self.tasks.get_mut(&task_id) {
                     if task.status == TaskStatus::Running {
@@ -1498,6 +1567,75 @@ impl Daemon {
                 }
             }
         }
+    }
+
+    fn emit_acp_session(&mut self, task_id: &str, update: wire::SessionUpdate) {
+        if self.should_skip_resume_replay(task_id, &update) {
+            return;
+        }
+        self.emit_session(task_id, update);
+    }
+
+    fn mark_task_running(&mut self, task_id: &str) {
+        if let Some(task) = self.tasks.get_mut(task_id) {
+            if task.status != TaskStatus::Done {
+                task.blocked_reason = None;
+                task.set_status(TaskStatus::Running);
+                let updated = task.clone();
+                self.persist(&updated);
+                self.emit(Event::TaskUpdated(updated));
+            }
+        }
+    }
+
+    fn emit_session_unless_last_duplicate(&self, task_id: &str, update: wire::SessionUpdate) {
+        if let Some(store) = &self.store {
+            if let Ok(Some(last)) = store.load_last_session_update(task_id) {
+                if last == update {
+                    return;
+                }
+            }
+        }
+        self.emit_session(task_id, update);
+    }
+
+    fn prepare_resume_replay_guard(&mut self, task_id: &str) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let Ok(updates) = store.load_session_updates(task_id) else {
+            return;
+        };
+        let replayable = updates
+            .into_iter()
+            .filter(is_acp_replay_update)
+            .collect::<VecDeque<_>>();
+        if !replayable.is_empty() {
+            self.resume_replay.insert(task_id.to_string(), replayable);
+        }
+    }
+
+    fn should_skip_resume_replay(&mut self, task_id: &str, update: &wire::SessionUpdate) -> bool {
+        if !is_acp_replay_update(update) {
+            return false;
+        }
+
+        let Some(history) = self.resume_replay.get_mut(task_id) else {
+            return false;
+        };
+
+        if history.front() == Some(update) {
+            history.pop_front();
+            if history.is_empty() {
+                self.resume_replay.remove(task_id);
+            }
+            return true;
+        }
+
+        // First mismatch means the agent has moved past replay into live output
+        // (or its replay shape differs from ours). Stop filtering immediately.
+        self.resume_replay.remove(task_id);
+        false
     }
 
     fn emit_session(&self, task_id: &str, update: wire::SessionUpdate) {
@@ -1533,8 +1671,17 @@ impl Daemon {
             .collect();
         self.services.stop_all().await.ok();
         self.portforwards.stop_all().await.ok();
+        kill_listeners_in_ranges(&self.project_port_ranges()).await;
         for (project, service) in services {
             self.emit_service_status(&project, &service);
         }
+    }
+
+    fn project_port_ranges(&self) -> Vec<(u16, u16)> {
+        self.projects
+            .iter()
+            .enumerate()
+            .map(|(index, _)| crate::ports::port_range(index))
+            .collect()
     }
 }

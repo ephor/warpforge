@@ -6,8 +6,8 @@ import { pfBadge, serviceBadge } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 type RuntimeTab =
-  | { kind: "service"; name: string }
-  | { kind: "portforward"; name: string };
+  | { key: string; kind: "service"; name: string }
+  | { key: string; kind: "portforward"; name: string };
 
 const EMPTY_LOGS: string[] = [];
 
@@ -22,15 +22,26 @@ export function RuntimePanel({
 }) {
   const tabs = useMemo<RuntimeTab[]>(
     () => [
-      ...services.map((s) => ({ kind: "service" as const, name: s.name })),
-      ...portforwards.map((p) => ({ kind: "portforward" as const, name: p.name })),
+      ...services.map((s) => ({
+        key: `service:${s.name}`,
+        kind: "service" as const,
+        name: s.name,
+      })),
+      ...portforwards.map((p) => ({
+        key: `portforward:${p.name}`,
+        kind: "portforward" as const,
+        name: p.name,
+      })),
     ],
     [services, portforwards],
   );
-  const [active, setActive] = useState<RuntimeTab | null>(null);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  const resolvedActiveKey =
+    activeKey && tabs.some((tab) => tab.key === activeKey) ? activeKey : (tabs[0]?.key ?? null);
+  const active = tabs.find((tab) => tab.key === resolvedActiveKey) ?? null;
   const activeService =
     active?.kind === "service" ? services.find((s) => s.name === active.name) : null;
   const activeServiceName = activeService?.name ?? null;
@@ -44,16 +55,6 @@ export function RuntimePanel({
         : EMPTY_LOGS,
   );
   const displayLogs = activeService && liveLogs.length > 0 ? liveLogs : logs;
-
-  useEffect(() => {
-    if (!active && tabs.length > 0) {
-      setActive(tabs[0]);
-      return;
-    }
-    if (active && !tabs.some((t) => t.kind === active.kind && t.name === active.name)) {
-      setActive(tabs[0] ?? null);
-    }
-  }, [active, tabs]);
 
   const fetchLogs = useCallback(() => {
     if (!activeServiceName) {
@@ -95,7 +96,7 @@ export function RuntimePanel({
               icon={<Server className="size-3.5" />}
               label={service.name}
               status={serviceBadge(service.status).label}
-              onClick={() => setActive({ kind: "service", name: service.name })}
+              onClick={() => setActiveKey(`service:${service.name}`)}
             />
           ))}
           {portforwards.map((pf) => (
@@ -105,7 +106,7 @@ export function RuntimePanel({
               icon={<PlugZap className="size-3.5" />}
               label={pf.name}
               status={pfBadge(pf.status).label}
-              onClick={() => setActive({ kind: "portforward", name: pf.name })}
+              onClick={() => setActiveKey(`portforward:${pf.name}`)}
             />
           ))}
         </div>

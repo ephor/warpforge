@@ -440,9 +440,9 @@ pub struct TaskInfo {
     pub config_options: Vec<ConfigOption>,
 }
 
-/// Board columns. `Interrupted` covers sessions lost to a daemon restart —
-/// the task is preserved in SQLite and can be re-queued, but the live ACP
-/// session is gone (v1 does not resume sessions).
+/// Board columns. `Interrupted` covers sessions whose live ACP handle was lost
+/// to a daemon restart. If the task has a saved native session id and the agent
+/// supports `session/load`, the daemon can reconnect when the user continues.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {

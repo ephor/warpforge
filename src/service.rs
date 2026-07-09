@@ -127,6 +127,55 @@ async fn kill_group(pgid: Option<u32>) {
     let _ = pgid;
 }
 
+/// Last-resort cleanup for orphan dev servers from an older daemon process.
+///
+/// Managed services are stopped through their process groups. This fallback is
+/// intentionally narrower: it only kills processes currently listening inside
+/// Warpforge-owned project port ranges, and only the listener PID. That frees
+/// the port without risking an accidental group kill of a user's shell.
+pub async fn kill_listeners_in_ranges(ranges: &[(u16, u16)]) {
+    #[cfg(unix)]
+    {
+        for &(start, end) in ranges {
+            kill_listeners_in_range(start, end, "TERM").await;
+        }
+        sleep(Duration::from_millis(600)).await;
+        for &(start, end) in ranges {
+            kill_listeners_in_range(start, end, "KILL").await;
+        }
+    }
+
+    #[cfg(not(unix))]
+    let _ = ranges;
+}
+
+#[cfg(unix)]
+async fn kill_listeners_in_range(start: u16, end: u16, signal: &str) {
+    let spec = format!("-iTCP:{start}-{end}");
+    let Ok(output) = Command::new("lsof")
+        .args(["-nP", "-t", &spec, "-sTCP:LISTEN"])
+        .output()
+        .await
+    else {
+        return;
+    };
+
+    if !output.status.success() {
+        return;
+    }
+
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let pid = line.trim();
+        if pid.is_empty() || pid == std::process::id().to_string() {
+            continue;
+        }
+        let _ = Command::new("kill")
+            .args([format!("-{signal}"), pid.to_string()])
+            .output()
+            .await;
+    }
+}
+
 pub struct ServiceManager {
     services: HashMap<String, ManagedService>,
     pub event_tx: mpsc::UnboundedSender<ServiceEvent>,
