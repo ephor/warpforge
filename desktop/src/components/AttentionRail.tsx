@@ -3,6 +3,7 @@ import { daemon, DaemonState } from "../daemon";
 import { SessionUpdate, TaskInfo } from "../protocol";
 import { coalesceUpdates, StreamLine, streamKey } from "../views/MissionControl";
 import { useUi } from "../store/ui";
+import { pendingPermission, PermissionUpdate } from "@/lib/sessionPermissions";
 import { elapsed, taskBadge, taskEdge } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,13 +16,6 @@ import { cn } from "@/lib/utils";
  * "Needs you" rail — tasks blocked on a human (pending permission, review,
  * blocked, interrupted). Lives at the app shell so it shows on every screen.
  */
-
-type PermissionUpdate = Extract<SessionUpdate, { kind: "permission_request" }>;
-
-function pendingPermission(updates: SessionUpdate[]): PermissionUpdate | undefined {
-  const last = updates[updates.length - 1];
-  return last?.kind === "permission_request" ? last : undefined;
-}
 
 function previewableUpdate(update: SessionUpdate): boolean {
   return update.kind !== "available_commands"
@@ -174,8 +168,11 @@ function SessionRailCard({
       {reason && <p className="mt-1 truncate text-xs text-warn/90">{reason}</p>}
 
       {recent.length > 0 && (
-        <div className="mt-2 max-h-24 overflow-hidden rounded-md border border-border/50 bg-background/35 px-2.5 py-2">
-          <div className="flex flex-col gap-1 text-xs leading-relaxed text-muted-foreground" onClick={(e) => e.stopPropagation()}>
+        <div className="mt-2 max-h-24 min-w-0 overflow-hidden rounded-md border border-border/50 bg-background/35 px-2.5 py-2">
+          <div
+            className="flex min-w-0 flex-col gap-1 text-xs leading-relaxed text-muted-foreground"
+            onClick={(e) => e.stopPropagation()}
+          >
             {recent.map((u, i) => <StreamLine key={streamKey(u, i)} update={u} compact />)}
           </div>
         </div>

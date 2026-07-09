@@ -2,12 +2,24 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 
+export type FileLinkResolver = (text: string) => string | null;
+
 /** Agent/user messages rendered as GitHub-flavored markdown, tailwind-styled. */
-export function Markdown({ children, className }: { children: string; className?: string }) {
+export function Markdown({
+  children,
+  className,
+  resolveFilePath,
+  onOpenFile,
+}: {
+  children: string;
+  className?: string;
+  resolveFilePath?: FileLinkResolver;
+  onOpenFile?: (path: string) => void;
+}) {
   return (
     <div
       className={cn(
-        "min-w-0 space-y-1 break-words text-sm leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        "min-w-0 space-y-1 break-words text-sm leading-relaxed [overflow-wrap:anywhere] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className,
       )}
     >
@@ -31,15 +43,29 @@ export function Markdown({ children, className }: { children: string; className?
             </blockquote>
           ),
           pre: ({ children }) => (
-            <pre className="my-2 overflow-x-auto rounded-md border bg-muted/50 p-2.5 font-mono text-xs leading-relaxed">
+            <pre className="my-2 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/50 p-2.5 font-mono text-xs leading-relaxed [overflow-wrap:anywhere]">
               {children}
             </pre>
           ),
           code: ({ className, children, ...rest }) => {
             const inline = !className;
+            const text = String(children ?? "");
+            const filePath = inline ? resolveFilePath?.(text) : null;
+            if (filePath && onOpenFile) {
+              return (
+                <button
+                  type="button"
+                  className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-primary underline decoration-primary/40 underline-offset-2 hover:bg-secondary hover:decoration-primary"
+                  title={`Open ${filePath}`}
+                  onClick={() => onOpenFile(filePath)}
+                >
+                  {children}
+                </button>
+              );
+            }
             return inline ? (
               <code
-                className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]"
+                className="break-words rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] [overflow-wrap:anywhere]"
                 {...rest}
               >
                 {children}

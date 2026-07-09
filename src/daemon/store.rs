@@ -115,8 +115,9 @@ impl Store {
     }
 
     /// Load all persisted tasks. Any task that was mid-flight when the daemon
-    /// last stopped is normalised to `Interrupted` — v1 does not resume live
-    /// ACP sessions, and the board surfaces these for one-click re-queue.
+    /// last stopped is normalised to `Interrupted`; the live process handle is
+    /// gone, but a saved `session_id` can be loaded again when the user sends
+    /// the next prompt and the agent supports ACP session/load.
     pub fn load_tasks(&self) -> Result<Vec<Task>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, project, prompt, agent, status, tags, \
@@ -202,6 +203,33 @@ impl Store {
             rusqlite::params![task_id, json],
         )?;
         Ok(())
+    }
+
+    pub fn load_session_updates(&self, task_id: &str) -> Result<Vec<wire::SessionUpdate>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT update_json FROM session_updates WHERE task_id = ?1 ORDER BY id")?;
+        let rows = stmt.query_map(rusqlite::params![task_id], |row| row.get::<_, String>(0))?;
+        let mut updates = Vec::new();
+        for row in rows.filter_map(|r| r.ok()) {
+            if let Ok(update) = serde_json::from_str::<wire::SessionUpdate>(&row) {
+                updates.push(update);
+            }
+        }
+        Ok(updates)
+    }
+
+    pub fn load_last_session_update(&self, task_id: &str) -> Result<Option<wire::SessionUpdate>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT update_json FROM session_updates WHERE task_id = ?1 ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![task_id])?;
+        if let Some(row) = rows.next()? {
+            let json: String = row.get(0)?;
+            Ok(serde_json::from_str::<wire::SessionUpdate>(&json).ok())
+        } else {
+            Ok(None)
+        }
     }
 
     /// Load all persisted session updates grouped by task id, in insertion order.

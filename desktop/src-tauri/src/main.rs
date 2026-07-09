@@ -5,7 +5,24 @@ use std::sync::Mutex;
 use tauri::Manager;
 use warpforge_protocol::DaemonEndpoint;
 
-struct DaemonProcess(Mutex<Option<Child>>);
+struct DaemonProcess {
+    child: Mutex<Option<Child>>,
+}
+
+impl DaemonProcess {
+    fn new(child: Option<Child>) -> Self {
+        Self {
+            child: Mutex::new(child),
+        }
+    }
+
+    fn pid(&self) -> Option<u32> {
+        self.child
+            .lock()
+            .ok()
+            .and_then(|child| child.as_ref().map(Child::id))
+    }
+}
 
 /// Find the warpforge daemon binary.
 ///
@@ -86,16 +103,20 @@ fn main() {
         .setup(|app| {
             if is_daemon_running() {
                 eprintln!("warpforge: daemon already running — reusing");
-                app.manage(DaemonProcess(Mutex::new(None)));
+                app.manage(DaemonProcess::new(None));
             } else {
                 let bin = find_daemon_bin();
                 match Command::new(&bin).arg("daemon").spawn() {
                     Ok(c) => {
-                        app.manage(DaemonProcess(Mutex::new(Some(c))));
+                        let daemon = DaemonProcess::new(Some(c));
+                        if let Some(pid) = daemon.pid() {
+                            eprintln!("warpforge: spawned daemon pid {pid}");
+                        }
+                        app.manage(daemon);
                     }
                     Err(e) => {
                         eprintln!("warning: could not spawn daemon ({bin:?}): {e}");
-                        app.manage(DaemonProcess(Mutex::new(None)));
+                        app.manage(DaemonProcess::new(None));
                     }
                 }
             }

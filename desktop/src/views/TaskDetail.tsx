@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowLeft,
@@ -26,13 +26,20 @@ import {
   TaskDiff,
   TaskInfo,
 } from "../protocol";
-import { StreamLine, coalesceUpdates, streamKey } from "./MissionControl";
+import {
+  StreamLine,
+  coalesceUpdates,
+  streamKey,
+} from "./MissionControl";
 import { useUi } from "../store/ui";
 import { Composer } from "../components/Composer";
+import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
 import { AgentConfigBar } from "../components/AgentConfigBar";
 import { CodeEditor } from "../components/CodeEditor";
 import { MergeDiff } from "../components/MergeDiff";
 import { ChangesRail } from "../components/ChangesRail";
+import { sessionActivity } from "@/lib/sessionActivity";
+import { resolvedPermissions } from "@/lib/sessionPermissions";
 import { taskBadge } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -142,9 +149,10 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   useEffect(() => {
     if (!diff) return;
     const paths = diff.files.map((f) => f.path);
-    if (selectedFile && paths.includes(selectedFile)) return;
-    setSelectedFile(paths[0] ?? null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setSelectedFile((current) => {
+      if (current && paths.includes(current)) return current;
+      return paths[0] ?? null;
+    });
   }, [diff]);
 
   // Load the selected file's old/new text for the split editor. Keyed on
@@ -167,16 +175,11 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   }, [activeFile, activeTab.kind, diffView, task.id, task.updatedAt, focusTick]);
 
   const merged = useMemo(() => coalesceUpdates(updates), [updates]);
+  const activity = useMemo(() => sessionActivity(task, merged), [task, merged]);
 
   // Persisted permission answers (request_id → outcome) so resolved prompts
   // don't re-show live buttons after a reopen.
-  const resolvedPerms = useMemo(() => {
-    const m: Record<string, string> = {};
-    for (const u of updates) {
-      if (u.kind === "permission_resolved") m[u.request_id] = u.outcome;
-    }
-    return m;
-  }, [updates]);
+  const resolvedPerms = useMemo(() => resolvedPermissions(updates), [updates]);
 
 
   // Slash-menu commands = the agent's most recent available_commands update.
@@ -236,6 +239,34 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     const changed = new Set((diff?.files ?? []).map((f) => f.path));
     return openFileTabs.map((path) => ({ path, changed: changed.has(path) }));
   }, [diff?.files, openFileTabs]);
+  const projectRoot = useMemo(
+    () => state.snapshot.projects.find((p) => p.name === task.project)?.path.replace(/\/+$/, ""),
+    [state.snapshot.projects, task.project],
+  );
+  const knownFilePaths = useMemo(() => {
+    const paths = new Set<string>();
+    for (const file of projectFiles) paths.add(file.path);
+    for (const file of diff?.files ?? []) paths.add(file.path);
+    for (const path of openFileTabs) paths.add(path);
+    return paths;
+  }, [diff?.files, openFileTabs, projectFiles]);
+  const resolveSessionFilePath = useCallback(
+    (value: string): string | null => {
+      let path = value.trim().replace(/^['"`]+|['"`]+$/g, "");
+      path = path.replace(/:\d+(?::\d+)?$/, "");
+      path = path.replace(/[),;]+$/, "");
+      path = path.replace(/^\.\/+/, "");
+
+      if (projectRoot && path.startsWith(`${projectRoot}/`)) {
+        return path.slice(projectRoot.length + 1);
+      }
+
+      if (knownFilePaths.has(path)) return path;
+
+      return null;
+    },
+    [knownFilePaths, projectRoot],
+  );
   const rightRailOpen = showDiff && rightPanel !== null;
 
   return (
@@ -299,9 +330,16 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
                         update={merged[vi.index]}
                         taskId={task.id}
                         resolved={resolvedPerms}
+                        resolveFilePath={resolveSessionFilePath}
+                        onOpenFile={openFileTab}
                       />
                     </div>
                   ))}
+                </div>
+              )}
+              {activity && (
+                <div className="sticky bottom-0 z-10 pt-3">
+                  <AgentActivityIndicator activity={activity} />
                 </div>
               )}
             </div>
