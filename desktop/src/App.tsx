@@ -1,6 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import {
-  Anvil,
   LayoutGrid,
   KanbanSquare,
   FolderTree,
@@ -116,9 +115,8 @@ export default function App() {
     <TooltipProvider delayDuration={300}>
       <div className="flex h-screen flex-col bg-background">
         <header className="flex h-11 items-center gap-3 border-b border-border/70 bg-card/80 px-2.5">
-          <div className="flex items-center gap-2 px-1 text-sm font-semibold">
-            <Anvil className="size-4 text-primary" />
-            warpforge
+          <div className="px-1 text-xs font-semibold uppercase tracking-[0.18em] text-foreground">
+            WARP<span className="text-primary">FORGE</span>
           </div>
 
           <Button
