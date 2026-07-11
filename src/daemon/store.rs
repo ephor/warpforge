@@ -254,6 +254,7 @@ fn parse_status(s: &str) -> TaskStatus {
     match s {
         "queued" => TaskStatus::Queued,
         "running" => TaskStatus::Running,
+        "idle" => TaskStatus::Idle,
         "needs_review" => TaskStatus::NeedsReview,
         "done" => TaskStatus::Done,
         "blocked" => TaskStatus::Blocked,

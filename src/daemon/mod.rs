@@ -185,6 +185,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn no_edit_turn_lands_in_idle_not_needs_review() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(test_projects(), store);
+        let mut events = daemon.subscribe();
+
+        let mock = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/mock-acp-agent-noedit.mjs"
+        );
+        let agent = format!("node {mock}");
+        let task_id = daemon
+            .create_task("demo", "what port is the api on?", &agent, vec![], false)
+            .await;
+
+        let mut saw_running = false;
+        let mut final_status: Option<TaskStatus> = None;
+        for _ in 0..60 {
+            let ev = match timeout(Duration::from_secs(5), events.recv()).await {
+                Ok(Ok(ev)) => ev,
+                _ => break,
+            };
+            if let Event::TaskUpdated(t) = ev {
+                if t.id == task_id {
+                    if t.status == TaskStatus::Running {
+                        saw_running = true;
+                    }
+                    // The turn settles into a non-running, non-queued status.
+                    if matches!(
+                        t.status,
+                        TaskStatus::Idle | TaskStatus::NeedsReview | TaskStatus::Blocked
+                    ) {
+                        final_status = Some(t.status.clone());
+                        break;
+                    }
+                }
+            }
+        }
+
+        assert!(saw_running, "task should go Running during the turn");
+        assert_eq!(
+            final_status,
+            Some(TaskStatus::Idle),
+            "a turn with no file edits should park in Idle, not NeedsReview"
+        );
+    }
+
+    #[tokio::test]
     async fn cancel_task_marks_done() {
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let daemon = Daemon::spawn(test_projects(), store);

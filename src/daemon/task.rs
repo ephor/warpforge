@@ -12,6 +12,8 @@ pub fn now_secs() -> u64 {
 pub enum TaskStatus {
     Queued,
     Running,
+    /// Turn finished with no changes; waiting for the next message.
+    Idle,
     NeedsReview,
     Done,
     Blocked,
@@ -23,6 +25,7 @@ impl std::fmt::Display for TaskStatus {
         let s = match self {
             TaskStatus::Queued => "queued",
             TaskStatus::Running => "running",
+            TaskStatus::Idle => "idle",
             TaskStatus::NeedsReview => "needs_review",
             TaskStatus::Done => "done",
             TaskStatus::Blocked => "blocked",

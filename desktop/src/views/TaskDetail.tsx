@@ -52,7 +52,7 @@ import { MergeDiff } from "../components/MergeDiff";
 import { ChangesRail } from "../components/ChangesRail";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { resolvedPermissions } from "@/lib/sessionPermissions";
-import { taskBadge } from "@/lib/status";
+import { activityBadge, taskBadge } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -207,6 +207,9 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
 
   const merged = useMemo(() => coalesceUpdates(updates), [updates]);
   const activity = useMemo(() => sessionActivity(task, merged), [task, merged]);
+  // While the agent is actively working a turn, the header chip reflects the
+  // live activity (thinking/working/writing) instead of the coarse status.
+  const headerBadge = activity ? activityBadge(activity.tone, activity.label) : badge;
 
   // Persisted permission answers (request_id → outcome) so resolved prompts
   // don't re-show live buttons after a reopen.
@@ -299,7 +302,7 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
           board
         </Button>
         <h1 className="min-w-0 flex-1 truncate text-base font-semibold">{task.prompt}</h1>
-        <Badge variant={badge.variant}>{badge.label}</Badge>
+        <Badge variant={headerBadge.variant}>{headerBadge.label}</Badge>
         <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <span className="max-w-36 truncate">{task.project}</span>
           <span>·</span>

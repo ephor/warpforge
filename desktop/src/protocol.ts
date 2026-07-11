@@ -132,6 +132,7 @@ export interface PortForwardInfo {
 export type TaskStatus =
   | "queued"
   | "running"
+  | "idle"
   | "needs_review"
   | "done"
   | "blocked"

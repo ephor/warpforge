@@ -1684,10 +1684,17 @@ impl Daemon {
                     return;
                 }
                 self.emit_session(&task_id, update);
-                // A finished turn with edits is ready for review.
+                // Turn over: only NeedsReview if there are actually changes to
+                // review; a pure Q&A turn goes Idle (waiting for the next
+                // message) instead of falsely demanding a review.
                 if let Some(task) = self.tasks.get_mut(&task_id) {
                     if task.status == TaskStatus::Running {
-                        task.set_status(TaskStatus::NeedsReview);
+                        let next = if task.files_changed > 0 {
+                            TaskStatus::NeedsReview
+                        } else {
+                            TaskStatus::Idle
+                        };
+                        task.set_status(next);
                         let updated = task.clone();
                         self.persist(&updated);
                         self.emit(Event::TaskUpdated(updated));
