@@ -13,6 +13,9 @@ import {
   FileText,
   SquareTerminal,
   PanelRight,
+  RefreshCw,
+  AlertTriangle,
+  Loader2,
 } from "lucide-react";
 import { RuntimePanel } from "../components/RuntimePanel";
 import { daemon, DaemonState } from "../daemon";
@@ -20,6 +23,8 @@ import {
   CommandInfo,
   FileDiff,
   FileDoc,
+  GitBranchList,
+  GitOpResult,
   HunkResolution,
   ProjectFile,
   SessionUpdate,
@@ -93,6 +98,25 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   const portforwards = state.snapshot.portforwards.filter((p) => p.project === task.project);
   // Bumped on window focus to refetch the diff (terminal edits show on return).
   const [focusTick, setFocusTick] = useState(0);
+  const [gitBanner, setGitBanner] = useState<GitOpResult | null>(null);
+
+  // Handle a git.update / git.switchBranch result: show it, and on a clean op
+  // force an immediate diff/branch/file refetch (the TaskUpdated event also
+  // triggers this, but bumping locally avoids waiting on the round-trip).
+  const onGitResult = useCallback((r: GitOpResult) => {
+    setGitBanner(r);
+    if (r.status === "ok" || r.status === "upToDate") {
+      setFocusTick((t) => t + 1);
+    }
+  }, []);
+
+  // Auto-dismiss a successful banner; keep conflicts/errors until the next op.
+  useEffect(() => {
+    if (!gitBanner) return;
+    if (gitBanner.status === "conflict" || gitBanner.status === "error") return;
+    const id = setTimeout(() => setGitBanner(null), 4000);
+    return () => clearTimeout(id);
+  }, [gitBanner]);
   const streamParent = useRef<HTMLDivElement>(null);
   const badge = taskBadge(task.status);
   const editable = task.status !== "done";
@@ -281,8 +305,11 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
         <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <span className="max-w-36 truncate">{task.project}</span>
           <span>·</span>
-          <GitBranch className="size-3.5 shrink-0" />
-          <span className="max-w-40 truncate font-mono">{diff?.branch ?? "no-branch"}</span>
+          <GitControls
+            taskId={task.id}
+            branch={diff?.branch ?? null}
+            onResult={onGitResult}
+          />
           <span>·</span>
           <span className="max-w-32 truncate">{task.agent}</span>
         </span>
@@ -297,6 +324,43 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
           </Button>
         )}
       </div>
+
+      {gitBanner && gitBanner.status !== "upToDate" && (
+        <div
+          className={cn(
+            "flex shrink-0 items-start gap-2 rounded-md border px-3 py-2 text-xs",
+            gitBanner.status === "ok"
+              ? "border-border bg-secondary/60 text-foreground"
+              : "border-destructive/40 bg-destructive/10 text-foreground",
+          )}
+        >
+          {gitBanner.status === "ok" ? (
+            <Check className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
+          ) : (
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+          )}
+          <div className="min-w-0 flex-1">
+            <div>{gitBanner.message}</div>
+            {gitBanner.conflicts.length > 0 && (
+              <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground">
+                {gitBanner.conflicts.map((f) => (
+                  <li key={f} className="truncate">
+                    {f}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setGitBanner(null)}
+            className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
+            aria-label="dismiss"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 gap-2">
       <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1 gap-0">
@@ -886,5 +950,124 @@ function FileDiffView({
           );
         })}
     </div>
+  );
+}
+
+/// Header git controls: an "Update" button (rebase-on-upstream + autostash) and
+/// a branch chip that doubles as a switcher. Both operate on the task's project
+/// repo via the daemon, which handles the stash/rollback; this just reflects the
+/// result. Since a project's tasks share one working tree, switching here moves
+/// the whole project's checkout.
+function GitControls({
+  taskId,
+  branch,
+  onResult,
+}: {
+  taskId: string;
+  branch: string | null;
+  onResult: (r: GitOpResult) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [branches, setBranches] = useState<string[]>([]);
+  const [updating, setUpdating] = useState(false);
+  const [switching, setSwitching] = useState<string | null>(null);
+  const busy = updating || switching !== null;
+
+  const loadBranches = useCallback(() => {
+    daemon
+      .request("git.branches", { task_id: taskId })
+      .then((d) => setBranches((d as GitBranchList).branches ?? []))
+      .catch(() => setBranches([]));
+  }, [taskId]);
+
+  const update = () => {
+    if (busy) return;
+    setUpdating(true);
+    daemon
+      .request("git.update", { task_id: taskId })
+      .then((r) => onResult(r as GitOpResult))
+      .catch((e: Error) => onResult({ status: "error", message: e.message, conflicts: [] }))
+      .finally(() => setUpdating(false));
+  };
+
+  const switchTo = (target: string) => {
+    setOpen(false);
+    if (busy || target === branch) return;
+    setSwitching(target);
+    daemon
+      .request("git.switchBranch", { task_id: taskId, branch: target })
+      .then((r) => onResult(r as GitOpResult))
+      .catch((e: Error) => onResult({ status: "error", message: e.message, conflicts: [] }))
+      .finally(() => setSwitching(null));
+  };
+
+  return (
+    <span className="flex items-center gap-1">
+      <div className="relative">
+        <button
+          type="button"
+          disabled={!branch}
+          onClick={() => {
+            if (!open) loadBranches();
+            setOpen((o) => !o);
+          }}
+          onBlur={() => setTimeout(() => setOpen(false), 120)}
+          title="Switch branch"
+          className="flex items-center gap-1 rounded px-1 py-0.5 font-mono hover:bg-secondary hover:text-foreground disabled:opacity-60"
+        >
+          <GitBranch className="size-3.5 shrink-0" />
+          <span className="max-w-40 truncate">{branch ?? "no-branch"}</span>
+          {switching ? (
+            <Loader2 className="size-3 animate-spin opacity-60" />
+          ) : (
+            branch && <ChevronDown className="size-3 opacity-60" />
+          )}
+        </button>
+        {open && branch && (
+          <div className="absolute left-0 top-full z-30 mt-1 max-h-[50vh] min-w-[200px] overflow-y-auto rounded-md border bg-popover shadow-md">
+            <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+              Switch branch
+            </div>
+            {branches.length === 0 && (
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">no branches</div>
+            )}
+            {branches.map((b) => (
+              <button
+                type="button"
+                key={b}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  switchTo(b);
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2 px-2 py-1 text-left font-mono text-xs",
+                  b === branch ? "bg-accent" : "hover:bg-accent/50",
+                )}
+              >
+                <Check
+                  className={cn("size-3 shrink-0", b === branch ? "opacity-100" : "opacity-0")}
+                />
+                <span className="truncate">{b}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={update}
+        disabled={busy || !branch}
+        title="Update project — rebase on upstream, autostashing your changes"
+        className="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-secondary hover:text-foreground disabled:opacity-60"
+      >
+        {updating ? (
+          <Loader2 className="size-3.5 animate-spin" />
+        ) : (
+          <RefreshCw className="size-3.5" />
+        )}
+        <span>Update</span>
+      </button>
+    </span>
   );
 }
