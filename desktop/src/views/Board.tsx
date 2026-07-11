@@ -69,6 +69,9 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
 
   const done = byStatus("done").sort((a, b) => b.updatedAt - a.updatedAt);
   const running = byStatus("running");
+  // Open conversations: the agent is either working (running) or waiting for
+  // your next message (idle). Both are live, non-review, non-done.
+  const active = byStatus(["running", "idle"]);
   const review = byStatus(["needs_review", "blocked", "interrupted"]);
 
   const doneToday = done.filter((t) => Date.now() / 1000 - t.updatedAt < 86400).length;
@@ -135,11 +138,11 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
           {queued.length === 0 && <Empty />}
         </Column>
 
-        <Column title="Running" count={running.length}>
-          {running.map((t) => (
+        <Column title="Active" count={active.length}>
+          {active.map((t) => (
             <TaskCard key={t.id} task={t} onOpen={() => onOpenTask(t.id)} />
           ))}
-          {running.length === 0 && <Empty />}
+          {active.length === 0 && <Empty />}
         </Column>
 
         <Column title="Review / blocked" count={review.length}>

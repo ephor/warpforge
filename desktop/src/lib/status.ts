@@ -8,6 +8,8 @@ export function taskBadge(s: TaskStatus): { variant: Variant; label: string } {
       return { variant: "ok", label: "running" };
     case "queued":
       return { variant: "outline", label: "queued" };
+    case "idle":
+      return { variant: "outline", label: "idle" };
     case "needs_review":
       return { variant: "warn", label: "needs review" };
     case "blocked":
@@ -17,6 +19,16 @@ export function taskBadge(s: TaskStatus): { variant: Variant; label: string } {
     case "done":
       return { variant: "default", label: "done" };
   }
+}
+
+/** Badge reflecting the live agent activity (overrides the coarse status while
+ * the agent is actively working a turn). */
+export function activityBadge(
+  tone: "thinking" | "working" | "writing",
+  label: string,
+): { variant: Variant; label: string } {
+  const variant: Variant = tone === "writing" ? "ok" : tone === "working" ? "warn" : "default";
+  return { variant, label };
 }
 
 export function serviceBadge(s: ServiceStatus): { variant: Variant; label: string } {

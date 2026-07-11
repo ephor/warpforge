@@ -1,6 +1,21 @@
+import { useEffect, useState } from "react";
 import { Activity } from "lucide-react";
 import { SessionActivity } from "@/lib/sessionActivity";
 import { cn } from "@/lib/utils";
+
+/** Ticking elapsed since mount — mounts when a turn starts (activity appears)
+ * and unmounts when it ends, so it measures the current turn. */
+function TurnTimer() {
+  const [start] = useState(() => Date.now());
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const s = Math.floor((Date.now() - start) / 1000);
+  const label = s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  return <span className="tnum ml-auto shrink-0 opacity-70">{label}</span>;
+}
 
 export function AgentActivityIndicator({
   activity,
@@ -33,6 +48,7 @@ export function AgentActivityIndicator({
       </div>
       <span className="shrink-0 font-medium">{activity.label}</span>
       <span className="min-w-0 truncate text-muted-foreground">{activity.detail}</span>
+      <TurnTimer />
     </div>
   );
 }

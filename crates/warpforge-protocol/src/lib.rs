@@ -460,6 +460,10 @@ pub struct TaskInfo {
 pub enum TaskStatus {
     Queued,
     Running,
+    /// The agent finished a turn that produced no changes and is now waiting for
+    /// your next message. Distinct from `NeedsReview` (which means there are
+    /// uncommitted changes to look at) and `Done` (finished/archived).
+    Idle,
     NeedsReview,
     Done,
     Blocked,

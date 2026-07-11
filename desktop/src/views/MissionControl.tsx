@@ -21,7 +21,7 @@ import { Composer } from "../components/Composer";
 import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { pendingPermission, resolvedPermissions } from "@/lib/sessionPermissions";
-import { elapsed, taskBadge } from "@/lib/status";
+import { activityBadge, elapsed, taskBadge } from "@/lib/status";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -109,7 +109,9 @@ function FocusPane({
   const activity = sessionActivity(task, stream);
   const badge = pending
     ? { variant: "warn" as const, label: "permission" }
-    : taskBadge(task.status);
+    : activity
+      ? activityBadge(activity.tone, activity.label)
+      : taskBadge(task.status);
 
   return (
     <Card
