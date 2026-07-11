@@ -243,6 +243,26 @@ export interface ProjectFile {
   changed: boolean;
 }
 
+// ── Git ops (update / branch switch) ────────────────────────────────────────
+
+export type GitOpStatus = "upToDate" | "ok" | "conflict" | "error";
+
+/** Result of `git.update` / `git.switchBranch`. */
+export interface GitOpResult {
+  status: GitOpStatus;
+  message: string;
+  /** Files that blocked the op (on `conflict`); empty otherwise. */
+  conflicts: string[];
+  /** Current branch after the op. */
+  branch?: string | null;
+}
+
+/** Result of `git.branches`. */
+export interface GitBranchList {
+  current?: string | null;
+  branches: string[];
+}
+
 // ── Terminals ───────────────────────────────────────────────────────────────
 
 export interface TerminalInfo {

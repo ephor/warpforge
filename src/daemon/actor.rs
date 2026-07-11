@@ -197,6 +197,22 @@ pub enum Command {
         amend: bool,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Fetch + rebase the task's repo onto its upstream (autostash, rollback).
+    GitUpdate {
+        task_id: String,
+        reply: oneshot::Sender<wire::GitOpResult>,
+    },
+    /// List local branches of the task's repo.
+    GitBranches {
+        task_id: String,
+        reply: oneshot::Sender<wire::GitBranchList>,
+    },
+    /// Switch the task's repo to `branch` (smart checkout, rollback on conflict).
+    GitSwitchBranch {
+        task_id: String,
+        branch: String,
+        reply: oneshot::Sender<wire::GitOpResult>,
+    },
     /// Send a follow-up prompt into a task's running agent session.
     SessionPrompt {
         task_id: String,
@@ -392,6 +408,47 @@ impl DaemonHandle {
         .await;
         rx.await
             .unwrap_or_else(|_| Err("daemon dropped the commit request".into()))
+    }
+
+    pub async fn git_update(&self, task_id: &str) -> wire::GitOpResult {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitUpdate {
+            task_id: task_id.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| wire::GitOpResult {
+            status: wire::GitOpStatus::Error,
+            message: "daemon dropped the update request".into(),
+            conflicts: Vec::new(),
+            branch: None,
+        })
+    }
+
+    pub async fn git_branches(&self, task_id: &str) -> wire::GitBranchList {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitBranches {
+            task_id: task_id.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_default()
+    }
+
+    pub async fn git_switch_branch(&self, task_id: &str, branch: &str) -> wire::GitOpResult {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitSwitchBranch {
+            task_id: task_id.to_string(),
+            branch: branch.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| wire::GitOpResult {
+            status: wire::GitOpStatus::Error,
+            message: "daemon dropped the switch request".into(),
+            conflicts: Vec::new(),
+            branch: None,
+        })
     }
 
     /// A window of a service's retained log lines (for backfill; live tail
@@ -731,6 +788,17 @@ impl Daemon {
             .iter()
             .find(|p| p.name == name)
             .map(|p| p.path.clone())
+    }
+
+    /// Bump a task's `updated_at`, persist, and emit `TaskUpdated` so every
+    /// client refetches its diff/branch (used after git ops change the tree).
+    fn bump_task(&mut self, task_id: &str) {
+        if let Some(task) = self.tasks.get_mut(task_id) {
+            task.updated_at = super::task::now_secs();
+            let updated = task.clone();
+            self.persist(&updated);
+            self.emit(Event::TaskUpdated(updated));
+        }
     }
 
     fn project_index(&self, name: &str) -> usize {
@@ -1116,6 +1184,75 @@ impl Daemon {
                         self.persist(&updated);
                         self.emit(Event::TaskUpdated(updated));
                     }
+                }
+                let _ = reply.send(result);
+            }
+            Command::GitUpdate { task_id, reply } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let result = match repo {
+                    Some(p) => super::diff::update_project(&p).await.unwrap_or_else(|e| {
+                        wire::GitOpResult {
+                            status: wire::GitOpStatus::Error,
+                            message: e.to_string(),
+                            conflicts: Vec::new(),
+                            branch: None,
+                        }
+                    }),
+                    None => wire::GitOpResult {
+                        status: wire::GitOpStatus::Error,
+                        message: format!("no repo for task {task_id}"),
+                        conflicts: Vec::new(),
+                        branch: None,
+                    },
+                };
+                // A clean update changed HEAD/tree — nudge clients to refetch.
+                if result.status == wire::GitOpStatus::Ok {
+                    self.bump_task(&task_id);
+                }
+                let _ = reply.send(result);
+            }
+            Command::GitBranches { task_id, reply } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let list = match repo {
+                    Some(p) => super::diff::list_branches(&p).await.unwrap_or_default(),
+                    None => wire::GitBranchList::default(),
+                };
+                let _ = reply.send(list);
+            }
+            Command::GitSwitchBranch {
+                task_id,
+                branch,
+                reply,
+            } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let result = match repo {
+                    Some(p) => super::diff::switch_branch(&p, &branch)
+                        .await
+                        .unwrap_or_else(|e| wire::GitOpResult {
+                            status: wire::GitOpStatus::Error,
+                            message: e.to_string(),
+                            conflicts: Vec::new(),
+                            branch: None,
+                        }),
+                    None => wire::GitOpResult {
+                        status: wire::GitOpStatus::Error,
+                        message: format!("no repo for task {task_id}"),
+                        conflicts: Vec::new(),
+                        branch: None,
+                    },
+                };
+                // Switching branches changes the whole working tree — refetch.
+                if result.status == wire::GitOpStatus::Ok {
+                    self.bump_task(&task_id);
                 }
                 let _ = reply.send(result);
             }

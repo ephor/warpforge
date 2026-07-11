@@ -148,6 +148,229 @@ pub async fn current_branch(repo: &str) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
+// ── Update Project / branch switch (autostash + atomic rollback) ────────────
+//
+// Both ops treat the working tree as sacred: if anything conflicts, we restore
+// the exact prior state (branch, HEAD, and uncommitted changes) and report the
+// blocking files, rather than leaving a half-merged tree an agent might commit.
+
+async fn git(repo: &str, args: &[&str]) -> Result<std::process::Output> {
+    Ok(Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .await?)
+}
+
+fn errline(out: &std::process::Output) -> String {
+    String::from_utf8_lossy(&out.stderr).trim().to_string()
+}
+
+async fn rev_parse_head(repo: &str) -> Result<String> {
+    let out = git(repo, &["rev-parse", "HEAD"]).await?;
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// True if the working tree has any tracked or untracked changes.
+async fn is_dirty(repo: &str) -> Result<bool> {
+    let out = git(repo, &["status", "--porcelain"]).await?;
+    Ok(!String::from_utf8_lossy(&out.stdout).trim().is_empty())
+}
+
+/// Files left unmerged (conflict markers) after a failed rebase/stash-pop.
+async fn unmerged_files(repo: &str) -> Vec<String> {
+    match git(repo, &["diff", "--name-only", "--diff-filter=U"]).await {
+        Ok(out) => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn op_error(msg: impl Into<String>) -> wire::GitOpResult {
+    wire::GitOpResult {
+        status: wire::GitOpStatus::Error,
+        message: msg.into(),
+        conflicts: Vec::new(),
+        branch: None,
+    }
+}
+
+fn op_conflict(msg: impl Into<String>, conflicts: Vec<String>, branch: Option<String>) -> wire::GitOpResult {
+    wire::GitOpResult {
+        status: wire::GitOpStatus::Conflict,
+        message: msg.into(),
+        conflicts,
+        branch,
+    }
+}
+
+/// `git.update`: fetch + rebase the current branch onto its upstream, stashing
+/// and restoring uncommitted changes around it. Any conflict rolls back.
+pub async fn update_project(repo: &str) -> Result<wire::GitOpResult> {
+    let branch = match current_branch(repo).await {
+        Some(b) => b,
+        None => return Ok(op_error("not on a branch (detached HEAD or not a git repo)")),
+    };
+
+    // Need an upstream to update from.
+    let upstream = git(repo, &["rev-parse", "--abbrev-ref", "--verify", "-q", "@{u}"]).await?;
+    if !upstream.status.success() {
+        return Ok(op_error(format!("no upstream configured for '{branch}'")));
+    }
+
+    let fetch = git(repo, &["fetch"]).await?;
+    if !fetch.status.success() {
+        return Ok(op_error(format!("git fetch failed: {}", errline(&fetch))));
+    }
+
+    let start = rev_parse_head(repo).await?;
+    let dirty = is_dirty(repo).await?;
+    if dirty {
+        let st = git(repo, &["stash", "push", "-u", "-m", "warpforge-update"]).await?;
+        if !st.status.success() {
+            return Ok(op_error(format!("git stash failed: {}", errline(&st))));
+        }
+    }
+
+    // Rebase onto the freshly-fetched upstream.
+    let rebase = git(repo, &["rebase", "@{u}"]).await?;
+    if !rebase.status.success() {
+        // Local commits conflict with the incoming ones. Capture before abort
+        // (abort clears the unmerged state), then restore the prior tree.
+        let conflicts = unmerged_files(repo).await;
+        let _ = git(repo, &["rebase", "--abort"]).await; // HEAD + tree back to `start`
+        if dirty {
+            let _ = git(repo, &["stash", "pop"]).await; // clean reapply onto `start`
+        }
+        return Ok(op_conflict(
+            format!("update rolled back — '{branch}' and its upstream have conflicting commits"),
+            conflicts,
+            Some(branch),
+        ));
+    }
+
+    // Rebase clean; put uncommitted changes back on top.
+    if dirty {
+        let pop = git(repo, &["stash", "pop"]).await?;
+        if !pop.status.success() {
+            // Uncommitted changes clash with the pulled update → full rollback:
+            // discard the pulled commits + conflict markers, reapply the stash
+            // onto the original HEAD (where it was taken, so it's always clean).
+            let conflicts = unmerged_files(repo).await;
+            let _ = git(repo, &["reset", "--hard", &start]).await;
+            let _ = git(repo, &["stash", "pop"]).await;
+            return Ok(op_conflict(
+                format!("update rolled back — your uncommitted changes conflict with the incoming update on '{branch}'"),
+                conflicts,
+                Some(branch),
+            ));
+        }
+    }
+
+    let head = rev_parse_head(repo).await?;
+    if head == start {
+        Ok(wire::GitOpResult {
+            status: wire::GitOpStatus::UpToDate,
+            message: format!("already up to date on '{branch}'"),
+            conflicts: Vec::new(),
+            branch: Some(branch),
+        })
+    } else {
+        Ok(wire::GitOpResult {
+            status: wire::GitOpStatus::Ok,
+            message: format!("updated '{branch}' from upstream"),
+            conflicts: Vec::new(),
+            branch: Some(branch),
+        })
+    }
+}
+
+/// `git.branches`: local branch names + the current one.
+pub async fn list_branches(repo: &str) -> Result<wire::GitBranchList> {
+    let out = git(repo, &["branch", "--format=%(refname:short)"]).await?;
+    if !out.status.success() {
+        bail!("git branch failed: {}", errline(&out));
+    }
+    let branches = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    Ok(wire::GitBranchList {
+        current: current_branch(repo).await,
+        branches,
+    })
+}
+
+/// `git.switchBranch`: smart checkout — stash uncommitted changes, switch, then
+/// reapply them on the target. A conflict rolls back to the original branch
+/// with the changes intact (nothing is ever discarded).
+pub async fn switch_branch(repo: &str, target: &str) -> Result<wire::GitOpResult> {
+    let from = match current_branch(repo).await {
+        Some(b) => b,
+        None => return Ok(op_error("not on a branch (detached HEAD or not a git repo)")),
+    };
+    if target == from {
+        return Ok(wire::GitOpResult {
+            status: wire::GitOpStatus::UpToDate,
+            message: format!("already on '{target}'"),
+            conflicts: Vec::new(),
+            branch: Some(from),
+        });
+    }
+    let verify = git(
+        repo,
+        &["rev-parse", "--verify", "-q", &format!("refs/heads/{target}")],
+    )
+    .await?;
+    if !verify.status.success() {
+        return Ok(op_error(format!("no local branch '{target}'")));
+    }
+
+    let dirty = is_dirty(repo).await?;
+    if dirty {
+        let st = git(repo, &["stash", "push", "-u", "-m", "warpforge-switch"]).await?;
+        if !st.status.success() {
+            return Ok(op_error(format!("git stash failed: {}", errline(&st))));
+        }
+    }
+
+    let checkout = git(repo, &["checkout", target]).await?;
+    if !checkout.status.success() {
+        if dirty {
+            let _ = git(repo, &["stash", "pop"]).await; // still on `from`, reapply
+        }
+        return Ok(op_error(format!("git checkout failed: {}", errline(&checkout))));
+    }
+
+    if dirty {
+        let pop = git(repo, &["stash", "pop"]).await?;
+        if !pop.status.success() {
+            // Changes conflict with the target branch → go back to `from`,
+            // discard the conflicted partial apply, reapply the stash cleanly.
+            let conflicts = unmerged_files(repo).await;
+            let _ = git(repo, &["checkout", "-f", &from]).await;
+            let _ = git(repo, &["stash", "pop"]).await;
+            return Ok(op_conflict(
+                format!("stayed on '{from}' — your uncommitted changes conflict with '{target}'"),
+                conflicts,
+                Some(from),
+            ));
+        }
+    }
+
+    Ok(wire::GitOpResult {
+        status: wire::GitOpStatus::Ok,
+        message: format!("switched to '{target}'"),
+        conflicts: Vec::new(),
+        branch: Some(target.to_string()),
+    })
+}
+
 /// A file's old (HEAD) and new (working-tree) text, for the editable review.
 pub async fn file_doc(repo: &str, path: &str) -> Result<wire::FileDoc> {
     if path.contains("..") {
@@ -481,5 +704,114 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    async fn init_repo(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-q"]).await;
+        git(dir, &["config", "user.email", "t@t"]).await;
+        git(dir, &["config", "user.name", "t"]).await;
+    }
+
+    #[tokio::test]
+    async fn switch_branch_carries_dirty_changes() {
+        let dir = std::env::temp_dir().join(format!("wf-sw-{}", uuid::Uuid::new_v4()));
+        let repo = dir.to_str().unwrap();
+        init_repo(&dir).await;
+        std::fs::write(dir.join("a.txt"), "base\n").unwrap();
+        git(&dir, &["add", "."]).await;
+        git(&dir, &["commit", "-q", "-m", "init"]).await;
+        git(&dir, &["branch", "feature"]).await;
+
+        // Uncommitted (non-conflicting) change, then switch.
+        std::fs::write(dir.join("a.txt"), "base\ndirty\n").unwrap();
+        let r = switch_branch(repo, "feature").await.unwrap();
+
+        assert_eq!(r.status, wire::GitOpStatus::Ok, "{}", r.message);
+        assert_eq!(current_branch(repo).await.as_deref(), Some("feature"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "base\ndirty\n",
+            "uncommitted change carried onto feature"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn switch_branch_conflict_rolls_back() {
+        let dir = std::env::temp_dir().join(format!("wf-swc-{}", uuid::Uuid::new_v4()));
+        let repo = dir.to_str().unwrap();
+        init_repo(&dir).await;
+        std::fs::write(dir.join("a.txt"), "line\n").unwrap();
+        git(&dir, &["add", "."]).await;
+        git(&dir, &["commit", "-q", "-m", "init"]).await;
+        let base = current_branch(repo).await.unwrap();
+
+        // feature diverges on the same line.
+        git(&dir, &["checkout", "-q", "-b", "feature"]).await;
+        std::fs::write(dir.join("a.txt"), "feature-change\n").unwrap();
+        git(&dir, &["commit", "-qam", "feature"]).await;
+        git(&dir, &["checkout", "-q", &base]).await;
+
+        // Uncommitted change on the same line → conflicts with feature.
+        std::fs::write(dir.join("a.txt"), "local-uncommitted\n").unwrap();
+        let r = switch_branch(repo, "feature").await.unwrap();
+
+        assert_eq!(r.status, wire::GitOpStatus::Conflict, "{}", r.message);
+        assert_eq!(
+            current_branch(repo).await.as_deref(),
+            Some(base.as_str()),
+            "rolled back to the original branch"
+        );
+        let content = std::fs::read_to_string(dir.join("a.txt")).unwrap();
+        assert_eq!(content, "local-uncommitted\n", "dirty change restored intact");
+        assert!(!content.contains("<<<<<<<"), "no conflict markers left behind");
+        assert!(
+            unmerged_files(repo).await.is_empty(),
+            "tree is not left in a half-merged state"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn update_project_rebases_and_keeps_dirty() {
+        let root = std::env::temp_dir().join(format!("wf-upd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let origin = root.join("origin.git");
+        let origin_url = origin.to_str().unwrap();
+
+        // Bare origin + two clones (one advances upstream).
+        git(&root, &["init", "--bare", "-q", origin_url]).await;
+        git(&root, &["clone", "-q", origin_url, "work"]).await;
+        let work = root.join("work");
+        let workp = work.to_str().unwrap();
+        git(&work, &["config", "user.email", "t@t"]).await;
+        git(&work, &["config", "user.name", "t"]).await;
+        std::fs::write(work.join("a.txt"), "base\n").unwrap();
+        git(&work, &["add", "."]).await;
+        git(&work, &["commit", "-q", "-m", "init"]).await;
+        git(&work, &["push", "-q", "-u", "origin", "HEAD"]).await;
+
+        git(&root, &["clone", "-q", origin_url, "other"]).await;
+        let other = root.join("other");
+        git(&other, &["config", "user.email", "t@t"]).await;
+        git(&other, &["config", "user.name", "t"]).await;
+        std::fs::write(other.join("b.txt"), "upstream\n").unwrap();
+        git(&other, &["add", "."]).await;
+        git(&other, &["commit", "-q", "-m", "upstream"]).await;
+        git(&other, &["push", "-q", "origin", "HEAD"]).await;
+
+        // work has a dirty (untracked) file; update should pull + preserve it.
+        std::fs::write(work.join("dirty.txt"), "wip\n").unwrap();
+        let r = update_project(workp).await.unwrap();
+
+        assert_eq!(r.status, wire::GitOpStatus::Ok, "{}", r.message);
+        assert!(work.join("b.txt").is_file(), "upstream commit pulled in");
+        assert_eq!(
+            std::fs::read_to_string(work.join("dirty.txt")).unwrap(),
+            "wip\n",
+            "uncommitted change preserved across update"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 }

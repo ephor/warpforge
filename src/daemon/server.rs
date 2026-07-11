@@ -313,6 +313,27 @@ async fn dispatch(
                 })?;
             Ok(json!(null))
         }
+        GitUpdate { task_id } => {
+            let result = handle.git_update(&task_id).await;
+            serde_json::to_value(result).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        GitBranches { task_id } => {
+            let list = handle.git_branches(&task_id).await;
+            serde_json::to_value(list).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        GitSwitchBranch { task_id, branch } => {
+            let result = handle.git_switch_branch(&task_id, &branch).await;
+            serde_json::to_value(result).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
         TaskCancel { task_id } => {
             handle.send(Command::CancelTask { id: task_id }).await;
             Ok(json!(null))

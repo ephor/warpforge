@@ -222,6 +222,18 @@ pub enum Method {
         #[serde(default)]
         amend: bool,
     },
+    /// Pull the task's project repo up to its upstream (rebase + autostash).
+    /// Any conflict rolls the working tree back to the exact prior state.
+    #[serde(rename = "git.update")]
+    GitUpdate { task_id: String },
+    /// List local branches of the task's project repo.
+    #[serde(rename = "git.branches")]
+    GitBranches { task_id: String },
+    /// Switch the task's project repo to `branch`, carrying uncommitted changes
+    /// across (stash → checkout → unstash). A conflict rolls back to the branch
+    /// you were on with your changes intact.
+    #[serde(rename = "git.switchBranch")]
+    GitSwitchBranch { task_id: String, branch: String },
 
     // ── Raw terminal agents (legacy PTY sessions, kept for the TUI) ──
     #[serde(rename = "terminal.spawn")]
@@ -554,6 +566,47 @@ pub enum ToolCallStatus {
     InProgress,
     Completed,
     Failed,
+}
+
+// ─── Git operations (update / branch switch) ────────────────────────────────
+
+/// Machine-readable outcome of a `git.update` / `git.switchBranch` op.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitOpStatus {
+    /// Nothing to do — already up to date / already on that branch.
+    UpToDate,
+    /// Completed cleanly (pulled, or switched with changes carried over).
+    Ok,
+    /// A conflict was hit and the working tree was rolled back to the exact
+    /// prior state. `conflicts` lists the files that blocked it.
+    Conflict,
+    /// Precondition failed (no upstream, detached HEAD, unknown branch, …).
+    Error,
+}
+
+/// Result of `git.update` / `git.switchBranch`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitOpResult {
+    pub status: GitOpStatus,
+    /// Human-readable one-liner for the toast/banner.
+    pub message: String,
+    /// Files that blocked the op (on `Conflict`); empty otherwise.
+    #[serde(default)]
+    pub conflicts: Vec<String>,
+    /// Current branch after the op (so the UI can refresh its chip).
+    #[serde(default)]
+    pub branch: Option<String>,
+}
+
+/// Result of `git.branches`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchList {
+    #[serde(default)]
+    pub current: Option<String>,
+    pub branches: Vec<String>,
 }
 
 // ─── Diff / review ───────────────────────────────────────────────────────────
