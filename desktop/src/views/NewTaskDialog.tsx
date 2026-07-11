@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Share2, History } from "lucide-react";
 import { daemon } from "../daemon";
 import { ExternalSession, Snapshot } from "../protocol";
@@ -35,7 +36,6 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
   const [prompt, setPrompt] = useState(initialPrompt ?? "");
   const [tags, setTags] = useState("");
   const [shareContext, setShareContext] = useState(true);
-  const [sessions, setSessions] = useState<ExternalSession[]>([]);
 
   const projectInfo = snapshot.projects.find((p) => p.name === project);
   // Global agent registry (from setup wizard) takes priority over per-project templates.
@@ -61,21 +61,13 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
 
-  // Fetch resumable claude/codex sessions for the selected project.
-  useEffect(() => {
-    if (!open || !project) {
-      setSessions([]);
-      return;
-    }
-    let cancelled = false;
-    daemon
-      .listSessions(project)
-      .then((s) => !cancelled && setSessions(s))
-      .catch(() => !cancelled && setSessions([]));
-    return () => {
-      cancelled = true;
-    };
-  }, [open, project]);
+  // Resumable claude/codex sessions for the selected project.
+  const sessionsQuery = useQuery({
+    queryKey: ["sessions", project],
+    queryFn: () => daemon.listSessions(project),
+    enabled: open && !!project,
+  });
+  const sessions = sessionsQuery.data ?? [];
 
   const resume = (s: ExternalSession) => {
     void daemon.resumeTask(project, s.agent, s.sessionId, s.title);

@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { daemonQuery } from "../query";
+import {
   ArrowLeft,
   Check,
   X,
@@ -72,17 +79,12 @@ type ActiveTab = { kind: "changes" } | { kind: "file"; path: string };
  * agent-panel review is the bar.
  */
 export default function TaskDetail({ task, updates, state, onClose }: Props) {
-  const [diff, setDiff] = useState<TaskDiff | null>(null);
-  const [diffError, setDiffError] = useState<string | null>(null);
   const [localRes, setLocalRes] = useState<Record<string, HunkResolution>>({});
-  const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
-  const [fileListError, setFileListError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>({ kind: "changes" });
   const [openFileTabs, setOpenFileTabs] = useState<string[]>([]);
   const diffView = useUi((s) => s.diffView);
   const setDiffView = useUi((s) => s.setDiffView);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [fileDoc, setFileDoc] = useState<FileDoc | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const showChat = useUi((s) => s.showChat);
   const showDiff = useUi((s) => s.showDiff);
@@ -96,18 +98,13 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   const setRuntimeOpen = useUi((s) => s.setRuntimeOpen);
   const services = state.snapshot.services.filter((s) => s.project === task.project);
   const portforwards = state.snapshot.portforwards.filter((p) => p.project === task.project);
-  // Bumped on window focus to refetch the diff (terminal edits show on return).
-  const [focusTick, setFocusTick] = useState(0);
   const [gitBanner, setGitBanner] = useState<GitOpResult | null>(null);
+  const queryClient = useQueryClient();
 
-  // Handle a git.update / git.switchBranch result: show it, and on a clean op
-  // force an immediate diff/branch/file refetch (the TaskUpdated event also
-  // triggers this, but bumping locally avoids waiting on the round-trip).
+  // Show a git.update / git.switchBranch result. The refetch of diff/branch is
+  // handled by GitControls invalidating those query keys on success.
   const onGitResult = useCallback((r: GitOpResult) => {
     setGitBanner(r);
-    if (r.status === "ok" || r.status === "upToDate") {
-      setFocusTick((t) => t + 1);
-    }
   }, []);
 
   // Auto-dismiss a successful banner; keep conflicts/errors until the next op.
@@ -121,6 +118,41 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   const badge = taskBadge(task.status);
   const editable = task.status !== "done";
   const activeFile = activeTab.kind === "file" ? activeTab.path : selectedFile;
+
+  // ── On-demand daemon reads (TanStack Query) ──
+  // Keyed on the task's server-side updatedAt, so a `task.updated` event (agent
+  // edit, git op, hunk resolve) changes the key and refetches on its own;
+  // keepPreviousData avoids re-mounting the diff/editor on every save, and the
+  // window-focus refetch (query default) catches edits made outside the app.
+  const diffQuery = useQuery({
+    queryKey: ["diff", task.id, task.updatedAt],
+    queryFn: daemonQuery<TaskDiff>("diff.get", { task_id: task.id }),
+    refetchOnWindowFocus: "always",
+    placeholderData: keepPreviousData,
+  });
+  const diff = diffQuery.data ?? null;
+
+  const fileListQuery = useQuery({
+    queryKey: ["fileList", task.id, task.updatedAt],
+    queryFn: daemonQuery<ProjectFile[]>("file.list", { task_id: task.id }),
+    placeholderData: keepPreviousData,
+  });
+  const projectFiles = Array.isArray(fileListQuery.data) ? fileListQuery.data : [];
+  const fileListError = fileListQuery.error?.message ?? null;
+
+  const fileContentsEnabled =
+    !!activeFile && !(activeTab.kind === "changes" && diffView !== "split");
+  const fileDocQuery = useQuery({
+    queryKey: ["fileContents", task.id, activeFile, task.updatedAt],
+    queryFn: daemonQuery<FileDoc>("file.contents", {
+      task_id: task.id,
+      path: activeFile,
+    }),
+    enabled: fileContentsEnabled,
+    refetchOnWindowFocus: "always",
+    placeholderData: keepPreviousData,
+  });
+  const fileDoc = fileContentsEnabled ? fileDocQuery.data ?? null : null;
 
   const setView = (v: "unified" | "split") => setDiffView(v);
   const openFileTab = (path: string) => {
@@ -163,12 +195,6 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     });
   };
 
-  useEffect(() => {
-    const onFocus = () => setFocusTick((t) => t + 1);
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, []);
-
   // Default the split-view selection to the first changed file.
   useEffect(() => {
     if (!diff) return;
@@ -178,25 +204,6 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
       return paths[0] ?? null;
     });
   }, [diff]);
-
-  // Load the selected file's old/new text for the split editor. Keyed on
-  // task.updatedAt so an agent editing the open file refetches. MergeDiff
-  // syncs the right pane in place and skips its own save-echo, so this no
-  // longer clobbers unsaved edits.
-  useEffect(() => {
-    if (!activeFile || (activeTab.kind === "changes" && diffView !== "split")) {
-      setFileDoc(null);
-      return;
-    }
-    let cancelled = false;
-    daemon
-      .request("file.contents", { task_id: task.id, path: activeFile })
-      .then((d) => !cancelled && setFileDoc(d as FileDoc))
-      .catch(() => !cancelled && setFileDoc(null));
-    return () => {
-      cancelled = true;
-    };
-  }, [activeFile, activeTab.kind, diffView, task.id, task.updatedAt, focusTick]);
 
   const merged = useMemo(() => coalesceUpdates(updates), [updates]);
   const activity = useMemo(() => sessionActivity(task, merged), [task, merged]);
@@ -215,25 +222,6 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     return [];
   }, [updates]);
 
-  // Refetch the diff on task switch and after edits (updatedAt bumps). Don't
-  // null it out here — replacing in place avoids re-mounting the whole diff
-  // (which flashed the tabs/tree/editor on every ⌘S save).
-  useEffect(() => {
-    setDiffError(null);
-    daemon
-      .request("diff.get", { task_id: task.id })
-      .then((d) => setDiff(d as TaskDiff))
-      .catch((e: Error) => setDiffError(e.message));
-  }, [task.id, task.updatedAt, focusTick]);
-
-  useEffect(() => {
-    setFileListError(null);
-    daemon
-      .request("file.list", { task_id: task.id })
-      .then((d) => setProjectFiles(Array.isArray(d) ? (d as ProjectFile[]) : []))
-      .catch((e: Error) => setFileListError(e.message));
-  }, [task.id, task.updatedAt, focusTick]);
-
   // Virtualize the conversation — histories run to thousands of updates
   // (codex re-sends every tool_call frame), so only mount what's on screen.
   const streamVirtualizer = useVirtualizer({
@@ -251,13 +239,23 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [merged.length]);
 
+  const resolveHunkMut = useMutation({
+    mutationFn: (v: { file: string; hunkIndex: number; resolution: HunkResolution }) =>
+      daemon.request("diff.resolveHunk", {
+        task_id: task.id,
+        file: v.file,
+        hunk_index: v.hunkIndex,
+        resolution: v.resolution,
+      }),
+    // A reject rewrites the tree; refetch the diff to reflect the revert.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["diff", task.id] }),
+  });
   const resolveHunk = (file: string, hunkIndex: number, resolution: HunkResolution) => {
-    // Optimistic: mark it now; a reject also revert-refetches via task.updated.
+    // Optimistic: mark it now; onSettled revert-refetches the diff.
     setLocalRes((prev) => ({ ...prev, [`${file}#${hunkIndex}`]: resolution }));
-    daemon
-      .request("diff.resolveHunk", { task_id: task.id, file, hunk_index: hunkIndex, resolution })
-      .catch((e: Error) => setDiffError(e.message));
+    resolveHunkMut.mutate({ file, hunkIndex, resolution });
   };
+  const diffError = diffQuery.error?.message ?? resolveHunkMut.error?.message ?? null;
 
   const openTabs = useMemo(() => {
     const changed = new Set((diff?.files ?? []).map((f) => f.path));
@@ -629,8 +627,14 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
                       files={diff.files}
                       selected={selectedFile}
                       taskId={task.id}
-                      onCommitted={() => setFocusTick((t) => t + 1)}
-                      onRefresh={() => setFocusTick((t) => t + 1)}
+                      onCommitted={() => {
+                        void queryClient.invalidateQueries({ queryKey: ["diff", task.id] });
+                        void queryClient.invalidateQueries({ queryKey: ["fileList", task.id] });
+                      }}
+                      onRefresh={() => {
+                        void queryClient.invalidateQueries({ queryKey: ["diff", task.id] });
+                        void queryClient.invalidateQueries({ queryKey: ["fileList", task.id] });
+                      }}
                       onSelect={openDiffFile}
                     />
                   ) : (
@@ -968,37 +972,56 @@ function GitControls({
   onResult: (r: GitOpResult) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [branches, setBranches] = useState<string[]>([]);
-  const [updating, setUpdating] = useState(false);
-  const [switching, setSwitching] = useState<string | null>(null);
-  const busy = updating || switching !== null;
+  const queryClient = useQueryClient();
 
-  const loadBranches = useCallback(() => {
-    daemon
-      .request("git.branches", { task_id: taskId })
-      .then((d) => setBranches((d as GitBranchList).branches ?? []))
-      .catch(() => setBranches([]));
-  }, [taskId]);
+  // Branch list is only needed while the dropdown is open.
+  const branchesQuery = useQuery({
+    queryKey: ["branches", taskId],
+    queryFn: daemonQuery<GitBranchList>("git.branches", { task_id: taskId }),
+    enabled: open,
+  });
+  const branches = branchesQuery.data?.branches ?? [];
 
-  const update = () => {
-    if (busy) return;
-    setUpdating(true);
-    daemon
-      .request("git.update", { task_id: taskId })
-      .then((r) => onResult(r as GitOpResult))
-      .catch((e: Error) => onResult({ status: "error", message: e.message, conflicts: [] }))
-      .finally(() => setUpdating(false));
+  // After a clean op the tree changed — refetch the task's reads. (The daemon's
+  // task.updated event also refetches via the updatedAt-keyed queries; this just
+  // makes it immediate.)
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["diff", taskId] });
+    void queryClient.invalidateQueries({ queryKey: ["fileList", taskId] });
+    void queryClient.invalidateQueries({ queryKey: ["branches", taskId] });
   };
+  const onErr = (e: Error): GitOpResult => ({
+    status: "error",
+    message: e.message,
+    conflicts: [],
+  });
+
+  const updateMut = useMutation({
+    mutationFn: () => daemon.request("git.update", { task_id: taskId }) as Promise<GitOpResult>,
+    onSuccess: (r) => {
+      onResult(r);
+      invalidate();
+    },
+    onError: (e: Error) => onResult(onErr(e)),
+  });
+  const switchMut = useMutation({
+    mutationFn: (target: string) =>
+      daemon.request("git.switchBranch", { task_id: taskId, branch: target }) as Promise<GitOpResult>,
+    onSuccess: (r) => {
+      onResult(r);
+      invalidate();
+    },
+    onError: (e: Error) => onResult(onErr(e)),
+  });
+
+  const updating = updateMut.isPending;
+  const switching = switchMut.isPending ? switchMut.variables : null;
+  const busy = updating || switchMut.isPending;
 
   const switchTo = (target: string) => {
     setOpen(false);
     if (busy || target === branch) return;
-    setSwitching(target);
-    daemon
-      .request("git.switchBranch", { task_id: taskId, branch: target })
-      .then((r) => onResult(r as GitOpResult))
-      .catch((e: Error) => onResult({ status: "error", message: e.message, conflicts: [] }))
-      .finally(() => setSwitching(null));
+    switchMut.mutate(target);
   };
 
   return (
@@ -1007,10 +1030,7 @@ function GitControls({
         <button
           type="button"
           disabled={!branch}
-          onClick={() => {
-            if (!open) loadBranches();
-            setOpen((o) => !o);
-          }}
+          onClick={() => setOpen((o) => !o)}
           onBlur={() => setTimeout(() => setOpen(false), 120)}
           title="Switch branch"
           className="flex items-center gap-1 rounded px-1 py-0.5 font-mono hover:bg-secondary hover:text-foreground disabled:opacity-60"
@@ -1028,7 +1048,10 @@ function GitControls({
             <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
               Switch branch
             </div>
-            {branches.length === 0 && (
+            {branchesQuery.isLoading && (
+              <div className="px-2 py-1.5 text-xs text-muted-foreground">loading…</div>
+            )}
+            {!branchesQuery.isLoading && branches.length === 0 && (
               <div className="px-2 py-1.5 text-xs text-muted-foreground">no branches</div>
             )}
             {branches.map((b) => (
@@ -1056,7 +1079,7 @@ function GitControls({
 
       <button
         type="button"
-        onClick={update}
+        onClick={() => !busy && updateMut.mutate()}
         disabled={busy || !branch}
         title="Update project — rebase on upstream, autostashing your changes"
         className="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-secondary hover:text-foreground disabled:opacity-60"
