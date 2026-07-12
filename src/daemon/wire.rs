@@ -209,5 +209,7 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
         }),
         // Internal-only: the wire conveys terminals via screen/exited events.
         Event::AgentSpawned { .. } | Event::AgentStatus { .. } => None,
+        // Orchestration events forwarded from the orchestrator actor.
+        Event::OrchestrationEvent(_) => None,
     }
 }

@@ -3,6 +3,7 @@ mod app;
 mod client;
 mod config;
 mod daemon;
+mod orchestration;
 mod portforward;
 mod policies;
 mod ports;

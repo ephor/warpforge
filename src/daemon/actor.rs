@@ -254,6 +254,16 @@ pub enum Command {
     UpdateAgents {
         agents: Vec<wire::AgentConfig>,
     },
+    /// Start an orchestration plan (planner→worker→reviewer pipeline).
+    StartOrchestration {
+        project: String,
+        goal: String,
+        reply: oneshot::Sender<String>,
+    },
+    /// List active orchestration graphs.
+    ListOrchestrations {
+        reply: oneshot::Sender<Vec<crate::orchestration::GraphInfo>>,
+    },
     Shutdown,
 }
 
@@ -318,6 +328,8 @@ pub enum Event {
         terminal_id: String,
         screen: wire::TerminalScreen,
     },
+    /// Orchestration pipeline event (plan created, node dispatched, etc.)
+    OrchestrationEvent(crate::orchestration::OrchEvent),
 }
 
 /// Cloneable handle clients use to talk to the daemon.
@@ -628,6 +640,10 @@ pub struct Daemon {
     policies: PolicyRegistry,
     /// Channel for ACP reader tasks to request policy checks before file ops.
     policy_tx: mpsc::UnboundedSender<PolicyCheck>,
+    /// Orchestrator: drives planner→worker→reviewer pipeline.
+    orch_tx: Option<mpsc::Sender<crate::orchestration::OrchCommand>>,
+    /// Receiver for orchestrator events (forwarded to broadcast).
+    orch_event_rx: Option<broadcast::Receiver<crate::orchestration::OrchEvent>>,
 }
 
 impl Daemon {
@@ -676,6 +692,8 @@ impl Daemon {
             worktrees: HashMap::new(),
             policies: default_policies(),
             policy_tx,
+            orch_tx: None,
+            orch_event_rx: None,
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -689,6 +707,26 @@ impl Daemon {
                 let _ = ev_tx.send(Event::AgentsSetupNeeded { detected });
             });
         }
+
+        // Spawn the orchestrator with default config.
+        let orch_config = crate::orchestration::config::OrchestratorConfig::default();
+        let orch_handle = handle.clone();
+        let (orch_cmd_tx, orch_event_bcast) =
+            crate::orchestration::spawn_orchestrator(orch_config, orch_handle);
+
+        // Forward orchestrator events into the daemon broadcast.
+        let ev_tx = handle.event_tx.clone();
+        let mut orch_event_rx = orch_event_bcast.subscribe();
+        tokio::spawn(async move {
+            while let Ok(ev) = orch_event_rx.recv().await {
+                let _ = ev_tx.send(Event::OrchestrationEvent(ev));
+            }
+        });
+
+        // Rebuild daemon with orchestrator handles.
+        let mut daemon = daemon;
+        daemon.orch_tx = Some(orch_cmd_tx);
+        daemon.orch_event_rx = None; // receiver moved to forwarder task
 
         tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx, acp_rx, policy_rx));
 
@@ -1535,6 +1573,34 @@ impl Daemon {
                 }
                 self.configured_agents = agents.clone();
                 self.emit(Event::AgentsUpdated { agents });
+            }
+            Command::StartOrchestration { project, goal, reply } => {
+                if let Some(orch_tx) = &self.orch_tx {
+                    let (rtx, rrx) = oneshot::channel();
+                    let _ = orch_tx
+                        .send(crate::orchestration::OrchCommand::StartPlan {
+                            project,
+                            goal,
+                            reply: rtx,
+                        })
+                        .await;
+                    let graph_id = rrx.await.unwrap_or_default();
+                    let _ = reply.send(graph_id);
+                } else {
+                    let _ = reply.send(String::new());
+                }
+            }
+            Command::ListOrchestrations { reply } => {
+                if let Some(orch_tx) = &self.orch_tx {
+                    let (rtx, rrx) = oneshot::channel();
+                    let _ = orch_tx
+                        .send(crate::orchestration::OrchCommand::List(rtx))
+                        .await;
+                    let infos = rrx.await.unwrap_or_default();
+                    let _ = reply.send(infos);
+                } else {
+                    let _ = reply.send(vec![]);
+                }
             }
         }
     }
