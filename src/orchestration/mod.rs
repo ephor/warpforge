@@ -37,6 +37,15 @@ pub enum OrchCommand {
         task_id: String,
         reason: String,
     },
+    /// A dispatched daemon task reached a terminal state. The orchestrator maps
+    /// the daemon task id back to its graph node (it owns that mapping) and
+    /// advances the pipeline. This is the feedback loop that turns a finished
+    /// planner into dispatched workers, and finished workers into reviewers.
+    TaskFinished {
+        task_id: String,
+        result: String,
+        success: bool,
+    },
     /// Cancel an entire orchestration.
     Cancel { graph_id: String },
     /// List active orchestration graphs.
@@ -146,6 +155,13 @@ impl Orchestrator {
                 } => {
                     self.handle_node_failed(&graph_id, &node_id, &task_id, &reason)
                         .await;
+                }
+                OrchCommand::TaskFinished {
+                    task_id,
+                    result,
+                    success,
+                } => {
+                    self.handle_task_finished(&task_id, result, success).await;
                 }
                 OrchCommand::Cancel { graph_id } => {
                     self.graphs.remove(&graph_id);
@@ -300,6 +316,32 @@ impl Orchestrator {
                 graph_id: graph_id.to_string(),
                 project,
             });
+        }
+    }
+
+    /// Map a finished daemon task back to its graph node and advance. The
+    /// `Running` guard makes this idempotent: once the node is Complete/Failed a
+    /// second `TurnEnded` (e.g. a multi-turn agent) no longer matches, so we
+    /// never re-parse a plan or re-dispatch.
+    async fn handle_task_finished(&mut self, task_id: &str, result: String, success: bool) {
+        let found = self.graphs.iter().find_map(|(gid, g)| {
+            g.nodes
+                .values()
+                .find(|n| {
+                    n.daemon_task_id.as_deref() == Some(task_id)
+                        && n.status == NodeStatus::Running
+                })
+                .map(|n| (gid.clone(), n.id.clone()))
+        });
+        let Some((graph_id, node_id)) = found else {
+            return;
+        };
+        if success {
+            self.handle_node_complete(&graph_id, &node_id, task_id, result)
+                .await;
+        } else {
+            self.handle_node_failed(&graph_id, &node_id, task_id, &result)
+                .await;
         }
     }
 
@@ -505,5 +547,61 @@ mod tests {
         let infos = list_rx.await.unwrap();
         assert_eq!(infos.len(), 1);
         assert_eq!(infos[0].project, "demo");
+    }
+
+    #[tokio::test]
+    async fn planner_completion_dispatches_worker() {
+        let daemon = test_daemon();
+        // Keep the test hermetic: no real git worktrees in the repo.
+        let config = config::OrchestratorConfig {
+            worktrees_enabled: false,
+            ..Default::default()
+        };
+        let (cmd_tx, event_tx) = spawn_orchestrator(config, daemon);
+        let mut events = event_tx.subscribe();
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(OrchCommand::StartPlan {
+                project: "demo".into(),
+                goal: "g".into(),
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        let _graph_id = reply_rx.await.unwrap();
+
+        // Capture the planner's daemon task id from its dispatch event.
+        let planner_task = loop {
+            if let OrchEvent::NodeDispatched { task_id, kind, .. } = events.recv().await.unwrap() {
+                if kind == "plan" {
+                    break task_id;
+                }
+            }
+        };
+
+        // Feed back a planner result — fenced JSON, exactly as real agents emit.
+        let plan = "```json\n{\"tasks\":[{\"spec\":\"do a\",\"depends_on\":[]}],\"reviews\":[]}\n```";
+        cmd_tx
+            .send(OrchCommand::TaskFinished {
+                task_id: planner_task,
+                result: plan.into(),
+                success: true,
+            })
+            .await
+            .unwrap();
+
+        // The feedback loop must now parse the plan and dispatch an implement node.
+        let dispatched_implement = loop {
+            match events.recv().await.unwrap() {
+                OrchEvent::NodeDispatched { kind, .. } if kind == "implement" => break true,
+                OrchEvent::AllComplete { .. } => break false,
+                _ => {}
+            }
+        };
+        assert!(
+            dispatched_implement,
+            "planner completion should dispatch a worker node"
+        );
     }
 }
