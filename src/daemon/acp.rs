@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -183,6 +183,13 @@ pub fn spawn_acp_session(
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
     let perms: Arc<Mutex<HashMap<String, PendingPerm>>> = Arc::new(Mutex::new(HashMap::new()));
     let next_id = Arc::new(AtomicU64::new(1));
+    // True only while a `session/load` RPC is in flight. During that window the
+    // agent replays its entire transcript back as `session/update`
+    // notifications; we already have that history persisted, so the reader
+    // drops it instead of re-streaming (and re-persisting) it to clients as if
+    // it were live — which used to flood the chat and blink task status on
+    // every resume of an old session.
+    let replaying = Arc::new(AtomicBool::new(false));
     let permission_run_id = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos().to_string())
@@ -198,6 +205,7 @@ pub fn spawn_acp_session(
         let cwd = cwd.clone();
         let permission_run_id = permission_run_id.clone();
         let policy_tx_reader = policy_tx.clone();
+        let replaying = Arc::clone(&replaying);
         tokio::spawn(async move {
             let _child = child; // hold so kill_on_drop fires when the reader ends
             let mut lines = BufReader::new(stdout).lines();
@@ -239,17 +247,25 @@ pub fn spawn_acp_session(
                 let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
 
                 match method {
-                    "session/update" => match parse_update(&params) {
-                        Some(update) => {
-                            let _ = updates.send((task_id.clone(), update));
+                    "session/update" => {
+                        // Drop transcript replayed during `session/load` — it is
+                        // already in history; re-streaming it looks like a live
+                        // flood and re-flips task status ("traffic light").
+                        if replaying.load(Ordering::Acquire) {
+                            continue;
                         }
-                        None if debug => {
-                            eprintln!(
-                                "[acp {task_id} <<?] unhandled session/update shape: {params}"
-                            );
+                        match parse_update(&params) {
+                            Some(update) => {
+                                let _ = updates.send((task_id.clone(), update));
+                            }
+                            None if debug => {
+                                eprintln!(
+                                    "[acp {task_id} <<?] unhandled session/update shape: {params}"
+                                );
+                            }
+                            None => {}
                         }
-                        None => {}
-                    },
+                    }
                     "session/request_permission" => {
                         let Some(agent_id) = id else { continue };
                         let (title, options, map) = parse_permission(&params);
@@ -347,6 +363,7 @@ pub fn spawn_acp_session(
         let perms = Arc::clone(&perms);
         let next_id = Arc::clone(&next_id);
         let updates = updates.clone();
+        let replaying = Arc::clone(&replaying);
         tokio::spawn(async move {
             const HS: std::time::Duration = std::time::Duration::from_secs(15);
 
@@ -387,7 +404,11 @@ pub fn spawn_acp_session(
                     ));
                     return;
                 }
-                match tokio::time::timeout(
+                // Replay window: the agent streams its whole transcript back
+                // between this request and its reply. The reader drops those
+                // updates while the flag is set.
+                replaying.store(true, Ordering::Release);
+                let loaded = tokio::time::timeout(
                     HS,
                     rpc(
                         &out_tx,
@@ -399,8 +420,9 @@ pub fn spawn_acp_session(
                         }),
                     ),
                 )
-                .await
-                {
+                .await;
+                replaying.store(false, Ordering::Release);
+                match loaded {
                     Ok(Some(_)) => sid,
                     _ => {
                         let _ = updates.send((
