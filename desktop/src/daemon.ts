@@ -228,6 +228,51 @@ class DaemonClient {
       }
       case "sessions.list":
         return Promise.resolve({ sessions: [] });
+      case "orchestrate.start": {
+        const graphId = `g${Math.random().toString(36).slice(2, 7)}`;
+        const taskId = `t${Math.random().toString(36).slice(2, 7)}`;
+        const goal = String(p.goal ?? "");
+        // Create a parent task with orchestration graph
+        const graph = {
+          id: graphId,
+          goal,
+          nodes: [
+            {
+              id: `${graphId}_plan`,
+              kind: "plan" as const,
+              agent: "claude",
+              status: "running" as const,
+              taskId,
+            },
+          ],
+        };
+        const task = {
+          id: taskId,
+          project: String(p.project),
+          prompt: goal,
+          agent: "claude",
+          status: "running" as const,
+          tags: ["orchestrator"],
+          createdAt: nowSecs(),
+          updatedAt: nowSecs(),
+          filesChanged: 0,
+          blockedReason: null,
+          orchestrationGraph: graph,
+        };
+        this.applyEvent({ event: "task.created", data: task });
+        return Promise.resolve({ graphId, taskId });
+      }
+      case "orchestrate.list":
+        return Promise.resolve({
+          graphs: this.state.snapshot.tasks
+            .filter((t) => t.orchestrationGraph)
+            .map((t) => ({
+              id: t.orchestrationGraph!.id,
+              goal: t.orchestrationGraph!.goal,
+              project: t.project,
+              totalNodes: t.orchestrationGraph!.nodes.length,
+            })),
+        });
       default:
         return Promise.resolve({});
     }
@@ -370,6 +415,14 @@ class DaemonClient {
       case "terminal.screen":
       case "terminal.exited":
         break;
+      // ── Orchestration events: update parent task's orchestrationGraph ──
+      case "orchestration.nodeDispatched":
+      case "orchestration.nodeCompleted":
+      case "orchestration.nodeFailed":
+      case "orchestration.allComplete":
+        // The parent task is updated via task.updated events from the daemon.
+        // These events are consumed by the UI for real-time graph updates.
+        break;
     }
   }
 
@@ -443,6 +496,37 @@ class DaemonClient {
       title,
     });
     return (result as { taskId?: string })?.taskId ?? "";
+  }
+
+  /** Start an orchestration: planner → workers → reviewers pipeline. */
+  async orchestrateStart(
+    project: string,
+    goal: string,
+  ): Promise<{ graphId: string; taskId: string }> {
+    const result = await this.request("orchestrate.start", { project, goal });
+    const r = result as { graphId?: string; taskId?: string };
+    return { graphId: r.graphId ?? "", taskId: r.taskId ?? "" };
+  }
+
+  /** List active orchestration graphs. */
+  async orchestrateList(): Promise<unknown[]> {
+    const result = await this.request("orchestrate.list", {});
+    const graphs = (result as { graphs?: unknown[] })?.graphs;
+    return Array.isArray(graphs) ? graphs : [];
+  }
+
+  /** Get the orchestrator configuration. */
+  async orchestrateGetConfig(): Promise<import("./protocol").OrchestratorConfig> {
+    const result = await this.request("orchestrate.getConfig", {});
+    return result as import("./protocol").OrchestratorConfig;
+  }
+
+  /** Save the orchestrator configuration. */
+  async orchestrateSaveConfig(
+    config: import("./protocol").OrchestratorConfig,
+  ): Promise<boolean> {
+    const result = await this.request("orchestrate.saveConfig", { config });
+    return (result as { ok?: boolean })?.ok ?? false;
   }
 }
 

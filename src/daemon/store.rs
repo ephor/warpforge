@@ -68,6 +68,10 @@ impl Store {
                 acp_command  TEXT NOT NULL,
                 enabled      INTEGER NOT NULL DEFAULT 1
             );
+            CREATE TABLE IF NOT EXISTS orchestrator_config (
+                id         INTEGER PRIMARY KEY CHECK (id = 1),
+                config_json TEXT NOT NULL
+            );
             "#,
         )?;
         // Existing databases from before config selector persistence won't have
@@ -150,6 +154,7 @@ impl Store {
                 blocked_reason: row.get(10)?,
                 config_options: serde_json::from_str(&config_options_json).unwrap_or_default(),
                 worktree: row.get(12)?,
+                orchestration_graph: None,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -188,6 +193,32 @@ impl Store {
                 rusqlite::params![a.id, a.display_name, a.acp_command, a.enabled as i64],
             )?;
         }
+        Ok(())
+    }
+
+    pub fn load_orchestrator_config(
+        &self,
+    ) -> Result<Option<crate::orchestration::config::OrchestratorConfig>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT config_json FROM orchestrator_config WHERE id = 1")?;
+        let mut rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        if let Some(Ok(json)) = rows.next() {
+            Ok(serde_json::from_str(&json).ok())
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn save_orchestrator_config(
+        &self,
+        config: &crate::orchestration::config::OrchestratorConfig,
+    ) -> Result<()> {
+        let json = serde_json::to_string(config)?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO orchestrator_config (id, config_json) VALUES (1, ?1)",
+            rusqlite::params![json],
+        )?;
         Ok(())
     }
 

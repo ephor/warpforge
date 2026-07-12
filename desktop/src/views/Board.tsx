@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { ArrowUp, ArrowDown, Plus, Clock, CheckCheck, GitPullRequestArrow, Activity, GitBranch } from "lucide-react";
-import { Snapshot, TaskInfo, TaskStatus } from "../protocol";
-import { taskBadge, elapsed } from "@/lib/status";
+import { ArrowUp, ArrowDown, Plus, Clock, CheckCheck, GitPullRequestArrow, Activity, GitBranch, ChevronDown, ChevronRight } from "lucide-react";
+import { Snapshot, TaskInfo, TaskStatus, OrchNodeInfo } from "../protocol";
+import { taskBadge, elapsed, orchNodeBadge } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -32,6 +32,7 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
   const [agent, setAgent] = useState("all");
   // Local priority ordering for the queue (daemon would persist this).
   const [order, setOrder] = useState<string[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const agents = useMemo(
     () => [...new Set(snapshot.tasks.map((t) => t.agent))].sort(),
@@ -65,6 +66,15 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
     if (j < 0 || j >= ids.length) return;
     [ids[i], ids[j]] = [ids[j], ids[i]];
     setOrder(ids);
+  };
+
+  const toggleExpanded = (id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
   const done = byStatus("done").sort((a, b) => b.updatedAt - a.updatedAt);
@@ -140,21 +150,40 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
 
         <Column title="Active" count={active.length}>
           {active.map((t) => (
-            <TaskCard key={t.id} task={t} onOpen={() => onOpenTask(t.id)} />
+            <TaskCard
+              key={t.id}
+              task={t}
+              onOpen={() => onOpenTask(t.id)}
+              expanded={expanded.has(t.id)}
+              onToggleExpand={() => toggleExpanded(t.id)}
+            />
           ))}
           {active.length === 0 && <Empty />}
         </Column>
 
         <Column title="Review / blocked" count={review.length}>
           {review.map((t) => (
-            <TaskCard key={t.id} task={t} onOpen={() => onOpenTask(t.id)} />
+            <TaskCard
+              key={t.id}
+              task={t}
+              onOpen={() => onOpenTask(t.id)}
+              expanded={expanded.has(t.id)}
+              onToggleExpand={() => toggleExpanded(t.id)}
+            />
           ))}
           {review.length === 0 && <Empty />}
         </Column>
 
         <Column title="History" count={done.length}>
           {done.map((t) => (
-            <TaskCard key={t.id} task={t} onOpen={() => onOpenTask(t.id)} muted />
+            <TaskCard
+              key={t.id}
+              task={t}
+              onOpen={() => onOpenTask(t.id)}
+              muted
+              expanded={expanded.has(t.id)}
+              onToggleExpand={() => toggleExpanded(t.id)}
+            />
           ))}
           {done.length === 0 && <Empty />}
         </Column>
@@ -217,34 +246,93 @@ function Column({
   );
 }
 
-function TaskCard({ task, onOpen, muted }: { task: TaskInfo; onOpen: () => void; muted?: boolean }) {
+function TaskCard({
+  task,
+  onOpen,
+  muted,
+  expanded,
+  onToggleExpand,
+}: {
+  task: TaskInfo;
+  onOpen: () => void;
+  muted?: boolean;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
+}) {
   const badge = taskBadge(task.status);
+  const nodes = task.orchestrationGraph?.nodes;
+  const hasAccordion = nodes && nodes.length > 0;
+
   return (
-    <Card
-      className={cn(
-        "cursor-pointer bg-secondary/40 p-2.5 transition-colors hover:border-primary/60",
-        muted && "opacity-70",
-      )}
-      onClick={onOpen}
-    >
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span className="font-semibold text-foreground">{task.project}</span>
-        <span className="flex items-center gap-1">
-          {task.worktree && <GitBranch className="size-3 text-primary" title="Isolated worktree" />}
-          {task.agent}
-        </span>
-      </div>
-      <p className="my-1.5 line-clamp-2 text-sm">{task.prompt}</p>
-      <div className="flex items-center gap-2">
-        <Badge variant={badge.variant}>{badge.label}</Badge>
-        {task.filesChanged > 0 && (
-          <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
+    <div>
+      <Card
+        className={cn(
+          "bg-secondary/40 p-2.5 transition-colors hover:border-primary/60",
+          muted && "opacity-70",
         )}
-        <span className="tnum ml-auto text-xs text-muted-foreground">
-          {task.status === "done" ? `${elapsed(task.updatedAt)} ago` : elapsed(task.createdAt)}
-        </span>
-      </div>
-    </Card>
+      >
+        {/* Clickable row: opens TaskDetail */}
+        <button className="w-full cursor-pointer text-left" onClick={onOpen}>
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span className="font-semibold text-foreground">{task.project}</span>
+            <span className="flex items-center gap-1">
+              {task.worktree && <GitBranch className="size-3 text-primary" />}
+              {task.agent}
+            </span>
+          </div>
+          <p className="my-1.5 line-clamp-2 text-sm">{task.prompt}</p>
+          <div className="flex items-center gap-2">
+            <Badge variant={badge.variant}>{badge.label}</Badge>
+            {task.filesChanged > 0 && (
+              <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
+            )}
+            <span className="tnum ml-auto text-xs text-muted-foreground">
+              {task.status === "done" ? `${elapsed(task.updatedAt)} ago` : elapsed(task.createdAt)}
+            </span>
+          </div>
+        </button>
+
+        {/* Accordion toggle for orchestrator tasks */}
+        {hasAccordion && (
+          <button
+            className="mt-1.5 flex w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExpand?.();
+            }}
+          >
+            {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+            <span>{nodes.length} subtasks</span>
+            <span className="ml-auto text-[10px]">
+              {nodes.filter((n) => n.status === "complete").length}/{nodes.length}
+            </span>
+          </button>
+        )}
+      </Card>
+
+      {/* Expanded subtask list */}
+      {hasAccordion && expanded && (
+        <div className="ml-2 mt-1 flex flex-col gap-1 border-l-2 border-border pl-2">
+          {nodes.map((node) => (
+            <NodeRow key={node.id} node={node} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NodeRow({ node }: { node: OrchNodeInfo }) {
+  const badge = orchNodeBadge(node.status);
+  return (
+    <div className="flex items-center gap-2 rounded bg-secondary/20 px-2 py-1 text-xs">
+      <Badge variant={badge.variant} className="w-14 text-center">
+        {badge.label}
+      </Badge>
+      <span className="font-medium text-foreground">{node.kind}</span>
+      <span className="text-muted-foreground">{node.agent}</span>
+      {node.taskId && <span className="ml-auto text-[10px] text-muted-foreground/60">{node.taskId}</span>}
+    </div>
   );
 }
 

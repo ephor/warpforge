@@ -264,6 +264,15 @@ pub enum Command {
     ListOrchestrations {
         reply: oneshot::Sender<Vec<crate::orchestration::GraphInfo>>,
     },
+    /// Get the orchestrator configuration.
+    GetOrchestratorConfig {
+        reply: oneshot::Sender<wire::OrchestratorConfigDto>,
+    },
+    /// Save the orchestrator configuration.
+    SaveOrchestratorConfig {
+        config: wire::OrchestratorConfigDto,
+        reply: oneshot::Sender<bool>,
+    },
     Shutdown,
 }
 
@@ -644,6 +653,8 @@ pub struct Daemon {
     orch_tx: Option<mpsc::Sender<crate::orchestration::OrchCommand>>,
     /// Receiver for orchestrator events (forwarded to broadcast).
     orch_event_rx: Option<broadcast::Receiver<crate::orchestration::OrchEvent>>,
+    /// Orchestrator configuration (loaded from ~/.warpforge/orchestrator.yaml).
+    orch_config: crate::orchestration::config::OrchestratorConfig,
 }
 
 impl Daemon {
@@ -677,6 +688,12 @@ impl Daemon {
             .map(|s| !s.agents_configured())
             .unwrap_or(false);
 
+        let orch_config = store
+            .as_ref()
+            .and_then(|s| s.load_orchestrator_config().ok())
+            .flatten()
+            .unwrap_or_default();
+
         let daemon = Daemon {
             projects,
             tasks,
@@ -694,6 +711,7 @@ impl Daemon {
             policy_tx,
             orch_tx: None,
             orch_event_rx: None,
+            orch_config,
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -708,8 +726,8 @@ impl Daemon {
             });
         }
 
-        // Spawn the orchestrator with default config.
-        let orch_config = crate::orchestration::config::OrchestratorConfig::default();
+        // Spawn the orchestrator with loaded config.
+        let orch_config = daemon.orch_config.clone();
         let orch_handle = handle.clone();
         let (orch_cmd_tx, orch_event_bcast) =
             crate::orchestration::spawn_orchestrator(orch_config, orch_handle);
@@ -1601,6 +1619,18 @@ impl Daemon {
                 } else {
                     let _ = reply.send(vec![]);
                 }
+            }
+            Command::GetOrchestratorConfig { reply } => {
+                let dto = self.orch_config.clone().into();
+                let _ = reply.send(dto);
+            }
+            Command::SaveOrchestratorConfig { config, reply } => {
+                self.orch_config = config.into();
+                // Persist to store if available.
+                if let Some(ref store) = self.store {
+                    let _ = store.save_orchestrator_config(&self.orch_config);
+                }
+                let _ = reply.send(true);
             }
         }
     }

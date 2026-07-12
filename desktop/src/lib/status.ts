@@ -58,6 +58,24 @@ export function pfBadge(s: PortForwardStatus): { variant: Variant; label: string
   }
 }
 
+export function orchNodeBadge(s: "pending" | "running" | "complete" | "failed" | "skipped"): {
+  variant: Variant;
+  label: string;
+} {
+  switch (s) {
+    case "running":
+      return { variant: "ok", label: "running" };
+    case "pending":
+      return { variant: "outline", label: "pending" };
+    case "complete":
+      return { variant: "default", label: "done" };
+    case "failed":
+      return { variant: "destructive", label: "failed" };
+    case "skipped":
+      return { variant: "outline", label: "skipped" };
+  }
+}
+
 /** Left-edge accent colour for a task tile, by status. */
 export function taskEdge(s: TaskStatus): string {
   switch (s) {

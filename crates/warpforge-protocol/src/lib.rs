@@ -263,6 +263,26 @@ pub enum Method {
     },
     #[serde(rename = "terminal.kill")]
     TerminalKill { terminal_id: String },
+
+    // ── Orchestration ──
+    /// Start an orchestration: planner → workers → reviewers pipeline.
+    /// Returns `{ graphId, taskId }` — the taskId is the parent orchestrator task.
+    #[serde(rename = "orchestrate.start")]
+    OrchestrateStart { project: String, goal: String },
+    /// List active orchestration graphs.
+    #[serde(rename = "orchestrate.list")]
+    OrchestrateList {},
+    /// Cancel an orchestration and its child tasks.
+    #[serde(rename = "orchestrate.cancel")]
+    OrchestrateCancel { graph_id: String },
+    /// Get the orchestrator configuration.
+    #[serde(rename = "orchestrate.getConfig")]
+    OrchestrateGetConfig {},
+    /// Save the orchestrator configuration.
+    #[serde(rename = "orchestrate.saveConfig")]
+    OrchestrateSaveConfig {
+        config: OrchestratorConfigDto,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -360,6 +380,35 @@ pub enum Event {
     },
     #[serde(rename = "terminal.exited")]
     TerminalExited { terminal_id: String, code: i32 },
+
+    // ── Orchestration ──
+    /// A worker/reviewer node was dispatched.
+    #[serde(rename = "orchestration.nodeDispatched")]
+    OrchestrationNodeDispatched {
+        graph_id: String,
+        node_id: String,
+        task_id: String,
+        agent: String,
+        kind: String,
+    },
+    /// A node completed successfully.
+    #[serde(rename = "orchestration.nodeCompleted")]
+    OrchestrationNodeCompleted {
+        graph_id: String,
+        node_id: String,
+        task_id: String,
+    },
+    /// A node failed.
+    #[serde(rename = "orchestration.nodeFailed")]
+    OrchestrationNodeFailed {
+        graph_id: String,
+        node_id: String,
+        task_id: String,
+        reason: String,
+    },
+    /// All nodes in the orchestration are done.
+    #[serde(rename = "orchestration.allComplete")]
+    OrchestrationAllComplete { graph_id: String, project: String },
 }
 
 // ─── State DTOs ──────────────────────────────────────────────────────────────
@@ -465,6 +514,10 @@ pub struct TaskInfo {
     /// `null` / omitted when the task runs in the project's main working dir.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    /// Orchestration graph for parent orchestrator tasks. Contains child nodes
+    /// (workers/reviewers) each with their own task_id for navigation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestration_graph: Option<OrchGraphInfo>,
 }
 
 /// Board columns. `Interrupted` covers sessions whose live ACP handle was lost
@@ -793,6 +846,88 @@ pub struct DaemonEndpoint {
     /// `{ "auth": "<token>" }`.
     pub token: String,
     pub version: String,
+}
+
+// ─── Orchestration DTOs ──────────────────────────────────────────────────────
+
+/// Orchestration graph info, embedded in a parent TaskInfo.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrchGraphInfo {
+    pub id: String,
+    pub goal: String,
+    pub nodes: Vec<OrchNodeInfo>,
+}
+
+/// A single node in the orchestration graph.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrchNodeInfo {
+    pub id: String,
+    pub kind: OrchNodeKind,
+    pub agent: String,
+    pub status: OrchNodeStatus,
+    /// Task ID on the board — click to open TaskDetail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    /// Node result text from the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OrchNodeKind {
+    Plan,
+    Implement,
+    Review,
+    Merge,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OrchNodeStatus {
+    Pending,
+    Running,
+    Complete,
+    Failed,
+    Skipped,
+}
+
+/// Orchestrator configuration DTO (wire format).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrchestratorConfigDto {
+    pub planner_agent: String,
+    pub worker_pool: Vec<OrchWorkerPoolDto>,
+    pub reviewer_pool: Vec<OrchReviewerPoolDto>,
+    pub worktrees_enabled: bool,
+}
+
+impl Default for OrchestratorConfigDto {
+    fn default() -> Self {
+        Self {
+            planner_agent: "claude".into(),
+            worker_pool: vec![
+                OrchWorkerPoolDto { agent: "claude".into() },
+                OrchWorkerPoolDto { agent: "codex".into() },
+            ],
+            reviewer_pool: vec![OrchReviewerPoolDto { agent: "opencode".into() }],
+            worktrees_enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrchWorkerPoolDto {
+    pub agent: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct OrchReviewerPoolDto {
+    pub agent: String,
 }
 
 #[cfg(test)]

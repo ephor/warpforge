@@ -133,6 +133,7 @@ pub fn task_info(t: &Task) -> wire::TaskInfo {
         blocked_reason: t.blocked_reason.clone(),
         config_options: t.config_options.clone(),
         worktree: t.worktree.clone(),
+        orchestration_graph: t.orchestration_graph.clone(),
     }
 }
 
@@ -210,6 +211,49 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
         // Internal-only: the wire conveys terminals via screen/exited events.
         Event::AgentSpawned { .. } | Event::AgentStatus { .. } => None,
         // Orchestration events forwarded from the orchestrator actor.
-        Event::OrchestrationEvent(_) => None,
+        Event::OrchestrationEvent(orch_ev) => match orch_ev.clone() {
+            crate::orchestration::OrchEvent::NodeDispatched {
+                graph_id,
+                node_id,
+                task_id,
+                agent,
+                kind,
+            } => Some(wire::Event::OrchestrationNodeDispatched {
+                graph_id,
+                node_id,
+                task_id,
+                agent,
+                kind,
+            }),
+            crate::orchestration::OrchEvent::NodeCompleted {
+                graph_id,
+                node_id,
+                task_id,
+            } => Some(wire::Event::OrchestrationNodeCompleted {
+                graph_id,
+                node_id,
+                task_id,
+            }),
+            crate::orchestration::OrchEvent::NodeFailed {
+                graph_id,
+                node_id,
+                task_id,
+                reason,
+            } => Some(wire::Event::OrchestrationNodeFailed {
+                graph_id,
+                node_id,
+                task_id,
+                reason,
+            }),
+            crate::orchestration::OrchEvent::AllComplete {
+                graph_id,
+                project,
+            } => Some(wire::Event::OrchestrationAllComplete {
+                graph_id,
+                project,
+            }),
+            crate::orchestration::OrchEvent::PlanCreated { .. } => None,
+            crate::orchestration::OrchEvent::Error { .. } => None,
+        },
     }
 }
