@@ -17,6 +17,7 @@ pub mod sessions;
 pub mod store;
 pub mod task;
 pub mod wire;
+pub mod worktree;
 
 #[allow(unused_imports)]
 pub use actor::{Command, Daemon, DaemonHandle, Event};
@@ -47,7 +48,7 @@ mod tests {
         let mut events = daemon.subscribe();
 
         let id = daemon
-            .create_task("demo", "fix the bug", "claude", vec!["bug".into()], false)
+            .create_task("demo", "fix the bug", "claude", vec!["bug".into()], false, false)
             .await;
 
         assert!(id.starts_with("t_"), "task id looks like a task id: {id}");
@@ -101,7 +102,7 @@ mod tests {
         );
         let agent = format!("node {mock}");
         let task_id = daemon
-            .create_task("demo", "fix the thing", &agent, vec![], false)
+            .create_task("demo", "fix the thing", &agent, vec![], false, false)
             .await;
 
         let mut saw_running = false;
@@ -196,7 +197,7 @@ mod tests {
         );
         let agent = format!("node {mock}");
         let task_id = daemon
-            .create_task("demo", "what port is the api on?", &agent, vec![], false)
+            .create_task("demo", "what port is the api on?", &agent, vec![], false, false)
             .await;
 
         let mut saw_running = false;
@@ -236,7 +237,7 @@ mod tests {
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let daemon = Daemon::spawn(test_projects(), store);
         let id = daemon
-            .create_task("demo", "p", "claude", vec![], false)
+            .create_task("demo", "p", "claude", vec![], false, false)
             .await;
         let mut events = daemon.subscribe();
 

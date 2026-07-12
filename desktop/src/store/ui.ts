@@ -20,7 +20,6 @@ interface UiState {
   // TaskDetail zones
   showChat: boolean;
   showDiff: boolean;
-  showTree: boolean;
   centerTab: CenterTab;
   diffView: DiffView;
   rightPanel: RightPanel;
@@ -33,7 +32,6 @@ interface UiState {
   toggleChat: () => void;
   toggleDiff: () => void;
   setShowDiff: (open: boolean) => void;
-  toggleTree: () => void;
   setCenterTab: (t: CenterTab) => void;
   setDiffView: (v: DiffView) => void;
   setRightPanel: (panel: RightPanel) => void;
@@ -50,7 +48,6 @@ export const useUi = create<UiState>()(
       attentionOpen: true,
       showChat: true,
       showDiff: true,
-      showTree: false,
       centerTab: "changes",
       diffView: "split",
       rightPanel: "changes",
@@ -65,7 +62,6 @@ export const useUi = create<UiState>()(
       toggleChat: () => set((s) => (!s.showChat || s.showDiff ? { showChat: !s.showChat } : s)),
       toggleDiff: () => set((s) => (!s.showDiff || s.showChat ? { showDiff: !s.showDiff } : s)),
       setShowDiff: (showDiff) => set((s) => (!showDiff && !s.showChat ? s : { showDiff })),
-      toggleTree: () => set((s) => ({ showTree: !s.showTree })),
       setCenterTab: (centerTab) => set({ centerTab }),
       setDiffView: (diffView) => set({ diffView }),
       setRightPanel: (rightPanel) => set({ rightPanel }),

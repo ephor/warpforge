@@ -30,6 +30,7 @@ use super::acp::{spawn_acp_session, AcpHandle, AcpUpdate};
 use super::store::Store;
 use super::task::{Task, TaskStatus};
 use super::wire as wireconv;
+use super::worktree::WorktreeManager;
 
 /// Split a `project/service` service key back into its parts (split on first
 /// `/`, which is how `ServiceManager` composes the key).
@@ -138,6 +139,8 @@ pub enum Command {
         agent: String,
         tags: Vec<String>,
         include_runtime_context: bool,
+        /// When true, create an isolated git worktree for this task.
+        worktree: bool,
         reply: oneshot::Sender<String>,
     },
     CancelTask {
@@ -146,6 +149,16 @@ pub enum Command {
     /// Delete a task and its session history permanently.
     DeleteTask {
         id: String,
+    },
+    /// Merge a task's worktree branch back into its base branch and clean up.
+    MergeWorktree {
+        task_id: String,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
+    /// List active worktrees for a project.
+    ListWorktrees {
+        project: String,
+        reply: oneshot::Sender<Vec<wire::WorktreeInfo>>,
     },
     /// List resumable agent sessions found on disk for a project's cwd.
     ListSessions {
@@ -345,6 +358,7 @@ impl DaemonHandle {
         agent: &str,
         tags: Vec<String>,
         include_runtime_context: bool,
+        worktree: bool,
     ) -> String {
         let (tx, rx) = oneshot::channel();
         self.send(Command::CreateTask {
@@ -353,6 +367,7 @@ impl DaemonHandle {
             agent: agent.to_string(),
             tags,
             include_runtime_context,
+            worktree,
             reply: tx,
         })
         .await;
@@ -564,6 +579,26 @@ impl DaemonHandle {
         rx.await
             .unwrap_or_else(|_| Err(anyhow::anyhow!("daemon closed")))
     }
+
+    pub async fn merge_worktree(&self, task_id: &str) -> Result<String, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MergeWorktree {
+            task_id: task_id.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| Err("daemon closed".into()))
+    }
+
+    pub async fn list_worktrees(&self, project: &str) -> Vec<wire::WorktreeInfo> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::ListWorktrees {
+            project: project.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_default()
+    }
 }
 
 pub struct Daemon {
@@ -584,6 +619,8 @@ pub struct Daemon {
     /// replay matches local history in order, drop it; the first mismatch is
     /// new live output and disables the guard.
     resume_replay: HashMap<String, VecDeque<wire::SessionUpdate>>,
+    /// Per-project git worktree managers, lazily created on first worktree use.
+    worktrees: HashMap<String, WorktreeManager>,
 }
 
 impl Daemon {
@@ -628,6 +665,7 @@ impl Daemon {
             acp_tx,
             store,
             resume_replay: HashMap::new(),
+            worktrees: HashMap::new(),
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -1045,9 +1083,28 @@ impl Daemon {
                 agent,
                 tags,
                 include_runtime_context,
+                worktree: use_worktree,
                 reply,
             } => {
-                let task = Task::new(&project, &prompt, &agent, tags);
+                let mut task = Task::new(&project, &prompt, &agent, tags);
+                // Create worktree if requested and project has a git repo.
+                if use_worktree {
+                    if let Some(path) = self.project_path(&project) {
+                        let wt_mgr = self
+                            .worktrees
+                            .entry(project.clone())
+                            .or_insert_with(|| WorktreeManager::new(std::path::PathBuf::from(&path)));
+                        match wt_mgr.create(&task.id, None).await {
+                            Ok(wt) => {
+                                task.worktree = Some(wt.path.to_string_lossy().to_string());
+                            }
+                            Err(e) => {
+                                eprintln!("[daemon] worktree creation failed: {e}");
+                                // Fall back to non-isolated run.
+                            }
+                        }
+                    }
+                }
                 let id = task.id.clone();
                 self.tasks.insert(id.clone(), task.clone());
                 self.persist(&task);
@@ -1271,12 +1328,72 @@ impl Daemon {
                 if let Some(handle) = self.sessions.remove(&id) {
                     handle.cancel();
                 }
+                // Clean up worktree if the task had one.
+                if let Some(task) = self.tasks.get(&id) {
+                    if task.worktree.is_some() {
+                        if let Some(wt_mgr) = self.worktrees.get_mut(&task.project) {
+                            if let Err(e) = wt_mgr.remove(&id).await {
+                                eprintln!("[daemon] worktree cleanup failed for {id}: {e}");
+                            }
+                        }
+                    }
+                }
                 if self.tasks.remove(&id).is_some() {
                     if let Some(store) = &self.store {
                         let _ = store.delete_task(&id);
                     }
                     self.emit(Event::TaskRemoved { id });
                 }
+            }
+            Command::MergeWorktree { task_id, reply } => {
+                let result = if let Some(task) = self.tasks.get(&task_id) {
+                    if let Some(wt_mgr) = self.worktrees.get(&task.project) {
+                        match wt_mgr.merge(&task_id).await {
+                            Ok(super::worktree::MergeResult::Ok { branch }) => {
+                                // Clean up after merge.
+                                if let Some(wt_mgr) = self.worktrees.get_mut(&task.project) {
+                                    let _ = wt_mgr.remove(&task_id).await;
+                                }
+                                // Clear the worktree field on the task.
+                                if let Some(task) = self.tasks.get_mut(&task_id) {
+                                    task.worktree = None;
+                                    task.updated_at = super::task::now_secs();
+                                    let updated = task.clone();
+                                    self.persist(&updated);
+                                    self.emit(Event::TaskUpdated(updated));
+                                }
+                                Ok(branch)
+                            }
+                            Ok(super::worktree::MergeResult::Conflict { message, branch }) => {
+                                Err(format!("merge conflict on {branch}: {message}"))
+                            }
+                            Ok(super::worktree::MergeResult::Error(msg)) => Err(msg),
+                            Err(e) => Err(e.to_string()),
+                        }
+                    } else {
+                        Err("no worktree manager for this project".into())
+                    }
+                } else {
+                    Err(format!("unknown task {task_id}"))
+                };
+                let _ = reply.send(result);
+            }
+            Command::ListWorktrees { project, reply } => {
+                let wts = if let Some(wt_mgr) = self.worktrees.get(&project) {
+                    wt_mgr
+                        .list()
+                        .into_iter()
+                        .map(|wt| wire::WorktreeInfo {
+                            task_id: wt.task_id.clone(),
+                            path: wt.path.to_string_lossy().to_string(),
+                            branch: wt.branch.clone(),
+                            base_branch: wt.base_branch.clone(),
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let _ = reply.send(wts);
             }
             Command::ListSessions { project, reply } => {
                 let path = self.project_path(&project);
@@ -1563,6 +1680,9 @@ impl Daemon {
     /// Some agents replay prior history as `session/update`; the frontend stream
     /// is append-only today, so this path is used primarily to regain a live
     /// handle and deliver a new prompt after daemon restarts.
+    ///
+    /// If the task has a worktree, the agent runs in the worktree directory
+    /// instead of the project root — so its edits are isolated.
     fn start_session(
         &mut self,
         task_id: &str,
@@ -1572,9 +1692,18 @@ impl Daemon {
         include_runtime_context: bool,
         resume: Option<String>,
     ) {
-        let cwd = self
-            .project_path(project)
-            .unwrap_or_else(|| ".".to_string());
+        // Resolve cwd: worktree path if set, otherwise project root.
+        let cwd = if let Some(task) = self.tasks.get(task_id) {
+            if let Some(ref wt_path) = task.worktree {
+                wt_path.clone()
+            } else {
+                self.project_path(project)
+                    .unwrap_or_else(|| ".".to_string())
+            }
+        } else {
+            self.project_path(project)
+                .unwrap_or_else(|| ".".to_string())
+        };
         let command = self.resolve_agent_command(project, agent);
         let full_prompt = match include_runtime_context
             .then(|| self.runtime_context(project))

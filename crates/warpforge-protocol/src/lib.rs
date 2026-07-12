@@ -134,6 +134,10 @@ pub enum Method {
         /// This is what ties Projects to agent work (see docs/UI_CONCEPT.md).
         #[serde(default = "default_true")]
         include_runtime_context: bool,
+        /// When true, create an isolated git worktree for this task so it
+        /// doesn't conflict with the main working tree or other tasks.
+        #[serde(default)]
+        worktree: bool,
     },
     #[serde(rename = "task.cancel")]
     TaskCancel { task_id: String },
@@ -143,6 +147,13 @@ pub enum Method {
     /// Delete a task and its persisted session history permanently.
     #[serde(rename = "task.delete")]
     TaskDelete { task_id: String },
+    /// Merge a task's worktree branch back into its base branch and remove
+    /// the worktree. No-op if the task has no worktree.
+    #[serde(rename = "task.mergeWorktree")]
+    TaskMergeWorktree { task_id: String },
+    /// List active worktrees for a project.
+    #[serde(rename = "task.listWorktrees")]
+    TaskListWorktrees { project: String },
 
     // ── External agent sessions (claude/codex on-disk session stores) ──
     /// List agent sessions found on disk for a project's working directory.
@@ -450,6 +461,10 @@ pub struct TaskInfo {
     /// their controls after a restart.
     #[serde(default)]
     pub config_options: Vec<ConfigOption>,
+    /// Path to the git worktree for this task, if isolated.
+    /// `null` / omitted when the task runs in the project's main working dir.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
 }
 
 /// Board columns. `Interrupted` covers sessions whose live ACP handle was lost
@@ -754,6 +769,16 @@ pub struct ExternalSession {
     pub updated_at: u64,
     /// Rough message count (0 if unknown).
     pub message_count: u32,
+}
+
+/// A git worktree for an isolated task.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    pub task_id: String,
+    pub path: String,
+    pub branch: String,
+    pub base_branch: String,
 }
 
 /// Contents of `~/.warpforge/daemon.json`, written by the daemon on startup

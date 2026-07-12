@@ -58,6 +58,9 @@ pub struct Task {
     /// Latest session selectors (model/mode/…) from the ACP session. Persisted
     /// so resumed/interrupted tasks keep the last known controls after restart.
     pub config_options: Vec<warpforge_protocol::ConfigOption>,
+    /// Path to the git worktree for this task, if it runs isolated.
+    /// `None` = run in the project's main working directory.
+    pub worktree: Option<String>,
 }
 
 impl Task {
@@ -76,6 +79,7 @@ impl Task {
             files_changed: 0,
             blocked_reason: None,
             config_options: Vec::new(),
+            worktree: None,
         }
     }
 

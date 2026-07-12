@@ -151,6 +151,8 @@ export interface TaskInfo {
   blockedReason: string | null;
   /** Session selectors (model/mode/…) reported by the live ACP session. */
   configOptions?: ConfigOption[];
+  /** Path to the git worktree for this task, if isolated. */
+  worktree?: string | null;
 }
 
 export interface ConfigChoice {
@@ -314,6 +316,14 @@ export interface ExternalSession {
   title: string;
   updatedAt: number;
   messageCount: number;
+}
+
+/** A git worktree for an isolated task. */
+export interface WorktreeInfo {
+  taskId: string;
+  path: string;
+  branch: string;
+  baseBranch: string;
 }
 
 // ── Daemon discovery (~/.warpforge/daemon.json) ─────────────────────────────
