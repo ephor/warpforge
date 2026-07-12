@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Share2, History } from "lucide-react";
+import { Share2, History, GitBranch } from "lucide-react";
 import { daemon } from "../daemon";
 import { ExternalSession, Snapshot } from "../protocol";
 import {
@@ -36,6 +36,7 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
   const [prompt, setPrompt] = useState(initialPrompt ?? "");
   const [tags, setTags] = useState("");
   const [shareContext, setShareContext] = useState(true);
+  const [useWorktree, setUseWorktree] = useState(false);
 
   const projectInfo = snapshot.projects.find((p) => p.name === project);
   // Global agent registry (from setup wizard) takes priority over per-project templates.
@@ -85,6 +86,7 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
         .map((t) => t.trim())
         .filter(Boolean),
       include_runtime_context: shareContext,
+      worktree: useWorktree,
     });
     onOpenChange(false);
   };
@@ -188,6 +190,35 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
                 ) : (
                   "No services running for this project right now."
                 )}
+              </p>
+            </div>
+          </button>
+
+          {/* Worktree isolation toggle */}
+          <button
+            type="button"
+            onClick={() => setUseWorktree((v) => !v)}
+            className={cn(
+              "flex items-start gap-3 rounded-md border p-3 text-left transition-colors",
+              useWorktree ? "border-primary/40 bg-primary/5" : "border-border",
+            )}
+          >
+            <div
+              className={cn(
+                "mt-0.5 flex size-4 items-center justify-center rounded border",
+                useWorktree ? "border-primary bg-primary" : "border-muted-foreground",
+              )}
+            >
+              {useWorktree && <div className="size-2 rounded-sm bg-primary-foreground" />}
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-1.5 text-sm font-medium">
+                <GitBranch className="size-3.5 text-primary" />
+                Run in isolated worktree
+              </div>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Creates a separate git worktree so this task's changes don't
+                conflict with the main working tree or other tasks.
               </p>
             </div>
           </button>

@@ -15,3 +15,6 @@ target/
 
 # Logs
 *.log
+
+# Reference projects (study-only clones)
+ref-projects/

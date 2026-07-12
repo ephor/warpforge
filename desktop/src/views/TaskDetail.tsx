@@ -13,13 +13,13 @@ import {
   X,
   ChevronDown,
   Trash2,
-  FolderTree,
+  Folder,
   GitBranch,
-  MessagesSquare,
-  Columns2,
+  GitCommitVertical,
+  MessageSquare,
+  Diff,
   FileText,
   SquareTerminal,
-  PanelRight,
   RefreshCw,
   Loader2,
 } from "lucide-react";
@@ -437,7 +437,7 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
                     : "text-muted-foreground hover:text-foreground",
                   )}
                 >
-                <FolderTree className="size-3.5" />
+                <GitCommitVertical className="size-3.5" />
               </button>
             </div>
           </div>
@@ -612,16 +612,16 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
           onClick={toggleChat}
           className={cn("rounded-md p-1.5 hover:bg-secondary hover:text-foreground", showChat && "bg-secondary text-foreground")}
         >
-          <MessagesSquare className="size-4" />
+          <MessageSquare className="size-4" />
         </button>
         <button
           type="button"
-          aria-label="Toggle editor"
-          title="Toggle editor"
+          aria-label="Toggle diff"
+          title="Toggle diff"
           onClick={toggleDiff}
           className={cn("rounded-md p-1.5 hover:bg-secondary hover:text-foreground", showDiff && "bg-secondary text-foreground")}
         >
-          <Columns2 className="size-4" />
+          <Diff className="size-4" />
         </button>
         <div className="my-1 h-px w-5 bg-border" />
         <button
@@ -634,7 +634,7 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
           }}
           className={cn("rounded-md p-1.5 hover:bg-secondary hover:text-foreground", rightPanel === "files" && "bg-secondary text-foreground")}
         >
-          <FolderTree className="size-4" />
+          <Folder className="size-4" />
         </button>
         <button
           type="button"
@@ -646,7 +646,7 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
           }}
           className={cn("rounded-md p-1.5 hover:bg-secondary hover:text-foreground", rightPanel === "changes" && "bg-secondary text-foreground")}
         >
-          <PanelRight className="size-4" />
+          <GitCommitVertical className="size-4" />
         </button>
         <button
           type="button"

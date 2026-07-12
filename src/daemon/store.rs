@@ -53,7 +53,8 @@ impl Store {
                 updated_at      INTEGER NOT NULL,
                 files_changed   INTEGER NOT NULL,
                 blocked_reason  TEXT,
-                config_options  TEXT NOT NULL DEFAULT '[]'
+                config_options  TEXT NOT NULL DEFAULT '[]',
+                worktree        TEXT
             );
             CREATE TABLE IF NOT EXISTS session_updates (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,6 +76,8 @@ impl Store {
             "ALTER TABLE tasks ADD COLUMN config_options TEXT NOT NULL DEFAULT '[]'",
             [],
         );
+        // Migration: add worktree column for tasks running in isolated git worktrees.
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN worktree TEXT", []);
         Ok(Self { conn })
     }
 
@@ -85,8 +88,8 @@ impl Store {
             r#"
             INSERT INTO tasks
                 (id, session_id, project, prompt, agent, status, tags,
-                 created_at, updated_at, files_changed, blocked_reason, config_options)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+                 created_at, updated_at, files_changed, blocked_reason, config_options, worktree)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
             ON CONFLICT(id) DO UPDATE SET
                 session_id=excluded.session_id,
                 status=excluded.status,
@@ -94,7 +97,8 @@ impl Store {
                 updated_at=excluded.updated_at,
                 files_changed=excluded.files_changed,
                 blocked_reason=excluded.blocked_reason,
-                config_options=excluded.config_options
+                config_options=excluded.config_options,
+                worktree=excluded.worktree
             "#,
             rusqlite::params![
                 task.id,
@@ -109,6 +113,7 @@ impl Store {
                 task.files_changed,
                 task.blocked_reason,
                 config_options,
+                task.worktree,
             ],
         )?;
         Ok(())
@@ -121,7 +126,7 @@ impl Store {
     pub fn load_tasks(&self) -> Result<Vec<Task>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, project, prompt, agent, status, tags, \
-             created_at, updated_at, files_changed, blocked_reason, config_options FROM tasks",
+             created_at, updated_at, files_changed, blocked_reason, config_options, worktree FROM tasks",
         )?;
         let rows = stmt.query_map([], |row| {
             let tags_json: String = row.get(6)?;
@@ -144,6 +149,7 @@ impl Store {
                 files_changed: row.get::<_, i64>(9)? as u32,
                 blocked_reason: row.get(10)?,
                 config_options: serde_json::from_str(&config_options_json).unwrap_or_default(),
+                worktree: row.get(12)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())

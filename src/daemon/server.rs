@@ -238,9 +238,10 @@ async fn dispatch(
             agent,
             tags,
             include_runtime_context,
+            worktree,
         } => {
             let id = handle
-                .create_task(&project, &prompt, &agent, tags, include_runtime_context)
+                .create_task(&project, &prompt, &agent, tags, include_runtime_context, worktree)
                 .await;
             Ok(json!({ "taskId": id }))
         }
@@ -341,6 +342,20 @@ async fn dispatch(
         TaskDelete { task_id } => {
             handle.send(Command::DeleteTask { id: task_id }).await;
             Ok(json!(null))
+        }
+        TaskMergeWorktree { task_id } => {
+            let result = handle.merge_worktree(&task_id).await;
+            match result {
+                Ok(branch) => Ok(json!({ "ok": true, "branch": branch })),
+                Err(e) => Err(wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message: e,
+                }),
+            }
+        }
+        TaskListWorktrees { project } => {
+            let wts = handle.list_worktrees(&project).await;
+            Ok(json!({ "worktrees": wts }))
         }
         SessionsList { project } => {
             let sessions = handle.list_sessions(&project).await;

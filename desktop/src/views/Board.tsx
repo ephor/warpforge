@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowUp, ArrowDown, Plus, Clock, CheckCheck, GitPullRequestArrow, Activity } from "lucide-react";
+import { ArrowUp, ArrowDown, Plus, Clock, CheckCheck, GitPullRequestArrow, Activity, GitBranch } from "lucide-react";
 import { Snapshot, TaskInfo, TaskStatus } from "../protocol";
 import { taskBadge, elapsed } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
@@ -229,7 +229,10 @@ function TaskCard({ task, onOpen, muted }: { task: TaskInfo; onOpen: () => void;
     >
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span className="font-semibold text-foreground">{task.project}</span>
-        <span>{task.agent}</span>
+        <span className="flex items-center gap-1">
+          {task.worktree && <GitBranch className="size-3 text-primary" title="Isolated worktree" />}
+          {task.agent}
+        </span>
       </div>
       <p className="my-1.5 line-clamp-2 text-sm">{task.prompt}</p>
       <div className="flex items-center gap-2">

@@ -7,7 +7,6 @@ import {
   Circle,
   Bot,
   PanelLeft,
-  PanelRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { DetectedAgent, GitOpResult } from "./protocol";
@@ -39,8 +38,6 @@ export default function App() {
   const setOpenTaskId = useUi((s) => s.openTask);
   const attentionOpen = useUi((s) => s.attentionOpen);
   const toggleAttention = useUi((s) => s.toggleAttention);
-  const rightPanel = useUi((s) => s.rightPanel);
-  const setRightPanel = useUi((s) => s.setRightPanel);
   const [newTaskProject, setNewTaskProject] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
@@ -217,18 +214,6 @@ export default function App() {
             <Button type="button" size="sm" onClick={() => startNewTask()}>
               <Plus className="size-4" />
               New task
-            </Button>
-            <Button
-              type="button"
-              aria-label="Right tool window"
-              size="icon"
-              variant="ghost"
-              title="Right tool window"
-              disabled={!openTask}
-              onClick={() => setRightPanel(rightPanel ? null : "changes")}
-              className={cn("size-7", rightPanel && openTask && "bg-secondary text-foreground")}
-            >
-              <PanelRight className="size-4" />
             </Button>
             <span
               className={cn(
