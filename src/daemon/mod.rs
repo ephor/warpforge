@@ -9,6 +9,7 @@
 #![allow(dead_code)]
 
 pub mod acp;
+pub mod acp_server;
 pub mod actor;
 pub mod agents;
 pub mod diff;
