@@ -9,10 +9,12 @@ import {
   PanelLeft,
   PanelRight,
 } from "lucide-react";
-import { DetectedAgent } from "./protocol";
+import { toast } from "sonner";
+import { DetectedAgent, GitOpResult } from "./protocol";
 import { daemon } from "./daemon";
 import { useUi, type View } from "./store/ui";
 import AttentionRail from "./components/AttentionRail";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -110,6 +112,42 @@ export default function App() {
       unlisten?.();
     };
   }, []);
+
+  // Cmd+T / Ctrl+T → update current task's branch from upstream.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key !== "t") return;
+      const id = useUi.getState().openTaskId;
+      if (!id) return;
+      e.preventDefault();
+      const task = state.snapshot.tasks.find((t) => t.id === id);
+      if (!task) return;
+      daemon
+        .request("git.update", { task_id: id })
+        .then((r) => {
+          const res = r as GitOpResult;
+          switch (res.status) {
+            case "up_to_date":
+              toast.info(res.message);
+              break;
+            case "ok":
+              toast.success(res.message);
+              break;
+            case "conflict":
+              toast.error(res.message, {
+                description: res.conflicts.length > 0 ? res.conflicts.join(", ") : undefined,
+              });
+              break;
+            case "error":
+              toast.error(res.message);
+              break;
+          }
+        })
+        .catch((e: Error) => toast.error(e.message));
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [state.snapshot.tasks]);
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -212,25 +250,27 @@ export default function App() {
         <div className="flex min-h-0 flex-1 gap-3 overflow-hidden p-3">
           {attentionOpen && <AttentionRail state={state} onOpenTask={setOpenTaskId} />}
           <main className="min-h-0 flex-1 overflow-hidden">
-            {openTask ? (
-              <TaskDetail
-                key={openTask.id}
-                task={openTask}
-                updates={state.sessionUpdates[openTask.id] ?? []}
-                state={state}
-                onClose={() => setOpenTaskId(null)}
-              />
-            ) : view === "control" ? (
-              <MissionControl state={state} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
-            ) : view === "board" ? (
-              <Board snapshot={state.snapshot} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
-            ) : (
-              <Projects
-                snapshot={state.snapshot}
-                onOpenTask={setOpenTaskId}
-                onNewTask={startNewTask}
-              />
-            )}
+            <ErrorBoundary>
+              {openTask ? (
+                <TaskDetail
+                  key={openTask.id}
+                  task={openTask}
+                  updates={state.sessionUpdates[openTask.id] ?? []}
+                  state={state}
+                  onClose={() => setOpenTaskId(null)}
+                />
+              ) : view === "control" ? (
+                <MissionControl state={state} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
+              ) : view === "board" ? (
+                <Board snapshot={state.snapshot} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
+              ) : (
+                <Projects
+                  snapshot={state.snapshot}
+                  onOpenTask={setOpenTaskId}
+                  onNewTask={startNewTask}
+                />
+              )}
+            </ErrorBoundary>
           </main>
         </div>
 
