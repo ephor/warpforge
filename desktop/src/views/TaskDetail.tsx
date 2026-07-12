@@ -21,7 +21,6 @@ import {
   SquareTerminal,
   PanelRight,
   RefreshCw,
-  AlertTriangle,
   Loader2,
 } from "lucide-react";
 import { RuntimePanel } from "../components/RuntimePanel";
@@ -63,6 +62,7 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 interface Props {
   task: TaskInfo;
@@ -98,22 +98,8 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   const setRuntimeOpen = useUi((s) => s.setRuntimeOpen);
   const services = state.snapshot.services.filter((s) => s.project === task.project);
   const portforwards = state.snapshot.portforwards.filter((p) => p.project === task.project);
-  const [gitBanner, setGitBanner] = useState<GitOpResult | null>(null);
   const queryClient = useQueryClient();
 
-  // Show a git.update / git.switchBranch result. The refetch of diff/branch is
-  // handled by GitControls invalidating those query keys on success.
-  const onGitResult = useCallback((r: GitOpResult) => {
-    setGitBanner(r);
-  }, []);
-
-  // Auto-dismiss a successful banner; keep conflicts/errors until the next op.
-  useEffect(() => {
-    if (!gitBanner) return;
-    if (gitBanner.status === "conflict" || gitBanner.status === "error") return;
-    const id = setTimeout(() => setGitBanner(null), 4000);
-    return () => clearTimeout(id);
-  }, [gitBanner]);
   const streamParent = useRef<HTMLDivElement>(null);
   const badge = taskBadge(task.status);
   const editable = task.status !== "done";
@@ -309,7 +295,6 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
           <GitControls
             taskId={task.id}
             branch={diff?.branch ?? null}
-            onResult={onGitResult}
           />
           <span>·</span>
           <span className="max-w-32 truncate">{task.agent}</span>
@@ -325,43 +310,6 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
           </Button>
         )}
       </div>
-
-      {gitBanner && gitBanner.status !== "upToDate" && (
-        <div
-          className={cn(
-            "flex shrink-0 items-start gap-2 rounded-md border px-3 py-2 text-xs",
-            gitBanner.status === "ok"
-              ? "border-border bg-secondary/60 text-foreground"
-              : "border-destructive/40 bg-destructive/10 text-foreground",
-          )}
-        >
-          {gitBanner.status === "ok" ? (
-            <Check className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
-          ) : (
-            <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-destructive" />
-          )}
-          <div className="min-w-0 flex-1">
-            <div>{gitBanner.message}</div>
-            {gitBanner.conflicts.length > 0 && (
-              <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-muted-foreground">
-                {gitBanner.conflicts.map((f) => (
-                  <li key={f} className="truncate">
-                    {f}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={() => setGitBanner(null)}
-            className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
-            aria-label="dismiss"
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-      )}
 
       <div className="flex min-h-0 flex-1 gap-2">
       <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1 gap-0">
@@ -968,11 +916,9 @@ function FileDiffView({
 function GitControls({
   taskId,
   branch,
-  onResult,
 }: {
   taskId: string;
   branch: string | null;
-  onResult: (r: GitOpResult) => void;
 }) {
   const [open, setOpen] = useState(false);
   const queryClient = useQueryClient();
@@ -993,28 +939,43 @@ function GitControls({
     void queryClient.invalidateQueries({ queryKey: ["fileList", taskId] });
     void queryClient.invalidateQueries({ queryKey: ["branches", taskId] });
   };
-  const onErr = (e: Error): GitOpResult => ({
-    status: "error",
-    message: e.message,
-    conflicts: [],
-  });
+  const onOk = (r: GitOpResult) => {
+    switch (r.status) {
+      case "up_to_date":
+        toast.info(r.message);
+        break;
+      case "ok":
+        toast.success(r.message);
+        break;
+      case "conflict":
+        toast.error(r.message, {
+          description: r.conflicts.length > 0 ? r.conflicts.join(", ") : undefined,
+        });
+        break;
+      case "error":
+        toast.error(r.message);
+        break;
+    }
+  };
+  const onErr = (e: Error) =>
+    toast.error(e.message);
 
   const updateMut = useMutation({
     mutationFn: () => daemon.request("git.update", { task_id: taskId }) as Promise<GitOpResult>,
     onSuccess: (r) => {
-      onResult(r);
+      onOk(r);
       invalidate();
     },
-    onError: (e: Error) => onResult(onErr(e)),
+    onError: (e: Error) => onErr(e),
   });
   const switchMut = useMutation({
     mutationFn: (target: string) =>
       daemon.request("git.switchBranch", { task_id: taskId, branch: target }) as Promise<GitOpResult>,
     onSuccess: (r) => {
-      onResult(r);
+      onOk(r);
       invalidate();
     },
-    onError: (e: Error) => onResult(onErr(e)),
+    onError: (e: Error) => onErr(e),
   });
 
   const updating = updateMut.isPending;
@@ -1084,7 +1045,7 @@ function GitControls({
         type="button"
         onClick={() => !busy && updateMut.mutate()}
         disabled={busy || !branch}
-        title="Update project — rebase on upstream, autostashing your changes"
+        title="Update project — rebase on upstream, autostashing your changes (⌘T)"
         className="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-secondary hover:text-foreground disabled:opacity-60"
       >
         {updating ? (

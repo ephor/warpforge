@@ -246,7 +246,7 @@ export interface ProjectFile {
 
 // ── Git ops (update / branch switch) ────────────────────────────────────────
 
-export type GitOpStatus = "upToDate" | "ok" | "conflict" | "error";
+export type GitOpStatus = "up_to_date" | "ok" | "conflict" | "error";
 
 /** Result of `git.update` / `git.switchBranch`. */
 export interface GitOpResult {
