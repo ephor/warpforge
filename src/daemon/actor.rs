@@ -1594,16 +1594,21 @@ impl Daemon {
             }
             Command::StartOrchestration { project, goal, reply } => {
                 if let Some(orch_tx) = &self.orch_tx {
-                    let (rtx, rrx) = oneshot::channel();
-                    let _ = orch_tx
-                        .send(crate::orchestration::OrchCommand::StartPlan {
-                            project,
-                            goal,
-                            reply: rtx,
-                        })
-                        .await;
-                    let graph_id = rrx.await.unwrap_or_default();
-                    let _ = reply.send(graph_id);
+                    // Spawn — the orchestrator will call back into the daemon
+                    // (create_task) which would deadlock if we blocked here.
+                    let orch_tx = orch_tx.clone();
+                    tokio::spawn(async move {
+                        let (rtx, rrx) = oneshot::channel();
+                        let _ = orch_tx
+                            .send(crate::orchestration::OrchCommand::StartPlan {
+                                project,
+                                goal,
+                                reply: rtx,
+                            })
+                            .await;
+                        let graph_id = rrx.await.unwrap_or_default();
+                        let _ = reply.send(graph_id);
+                    });
                 } else {
                     let _ = reply.send(String::new());
                 }
