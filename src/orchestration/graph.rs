@@ -177,8 +177,10 @@ impl TaskGraph {
     /// Parse planner output into implement/review nodes.
     /// Expects JSON like: {"tasks": [{"spec": "...", "depends_on": []}], "reviews": [...]}
     pub fn parse_plan_output(&mut self, output: &str, config: &crate::orchestration::config::OrchestratorConfig) {
-        // Try JSON first
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(output) {
+        // Agents wrap JSON in ```json fences or surrounding prose; pull the
+        // object out before parsing.
+        let json = extract_json_object(output);
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json) {
             if let Some(tasks) = val.get("tasks").and_then(|t| t.as_array()) {
                 let mut node_ids = Vec::new();
                 for task in tasks {
@@ -254,6 +256,26 @@ impl TaskGraph {
     }
 }
 
+/// Extract a JSON object from an agent's reply. Handles ```json fenced blocks
+/// and prose around the object; falls back to the trimmed input.
+fn extract_json_object(output: &str) -> String {
+    let trimmed = output.trim();
+    if let Some(start) = trimmed.find("```") {
+        let after = &trimmed[start + 3..];
+        // Drop an optional language tag ("json") right after the fence.
+        let body = after.strip_prefix("json").unwrap_or(after);
+        if let Some(end) = body.find("```") {
+            return body[..end].trim().to_string();
+        }
+    }
+    if let (Some(s), Some(e)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if e >= s {
+            return trimmed[s..=e].to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
 /// Pick a worker agent from the pool (planner decides how many to spawn).
 fn pick_worker(config: &crate::orchestration::config::OrchestratorConfig) -> String {
     config.worker_pool.first().map(|w| w.agent.clone()).unwrap_or_else(|| "claude".into())
@@ -274,6 +296,24 @@ mod tests {
         assert!(!graph.all_done());
         // But ready_nodes should return the root (no deps)
         assert_eq!(graph.ready_nodes().len(), 1);
+    }
+
+    #[test]
+    fn parse_plan_strips_markdown_fences() {
+        let mut graph = TaskGraph::new("demo", "goal", "claude");
+        let config = crate::orchestration::config::OrchestratorConfig::default();
+        let fenced = "Here's the plan:\n\n```json\n{\"tasks\":[{\"spec\":\"do a\",\
+            \"depends_on\":[]}],\"reviews\":[{\"diff_ref\":\"HEAD\",\"target\":\"0\"}]}\n```\ndone";
+        graph.parse_plan_output(fenced, &config);
+        // root plan + 1 implement + 1 review
+        assert_eq!(graph.nodes.len(), 3);
+    }
+
+    #[test]
+    fn extract_json_handles_prose_and_fences() {
+        assert_eq!(extract_json_object("```json\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(extract_json_object("text {\"a\":1} tail"), "{\"a\":1}");
+        assert_eq!(extract_json_object("  {\"a\":1}  "), "{\"a\":1}");
     }
 
     #[test]

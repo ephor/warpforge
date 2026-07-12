@@ -1922,6 +1922,9 @@ impl Daemon {
                 },
             ),
             AcpUpdate::TurnEnded { stop_reason } => {
+                // A clean turn end completes the node; a "disconnected" stop is
+                // the agent process dying, which we treat as a failure.
+                let success = stop_reason != "disconnected";
                 let update = wire::SessionUpdate::TurnEnded { stop_reason };
                 if self.should_skip_resume_replay(&task_id, &update) {
                     return;
@@ -1943,8 +1946,11 @@ impl Daemon {
                         self.emit(Event::TaskUpdated(updated));
                     }
                 }
+                let result = self.collect_agent_text(&task_id);
+                self.notify_orch_finished(&task_id, success, result);
             }
             AcpUpdate::Error(message) => {
+                let reason = message.clone();
                 if let Some(task) = self.tasks.get_mut(&task_id) {
                     task.blocked_reason = Some(message);
                     task.set_status(TaskStatus::Blocked);
@@ -1952,6 +1958,7 @@ impl Daemon {
                     self.persist(&updated);
                     self.emit(Event::TaskUpdated(updated));
                 }
+                self.notify_orch_finished(&task_id, false, reason);
             }
         }
     }
@@ -2023,6 +2030,51 @@ impl Daemon {
         // (or its replay shape differs from ours). Stop filtering immediately.
         self.resume_replay.remove(task_id);
         false
+    }
+
+    /// Concatenate the agent's text output for a task (its persisted
+    /// `AgentText` updates) — used as the orchestrator node's result, e.g. the
+    /// planner's task-graph JSON.
+    fn collect_agent_text(&self, task_id: &str) -> String {
+        let Some(store) = &self.store else {
+            return String::new();
+        };
+        let Ok(updates) = store.load_session_updates(task_id) else {
+            return String::new();
+        };
+        updates
+            .into_iter()
+            .filter_map(|u| match u {
+                wire::SessionUpdate::AgentText { text } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    /// Tell the orchestrator a dispatched task finished. No-op unless the task
+    /// carries the "orchestrator" tag and an orchestrator is wired.
+    fn notify_orch_finished(&self, task_id: &str, success: bool, result: String) {
+        let Some(orch_tx) = self.orch_tx.clone() else {
+            return;
+        };
+        let is_orch = self
+            .tasks
+            .get(task_id)
+            .map_or(false, |t| t.tags.iter().any(|tag| tag == "orchestrator"));
+        if !is_orch {
+            return;
+        }
+        let task_id = task_id.to_string();
+        tokio::spawn(async move {
+            let _ = orch_tx
+                .send(crate::orchestration::OrchCommand::TaskFinished {
+                    task_id,
+                    result,
+                    success,
+                })
+                .await;
+        });
     }
 
     fn emit_session(&self, task_id: &str, update: wire::SessionUpdate) {
