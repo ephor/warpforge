@@ -210,7 +210,7 @@ impl TaskGraph {
                         })
                         .collect();
 
-                    let worker = pick_worker(spec, config);
+                    let worker = pick_worker(config);
                     let id = self.add_node(
                         NodeKind::Implement {
                             spec: spec.to_string(),
@@ -254,18 +254,13 @@ impl TaskGraph {
     }
 }
 
-/// Pick a worker agent that can handle this spec.
-fn pick_worker(spec: &str, config: &crate::orchestration::config::OrchestratorConfig) -> String {
-    for w in &config.workers {
-        if spec.to_lowercase().contains(&w.purpose) {
-            return w.agent.clone();
-        }
-    }
-    config.workers.first().map(|w| w.agent.clone()).unwrap_or_else(|| "claude".into())
+/// Pick a worker agent from the pool (planner decides how many to spawn).
+fn pick_worker(config: &crate::orchestration::config::OrchestratorConfig) -> String {
+    config.worker_pool.first().map(|w| w.agent.clone()).unwrap_or_else(|| "claude".into())
 }
 
 fn pick_reviewer(config: &crate::orchestration::config::OrchestratorConfig) -> String {
-    config.reviewers.first().map(|r| r.agent.clone()).unwrap_or_else(|| "opencode".into())
+    config.reviewer_pool.first().map(|r| r.agent.clone()).unwrap_or_else(|| "opencode".into())
 }
 
 #[cfg(test)]

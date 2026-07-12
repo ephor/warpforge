@@ -9,7 +9,7 @@ import { persist } from "zustand/middleware";
 export type View = "control" | "board" | "projects";
 export type CenterTab = "changes" | "editor";
 export type DiffView = "unified" | "split";
-export type RightPanel = "changes" | "files" | null;
+export type RightPanel = "changes" | "files" | "subtasks" | null;
 
 interface UiState {
   // Navigation

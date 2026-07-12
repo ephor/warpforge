@@ -64,7 +64,35 @@ export type DaemonEvent =
       event: "terminal.screen";
       data: { terminal_id: string; screen: TerminalScreen };
     }
-  | { event: "terminal.exited"; data: { terminal_id: string; code: number } };
+  | { event: "terminal.exited"; data: { terminal_id: string; code: number } }
+  // ── Orchestration ──
+  | {
+      event: "orchestration.nodeDispatched";
+      data: {
+        graph_id: string;
+        node_id: string;
+        task_id: string;
+        agent: string;
+        kind: string;
+      };
+    }
+  | {
+      event: "orchestration.nodeCompleted";
+      data: { graph_id: string; node_id: string; task_id: string };
+    }
+  | {
+      event: "orchestration.nodeFailed";
+      data: {
+        graph_id: string;
+        node_id: string;
+        task_id: string;
+        reason: string;
+      };
+    }
+  | {
+      event: "orchestration.allComplete";
+      data: { graph_id: string; project: string };
+    };
 
 export function isEvent(msg: ServerMessage): msg is DaemonEvent {
   return "event" in msg;
@@ -153,6 +181,8 @@ export interface TaskInfo {
   configOptions?: ConfigOption[];
   /** Path to the git worktree for this task, if isolated. */
   worktree?: string | null;
+  /** Orchestration graph for parent orchestrator tasks. */
+  orchestrationGraph?: OrchGraphInfo | null;
 }
 
 export interface ConfigChoice {
@@ -167,6 +197,47 @@ export interface ConfigOption {
   category?: string | null;
   currentValue: string;
   options: ConfigChoice[];
+}
+
+// ── Orchestration DTOs ─────────────────────────────────────────────────────
+
+export interface OrchGraphInfo {
+  id: string;
+  goal: string;
+  nodes: OrchNodeInfo[];
+}
+
+export interface OrchNodeInfo {
+  id: string;
+  kind: OrchNodeKind;
+  agent: string;
+  status: OrchNodeStatus;
+  taskId?: string | null;
+  result?: string | null;
+}
+
+export type OrchNodeKind = "plan" | "implement" | "review" | "merge";
+
+export type OrchNodeStatus =
+  | "pending"
+  | "running"
+  | "complete"
+  | "failed"
+  | "skipped";
+
+export interface OrchestratorConfig {
+  plannerAgent: string;
+  workerPool: OrchWorkerPool[];
+  reviewerPool: OrchReviewerPool[];
+  worktreesEnabled: boolean;
+}
+
+export interface OrchWorkerPool {
+  agent: string;
+}
+
+export interface OrchReviewerPool {
+  agent: string;
 }
 
 export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";

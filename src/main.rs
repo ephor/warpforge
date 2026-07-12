@@ -3,8 +3,10 @@ mod app;
 mod client;
 mod config;
 mod daemon;
+#[allow(dead_code)]
 mod orchestration;
 mod portforward;
+#[allow(dead_code)]
 mod policies;
 mod ports;
 mod registry;

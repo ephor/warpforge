@@ -1,0 +1,17 @@
+# .workspace.yaml — Warpforge project configuration
+name: warpforge
+
+services:
+  app:
+    command: npm run dev
+    port: 3000
+    # env:
+    #   DATABASE_URL: postgres://localhost:${db.port}/mydb
+    # healthcheck:
+    #   url: http://localhost:${app.port}/api/health
+    #   interval: 5s
+
+# agentTemplates:
+#   dev:
+#     command: claude
+#     description: "Interactive development session"

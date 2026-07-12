@@ -17,6 +17,7 @@ use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
+use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 use warpforge_protocol as wire;
@@ -467,6 +468,47 @@ async fn dispatch(
         AgentsUpdate { agents } => {
             handle.update_agents(agents).await;
             Ok(json!(null))
+        }
+        // ── Orchestration ──
+        OrchestrateStart { project, goal } => {
+            let (tx, rx) = oneshot::channel();
+            handle
+                .send(Command::StartOrchestration {
+                    project,
+                    goal,
+                    reply: tx,
+                })
+                .await;
+            let graph_id = rx.await.unwrap_or_default();
+            Ok(json!({ "graphId": graph_id }))
+        }
+        OrchestrateList {} => {
+            let (tx, rx) = oneshot::channel();
+            handle
+                .send(Command::ListOrchestrations { reply: tx })
+                .await;
+            let infos = rx.await.unwrap_or_default();
+            Ok(json!({ "graphs": infos }))
+        }
+        OrchestrateCancel { .. } => {
+            // TODO: wire through to orchestrator
+            Ok(json!(null))
+        }
+        OrchestrateGetConfig {} => {
+            let (tx, rx) = oneshot::channel();
+            handle
+                .send(Command::GetOrchestratorConfig { reply: tx })
+                .await;
+            let config = rx.await.unwrap_or_default();
+            Ok(json!(config))
+        }
+        OrchestrateSaveConfig { config } => {
+            let (tx, rx) = oneshot::channel();
+            handle
+                .send(Command::SaveOrchestratorConfig { config, reply: tx })
+                .await;
+            let ok = rx.await.unwrap_or(false);
+            Ok(json!({ "ok": ok }))
         }
         // Not yet in this build: project.* (use `wf add` + restart) and
         // task.archive. Follow-ups.

@@ -61,6 +61,8 @@ pub struct Task {
     /// Path to the git worktree for this task, if it runs isolated.
     /// `None` = run in the project's main working directory.
     pub worktree: Option<String>,
+    /// Orchestration graph for parent orchestrator tasks.
+    pub orchestration_graph: Option<warpforge_protocol::OrchGraphInfo>,
 }
 
 impl Task {
@@ -80,6 +82,7 @@ impl Task {
             blocked_reason: None,
             config_options: Vec::new(),
             worktree: None,
+            orchestration_graph: None,
         }
     }
 

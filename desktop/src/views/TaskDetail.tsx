@@ -22,6 +22,8 @@ import {
   SquareTerminal,
   RefreshCw,
   Loader2,
+  ListTodo,
+  Send,
 } from "lucide-react";
 import { RuntimePanel } from "../components/RuntimePanel";
 import { daemon, DaemonState } from "../daemon";
@@ -32,6 +34,7 @@ import {
   GitBranchList,
   GitOpResult,
   HunkResolution,
+  OrchNodeInfo,
   ProjectFile,
   SessionUpdate,
   TaskDiff,
@@ -43,7 +46,7 @@ import {
   streamKey,
 } from "./MissionControl";
 import { useUi } from "../store/ui";
-import { Composer } from "../components/Composer";
+import { Composer, ComposerHandle } from "../components/Composer";
 import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
 import { AgentConfigBar } from "../components/AgentConfigBar";
 import { CodeEditor } from "../components/CodeEditor";
@@ -51,7 +54,7 @@ import { MergeDiff } from "../components/MergeDiff";
 import { ChangesRail } from "../components/ChangesRail";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { resolvedPermissions } from "@/lib/sessionPermissions";
-import { activityBadge, taskBadge } from "@/lib/status";
+import { activityBadge, taskBadge, orchNodeBadge } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -100,6 +103,7 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   const portforwards = state.snapshot.portforwards.filter((p) => p.project === task.project);
   const queryClient = useQueryClient();
 
+  const composerRef = useRef<ComposerHandle>(null);
   const streamParent = useRef<HTMLDivElement>(null);
   const badge = taskBadge(task.status);
   const editable = task.status !== "done";
@@ -357,6 +361,7 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
               )}
             </div>
             <Composer
+              ref={composerRef}
               commands={commands}
               disabled={task.status === "done"}
               onSend={(text) => void daemon.request("session.prompt", { task_id: task.id, text })}
@@ -507,6 +512,9 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
                             file={file}
                             localRes={localRes}
                             onResolve={resolveHunk}
+                            onSendToChat={(f) => {
+                              composerRef.current?.attachDiff(f, formatFileDiffAsMessage(f));
+                            }}
                           />
                         ))}
                       </div>
@@ -591,6 +599,8 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
                   ) : (
                     <p className="p-3 text-sm text-muted-foreground">Loading changes…</p>
                   )
+                ) : rightPanel === "subtasks" ? (
+                  <SubtasksRail task={task} />
                 ) : (
                   <ProjectFilesPanel
                     files={projectFiles}
@@ -648,6 +658,20 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
         >
           <GitCommitVertical className="size-4" />
         </button>
+        {task.orchestrationGraph && task.orchestrationGraph.nodes.length > 0 && (
+          <button
+            type="button"
+            aria-label="Subtasks"
+            title="Subtasks"
+            onClick={() => {
+              setShowDiff(true);
+              setRightPanel(rightPanel === "subtasks" ? null : "subtasks");
+            }}
+            className={cn("rounded-md p-1.5 hover:bg-secondary hover:text-foreground", rightPanel === "subtasks" && "bg-secondary text-foreground")}
+          >
+            <ListTodo className="size-4" />
+          </button>
+        )}
         <button
           type="button"
           aria-label="Runtime"
@@ -818,16 +842,40 @@ function ProjectFilesPanel({
 /** Stable DOM id for a file's unified-diff block, for tree-click scroll-to. */
 const fileAnchor = (path: string) => `diff-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
 
+/** Format a FileDiff as a git-style unified diff message for sending to chat. */
+function formatFileDiffAsMessage(file: FileDiff): string {
+  const header = file.oldPath && file.oldPath !== file.path
+    ? `diff --git a/${file.oldPath} b/${file.path}`
+    : `diff --git a/${file.path} b/${file.path}`;
+  const statusLine =
+    file.status === "added"
+      ? `new file mode 100644`
+      : file.status === "deleted"
+        ? `deleted file mode 100644`
+        : file.status === "renamed"
+          ? `rename from ${file.oldPath}\nrename to ${file.path}`
+          : `index ---..+++ 100644`;
+
+  const hunkHeaders = file.hunks.map(
+    (h) => `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`,
+  );
+  const lines = file.hunks.flatMap((h) => h.lines);
+
+  return `${header}\n${statusLine}\n${hunkHeaders.join("\n")}\n${lines.join("\n")}`;
+}
+
 function FileDiffView({
   id,
   file,
   localRes,
   onResolve,
+  onSendToChat,
 }: {
   id?: string;
   file: FileDiff;
   localRes: Record<string, HunkResolution>;
   onResolve: (file: string, hunkIndex: number, r: HunkResolution) => void;
+  onSendToChat?: (file: FileDiff) => void;
 }) {
   const [open, setOpen] = useState(true);
   const statusColor =
@@ -846,7 +894,25 @@ function FileDiffView({
       >
         <ChevronDown className={cn("size-3.5 transition-transform", !open && "-rotate-90")} />
         <span className={cn("uppercase", statusColor)}>{file.status}</span>
-        <span>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</span>
+        <span>{file.status === "renamed" && file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</span>
+        {onSendToChat && (
+          <span className="ml-auto flex items-center gap-1">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 gap-1 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+              title="Send this file's diff to chat"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSendToChat(file);
+              }}
+            >
+              <Send className="size-3" />
+              send
+            </Button>
+          </span>
+        )}
       </button>
       {open &&
         file.hunks.map((hunk, i) => {
@@ -1056,5 +1122,51 @@ function GitControls({
         <span>Update</span>
       </button>
     </span>
+  );
+}
+
+function SubtasksRail({ task }: { task: TaskInfo }) {
+  const nodes = task.orchestrationGraph?.nodes ?? [];
+  const graph = task.orchestrationGraph;
+  if (!graph) return <p className="p-3 text-sm text-muted-foreground">No orchestration data.</p>;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center gap-2 border-b px-3 py-2">
+        <ListTodo className="size-4 text-muted-foreground" />
+        <span className="text-sm font-semibold">Subtasks</span>
+        <span className="ml-auto text-xs text-muted-foreground">
+          {nodes.filter((n) => n.status === "complete").length}/{nodes.length}
+        </span>
+      </div>
+      <ScrollArea className="flex-1">
+        <div className="flex flex-col gap-1 p-2">
+          {nodes.map((node) => (
+            <SubtaskRow key={node.id} node={node} />
+          ))}
+        </div>
+      </ScrollArea>
+      <div className="border-t px-3 py-2">
+        <div className="text-xs text-muted-foreground">{graph.goal}</div>
+      </div>
+    </div>
+  );
+}
+
+function SubtaskRow({ node }: { node: OrchNodeInfo }) {
+  const badge = orchNodeBadge(node.status);
+  return (
+    <div className="flex items-center gap-2 rounded bg-secondary/30 px-2 py-1.5 text-xs">
+      <Badge variant={badge.variant} className="w-16 text-center text-[10px]">
+        {badge.label}
+      </Badge>
+      <div className="min-w-0 flex-1">
+        <div className="font-medium text-foreground">{node.kind}</div>
+        <div className="text-muted-foreground">{node.agent}</div>
+      </div>
+      {node.taskId && (
+        <span className="shrink-0 text-[10px] text-muted-foreground/60">{node.taskId}</span>
+      )}
+    </div>
   );
 }
