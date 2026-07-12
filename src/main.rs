@@ -4,6 +4,7 @@ mod client;
 mod config;
 mod daemon;
 mod portforward;
+mod policies;
 mod ports;
 mod registry;
 mod service;

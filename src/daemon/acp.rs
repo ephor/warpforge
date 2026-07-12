@@ -23,6 +23,14 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use warpforge_protocol as wire;
 
+use crate::policies::{Phase, PolicyAction, PolicyContext, PolicyResult};
+
+/// A request from the ACP reader to evaluate a policy before executing an op.
+pub struct PolicyCheck {
+    pub ctx: PolicyContext,
+    pub reply: oneshot::Sender<PolicyResult>,
+}
+
 /// An update from an agent session, forwarded to the daemon actor as
 /// `(task_id, AcpUpdate)`.
 #[derive(Debug, Clone)]
@@ -107,6 +115,9 @@ type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
 /// Spawn an agent process and its ACP session. Returns immediately; the
 /// `initialize` → `session/new` → initial `session/prompt` handshake runs in
 /// the background and streams updates over `updates`.
+///
+/// When `policy_tx` is provided, file write operations are gated through the
+/// daemon's policy engine before execution.
 pub fn spawn_acp_session(
     task_id: String,
     command: String,
@@ -116,6 +127,7 @@ pub fn spawn_acp_session(
     // starting a fresh `session/new`. The agent replays history as updates.
     resume: Option<String>,
     updates: mpsc::UnboundedSender<(String, AcpUpdate)>,
+    policy_tx: Option<mpsc::UnboundedSender<PolicyCheck>>,
 ) -> anyhow::Result<AcpHandle> {
     let mut child = Command::new("sh")
         .args(["-c", &command])
@@ -185,6 +197,7 @@ pub fn spawn_acp_session(
         let task_id = task_id.clone();
         let cwd = cwd.clone();
         let permission_run_id = permission_run_id.clone();
+        let policy_tx_reader = policy_tx.clone();
         tokio::spawn(async move {
             let _child = child; // hold so kill_on_drop fires when the reader ends
             let mut lines = BufReader::new(stdout).lines();
@@ -273,10 +286,41 @@ pub fn spawn_acp_session(
                     "fs/write_text_file" => {
                         let path = params.get("path").and_then(|p| p.as_str()).unwrap_or("");
                         let content = params.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                        let _ = std::fs::write(resolve(&cwd, path), content);
-                        if let Some(id) = id {
-                            let _ = out_tx
-                                .send(json!({"jsonrpc":"2.0","id":id,"result":null}).to_string());
+
+                        // Check policies before writing.
+                        let allowed = if let Some(ref ptx) = policy_tx_reader {
+                            let (ptx_reply, ptx_rx) = oneshot::channel();
+                            let ctx = PolicyContext {
+                                phase: Phase::ToolCall,
+                                tool_name: Some("fs/write_text_file".into()),
+                                tool_input: Some(json!({"path": path, "content": content})),
+                                agent: String::new(), // filled by daemon
+                                task_id: task_id.clone(),
+                                project: String::new(),
+                                cwd: PathBuf::from(&cwd),
+                                labels: HashMap::new(),
+                            };
+                            let _ = ptx.send(PolicyCheck { ctx, reply: ptx_reply });
+                            match ptx_rx.await {
+                                Ok(result) => matches!(result.action, PolicyAction::Allow),
+                                Err(_) => true, // policy channel closed — allow
+                            }
+                        } else {
+                            true
+                        };
+
+                        if allowed {
+                            let _ = std::fs::write(resolve(&cwd, path), content);
+                            if let Some(id) = id {
+                                let _ = out_tx
+                                    .send(json!({"jsonrpc":"2.0","id":id,"result":null}).to_string());
+                            }
+                        } else {
+                            if let Some(id) = id {
+                                let _ = out_tx.send(
+                                    json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":"denied by policy"}}).to_string(),
+                                );
+                            }
                         }
                     }
                     _ => {

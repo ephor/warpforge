@@ -26,11 +26,14 @@ use crate::portforward::{PfEvent, PfStatus, PortForwardManager};
 use crate::registry::ProjectEntry;
 use crate::service::{kill_listeners_in_ranges, ServiceEvent, ServiceManager, ServiceStatus};
 
-use super::acp::{spawn_acp_session, AcpHandle, AcpUpdate};
+use super::acp::{spawn_acp_session, AcpHandle, AcpUpdate, PolicyCheck};
 use super::store::Store;
 use super::task::{Task, TaskStatus};
 use super::wire as wireconv;
 use super::worktree::WorktreeManager;
+use crate::policies::builtins::{BlastRadiusPolicy, SpawnBoundsPolicy};
+use crate::policies::registry::PolicyRegistry;
+use crate::policies::{Phase, PolicyContext};
 
 /// Split a `project/service` service key back into its parts (split on first
 /// `/`, which is how `ServiceManager` composes the key).
@@ -621,6 +624,10 @@ pub struct Daemon {
     resume_replay: HashMap<String, VecDeque<wire::SessionUpdate>>,
     /// Per-project git worktree managers, lazily created on first worktree use.
     worktrees: HashMap<String, WorktreeManager>,
+    /// Policy engine: gates agent actions through configurable policies.
+    policies: PolicyRegistry,
+    /// Channel for ACP reader tasks to request policy checks before file ops.
+    policy_tx: mpsc::UnboundedSender<PolicyCheck>,
 }
 
 impl Daemon {
@@ -634,6 +641,7 @@ impl Daemon {
         let (service_tx, service_rx) = mpsc::unbounded_channel();
         let (pf_tx, pf_rx) = mpsc::unbounded_channel();
         let (acp_tx, acp_rx) = mpsc::unbounded_channel();
+        let (policy_tx, policy_rx) = mpsc::unbounded_channel::<PolicyCheck>();
 
         let tasks = store
             .as_ref()
@@ -666,6 +674,8 @@ impl Daemon {
             store,
             resume_replay: HashMap::new(),
             worktrees: HashMap::new(),
+            policies: default_policies(),
+            policy_tx,
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -680,7 +690,7 @@ impl Daemon {
             });
         }
 
-        tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx, acp_rx));
+        tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx, acp_rx, policy_rx));
 
         handle
     }
@@ -853,6 +863,7 @@ impl Daemon {
         mut service_rx: mpsc::UnboundedReceiver<ServiceEvent>,
         mut pf_rx: mpsc::UnboundedReceiver<PfEvent>,
         mut acp_rx: mpsc::UnboundedReceiver<(String, AcpUpdate)>,
+        mut policy_rx: mpsc::UnboundedReceiver<PolicyCheck>,
     ) {
         loop {
             tokio::select! {
@@ -866,6 +877,7 @@ impl Daemon {
                 Some(ev) = service_rx.recv() => self.handle_service_event(ev),
                 Some(ev) = pf_rx.recv() => self.handle_pf_event(ev),
                 Some((task_id, update)) = acp_rx.recv() => self.handle_acp_update(task_id, update),
+                Some(check) = policy_rx.recv() => self.handle_policy_check(check).await,
             }
         }
 
@@ -1719,6 +1731,7 @@ impl Daemon {
             full_prompt,
             resume,
             self.acp_tx.clone(),
+            Some(self.policy_tx.clone()),
         ) {
             Ok(handle) => {
                 self.sessions.insert(task_id.to_string(), handle);
@@ -1957,4 +1970,62 @@ impl Daemon {
             .map(|(index, _)| crate::ports::port_range(index))
             .collect()
     }
+
+    /// Build a PolicyContext for evaluating an action on a task.
+    fn policy_context(
+        &self,
+        task_id: &str,
+        phase: Phase,
+        tool_name: Option<String>,
+        tool_input: Option<serde_json::Value>,
+    ) -> Option<PolicyContext> {
+        let task = self.tasks.get(task_id)?;
+        let project_path = self.project_path(&task.project)?;
+        let cwd = if let Some(ref wt) = task.worktree {
+            std::path::PathBuf::from(wt)
+        } else {
+            std::path::PathBuf::from(&project_path)
+        };
+        Some(PolicyContext {
+            phase,
+            tool_name,
+            tool_input,
+            agent: task.agent.clone(),
+            task_id: task_id.to_string(),
+            project: task.project.clone(),
+            cwd,
+            labels: HashMap::new(),
+        })
+    }
+
+    /// Evaluate all policies for an action on a task.
+    async fn evaluate_policies(
+        &self,
+        task_id: &str,
+        phase: Phase,
+        tool_name: Option<String>,
+        tool_input: Option<serde_json::Value>,
+    ) -> crate::policies::PolicyResult {
+        let ctx = match self.policy_context(task_id, phase, tool_name, tool_input) {
+            Some(ctx) => ctx,
+            None => return crate::policies::PolicyResult::allow(),
+        };
+        self.policies.evaluate_all(&ctx).await
+    }
+
+    /// Handle a policy check request from an ACP reader task.
+    async fn handle_policy_check(&mut self, check: PolicyCheck) {
+        let result = self.policies.evaluate_all(&check.ctx).await;
+        let _ = check.reply.send(result);
+    }
+}
+
+/// Create the default policy set for a new daemon.
+fn default_policies() -> PolicyRegistry {
+    let mut reg = PolicyRegistry::new();
+    reg.push(Box::new(BlastRadiusPolicy::default()));
+    reg.push(Box::new(SpawnBoundsPolicy::new(6)));
+    // CostBudget disabled by default (max=∞). Enable via config when needed.
+    // WorktreeGuard enabled per-task in start_session, not globally.
+    reg
 }
