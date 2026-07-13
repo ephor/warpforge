@@ -63,6 +63,10 @@ pub struct Task {
     pub worktree: Option<String>,
     /// Orchestration graph for parent orchestrator tasks.
     pub orchestration_graph: Option<warpforge_protocol::OrchGraphInfo>,
+    /// When this task was spawned by an orchestrator agent as a sub-agent, the
+    /// id of that orchestrator task. Its result is delivered back into the
+    /// parent's inbox on completion.
+    pub parent_task_id: Option<String>,
 }
 
 impl Task {
@@ -83,6 +87,7 @@ impl Task {
             config_options: Vec::new(),
             worktree: None,
             orchestration_graph: None,
+            parent_task_id: None,
         }
     }
 

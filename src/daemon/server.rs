@@ -240,11 +240,24 @@ async fn dispatch(
             tags,
             include_runtime_context,
             worktree,
+            parent_task_id,
         } => {
             let id = handle
-                .create_task(&project, &prompt, &agent, tags, include_runtime_context, worktree)
+                .create_task(
+                    &project,
+                    &prompt,
+                    &agent,
+                    tags,
+                    include_runtime_context,
+                    worktree,
+                    parent_task_id,
+                )
                 .await;
             Ok(json!({ "taskId": id }))
+        }
+        OrchestratorReadInbox { parent_task_id } => {
+            let results = handle.read_inbox(&parent_task_id).await;
+            Ok(json!({ "results": results }))
         }
         DiffGet { task_id } => {
             let diff = handle.diff(&task_id).await;

@@ -3,6 +3,7 @@ mod app;
 mod client;
 mod config;
 mod daemon;
+mod mcp;
 #[allow(dead_code)]
 mod orchestration;
 mod portforward;
@@ -56,6 +57,11 @@ enum Commands {
         #[arg(long)]
         dev: bool,
     },
+    /// (internal) MCP server bridging an orchestrator agent to the daemon.
+    /// Spawned by the daemon via an orchestrator session's mcpServers config,
+    /// not meant to be run by hand.
+    #[command(name = "__mcp-orchestrator", hide = true)]
+    McpOrchestrator,
 }
 
 #[tokio::main]
@@ -105,6 +111,9 @@ async fn main() -> Result<()> {
             let store = daemon::Store::open().ok();
             let handle = daemon::Daemon::spawn(projects, store);
             daemon::server::serve(handle, dev).await?;
+        }
+        Commands::McpOrchestrator => {
+            mcp::run().await?;
         }
     }
 

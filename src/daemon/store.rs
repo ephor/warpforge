@@ -82,6 +82,8 @@ impl Store {
         );
         // Migration: add worktree column for tasks running in isolated git worktrees.
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN worktree TEXT", []);
+        // Migration: add parent_task_id for orchestrator sub-agent tasks.
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT", []);
         Ok(Self { conn })
     }
 
@@ -92,8 +94,9 @@ impl Store {
             r#"
             INSERT INTO tasks
                 (id, session_id, project, prompt, agent, status, tags,
-                 created_at, updated_at, files_changed, blocked_reason, config_options, worktree)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                 created_at, updated_at, files_changed, blocked_reason, config_options, worktree,
+                 parent_task_id)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
             ON CONFLICT(id) DO UPDATE SET
                 session_id=excluded.session_id,
                 status=excluded.status,
@@ -118,6 +121,7 @@ impl Store {
                 task.blocked_reason,
                 config_options,
                 task.worktree,
+                task.parent_task_id,
             ],
         )?;
         Ok(())
@@ -130,7 +134,8 @@ impl Store {
     pub fn load_tasks(&self) -> Result<Vec<Task>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, project, prompt, agent, status, tags, \
-             created_at, updated_at, files_changed, blocked_reason, config_options, worktree FROM tasks",
+             created_at, updated_at, files_changed, blocked_reason, config_options, worktree, \
+             parent_task_id FROM tasks",
         )?;
         let rows = stmt.query_map([], |row| {
             let tags_json: String = row.get(6)?;
@@ -155,6 +160,7 @@ impl Store {
                 config_options: serde_json::from_str(&config_options_json).unwrap_or_default(),
                 worktree: row.get(12)?,
                 orchestration_graph: None,
+                parent_task_id: row.get(13)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())

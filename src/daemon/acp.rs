@@ -126,6 +126,9 @@ pub fn spawn_acp_session(
     // When set, resume this native session id via ACP `session/load` instead of
     // starting a fresh `session/new`. The agent replays history as updates.
     resume: Option<String>,
+    // MCP servers to advertise to the agent on session setup (empty for a plain
+    // task; the orchestrator session passes the warpforge MCP bridge here).
+    mcp_servers: Vec<Value>,
     updates: mpsc::UnboundedSender<(String, AcpUpdate)>,
     policy_tx: Option<mpsc::UnboundedSender<PolicyCheck>>,
 ) -> anyhow::Result<AcpHandle> {
@@ -416,7 +419,7 @@ pub fn spawn_acp_session(
                         &next_id,
                         "session/load",
                         json!({
-                            "sessionId": sid, "cwd": cwd, "mcpServers": []
+                            "sessionId": sid, "cwd": cwd, "mcpServers": mcp_servers
                         }),
                     ),
                 )
@@ -444,7 +447,7 @@ pub fn spawn_acp_session(
                         &next_id,
                         "session/new",
                         json!({
-                            "cwd": cwd, "mcpServers": []
+                            "cwd": cwd, "mcpServers": mcp_servers
                         }),
                     ),
                 )

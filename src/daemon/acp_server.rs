@@ -134,7 +134,7 @@ async fn handle_connection(
                 let agent = params.get("agent").and_then(|a| a.as_str()).unwrap_or("claude");
 
                 let task_id = daemon
-                    .create_task(project, prompt, agent, vec!["acp-server".into()], true, false)
+                    .create_task(project, prompt, agent, vec!["acp-server".into()], true, false, None)
                     .await;
 
                 // Subscribe to updates for this task.

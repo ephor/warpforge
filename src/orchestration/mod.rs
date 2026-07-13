@@ -204,6 +204,7 @@ impl Orchestrator {
                 vec!["orchestrator".into(), "planner".into()],
                 true,
                 false,
+                None,
             )
             .await
         {
@@ -396,6 +397,7 @@ impl Orchestrator {
                     vec!["orchestrator".into(), kind_str.into()],
                     true,
                     worktree,
+                    None,
                 )
                 .await
             {
