@@ -36,15 +36,6 @@ export function AgentActivityIndicator({
     >
       <div className="flex shrink-0 items-center gap-1.5">
         <Activity className={cn("animate-pulse", compact ? "size-3.5" : "size-4")} />
-        <span className="flex items-center gap-1">
-          {[0, 1, 2].map((i) => (
-            <span
-              key={i}
-              className="size-1.5 animate-pulse rounded-full bg-current opacity-70"
-              style={{ animationDelay: `${i * 140}ms` }}
-            />
-          ))}
-        </span>
       </div>
       <span className="shrink-0 font-medium">{activity.label}</span>
       <span className="min-w-0 truncate text-muted-foreground">{activity.detail}</span>

@@ -62,6 +62,51 @@ fn is_acp_replay_update(update: &wire::SessionUpdate) -> bool {
     }
 }
 
+/// System preamble prepended to an orchestrator-chat session's first prompt.
+const ORCHESTRATOR_SYSTEM: &str = "\
+You are an orchestrator agent in warpforge. You coordinate work by delegating to \
+sub-agents rather than doing large tasks yourself.\n\n\
+You have two MCP tools:\n\
+- spawn_agent(agent, task): dispatch a sub-agent (e.g. \"claude\", \"codex\", \
+\"opencode\") to work on a task. It runs asynchronously in its own session and \
+returns immediately. Spawn several in one turn to parallelize.\n\
+- read_inbox(): collect finished sub-agent results. When a sub-agent finishes you \
+will receive a system message telling you results are waiting — call read_inbox to \
+collect them, then decide the next step (spawn more, or report back to the user).\n\n\
+Talk to the user normally. When a task needs real work, delegate it with \
+spawn_agent, tell the user what you dispatched, and continue the conversation. \
+The user can keep messaging you while sub-agents run.";
+
+/// The warpforge MCP bridge config handed to an orchestrator session so the
+/// agent can call spawn_agent / read_inbox back into this daemon.
+fn orchestrator_mcp_servers(task_id: &str, project: &str) -> Vec<serde_json::Value> {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+        .unwrap_or_else(|| "warpforge".to_string());
+    vec![serde_json::json!({
+        "name": "warpforge",
+        "command": exe,
+        "args": ["__mcp-orchestrator"],
+        "env": [
+            { "name": "WF_ORCH_TASK", "value": task_id },
+            { "name": "WF_ORCH_PROJECT", "value": project },
+        ],
+    })]
+}
+
+/// A finished sub-agent's result, queued in its orchestrator parent's inbox
+/// until the orchestrator agent drains it via the `read_inbox` MCP tool.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildResult {
+    pub child_id: String,
+    pub agent: String,
+    pub prompt: String,
+    pub output: String,
+    pub success: bool,
+}
+
 /// Commands from clients to the daemon.
 pub enum Command {
     Projects(oneshot::Sender<Vec<ProjectEntry>>),
@@ -144,7 +189,14 @@ pub enum Command {
         include_runtime_context: bool,
         /// When true, create an isolated git worktree for this task.
         worktree: bool,
+        /// Set when this task is a sub-agent of an orchestrator task.
+        parent_task_id: Option<String>,
         reply: oneshot::Sender<String>,
+    },
+    /// Drain an orchestrator task's inbox of finished sub-agent results.
+    ReadInbox {
+        parent_task_id: String,
+        reply: oneshot::Sender<Vec<ChildResult>>,
     },
     CancelTask {
         id: String,
@@ -375,6 +427,7 @@ impl DaemonHandle {
         rx.await.unwrap_or_default()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_task(
         &self,
         project: &str,
@@ -383,6 +436,7 @@ impl DaemonHandle {
         tags: Vec<String>,
         include_runtime_context: bool,
         worktree: bool,
+        parent_task_id: Option<String>,
     ) -> String {
         let (tx, rx) = oneshot::channel();
         self.send(Command::CreateTask {
@@ -392,6 +446,17 @@ impl DaemonHandle {
             tags,
             include_runtime_context,
             worktree,
+            parent_task_id,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_default()
+    }
+
+    pub async fn read_inbox(&self, parent_task_id: &str) -> Vec<ChildResult> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::ReadInbox {
+            parent_task_id: parent_task_id.to_string(),
             reply: tx,
         })
         .await;
@@ -655,6 +720,13 @@ pub struct Daemon {
     orch_event_rx: Option<broadcast::Receiver<crate::orchestration::OrchEvent>>,
     /// Orchestrator configuration (loaded from ~/.warpforge/orchestrator.yaml).
     orch_config: crate::orchestration::config::OrchestratorConfig,
+    /// Per-orchestrator-task inbox of finished sub-agent results, keyed by the
+    /// parent (orchestrator) task id. Drained by the `read_inbox` MCP tool.
+    orchestrator_inbox: HashMap<String, Vec<ChildResult>>,
+    /// Orchestrator tasks with results that arrived mid-turn: wake them once
+    /// their current turn ends (deferred so a fan-out of N completions yields
+    /// one wake, and an ignored wake never re-fires into a loop).
+    pending_wake: std::collections::HashSet<String>,
 }
 
 impl Daemon {
@@ -712,6 +784,8 @@ impl Daemon {
             orch_tx: None,
             orch_event_rx: None,
             orch_config,
+            orchestrator_inbox: HashMap::new(),
+            pending_wake: std::collections::HashSet::new(),
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -1152,9 +1226,11 @@ impl Daemon {
                 tags,
                 include_runtime_context,
                 worktree: use_worktree,
+                parent_task_id,
                 reply,
             } => {
                 let mut task = Task::new(&project, &prompt, &agent, tags);
+                task.parent_task_id = parent_task_id;
                 // Create worktree if requested and project has a git repo.
                 if use_worktree {
                     if let Some(path) = self.project_path(&project) {
@@ -1186,6 +1262,17 @@ impl Daemon {
                     include_runtime_context,
                     None,
                 );
+            }
+            Command::ReadInbox {
+                parent_task_id,
+                reply,
+            } => {
+                let results = self
+                    .orchestrator_inbox
+                    .remove(&parent_task_id)
+                    .unwrap_or_default();
+                self.pending_wake.remove(&parent_task_id);
+                let _ = reply.send(results);
             }
             Command::GetDiff { task_id, reply } => {
                 // Resolve the repo path (sync) before awaiting git, so no shared
@@ -1818,12 +1905,27 @@ impl Daemon {
                 .unwrap_or_else(|| ".".to_string())
         };
         let command = self.resolve_agent_command(project, agent);
+        // An orchestrator-chat session gets the warpforge MCP bridge (spawn_agent
+        // / read_inbox tools) and an orchestrator system preamble; a plain task
+        // gets neither.
+        let is_orchestrator = self
+            .tasks
+            .get(task_id)
+            .map_or(false, |t| t.tags.iter().any(|x| x == "orchestrator-chat"));
+        let (mcp_servers, base_prompt) = if is_orchestrator {
+            (
+                orchestrator_mcp_servers(task_id, project),
+                format!("{ORCHESTRATOR_SYSTEM}\n\n{prompt}"),
+            )
+        } else {
+            (Vec::new(), prompt.to_string())
+        };
         let full_prompt = match include_runtime_context
             .then(|| self.runtime_context(project))
             .flatten()
         {
-            Some(ctx) => format!("{ctx}\n\n{prompt}"),
-            None => prompt.to_string(),
+            Some(ctx) => format!("{ctx}\n\n{base_prompt}"),
+            None => base_prompt,
         };
         match spawn_acp_session(
             task_id.to_string(),
@@ -1831,6 +1933,7 @@ impl Daemon {
             cwd,
             full_prompt,
             resume,
+            mcp_servers,
             self.acp_tx.clone(),
             Some(self.policy_tx.clone()),
         ) {
@@ -1946,8 +2049,16 @@ impl Daemon {
                         self.emit(Event::TaskUpdated(updated));
                     }
                 }
-                let result = self.collect_agent_text(&task_id);
-                self.notify_orch_finished(&task_id, success, result);
+                let output = self.collect_agent_text(&task_id);
+                self.notify_orch_finished(&task_id, success, output.clone());
+                // Deliver to a parent if this was a sub-agent; and drain our own
+                // inbox if we are a parent that just went idle.
+                self.deliver_child_result(&task_id, success, output);
+                // If we are an orchestrator whose sub-agents finished mid-turn,
+                // process them now that the turn is over.
+                if self.pending_wake.remove(&task_id) {
+                    self.wake_parent(&task_id);
+                }
             }
             AcpUpdate::Error(message) => {
                 let reason = message.clone();
@@ -1958,7 +2069,8 @@ impl Daemon {
                     self.persist(&updated);
                     self.emit(Event::TaskUpdated(updated));
                 }
-                self.notify_orch_finished(&task_id, false, reason);
+                self.notify_orch_finished(&task_id, false, reason.clone());
+                self.deliver_child_result(&task_id, false, reason);
             }
         }
     }
@@ -2075,6 +2187,62 @@ impl Daemon {
                 })
                 .await;
         });
+    }
+
+    /// If `child_id` was spawned by an orchestrator, queue its result in the
+    /// parent's inbox and (if the parent is idle) wake it.
+    fn deliver_child_result(&mut self, child_id: &str, success: bool, output: String) {
+        let Some(child) = self.tasks.get(child_id) else {
+            return;
+        };
+        let Some(parent_id) = child.parent_task_id.clone() else {
+            return;
+        };
+        let result = ChildResult {
+            child_id: child_id.to_string(),
+            agent: child.agent.clone(),
+            prompt: child.prompt.clone(),
+            output,
+            success,
+        };
+        self.orchestrator_inbox
+            .entry(parent_id.clone())
+            .or_default()
+            .push(result);
+        // Wake now if the orchestrator is idle; otherwise defer to its turn end.
+        let running = self
+            .tasks
+            .get(&parent_id)
+            .map_or(false, |t| t.status == TaskStatus::Running);
+        if running {
+            self.pending_wake.insert(parent_id);
+        } else {
+            self.wake_parent(&parent_id);
+        }
+    }
+
+    /// Inject a system nudge into an orchestrator's session so it drains its
+    /// inbox. No-op if the inbox is empty.
+    fn wake_parent(&mut self, parent_id: &str) {
+        let pending = self
+            .orchestrator_inbox
+            .get(parent_id)
+            .map_or(0, |v| v.len());
+        if pending == 0 {
+            return;
+        }
+        let Some(handle) = self.sessions.get(parent_id).cloned() else {
+            // Orchestrator session isn't live right now (e.g. it ended while a
+            // sub-agent was still running). Keep the results queued and retry
+            // the nudge when the parent next runs (its next turn end).
+            self.pending_wake.insert(parent_id.to_string());
+            return;
+        };
+        self.mark_task_running(parent_id);
+        handle.prompt(format!(
+            "[System] {pending} sub-agent result(s) ready in your inbox. \
+             Call the read_inbox tool to collect them, then decide what to do next."
+        ));
     }
 
     fn emit_session(&self, task_id: &str, update: wire::SessionUpdate) {

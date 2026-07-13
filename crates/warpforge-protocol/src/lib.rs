@@ -138,6 +138,10 @@ pub enum Method {
         /// doesn't conflict with the main working tree or other tasks.
         #[serde(default)]
         worktree: bool,
+        /// When set, this task is a sub-agent spawned by the given orchestrator
+        /// task; its result is delivered back into that orchestrator's inbox.
+        #[serde(default)]
+        parent_task_id: Option<String>,
     },
     #[serde(rename = "task.cancel")]
     TaskCancel { task_id: String },
@@ -170,6 +174,12 @@ pub enum Method {
         #[serde(default)]
         title: String,
     },
+
+    /// Drain an orchestrator task's inbox of finished sub-agent results.
+    /// Returns `{ results: ChildResult[] }`. Called by the orchestrator's
+    /// `read_inbox` MCP tool.
+    #[serde(rename = "orchestrator.readInbox")]
+    OrchestratorReadInbox { parent_task_id: String },
 
     // ── Agent registry ──
     /// Detect installed ACP-capable agents. Returns `{ detected: DetectedAgent[] }`.
