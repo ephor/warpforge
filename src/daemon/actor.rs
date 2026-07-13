@@ -1829,6 +1829,15 @@ impl Daemon {
 
     /// Resolve a task's `agent` to a spawnable ACP command.
     /// Priority: global agent registry → project agentTemplates → raw command.
+    /// Enabled agent ids the orchestrator may delegate to (from the registry).
+    fn available_agent_ids(&self) -> Vec<String> {
+        self.configured_agents
+            .iter()
+            .filter(|a| a.enabled)
+            .map(|a| a.id.clone())
+            .collect()
+    }
+
     fn resolve_agent_command(&self, project: &str, agent: &str) -> String {
         // 1. Global registry (configured via setup wizard / settings).
         if let Some(cfg) = self
@@ -1913,9 +1922,15 @@ impl Daemon {
             .get(task_id)
             .map_or(false, |t| t.tags.iter().any(|x| x == "orchestrator-chat"));
         let (mcp_servers, base_prompt) = if is_orchestrator {
+            let agents = self.available_agent_ids();
+            let roster = if agents.is_empty() {
+                String::new()
+            } else {
+                format!("\n\nAgents you can pass to spawn_agent: {}.", agents.join(", "))
+            };
             (
                 orchestrator_mcp_servers(task_id, project),
-                format!("{ORCHESTRATOR_SYSTEM}\n\n{prompt}"),
+                format!("{ORCHESTRATOR_SYSTEM}{roster}\n\n{prompt}"),
             )
         } else {
             (Vec::new(), prompt.to_string())
