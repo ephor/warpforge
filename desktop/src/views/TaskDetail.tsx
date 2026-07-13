@@ -5,6 +5,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  useQueries,
 } from "@tanstack/react-query";
 import { daemonQuery } from "../query";
 import {
@@ -130,8 +131,7 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   const projectFiles = Array.isArray(fileListQuery.data) ? fileListQuery.data : [];
   const fileListError = fileListQuery.error?.message ?? null;
 
-  const fileContentsEnabled =
-    !!activeFile && !(activeTab.kind === "changes" && diffView !== "split");
+  const fileContentsEnabled = !!activeFile && activeTab.kind === "file";
   const fileDocQuery = useQuery({
     queryKey: ["fileContents", task.id, activeFile, task.updatedAt],
     queryFn: daemonQuery<FileDoc>("file.contents", {
@@ -143,6 +143,24 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     placeholderData: keepPreviousData,
   });
   const fileDoc = fileContentsEnabled ? fileDocQuery.data ?? null : null;
+
+  // Split review is still an all-changes view. Fetch every changed file here;
+  // selectedFile only tracks the rail highlight/scroll target and must not
+  // determine which diff blocks are mounted.
+  const splitFileQueries = useQueries({
+    queries:
+      activeTab.kind === "changes" && diffView === "split"
+        ? (diff?.files ?? []).map((file) => ({
+            queryKey: ["fileContents", task.id, file.path, task.updatedAt],
+            queryFn: daemonQuery<FileDoc>("file.contents", {
+              task_id: task.id,
+              path: file.path,
+            }),
+            refetchOnWindowFocus: "always" as const,
+            placeholderData: keepPreviousData,
+          }))
+        : [],
+  });
 
   const setView = (v: "unified" | "split") => setDiffView(v);
   const openFileTab = (path: string) => {
@@ -157,14 +175,12 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     setActiveTab({ kind: "changes" });
     setShowDiff(true);
     setCenterTab("changes");
-    if (diffView === "unified") {
-      requestAnimationFrame(() => {
-        document.getElementById(fileAnchor(path))?.scrollIntoView({
-          block: "start",
-          behavior: "smooth",
-        });
+    requestAnimationFrame(() => {
+      document.getElementById(fileAnchor(path))?.scrollIntoView({
+        block: "start",
+        behavior: "smooth",
       });
-    }
+    });
   };
   const openChangesTab = () => {
     setActiveTab({ kind: "changes" });
@@ -520,23 +536,45 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
                       </div>
                     </ScrollArea>
                   ) : (
-                    <div className="min-h-0 flex-1">
-                      {diff && diff.files.length === 0 ? (
+                    <div className="min-h-0 flex-1 overflow-auto">
+                      {!diff ? (
+                        <p className="p-3 text-sm text-muted-foreground">Loading diff…</p>
+                      ) : diff.files.length === 0 ? (
                         <p className="p-3 text-sm text-muted-foreground">No changes yet.</p>
-                      ) : fileDoc ? (
-                        <MergeDiff
-                          doc={fileDoc}
-                          editable={editable}
-                          onSave={(content) =>
-                            void daemon.request("file.save", {
-                              task_id: task.id,
-                              path: fileDoc.path,
-                              content,
-                            })
-                          }
-                        />
                       ) : (
-                        <p className="p-3 text-sm text-muted-foreground">Loading file…</p>
+                        diff.files.map((file, index) => {
+                          const query = splitFileQueries[index];
+                          const doc = query?.data;
+                          return (
+                            <div
+                              key={file.path}
+                              id={fileAnchor(file.path)}
+                              className="h-full min-h-[24rem] border-b last:border-b-0"
+                            >
+                              {doc ? (
+                                <MergeDiff
+                                  doc={doc}
+                                  editable={editable}
+                                  onSave={(content) =>
+                                    void daemon.request("file.save", {
+                                      task_id: task.id,
+                                      path: doc.path,
+                                      content,
+                                    })
+                                  }
+                                />
+                              ) : query?.error ? (
+                                <p className="p-3 text-sm text-destructive">
+                                  Failed to load {file.path}: {query.error.message}
+                                </p>
+                              ) : (
+                                <p className="p-3 text-sm text-muted-foreground">
+                                  Loading {file.path}…
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })
                       )}
                     </div>
                   )}
