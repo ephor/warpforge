@@ -51,6 +51,10 @@ export default function NewTaskDialog({
   const [shareContext, setShareContext] = useState(true);
   const [useWorktree, setUseWorktree] = useState(false);
   const [orchestrate, setOrchestrate] = useState(false);
+  // Chat orchestrator (B): a lead agent that delegates to sub-agents and
+  // processes their results in one conversation. Distinct from the deterministic
+  // "orchestrate" pipeline above.
+  const [orchChat, setOrchChat] = useState(false);
   const [orch, setOrch] = useState<OrchestratorConfig>(DEFAULT_ORCH);
   const [orchLoaded, setOrchLoaded] = useState(false);
 
@@ -75,6 +79,7 @@ export default function NewTaskDialog({
       setPrompt(initialPrompt ?? "");
       setTags("");
       setOrchestrate(false);
+      setOrchChat(false);
       setOrchLoaded(false);
     }
   }, [open, defaultProject, initialPrompt]);
@@ -110,16 +115,19 @@ export default function NewTaskDialog({
       await daemon.orchestrateSaveConfig(orch);
       void daemon.orchestrateStart(project, prompt.trim());
     } else {
+      const userTags = tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
       void daemon.request("task.create", {
         project,
         prompt: prompt.trim(),
         agent,
-        tags: tags
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean),
+        // The "orchestrator-chat" tag makes the daemon wire the warpforge MCP
+        // bridge (spawn_agent / read_inbox) into this session.
+        tags: orchChat ? [...userTags, "orchestrator-chat"] : userTags,
         include_runtime_context: shareContext,
-        worktree: useWorktree,
+        worktree: orchChat ? false : useWorktree,
       });
     }
     onOpenChange(false);
@@ -362,7 +370,7 @@ export default function NewTaskDialog({
               </div>
             </button>
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => setUseWorktree((v) => !v)}
@@ -390,7 +398,12 @@ export default function NewTaskDialog({
 
               <button
                 type="button"
-                onClick={() => setOrchestrate((v) => !v)}
+                onClick={() =>
+                  setOrchestrate((v) => {
+                    if (!v) setOrchChat(false);
+                    return !v;
+                  })
+                }
                 className={cn(
                   "flex items-center gap-3 rounded-md border p-2.5 text-left transition-colors",
                   orchestrate ? "border-primary/40 bg-primary/5" : "border-border",
@@ -407,9 +420,39 @@ export default function NewTaskDialog({
                 <div>
                   <div className="text-sm font-medium">
                     <GitMerge className="mr-1 inline size-3.5 text-primary" />
-                    Orchestrate
+                    Pipeline
                   </div>
-                  <p className="text-[11px] text-muted-foreground">Multi-agent pipeline</p>
+                  <p className="text-[11px] text-muted-foreground">Planner → workers</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setOrchChat((v) => {
+                    if (!v) setOrchestrate(false);
+                    return !v;
+                  })
+                }
+                className={cn(
+                  "flex items-center gap-3 rounded-md border p-2.5 text-left transition-colors",
+                  orchChat ? "border-primary/40 bg-primary/5" : "border-border",
+                )}
+              >
+                <div
+                  className={cn(
+                    "flex size-4 shrink-0 items-center justify-center rounded border",
+                    orchChat ? "border-primary bg-primary" : "border-muted-foreground",
+                  )}
+                >
+                  {orchChat && <div className="size-2 rounded-sm bg-primary-foreground" />}
+                </div>
+                <div>
+                  <div className="text-sm font-medium">
+                    <GitMerge className="mr-1 inline size-3.5 text-primary" />
+                    Orchestrator
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">Chat + sub-agents</p>
                 </div>
               </button>
             </div>
@@ -451,7 +494,7 @@ export default function NewTaskDialog({
             Cancel
           </Button>
           <Button onClick={create} disabled={!prompt.trim() || !project}>
-            {orchestrate ? "Start orchestration" : "Start task"}
+            {orchestrate ? "Start orchestration" : orchChat ? "Start orchestrator" : "Start task"}
           </Button>
         </DialogFooter>
       </DialogContent>
