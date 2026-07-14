@@ -526,8 +526,8 @@ async fn dispatch(
                     reply: tx,
                 })
                 .await;
-            let graph_id = rx.await.unwrap_or_default();
-            Ok(json!({ "graphId": graph_id }))
+            let (graph_id, task_id) = rx.await.unwrap_or_default();
+            Ok(json!({ "graphId": graph_id, "taskId": task_id }))
         }
         OrchestrateList {} => {
             let (tx, rx) = oneshot::channel();

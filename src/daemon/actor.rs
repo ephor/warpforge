@@ -328,7 +328,7 @@ pub enum Command {
     StartOrchestration {
         project: String,
         goal: String,
-        reply: oneshot::Sender<String>,
+        reply: oneshot::Sender<(String, String)>,
     },
     /// List active orchestration graphs.
     ListOrchestrations {
@@ -342,6 +342,12 @@ pub enum Command {
     SaveOrchestratorConfig {
         config: wire::OrchestratorConfigDto,
         reply: oneshot::Sender<bool>,
+    },
+    /// Force-set a task's status and emit a TaskUpdated event. Used by the
+    /// orchestrator to reflect aggregate orchestration state on the parent task.
+    SetTaskStatus {
+        id: String,
+        status: TaskStatus,
     },
     Shutdown,
 }
@@ -471,6 +477,14 @@ impl DaemonHandle {
         })
         .await;
         rx.await.unwrap_or_default()
+    }
+
+    pub async fn set_task_status(&self, id: &str, status: TaskStatus) {
+        self.send(Command::SetTaskStatus {
+            id: id.to_string(),
+            status,
+        })
+        .await;
     }
 
     pub async fn read_inbox(&self, parent_task_id: &str) -> Vec<ChildResult> {
@@ -988,7 +1002,7 @@ impl Daemon {
         portforwards.sort_by(|a, b| a.name.cmp(&b.name));
 
         let mut tasks: Vec<wire::TaskInfo> = self.tasks.values().map(wireconv::task_info).collect();
-        tasks.sort_by_key(|t| t.created_at);
+        tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
         let terminals = self
             .agents
@@ -1175,7 +1189,7 @@ impl Daemon {
             }
             Command::Tasks(reply) => {
                 let mut tasks: Vec<Task> = self.tasks.values().cloned().collect();
-                tasks.sort_by_key(|t| t.created_at);
+                tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
                 let _ = reply.send(tasks);
             }
             Command::Snapshot(reply) => {
@@ -1844,11 +1858,11 @@ impl Daemon {
                                 reply: rtx,
                             })
                             .await;
-                        let graph_id = rrx.await.unwrap_or_default();
-                        let _ = reply.send(graph_id);
+                        let result = rrx.await.unwrap_or_default();
+                        let _ = reply.send(result);
                     });
                 } else {
-                    let _ = reply.send(String::new());
+                    let _ = reply.send((String::new(), String::new()));
                 }
             }
             Command::ListOrchestrations { reply } => {
@@ -1874,6 +1888,14 @@ impl Daemon {
                     let _ = store.save_orchestrator_config(&self.orch_config);
                 }
                 let _ = reply.send(true);
+            }
+            Command::SetTaskStatus { id, status } => {
+                if let Some(task) = self.tasks.get_mut(&id) {
+                    task.set_status(status);
+                    let updated = task.clone();
+                    self.persist(&updated);
+                    self.emit(Event::TaskUpdated(updated));
+                }
             }
         }
     }

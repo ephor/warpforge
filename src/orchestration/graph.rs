@@ -9,6 +9,9 @@ pub struct TaskGraph {
     pub goal: String,
     pub nodes: HashMap<String, TaskNode>,
     pub root_id: String,
+    /// The daemon task that owns this orchestration on the board. All child
+    /// tasks created by the graph carry `parent_task_id` pointing here.
+    pub parent_task_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -50,7 +53,7 @@ pub enum NodeStatus {
 
 impl TaskGraph {
     /// Create a new graph with a root Plan node.
-    pub fn new(project: &str, goal: &str, planner_agent: &str) -> Self {
+    pub fn new(project: &str, goal: &str, planner_agent: &str, parent_task_id: String) -> Self {
         let id = format!("g_{}", &Uuid::new_v4().to_string()[..8]);
         let root_id = format!("{id}_plan");
         let root = TaskNode {
@@ -72,6 +75,7 @@ impl TaskGraph {
             goal: goal.to_string(),
             nodes,
             root_id,
+            parent_task_id,
         }
     }
 
@@ -298,7 +302,7 @@ mod tests {
 
     #[test]
     fn empty_graph_all_done() {
-        let graph = TaskGraph::new("demo", "fix bug", "claude");
+        let graph = TaskGraph::new("demo", "fix bug", "claude", "t_parent".into());
         // Root is Pending, not Complete — all_done should be false
         assert!(!graph.all_done());
         // But ready_nodes should return the root (no deps)
@@ -307,7 +311,7 @@ mod tests {
 
     #[test]
     fn parse_plan_strips_markdown_fences() {
-        let mut graph = TaskGraph::new("demo", "goal", "claude");
+        let mut graph = TaskGraph::new("demo", "goal", "claude", "t_parent".into());
         let config = crate::orchestration::config::OrchestratorConfig::default();
         let fenced = "Here's the plan:\n\n```json\n{\"tasks\":[{\"spec\":\"do a\",\
             \"depends_on\":[]}],\"reviews\":[{\"diff_ref\":\"HEAD\",\"target\":\"0\"}]}\n```\ndone";
@@ -325,7 +329,7 @@ mod tests {
 
     #[test]
     fn add_node_and_ready() {
-        let mut graph = TaskGraph::new("demo", "fix bug", "claude");
+        let mut graph = TaskGraph::new("demo", "fix bug", "claude", "t_parent".into());
         let root = graph.root_id.clone();
 
         // Complete root
@@ -352,7 +356,7 @@ mod tests {
 
     #[test]
     fn topo_order_respects_deps() {
-        let mut graph = TaskGraph::new("demo", "test", "claude");
+        let mut graph = TaskGraph::new("demo", "test", "claude", "t_parent".into());
 
         let a = graph.add_node(NodeKind::Implement { spec: "a".into() }, "claude", vec![]);
         let b = graph.add_node(
@@ -371,7 +375,7 @@ mod tests {
 
     #[test]
     fn parse_simple_plan() {
-        let mut graph = TaskGraph::new("demo", "build feature", "claude");
+        let mut graph = TaskGraph::new("demo", "build feature", "claude", "t_parent".into());
         let config = crate::orchestration::config::OrchestratorConfig::default();
 
         let plan = r#"{

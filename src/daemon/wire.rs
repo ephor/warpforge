@@ -134,6 +134,7 @@ pub fn task_info(t: &Task) -> wire::TaskInfo {
         config_options: t.config_options.clone(),
         worktree: t.worktree.clone(),
         orchestration_graph: t.orchestration_graph.clone(),
+        parent_task_id: t.parent_task_id.clone(),
     }
 }
 
