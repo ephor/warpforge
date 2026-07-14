@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   Clock3,
@@ -13,7 +14,8 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { daemon, DaemonState } from "../daemon";
-import { CommandInfo, SessionUpdate, TaskInfo } from "../protocol";
+import { CommandInfo, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
+import { daemonQuery } from "../query";
 import { useUi } from "../store/ui";
 import { FileLinkResolver, Markdown } from "../components/Markdown";
 import { AgentConfigBar } from "../components/AgentConfigBar";
@@ -106,6 +108,13 @@ function FocusPane({
   const tools = summarizeTools(stream);
   const files = summarizeFiles(stream);
   const commands = latestCommands(updates);
+  const fileListQuery = useQuery({
+    queryKey: ["fileList", task.id, task.updatedAt],
+    queryFn: daemonQuery<ProjectFile[]>("file.list", { task_id: task.id }),
+  });
+  const projectFiles = Array.isArray(fileListQuery.data) ? fileListQuery.data : [];
+  const capability = [...updates].reverse().find((update) => update.kind === "prompt_capabilities");
+  const imageSupported = capability?.kind === "prompt_capabilities" ? capability.image : false;
   const activity = sessionActivity(task, stream);
   const badge = pending
     ? { variant: "warn" as const, label: "permission" }
@@ -225,9 +234,12 @@ function FocusPane({
       <div className="border-t border-border/70 bg-background/35">
         <Composer
           commands={commands}
+          files={projectFiles}
+          filesLoading={fileListQuery.isLoading}
+          imageSupported={imageSupported}
           disabled={task.status === "done"}
           placeholder="Steer this session..."
-          onSend={(text) => void daemon.request("session.prompt", { task_id: task.id, text })}
+          onSend={async (submission) => { await daemon.request("session.prompt", { task_id: task.id, ...submission }); }}
           toolbar={
             task.configOptions && task.configOptions.length > 0 ? (
               <AgentConfigBar taskId={task.id} options={task.configOptions} />
@@ -584,6 +596,9 @@ export function StreamLine({
           >
             {compact ? `› ${update.text}` : update.text}
           </Markdown>
+          {!!update.attachments?.length && <div className="mt-1.5 flex flex-wrap gap-1">
+            {update.attachments.map((attachment, index) => <span key={`${attachment.type}-${index}`} className="rounded border border-primary/20 bg-background/40 px-1.5 py-0.5 font-mono text-[10px]">{attachment.type === "file" ? `@${attachment.path}` : `image: ${attachment.name}`}</span>)}
+          </div>}
         </div>
       );
     case "agent_text":
@@ -705,6 +720,7 @@ export function StreamLine({
         </div>
       );
     case "available_commands":
+    case "prompt_capabilities":
       // Metadata for the composer's slash menu — not shown inline.
       return null;
     case "turn_ended":

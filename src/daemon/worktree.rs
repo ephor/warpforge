@@ -92,7 +92,12 @@ impl WorktreeManager {
 
         // Remove the worktree (git cleans up the dir).
         let status = tokio::process::Command::new("git")
-            .args(["worktree", "remove", "--force", wt.path.to_str().unwrap_or("")])
+            .args([
+                "worktree",
+                "remove",
+                "--force",
+                wt.path.to_str().unwrap_or(""),
+            ])
             .current_dir(&self.base_repo)
             .status()
             .await
@@ -217,7 +222,9 @@ impl WorktreeManager {
                 .ok()
                 .and_then(|o| {
                     if o.status.success() {
-                        String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
+                        String::from_utf8(o.stdout)
+                            .ok()
+                            .map(|s| s.trim().to_string())
                     } else {
                         None
                     }

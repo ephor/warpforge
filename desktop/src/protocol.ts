@@ -253,8 +253,22 @@ export interface CommandInfo {
   description: string;
 }
 
+export type PromptAttachment =
+  | { type: "file"; path: string }
+  | { type: "image"; name: string; mimeType: "image/png" | "image/jpeg"; data: string };
+
+export interface PromptSubmission {
+  text: string;
+  attachments: PromptAttachment[];
+}
+
+export type PromptAttachmentSummary =
+  | { type: "file"; path: string }
+  | { type: "image"; name: string };
+
 export type SessionUpdate =
-  | { kind: "user_message"; text: string }
+  | { kind: "user_message"; text: string; attachments?: PromptAttachmentSummary[] }
+  | { kind: "prompt_capabilities"; image: boolean; embedded_context: boolean }
   | { kind: "agent_text"; text: string }
   | { kind: "agent_thought"; text: string }
   | {

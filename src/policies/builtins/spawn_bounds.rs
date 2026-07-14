@@ -94,7 +94,10 @@ mod tests {
         p.record_spawn();
         p.record_spawn();
         let r = p.evaluate(&spawn_ctx()).await;
-        assert!(matches!(r.action, crate::policies::PolicyAction::Deny { .. }));
+        assert!(matches!(
+            r.action,
+            crate::policies::PolicyAction::Deny { .. }
+        ));
     }
 
     #[tokio::test]

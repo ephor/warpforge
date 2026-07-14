@@ -241,6 +241,7 @@ async fn dispatch(
             include_runtime_context,
             worktree,
             parent_task_id,
+            attachments,
         } => {
             let id = handle
                 .create_task(
@@ -251,6 +252,7 @@ async fn dispatch(
                     include_runtime_context,
                     worktree,
                     parent_task_id,
+                    attachments,
                 )
                 .await;
             Ok(json!({ "taskId": id }))
@@ -292,8 +294,8 @@ async fn dispatch(
                 message: format!("cannot read {path}"),
             }),
         },
-        FileList { task_id } => {
-            let files = handle.list_files(&task_id).await;
+        FileList { task_id, project } => {
+            let files = handle.list_files(&task_id, project).await;
             serde_json::to_value(files).map_err(|e| wire::RpcError {
                 code: wire::ErrorCode::Internal,
                 message: e.to_string(),
@@ -386,10 +388,18 @@ async fn dispatch(
                 .await;
             Ok(json!({ "taskId": id }))
         }
-        SessionPrompt { task_id, text } => {
-            handle.session_prompt(&task_id, &text).await;
-            Ok(json!(null))
-        }
+        SessionPrompt {
+            task_id,
+            text,
+            attachments,
+        } => handle
+            .session_prompt(&task_id, &text, attachments)
+            .await
+            .map(|_| json!(null))
+            .map_err(|message| wire::RpcError {
+                code: wire::ErrorCode::InvalidRequest,
+                message,
+            }),
         SessionSetConfigOption {
             task_id,
             config_id,
@@ -497,9 +507,7 @@ async fn dispatch(
         }
         OrchestrateList {} => {
             let (tx, rx) = oneshot::channel();
-            handle
-                .send(Command::ListOrchestrations { reply: tx })
-                .await;
+            handle.send(Command::ListOrchestrations { reply: tx }).await;
             let infos = rx.await.unwrap_or_default();
             Ok(json!({ "graphs": infos }))
         }

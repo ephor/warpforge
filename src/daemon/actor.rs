@@ -47,7 +47,8 @@ fn split_key(key: &str) -> (String, String) {
 fn is_acp_replay_update(update: &wire::SessionUpdate) -> bool {
     match update {
         wire::SessionUpdate::UserMessage { .. }
-        | wire::SessionUpdate::PermissionResolved { .. } => false,
+        | wire::SessionUpdate::PermissionResolved { .. }
+        | wire::SessionUpdate::PromptCapabilities { .. } => false,
         wire::SessionUpdate::AgentText { text } => {
             text != "Reconnecting to the saved agent session…"
                 && !text.starts_with("⚠ No live agent session")
@@ -191,6 +192,7 @@ pub enum Command {
         worktree: bool,
         /// Set when this task is a sub-agent of an orchestrator task.
         parent_task_id: Option<String>,
+        attachments: Vec<wire::PromptAttachment>,
         reply: oneshot::Sender<String>,
     },
     /// Drain an orchestrator task's inbox of finished sub-agent results.
@@ -242,6 +244,7 @@ pub enum Command {
     /// List files in a task's project working tree.
     ListFiles {
         task_id: String,
+        project: Option<String>,
         reply: oneshot::Sender<Vec<wire::ProjectFile>>,
     },
     /// Write new contents to a file in the task's working tree.
@@ -285,6 +288,8 @@ pub enum Command {
     SessionPrompt {
         task_id: String,
         text: String,
+        attachments: Vec<wire::PromptAttachment>,
+        reply: oneshot::Sender<Result<(), String>>,
     },
     /// Answer a permission request the agent raised.
     SessionPermission {
@@ -437,6 +442,7 @@ impl DaemonHandle {
         include_runtime_context: bool,
         worktree: bool,
         parent_task_id: Option<String>,
+        attachments: Vec<wire::PromptAttachment>,
     ) -> String {
         let (tx, rx) = oneshot::channel();
         self.send(Command::CreateTask {
@@ -447,6 +453,7 @@ impl DaemonHandle {
             include_runtime_context,
             worktree,
             parent_task_id,
+            attachments,
             reply: tx,
         })
         .await;
@@ -484,10 +491,15 @@ impl DaemonHandle {
         rx.await.ok().flatten()
     }
 
-    pub async fn list_files(&self, task_id: &str) -> Vec<wire::ProjectFile> {
+    pub async fn list_files(
+        &self,
+        task_id: &str,
+        project: Option<String>,
+    ) -> Vec<wire::ProjectFile> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::ListFiles {
             task_id: task_id.to_string(),
+            project,
             reply: tx,
         })
         .await;
@@ -582,12 +594,22 @@ impl DaemonHandle {
         self.send(Command::Shutdown).await;
     }
 
-    pub async fn session_prompt(&self, task_id: &str, text: &str) {
+    pub async fn session_prompt(
+        &self,
+        task_id: &str,
+        text: &str,
+        attachments: Vec<wire::PromptAttachment>,
+    ) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
         self.send(Command::SessionPrompt {
             task_id: task_id.into(),
             text: text.into(),
+            attachments,
+            reply: tx,
         })
         .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the prompt request".into()))
     }
 
     pub async fn list_sessions(&self, project: &str) -> Vec<wire::ExternalSession> {
@@ -1227,6 +1249,7 @@ impl Daemon {
                 include_runtime_context,
                 worktree: use_worktree,
                 parent_task_id,
+                attachments,
                 reply,
             } => {
                 let mut task = Task::new(&project, &prompt, &agent, tags);
@@ -1234,10 +1257,9 @@ impl Daemon {
                 // Create worktree if requested and project has a git repo.
                 if use_worktree {
                     if let Some(path) = self.project_path(&project) {
-                        let wt_mgr = self
-                            .worktrees
-                            .entry(project.clone())
-                            .or_insert_with(|| WorktreeManager::new(std::path::PathBuf::from(&path)));
+                        let wt_mgr = self.worktrees.entry(project.clone()).or_insert_with(|| {
+                            WorktreeManager::new(std::path::PathBuf::from(&path))
+                        });
                         match wt_mgr.create(&task.id, None).await {
                             Ok(wt) => {
                                 task.worktree = Some(wt.path.to_string_lossy().to_string());
@@ -1261,6 +1283,7 @@ impl Daemon {
                     &prompt,
                     include_runtime_context,
                     None,
+                    attachments,
                 );
             }
             Command::ReadInbox {
@@ -1309,11 +1332,16 @@ impl Daemon {
                 };
                 let _ = reply.send(doc);
             }
-            Command::ListFiles { task_id, reply } => {
+            Command::ListFiles {
+                task_id,
+                project,
+                reply,
+            } => {
                 let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                    .and_then(|t| self.project_path(&t.project))
+                    .or_else(|| project.as_deref().and_then(|name| self.project_path(name)));
                 let files = match repo {
                     Some(p) => super::diff::list_files(&p).await.unwrap_or_default(),
                     None => Vec::new(),
@@ -1580,12 +1608,46 @@ impl Daemon {
                 self.emit(Event::TaskCreated(task));
                 let _ = reply.send(id.clone());
                 // Load history only (empty prompt); user continues via session.prompt.
-                self.start_session(&id, &project, &agent, "", false, Some(session_id));
+                self.start_session(&id, &project, &agent, "", false, Some(session_id), vec![]);
             }
-            Command::SessionPrompt { task_id, text } => {
-                let user_update = wire::SessionUpdate::UserMessage { text: text.clone() };
+            Command::SessionPrompt {
+                task_id,
+                text,
+                attachments,
+                reply,
+            } => {
+                let root = self.tasks.get(&task_id).map(|task| {
+                    task.worktree
+                        .clone()
+                        .or_else(|| self.project_path(&task.project))
+                        .unwrap_or_else(|| ".".into())
+                });
+                let prepared = root
+                    .ok_or_else(|| format!("unknown task {task_id}"))
+                    .and_then(|root| {
+                        super::prompt::prepare_prompt(
+                            std::path::Path::new(&root),
+                            text.clone(),
+                            &attachments,
+                        )
+                    });
+                let prepared = match prepared {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                        return;
+                    }
+                };
+                let user_update = wire::SessionUpdate::UserMessage {
+                    text: text.clone(),
+                    attachments: prepared.summaries.clone(),
+                };
                 match self.sessions.get(&task_id).cloned() {
                     Some(handle) => {
+                        if let Err(error) = handle.prompt(prepared) {
+                            let _ = reply.send(Err(error));
+                            return;
+                        }
                         self.mark_task_running(&task_id);
                         // Echo the developer's message through the same
                         // persisted stream as agent updates. If a reconnect
@@ -1594,7 +1656,7 @@ impl Daemon {
                         // readable by dropping only that exact consecutive
                         // duplicate.
                         self.emit_session_unless_last_duplicate(&task_id, user_update);
-                        handle.prompt(text);
+                        let _ = reply.send(Ok(()));
                     }
                     None => {
                         let resume = self.tasks.get(&task_id).and_then(|task| {
@@ -1620,20 +1682,12 @@ impl Daemon {
                                 &text,
                                 false,
                                 Some(session_id),
+                                attachments,
                             );
+                            let _ = reply.send(Ok(()));
                         } else {
-                            // No live session and no persisted native session id
-                            // to load. Say so instead of dropping the message.
-                            self.emit_session_unless_last_duplicate(&task_id, user_update);
-                            self.emit_session(
-                                &task_id,
-                                wire::SessionUpdate::AgentText {
-                                    text: "⚠ No live agent session for this task — its \
-                                           session ended and there is no saved session id \
-                                           to resume. Start or resume a new task to continue."
-                                        .into(),
-                                },
-                            );
+                            // Reject without echoing a user message that was never delivered.
+                            let _ = reply.send(Err("no live or resumable agent session".into()));
                         }
                     }
                 }
@@ -1679,7 +1733,11 @@ impl Daemon {
                 self.configured_agents = agents.clone();
                 self.emit(Event::AgentsUpdated { agents });
             }
-            Command::StartOrchestration { project, goal, reply } => {
+            Command::StartOrchestration {
+                project,
+                goal,
+                reply,
+            } => {
                 if let Some(orch_tx) = &self.orch_tx {
                     // Spawn — the orchestrator will call back into the daemon
                     // (create_task) which would deadlock if we blocked here.
@@ -1900,6 +1958,7 @@ impl Daemon {
         prompt: &str,
         include_runtime_context: bool,
         resume: Option<String>,
+        attachments: Vec<wire::PromptAttachment>,
     ) {
         // Resolve cwd: worktree path if set, otherwise project root.
         let cwd = if let Some(task) = self.tasks.get(task_id) {
@@ -1926,7 +1985,10 @@ impl Daemon {
             let roster = if agents.is_empty() {
                 String::new()
             } else {
-                format!("\n\nAgents you can pass to spawn_agent: {}.", agents.join(", "))
+                format!(
+                    "\n\nAgents you can pass to spawn_agent: {}.",
+                    agents.join(", ")
+                )
             };
             (
                 orchestrator_mcp_servers(task_id, project),
@@ -1942,11 +2004,37 @@ impl Daemon {
             Some(ctx) => format!("{ctx}\n\n{base_prompt}"),
             None => base_prompt,
         };
+        let prepared_prompt = match super::prompt::prepare_prompt(
+            std::path::Path::new(&cwd),
+            full_prompt,
+            &attachments,
+        ) {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                if let Some(task) = self.tasks.get_mut(task_id) {
+                    task.blocked_reason = Some(error);
+                    task.set_status(TaskStatus::Blocked);
+                    let updated = task.clone();
+                    self.persist(&updated);
+                    self.emit(Event::TaskUpdated(updated));
+                }
+                return;
+            }
+        };
+        if !prompt.is_empty() || !prepared_prompt.summaries.is_empty() {
+            self.emit_session_unless_last_duplicate(
+                task_id,
+                wire::SessionUpdate::UserMessage {
+                    text: prompt.to_string(),
+                    attachments: prepared_prompt.summaries.clone(),
+                },
+            );
+        }
         match spawn_acp_session(
             task_id.to_string(),
             command,
             cwd,
-            full_prompt,
+            prepared_prompt,
             resume,
             mcp_servers,
             self.acp_tx.clone(),
@@ -2014,6 +2102,16 @@ impl Daemon {
                     self.emit(Event::TaskUpdated(updated));
                 }
             }
+            AcpUpdate::PromptCapabilities {
+                image,
+                embedded_context,
+            } => self.emit_session(
+                &task_id,
+                wire::SessionUpdate::PromptCapabilities {
+                    image,
+                    embedded_context,
+                },
+            ),
             AcpUpdate::FileEdit { path } => {
                 let update = wire::SessionUpdate::FileEdit { path };
                 if self.should_skip_resume_replay(&task_id, &update) {
@@ -2254,10 +2352,14 @@ impl Daemon {
             return;
         };
         self.mark_task_running(parent_id);
-        handle.prompt(format!(
-            "[System] {pending} sub-agent result(s) ready in your inbox. \
-             Call the read_inbox tool to collect them, then decide what to do next."
-        ));
+        let _ = handle.prompt(super::prompt::PreparedPrompt {
+            content: vec![super::prompt::PromptContent::Text(format!(
+                "[System] {pending} sub-agent result(s) ready in your inbox. \
+                 Call the read_inbox tool to collect them, then decide what to do next."
+            ))],
+            summaries: vec![],
+            has_images: false,
+        });
     }
 
     fn emit_session(&self, task_id: &str, update: wire::SessionUpdate) {

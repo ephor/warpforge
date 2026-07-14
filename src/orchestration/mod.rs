@@ -167,11 +167,8 @@ impl Orchestrator {
                     self.graphs.remove(&graph_id);
                 }
                 OrchCommand::List(reply) => {
-                    let infos: Vec<GraphInfo> = self
-                        .graphs
-                        .values()
-                        .map(|g| graph_info(g))
-                        .collect();
+                    let infos: Vec<GraphInfo> =
+                        self.graphs.values().map(|g| graph_info(g)).collect();
                     let _ = reply.send(infos);
                 }
             }
@@ -179,8 +176,7 @@ impl Orchestrator {
     }
 
     async fn handle_start_plan(&mut self, project: &str, goal: &str) -> String {
-        let mut graph =
-            TaskGraph::new(project, goal, &self.config.planner_agent);
+        let mut graph = TaskGraph::new(project, goal, &self.config.planner_agent);
         let graph_id = graph.id.clone();
 
         // Dispatch the planner node
@@ -205,6 +201,7 @@ impl Orchestrator {
                 true,
                 false,
                 None,
+                vec![],
             )
             .await
         {
@@ -329,8 +326,7 @@ impl Orchestrator {
             g.nodes
                 .values()
                 .find(|n| {
-                    n.daemon_task_id.as_deref() == Some(task_id)
-                        && n.status == NodeStatus::Running
+                    n.daemon_task_id.as_deref() == Some(task_id) && n.status == NodeStatus::Running
                 })
                 .map(|n| (gid.clone(), n.id.clone()))
         });
@@ -358,12 +354,7 @@ impl Orchestrator {
                 .map(|n| {
                     let worktree = matches!(n.kind, NodeKind::Implement { .. })
                         && self.config.worktrees_enabled;
-                    (
-                        n.id.clone(),
-                        n.agent.clone(),
-                        node_prompt(n),
-                        worktree,
-                    )
+                    (n.id.clone(), n.agent.clone(), node_prompt(n), worktree)
                 })
                 .collect()
         };
@@ -398,6 +389,7 @@ impl Orchestrator {
                     true,
                     worktree,
                     None,
+                    vec![],
                 )
                 .await
             {
@@ -444,9 +436,7 @@ fn node_prompt(node: &graph::TaskNode) -> String {
                  Provide structured feedback: approve or request changes with specific reasons."
             )
         }
-        NodeKind::Merge => {
-            "Merge all worktree branches back into the base branch.".to_string()
-        }
+        NodeKind::Merge => "Merge all worktree branches back into the base branch.".to_string(),
     }
 }
 
@@ -542,10 +532,7 @@ mod tests {
 
         // List
         let (list_tx, list_rx) = oneshot::channel();
-        cmd_tx
-            .send(OrchCommand::List(list_tx))
-            .await
-            .unwrap();
+        cmd_tx.send(OrchCommand::List(list_tx)).await.unwrap();
         let infos = list_rx.await.unwrap();
         assert_eq!(infos.len(), 1);
         assert_eq!(infos[0].project, "demo");
@@ -583,7 +570,8 @@ mod tests {
         };
 
         // Feed back a planner result — fenced JSON, exactly as real agents emit.
-        let plan = "```json\n{\"tasks\":[{\"spec\":\"do a\",\"depends_on\":[]}],\"reviews\":[]}\n```";
+        let plan =
+            "```json\n{\"tasks\":[{\"spec\":\"do a\",\"depends_on\":[]}],\"reviews\":[]}\n```";
         cmd_tx
             .send(OrchCommand::TaskFinished {
                 task_id: planner_task,

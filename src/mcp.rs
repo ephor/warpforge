@@ -68,10 +68,7 @@ async fn connect_daemon() -> Result<WsStream> {
         .get("url")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("daemon.json missing url"))?;
-    let token = endpoint
-        .get("token")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let token = endpoint.get("token").and_then(|v| v.as_str()).unwrap_or("");
 
     let (mut ws, _) = tokio_tungstenite::connect_async(url)
         .await
@@ -234,7 +231,10 @@ async fn handle_tool_call(
 ) -> Result<String> {
     let params = params.ok_or_else(|| anyhow!("missing params"))?;
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-    let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let args = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
 
     match name {
         "spawn_agent" => {

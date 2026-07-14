@@ -245,13 +245,9 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
                 task_id,
                 reason,
             }),
-            crate::orchestration::OrchEvent::AllComplete {
-                graph_id,
-                project,
-            } => Some(wire::Event::OrchestrationAllComplete {
-                graph_id,
-                project,
-            }),
+            crate::orchestration::OrchEvent::AllComplete { graph_id, project } => {
+                Some(wire::Event::OrchestrationAllComplete { graph_id, project })
+            }
             crate::orchestration::OrchEvent::PlanCreated { .. } => None,
             crate::orchestration::OrchEvent::Error { .. } => None,
         },

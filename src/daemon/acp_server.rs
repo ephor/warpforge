@@ -129,12 +129,27 @@ async fn handle_connection(
                 let _ = write_tx.send(format!("{resp}"));
             }
             "session/new" => {
-                let project = params.get("project").and_then(|p| p.as_str()).unwrap_or("demo");
+                let project = params
+                    .get("project")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("demo");
                 let prompt = params.get("prompt").and_then(|p| p.as_str()).unwrap_or("");
-                let agent = params.get("agent").and_then(|a| a.as_str()).unwrap_or("claude");
+                let agent = params
+                    .get("agent")
+                    .and_then(|a| a.as_str())
+                    .unwrap_or("claude");
 
                 let task_id = daemon
-                    .create_task(project, prompt, agent, vec!["acp-server".into()], true, false, None)
+                    .create_task(
+                        project,
+                        prompt,
+                        agent,
+                        vec!["acp-server".into()],
+                        true,
+                        false,
+                        None,
+                        vec![],
+                    )
                     .await;
 
                 // Subscribe to updates for this task.
@@ -162,7 +177,11 @@ async fn handle_connection(
                                 let _ = fwd_tx.send(format!("{notification}"));
                             }
                             Ok(Event::TaskUpdated(t)) if t.id == fwd_task => {
-                                if matches!(t.status, crate::daemon::TaskStatus::Done | crate::daemon::TaskStatus::Idle) {
+                                if matches!(
+                                    t.status,
+                                    crate::daemon::TaskStatus::Done
+                                        | crate::daemon::TaskStatus::Idle
+                                ) {
                                     let notification = json!({
                                         "jsonrpc": "2.0",
                                         "method": "session/ended",
@@ -193,7 +212,7 @@ async fn handle_connection(
 
                 match task_id_val {
                     Some(tid) => {
-                        daemon.session_prompt(tid, text).await;
+                        let _ = daemon.session_prompt(tid, text, vec![]).await;
                         let result = json!({"status": "sent"});
                         let resp = json!({"jsonrpc": "2.0", "result": result, "id": id});
                         let _ = write_tx.send(format!("{resp}"));
@@ -207,8 +226,14 @@ async fn handle_connection(
             }
             "session/permission" => {
                 let task_id_val = params.get("sessionId").and_then(|s| s.as_str());
-                let request_id = params.get("requestId").and_then(|r| r.as_str()).unwrap_or("");
-                let outcome = params.get("outcome").and_then(|o| o.as_str()).unwrap_or("allow");
+                let request_id = params
+                    .get("requestId")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("");
+                let outcome = params
+                    .get("outcome")
+                    .and_then(|o| o.as_str())
+                    .unwrap_or("allow");
 
                 if let Some(tid) = task_id_val {
                     daemon.session_permission(tid, request_id, outcome).await;
@@ -288,7 +313,10 @@ mod tests {
             "id": 1,
             "params": {}
         });
-        stream.write_all(format!("{init}\n").as_bytes()).await.unwrap();
+        stream
+            .write_all(format!("{init}\n").as_bytes())
+            .await
+            .unwrap();
 
         // Read response
         use tokio::io::AsyncReadExt;
@@ -297,7 +325,9 @@ mod tests {
         let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
 
         assert_eq!(resp["id"], 1);
-        assert!(resp["result"]["capabilities"]["sessions"]["create"].as_bool().unwrap());
+        assert!(resp["result"]["capabilities"]["sessions"]["create"]
+            .as_bool()
+            .unwrap());
     }
 
     #[tokio::test]
@@ -313,7 +343,10 @@ mod tests {
 
         // initialize
         let init = json!({"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {}});
-        stream.write_all(format!("{init}\n").as_bytes()).await.unwrap();
+        stream
+            .write_all(format!("{init}\n").as_bytes())
+            .await
+            .unwrap();
         let mut buf = vec![0u8; 4096];
         let n = stream.read(&mut buf).await.unwrap();
 
@@ -328,11 +361,17 @@ mod tests {
                 "agent": "claude"
             }
         });
-        stream.write_all(format!("{new}\n").as_bytes()).await.unwrap();
+        stream
+            .write_all(format!("{new}\n").as_bytes())
+            .await
+            .unwrap();
         let n = stream.read(&mut buf).await.unwrap();
         let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
 
         assert_eq!(resp["id"], 2);
-        assert!(resp["result"]["sessionId"].as_str().unwrap().starts_with("t_"));
+        assert!(resp["result"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .starts_with("t_"));
     }
 }
