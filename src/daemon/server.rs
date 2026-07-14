@@ -355,6 +355,10 @@ async fn dispatch(
             handle.send(Command::CancelTask { id: task_id }).await;
             Ok(json!(null))
         }
+        TaskArchive { task_id } => {
+            handle.send(Command::ArchiveTask { id: task_id }).await;
+            Ok(json!(null))
+        }
         TaskDelete { task_id } => {
             handle.send(Command::DeleteTask { id: task_id }).await;
             Ok(json!(null))
@@ -531,8 +535,7 @@ async fn dispatch(
             let ok = rx.await.unwrap_or(false);
             Ok(json!({ "ok": ok }))
         }
-        // Not yet in this build: project.* (use `wf add` + restart) and
-        // task.archive. Follow-ups.
+        // Not yet in this build: project.* (use `wf add` + restart).
         _ => Err(wire::RpcError {
             code: wire::ErrorCode::NotFound,
             message: "method not implemented in this build".to_string(),

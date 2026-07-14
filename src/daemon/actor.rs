@@ -203,6 +203,10 @@ pub enum Command {
     CancelTask {
         id: String,
     },
+    /// Archive a task (set status to Done, hide from live views).
+    ArchiveTask {
+        id: String,
+    },
     /// Delete a task and its session history permanently.
     DeleteTask {
         id: String,
@@ -1500,6 +1504,14 @@ impl Daemon {
                 if let Some(handle) = self.sessions.remove(&id) {
                     handle.cancel();
                 }
+                if let Some(task) = self.tasks.get_mut(&id) {
+                    task.set_status(TaskStatus::Done);
+                    let updated = task.clone();
+                    self.persist(&updated);
+                    self.emit(Event::TaskUpdated(updated));
+                }
+            }
+            Command::ArchiveTask { id } => {
                 if let Some(task) = self.tasks.get_mut(&id) {
                     task.set_status(TaskStatus::Done);
                     let updated = task.clone();

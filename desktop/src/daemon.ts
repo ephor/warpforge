@@ -233,6 +233,14 @@ class DaemonClient {
         }));
         return Promise.resolve({});
       }
+      case "task.archive": {
+        this.patchTask(String(p.task_id), (t) => ({
+          ...t,
+          status: "done",
+          updatedAt: nowSecs(),
+        }));
+        return Promise.resolve({});
+      }
       case "task.delete": {
         this.applyEvent({ event: "task.removed", data: { id: String(p.task_id) } });
         return Promise.resolve({});
@@ -452,6 +460,10 @@ class DaemonClient {
 
   async deleteTask(taskId: string) {
     await this.request("task.delete", { task_id: taskId });
+  }
+
+  async archiveTask(taskId: string) {
+    await this.request("task.archive", { task_id: taskId });
   }
 
   async stopRuntime() {
