@@ -167,6 +167,36 @@ class DaemonClient {
       }
       case "file.save":
         return Promise.resolve({});
+      case "git.pushInfo": {
+        const taskId = String(p.task_id);
+        const task = this.state.snapshot.tasks.find((item) => item.id === taskId);
+        return Promise.resolve({
+          branch: "feature/demo-push",
+          remote: "origin",
+          remoteBranch: "feature/demo-push",
+          upstream: "origin/feature/demo-push",
+          hasUpstream: true,
+          commits: [
+            {
+              hash: "7bc91e2d36d05a89f86e58d27060edeb36cf91c2",
+              shortHash: "7bc91e2",
+              subject: task?.prompt || "Improve workspace flow",
+              author: "Warpforge Developer",
+              files: this.demoDiff!(taskId).files.map((file) => ({
+                path: file.path,
+                status: file.status === "added" ? "A" : file.status === "deleted" ? "D" : "M",
+              })),
+            },
+          ],
+        });
+      }
+      case "git.push":
+        return Promise.resolve({
+          status: "ok",
+          message: p.force ? "pushed with force-with-lease" : "pushed to origin",
+          conflicts: [],
+          branch: "feature/demo-push",
+        });
       case "service.logs":
         return Promise.resolve([
           `[${String(p.service)}] starting process`,

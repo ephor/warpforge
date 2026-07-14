@@ -351,6 +351,29 @@ export interface GitBranchList {
   branches: string[];
 }
 
+export interface GitPushFile {
+  path: string;
+  status: string;
+}
+
+export interface GitPushCommit {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  author: string;
+  files: GitPushFile[];
+}
+
+/** Outgoing commits and their files for the current branch. */
+export interface GitPushInfo {
+  branch: string;
+  remote: string;
+  remoteBranch: string;
+  upstream: string;
+  hasUpstream: boolean;
+  commits: GitPushCommit[];
+}
+
 // ── Terminals ───────────────────────────────────────────────────────────────
 
 export interface TerminalInfo {

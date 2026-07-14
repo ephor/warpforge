@@ -268,6 +268,16 @@ pub enum Method {
     /// you were on with your changes intact.
     #[serde(rename = "git.switchBranch")]
     GitSwitchBranch { task_id: String, branch: String },
+    /// Describe the commits and files that would be sent by `git.push`.
+    #[serde(rename = "git.pushInfo")]
+    GitPushInfo { task_id: String },
+    /// Push the current branch. With `force`, uses `--force-with-lease`.
+    #[serde(rename = "git.push")]
+    GitPush {
+        task_id: String,
+        #[serde(default)]
+        force: bool,
+    },
 
     // ── Raw terminal agents (legacy PTY sessions, kept for the TUI) ──
     #[serde(rename = "terminal.spawn")]
@@ -729,6 +739,39 @@ pub struct GitBranchList {
     #[serde(default)]
     pub current: Option<String>,
     pub branches: Vec<String>,
+}
+
+/// One file contained in an outgoing commit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPushFile {
+    pub path: String,
+    /// Git's compact name-status code (`A`, `M`, `D`, `R`, …).
+    pub status: String,
+}
+
+/// One commit that is not present on the push target.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPushCommit {
+    pub hash: String,
+    pub short_hash: String,
+    pub subject: String,
+    pub author: String,
+    pub files: Vec<GitPushFile>,
+}
+
+/// Preview returned by `git.pushInfo`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitPushInfo {
+    pub branch: String,
+    pub remote: String,
+    pub remote_branch: String,
+    /// Configured upstream, or the target Warpforge will create on first push.
+    pub upstream: String,
+    pub has_upstream: bool,
+    pub commits: Vec<GitPushCommit>,
 }
 
 // ─── Diff / review ───────────────────────────────────────────────────────────

@@ -351,6 +351,26 @@ async fn dispatch(
                 message: e.to_string(),
             })
         }
+        GitPushInfo { task_id } => {
+            let info = handle
+                .git_push_info(&task_id)
+                .await
+                .map_err(|message| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message,
+                })?;
+            serde_json::to_value(info).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        GitPush { task_id, force } => {
+            let result = handle.git_push(&task_id, force).await;
+            serde_json::to_value(result).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
         TaskCancel { task_id } => {
             handle.send(Command::CancelTask { id: task_id }).await;
             Ok(json!(null))
