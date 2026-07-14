@@ -21,7 +21,7 @@ pub enum OrchCommand {
     StartPlan {
         project: String,
         goal: String,
-        reply: oneshot::Sender<String>,
+        reply: oneshot::Sender<(String, String)>,
     },
     /// A worker/reviewer node completed its task.
     NodeComplete {
@@ -135,8 +135,8 @@ impl Orchestrator {
                     goal,
                     reply,
                 } => {
-                    let graph_id = self.handle_start_plan(&project, &goal).await;
-                    let _ = reply.send(graph_id);
+                    let result = self.handle_start_plan(&project, &goal).await;
+                    let _ = reply.send(result);
                 }
                 OrchCommand::NodeComplete {
                     graph_id,
@@ -175,9 +175,34 @@ impl Orchestrator {
         }
     }
 
-    async fn handle_start_plan(&mut self, project: &str, goal: &str) -> String {
-        let mut graph = TaskGraph::new(project, goal, &self.config.planner_agent);
+    async fn handle_start_plan(&mut self, project: &str, goal: &str) -> (String, String) {
+        // Create a parent orchestrator task on the board. Children will carry
+        // its id in `parent_task_id` so the board can group them.
+        let parent_id = self
+            .daemon
+            .create_task(
+                project,
+                &format!("Orchestrate: {goal}"),
+                &self.config.planner_agent,
+                vec!["orchestrator".into()],
+                false,
+                false,
+                None,
+                vec![],
+            )
+            .await;
+        if parent_id.is_empty() {
+            let _ = self.event_tx.send(OrchEvent::Error {
+                graph_id: String::new(),
+                reason: "Failed to create orchestrator parent task".into(),
+            });
+            return (String::new(), String::new());
+        }
+
+        let mut graph =
+            TaskGraph::new(project, goal, &self.config.planner_agent, parent_id.clone());
         let graph_id = graph.id.clone();
+        let parent_task_id = graph.parent_task_id.clone();
 
         // Dispatch the planner node
         let root_id = graph.root_id.clone();
@@ -200,7 +225,7 @@ impl Orchestrator {
                 vec!["orchestrator".into(), "planner".into()],
                 true,
                 false,
-                None,
+                Some(parent_id),
                 vec![],
             )
             .await
@@ -232,7 +257,7 @@ impl Orchestrator {
             }
         }
 
-        graph_id
+        (graph_id, parent_task_id)
     }
 
     async fn handle_node_complete(
@@ -263,11 +288,16 @@ impl Orchestrator {
 
         // Check if all done
         if graph.all_done() {
+            let parent_id = graph.parent_task_id.clone();
             let project = graph.project.clone();
             let _ = self.event_tx.send(OrchEvent::AllComplete {
                 graph_id: graph_id.to_string(),
                 project,
             });
+            // Transition parent task: all succeeded → NeedsReview
+            self.daemon
+                .set_task_status(&parent_id, crate::daemon::task::TaskStatus::NeedsReview)
+                .await;
             return;
         }
 
@@ -309,11 +339,16 @@ impl Orchestrator {
         }
 
         if graph.all_done() {
+            let parent_id = graph.parent_task_id.clone();
             let project = graph.project.clone();
             let _ = self.event_tx.send(OrchEvent::AllComplete {
                 graph_id: graph_id.to_string(),
                 project,
             });
+            // Transition parent task: some failed → Blocked
+            self.daemon
+                .set_task_status(&parent_id, crate::daemon::task::TaskStatus::Blocked)
+                .await;
         }
     }
 
@@ -359,6 +394,12 @@ impl Orchestrator {
                 .collect()
         };
 
+        let parent_task_id = self
+            .graphs
+            .get(graph_id)
+            .map(|g| g.parent_task_id.clone())
+            .unwrap_or_default();
+
         for (node_id, agent, prompt, worktree) in ready {
             let project = self
                 .graphs
@@ -388,7 +429,7 @@ impl Orchestrator {
                     vec!["orchestrator".into(), kind_str.into()],
                     true,
                     worktree,
-                    None,
+                    Some(parent_task_id.clone()),
                     vec![],
                 )
                 .await
@@ -508,8 +549,9 @@ mod tests {
             .await
             .unwrap();
 
-        let graph_id = reply_rx.await.unwrap();
+        let (graph_id, parent_id) = reply_rx.await.unwrap();
         assert!(graph_id.starts_with("g_"), "graph id: {graph_id}");
+        assert!(parent_id.starts_with("t_"), "parent task id: {parent_id}");
     }
 
     #[tokio::test]
@@ -528,7 +570,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let _graph_id = reply_rx.await.unwrap();
+        let _ = reply_rx.await.unwrap();
 
         // List
         let (list_tx, list_rx) = oneshot::channel();
@@ -558,7 +600,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let _graph_id = reply_rx.await.unwrap();
+        let _ = reply_rx.await.unwrap();
 
         // Capture the planner's daemon task id from its dispatch event.
         let planner_task = loop {

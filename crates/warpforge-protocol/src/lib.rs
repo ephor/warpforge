@@ -549,6 +549,10 @@ pub struct TaskInfo {
     /// (workers/reviewers) each with their own task_id for navigation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orchestration_graph: Option<OrchGraphInfo>,
+    /// Task that spawned this task through the orchestrator MCP. Keeping this
+    /// on the wire lets clients present the child in its parent's context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_task_id: Option<String>,
 }
 
 /// Board columns. `Interrupted` covers sessions whose live ACP handle was lost

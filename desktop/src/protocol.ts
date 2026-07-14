@@ -183,6 +183,8 @@ export interface TaskInfo {
   worktree?: string | null;
   /** Orchestration graph for parent orchestrator tasks. */
   orchestrationGraph?: OrchGraphInfo | null;
+  /** Task that spawned this sub-agent through the orchestrator MCP. */
+  parentTaskId?: string | null;
 }
 
 export interface ConfigChoice {
