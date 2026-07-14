@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, GitCommitVertical, RefreshCw, Sparkles, Undo2 } from "lucide-react";
+import { ChevronRight, GitCommitVertical, RefreshCw, Undo2 } from "lucide-react";
 import { FileDiff } from "../protocol";
 import { daemon } from "../daemon";
 import { Button } from "@/components/ui/button";
@@ -374,9 +374,6 @@ export function ChangesRail({
           <Button type="button" size="sm" className="ml-auto h-7" disabled={!canCommit} onClick={commit}>
             <GitCommitVertical className="size-3.5" />
             {busy ? "…" : amend ? "Amend" : "Commit"}
-          </Button>
-          <Button type="button" size="icon" variant="ghost" className="size-7" title="Generate commit message">
-            <Sparkles className="size-3.5" />
           </Button>
         </div>
       </div>
