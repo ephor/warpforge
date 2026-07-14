@@ -310,7 +310,6 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
       <div className="flex h-9 shrink-0 items-center gap-3">
         <Button type="button" variant="ghost" size="sm" onClick={onClose} className="h-7 px-2 text-muted-foreground">
           <ArrowLeft className="size-4" />
-          board
         </Button>
         <h1 className="min-w-0 flex-1 truncate text-base font-semibold">{task.prompt}</h1>
         <Badge variant={headerBadge.variant}>{headerBadge.label}</Badge>
