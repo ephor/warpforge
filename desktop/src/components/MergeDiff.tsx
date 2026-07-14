@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from "react";
 import { MergeView } from "@codemirror/merge";
-import { EditorState, Extension } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import type { Extension } from "@codemirror/state";
+import { EditorState } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { Undo2, Check } from "lucide-react";
-import { FileDoc } from "../protocol";
-import { cn } from "@/lib/utils";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { Check, Undo2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+
 import { codemirrorLanguageForPath } from "@/lib/codemirrorLanguages";
+import { cn } from "@/lib/utils";
+
+import type { FileDoc } from "../protocol";
 
 type SaveStatus = "clean" | "unsaved" | "saved";
 
@@ -34,13 +37,17 @@ export function MergeDiff({
   // Text we last wrote to disk — lets the sync effect tell our own save-echo
   // (harmless, skip) from a real external/agent edit (apply to the pane).
   const lastSaved = useRef<string | null>(null);
-  const original = doc.newText; // the agent's version, for "discard edits"
+  const original = doc.newText; // The agent's version, for "discard edits"
   const [status, setStatus] = useState<SaveStatus>("clean");
 
   const flushSave = () => {
     const view = viewRef.current;
-    if (!view) return;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (!view) {
+      return;
+    }
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+    }
     const text = view.b.state.doc.toString();
     lastSaved.current = text;
     onSaveRef.current(text);
@@ -49,22 +56,25 @@ export function MergeDiff({
 
   const discard = () => {
     const view = viewRef.current;
-    if (!view) return;
+    if (!view) {
+      return;
+    }
     view.b.dispatch({
-      changes: { from: 0, to: view.b.state.doc.length, insert: original },
+      changes: { from: 0, insert: original, to: view.b.state.doc.length },
     });
     flushSave();
   };
 
   useEffect(() => {
-    if (!host.current) return;
+    if (!host.current) {
+      return;
+    }
     setStatus("clean");
     lastSaved.current = null;
     const lang = codemirrorLanguageForPath(doc.path);
     const common: Extension[] = [lineNumbers(), oneDark, EditorView.lineWrapping, ...lang];
 
     const view = new MergeView({
-      parent: host.current,
       a: {
         doc: doc.oldText,
         extensions: [...common, EditorState.readOnly.of(true)],
@@ -88,15 +98,18 @@ export function MergeDiff({
           }),
         ],
       },
-      revertControls: editable ? "a-to-b" : undefined,
-      highlightChanges: true,
-      gutter: true,
       collapseUnchanged: { margin: 3, minSize: 4 },
+      gutter: true,
+      highlightChanges: true,
+      parent: host.current,
+      revertControls: editable ? "a-to-b" : undefined,
     });
     viewRef.current = view;
 
     return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+      }
       view.destroy();
       viewRef.current = null;
     };
@@ -104,16 +117,22 @@ export function MergeDiff({
   }, [doc.path, doc.oldText, editable]);
 
   // The right pane changed on disk (agent edited the open file). Apply it in
-  // place — but skip our own save-echo and any content that already matches,
-  // so a user's unsaved edits and cursor survive.
+  // Place — but skip our own save-echo and any content that already matches,
+  // So a user's unsaved edits and cursor survive.
   useEffect(() => {
     const view = viewRef.current;
-    if (!view) return;
-    if (doc.newText === lastSaved.current) return;
+    if (!view) {
+      return;
+    }
+    if (doc.newText === lastSaved.current) {
+      return;
+    }
     const cur = view.b.state.doc.toString();
-    if (doc.newText === cur) return;
+    if (doc.newText === cur) {
+      return;
+    }
     view.b.dispatch({
-      changes: { from: 0, to: view.b.state.doc.length, insert: doc.newText },
+      changes: { from: 0, insert: doc.newText, to: view.b.state.doc.length },
     });
     setStatus("clean");
     lastSaved.current = null;

@@ -1,5 +1,6 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
 import { cn } from "@/lib/utils";
 
 export type FileLinkResolver = (text: string) => string | null;
@@ -26,26 +27,15 @@ export function Markdown({
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          p: ({ children }) => <p className="my-1">{children}</p>,
           a: ({ children, href }) => (
             <a href={href} target="_blank" rel="noreferrer" className="text-primary underline">
               {children}
             </a>
           ),
-          ul: ({ children }) => <ul className="my-1 list-disc space-y-0.5 pl-5">{children}</ul>,
-          ol: ({ children }) => <ol className="my-1 list-decimal space-y-0.5 pl-5">{children}</ol>,
-          h1: ({ children }) => <h1 className="mb-1 mt-2 text-base font-semibold">{children}</h1>,
-          h2: ({ children }) => <h2 className="mb-1 mt-2 text-sm font-semibold">{children}</h2>,
-          h3: ({ children }) => <h3 className="mb-1 mt-2 text-sm font-semibold">{children}</h3>,
           blockquote: ({ children }) => (
             <blockquote className="my-1 border-l-2 border-border pl-3 text-muted-foreground">
               {children}
             </blockquote>
-          ),
-          pre: ({ children }) => (
-            <pre className="my-2 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/50 p-2.5 font-mono text-xs leading-relaxed [overflow-wrap:anywhere]">
-              {children}
-            </pre>
           ),
           code: ({ className, children, ...rest }) => {
             const inline = !className;
@@ -76,13 +66,26 @@ export function Markdown({
               </code>
             );
           },
+          h1: ({ children }) => <h1 className="mb-1 mt-2 text-base font-semibold">{children}</h1>,
+          h2: ({ children }) => <h2 className="mb-1 mt-2 text-sm font-semibold">{children}</h2>,
+          h3: ({ children }) => <h3 className="mb-1 mt-2 text-sm font-semibold">{children}</h3>,
+          ol: ({ children }) => <ol className="my-1 list-decimal space-y-0.5 pl-5">{children}</ol>,
+          p: ({ children }) => <p className="my-1">{children}</p>,
+          pre: ({ children }) => (
+            <pre className="my-2 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/50 p-2.5 font-mono text-xs leading-relaxed [overflow-wrap:anywhere]">
+              {children}
+            </pre>
+          ),
           table: ({ children }) => (
             <div className="my-2 overflow-x-auto">
               <table className="w-full border-collapse text-xs">{children}</table>
             </div>
           ),
-          th: ({ children }) => <th className="border border-border px-2 py-1 text-left">{children}</th>,
           td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
+          th: ({ children }) => (
+            <th className="border border-border px-2 py-1 text-left">{children}</th>
+          ),
+          ul: ({ children }) => <ul className="my-1 list-disc space-y-0.5 pl-5">{children}</ul>,
         }}
       >
         {children}

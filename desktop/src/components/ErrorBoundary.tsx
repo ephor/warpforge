@@ -4,10 +4,7 @@ interface State {
   error: Error | null;
 }
 
-export default class ErrorBoundary extends React.Component<
-  React.PropsWithChildren,
-  State
-> {
+export default class ErrorBoundary extends React.Component<React.PropsWithChildren, State> {
   state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {

@@ -1,7 +1,9 @@
-import { useState } from "react";
 import { ChevronRight, File } from "lucide-react";
-import { FileDiff } from "../protocol";
+import { useState } from "react";
+
 import { cn } from "@/lib/utils";
+
+import type { FileDiff } from "../protocol";
 
 /**
  * A collapsible directory tree of changed files (WebStorm-style), an
@@ -17,14 +19,14 @@ interface TreeNode {
 }
 
 function buildTree(files: FileDiff[]): TreeNode {
-  const root: TreeNode = { name: "", children: new Map() };
+  const root: TreeNode = { children: new Map(), name: "" };
   for (const f of files) {
     const parts = f.path.split("/");
     let node = root;
     parts.forEach((part, i) => {
       let child = node.children.get(part);
       if (!child) {
-        child = { name: part, children: new Map() };
+        child = { children: new Map(), name: part };
         node.children.set(part, child);
       }
       if (i === parts.length - 1) {
@@ -45,15 +47,17 @@ function compact(node: TreeNode): TreeNode {
     return { ...only, name: `${node.name}/${only.name}` };
   }
   const map = new Map<string, TreeNode>();
-  for (const c of children) map.set(c.name, c);
+  for (const c of children) {
+    map.set(c.name, c);
+  }
   return { ...node, children: map };
 }
 
 const STATUS_COLOR: Record<FileDiff["status"], string> = {
   added: "text-ok",
   deleted: "text-destructive",
-  renamed: "text-warn",
   modified: "text-warn",
+  renamed: "text-warn",
 };
 
 function Row({
@@ -88,7 +92,7 @@ function Row({
   }
 
   const children = [...node.children.values()].sort((a, b) => {
-    // folders first, then files, each alphabetical
+    // Folders first, then files, each alphabetical
     const af = a.path ? 1 : 0;
     const bf = b.path ? 1 : 0;
     return af - bf || a.name.localeCompare(b.name);
@@ -101,7 +105,9 @@ function Row({
         onClick={() => setOpen((o) => !o)}
         className="flex w-full items-center gap-1.5 py-1 pr-2 text-left text-xs text-muted-foreground hover:bg-secondary/50"
       >
-        <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+        <ChevronRight
+          className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")}
+        />
         <span className="truncate">{node.name}</span>
       </button>
       {open &&

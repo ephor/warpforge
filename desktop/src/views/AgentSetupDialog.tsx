@@ -1,17 +1,19 @@
-import { useState } from "react";
 import { Bot, Download } from "lucide-react";
-import { daemon } from "../daemon";
-import { AgentConfig, DetectedAgent } from "../protocol";
+import { useState } from "react";
+
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle,
   DialogDescription,
   DialogFooter,
+  DialogHeader,
+  DialogTitle,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+import { daemon } from "../daemon";
+import type { AgentConfig, DetectedAgent } from "../protocol";
 
 interface Props {
   detected: DetectedAgent[];
@@ -26,7 +28,11 @@ export default function AgentSetupDialog({ detected, onClose }: Props) {
   const toggle = (id: string) =>
     setEnabled((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
 
@@ -34,10 +40,10 @@ export default function AgentSetupDialog({ detected, onClose }: Props) {
     const agents: AgentConfig[] = detected
       .filter((a) => enabled.has(a.id))
       .map((a) => ({
-        id: a.id,
-        displayName: a.displayName,
         acpCommand: a.defaultAcpCommand,
+        displayName: a.displayName,
         enabled: true,
+        id: a.id,
       }));
     await daemon.saveAgents(agents);
     onClose();
@@ -52,8 +58,8 @@ export default function AgentSetupDialog({ detected, onClose }: Props) {
             Set up AI agents
           </DialogTitle>
           <DialogDescription>
-            Select which agents to enable. Warpforge connects to them via ACP
-            (Agent Client Protocol) over stdio.
+            Select which agents to enable. Warpforge connects to them via ACP (Agent Client
+            Protocol) over stdio.
           </DialogDescription>
         </DialogHeader>
 

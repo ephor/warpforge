@@ -1,19 +1,16 @@
-import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Share2, History, GitBranch, GitMerge } from "lucide-react";
-import { daemon } from "../daemon";
-import { ExternalSession, ProjectFile, PromptSubmission, Snapshot } from "../protocol";
-import { daemonQuery } from "../query";
-import { Composer, ComposerHandle } from "../components/Composer";
+import { GitBranch, GitMerge, History, Share2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle,
   DialogDescription,
   DialogFooter,
+  DialogHeader,
+  DialogTitle,
 } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -22,6 +19,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+
+import type { ComposerHandle } from "../components/Composer";
+import { Composer } from "../components/Composer";
+import { daemon } from "../daemon";
+import type { ExternalSession, ProjectFile, PromptSubmission, Snapshot } from "../protocol";
+import { daemonQuery } from "../query";
 
 interface Props {
   open: boolean;
@@ -45,48 +48,50 @@ export default function NewTaskDialog({
   const [shareContext, setShareContext] = useState(true);
   const [useWorktree, setUseWorktree] = useState(false);
   // Chat orchestrator: the selected agent becomes a lead that delegates to
-  // sub-agents (via the spawn_agent / read_inbox MCP tools) and processes their
-  // results in one conversation. Tag "orchestrator-chat" wires the bridge.
+  // Sub-agents (via the spawn_agent / read_inbox MCP tools) and processes their
+  // Results in one conversation. Tag "orchestrator-chat" wires the bridge.
   const [orchChat, setOrchChat] = useState(false);
   const composerRef = useRef<ComposerHandle>(null);
 
+  const firstProjectName = snapshot.projects[0]?.name ?? "";
   const projectInfo = snapshot.projects.find((p) => p.name === project);
-  const agentOptions =
-    snapshot.agents && snapshot.agents.length > 0
-      ? snapshot.agents
-          .filter((a) => a.enabled)
-          .map((a) => ({ id: a.id, label: a.displayName }))
-      : (projectInfo ? Object.keys(projectInfo.agentTemplates) : []).map((id) => ({
-          id,
-          label: id,
-        }));
+  const agentOptions = useMemo(
+    () =>
+      snapshot.agents && snapshot.agents.length > 0
+        ? snapshot.agents.filter((a) => a.enabled).map((a) => ({ id: a.id, label: a.displayName }))
+        : (projectInfo ? Object.keys(projectInfo.agentTemplates) : []).map((id) => ({
+            id,
+            label: id,
+          })),
+    [projectInfo, snapshot.agents],
+  );
   const running = snapshot.services.filter(
     (s) => s.project === project && s.status === "running" && s.allocatedPort > 0,
   );
 
   useEffect(() => {
     if (open) {
-      setProject(defaultProject ?? snapshot.projects[0]?.name ?? "");
+      setProject(defaultProject ?? firstProjectName);
       setPrompt(initialPrompt ?? "");
       setTags("");
       setOrchChat(false);
     }
-  }, [open, defaultProject, initialPrompt]);
+  }, [open, defaultProject, firstProjectName, initialPrompt]);
 
   useEffect(() => {
     setAgent(agentOptions[0]?.id ?? "claude");
-  }, [project]);
+  }, [agentOptions, project]);
 
   const sessionsQuery = useQuery({
-    queryKey: ["sessions", project],
-    queryFn: () => daemon.listSessions(project),
     enabled: open && !!project,
+    queryFn: () => daemon.listSessions(project),
+    queryKey: ["sessions", project],
   });
   const sessions = sessionsQuery.data ?? [];
   const filesQuery = useQuery({
-    queryKey: ["fileList", "new", project],
-    queryFn: daemonQuery<ProjectFile[]>("file.list", { project }),
     enabled: open && !!project,
+    queryFn: daemonQuery<ProjectFile[]>("file.list", { project }),
+    queryKey: ["fileList", "new", project],
   });
   const projectFiles = Array.isArray(filesQuery.data) ? filesQuery.data : [];
 
@@ -96,7 +101,9 @@ export default function NewTaskDialog({
   };
 
   const create = async (submission: PromptSubmission) => {
-    if (!submission.text.trim() || !project) return;
+    if (!submission.text.trim() || !project) {
+      return;
+    }
     const userTags = tags
       .split(",")
       .map((t) => t.trim())
@@ -107,7 +114,7 @@ export default function NewTaskDialog({
       attachments: submission.attachments,
       agent,
       // The "orchestrator-chat" tag makes the daemon wire the warpforge MCP
-      // bridge (spawn_agent / read_inbox) into this session.
+      // Bridge (spawn_agent / read_inbox) into this session.
       tags: orchChat ? [...userTags, "orchestrator-chat"] : userTags,
       include_runtime_context: shareContext,
       worktree: orchChat ? false : useWorktree,
@@ -174,9 +181,14 @@ export default function NewTaskDialog({
               imageSupported
               hideSendButton
               onSend={create}
-              placeholder={orchChat ? "What should the orchestrator coordinate?" : "What should the agent do?"}
+              placeholder={
+                orchChat ? "What should the orchestrator coordinate?" : "What should the agent do?"
+              }
             />
-            <span>Image support is negotiated when the agent starts; unsupported image prompts are marked blocked.</span>
+            <span>
+              Image support is negotiated when the agent starts; unsupported image prompts are
+              marked blocked.
+            </span>
           </div>
 
           {/* Tags */}
@@ -235,7 +247,9 @@ export default function NewTaskDialog({
                 <div
                   className={cn(
                     "flex size-4 shrink-0 items-center justify-center rounded border",
-                    useWorktree && !orchChat ? "border-primary bg-primary" : "border-muted-foreground",
+                    useWorktree && !orchChat
+                      ? "border-primary bg-primary"
+                      : "border-muted-foreground",
                   )}
                 >
                   {useWorktree && !orchChat && (
@@ -313,7 +327,10 @@ export default function NewTaskDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={() => composerRef.current?.submit()} disabled={!prompt.trim() || !project}>
+          <Button
+            onClick={() => composerRef.current?.submit()}
+            disabled={!prompt.trim() || !project}
+          >
             {orchChat ? "Start orchestrator" : "Start task"}
           </Button>
         </DialogFooter>

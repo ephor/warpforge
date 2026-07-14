@@ -1,4 +1,4 @@
-import { SessionUpdate } from "../protocol";
+import type { SessionUpdate } from "../protocol";
 
 export type PermissionUpdate = Extract<SessionUpdate, { kind: "permission_request" }>;
 

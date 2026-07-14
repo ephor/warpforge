@@ -1,34 +1,29 @@
+import { Bot, Circle, FolderTree, KanbanSquare, LayoutGrid, PanelLeft, Plus } from "lucide-react";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import {
-  LayoutGrid,
-  KanbanSquare,
-  FolderTree,
-  Plus,
-  Circle,
-  Bot,
-  PanelLeft,
-} from "lucide-react";
 import { toast } from "sonner";
-import { DetectedAgent, GitOpResult } from "./protocol";
-import { daemon } from "./daemon";
-import { useUi, type View } from "./store/ui";
+
+import { Button } from "@/components/ui/button";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+
 import AttentionRail from "./components/AttentionRail";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { daemon } from "./daemon";
+import type { DetectedAgent, GitOpResult } from "./protocol";
+import { useUi } from "./store/ui";
+import type { View } from "./store/ui";
+import AgentSetupDialog from "./views/AgentSetupDialog";
 import Board from "./views/Board";
 import MissionControl from "./views/MissionControl";
-import Projects from "./views/Projects";
-import TaskDetail from "./views/TaskDetail";
 import NewTaskDialog from "./views/NewTaskDialog";
-import AgentSetupDialog from "./views/AgentSetupDialog";
+import Projects from "./views/Projects";
 import PushDialog from "./views/PushDialog";
+import TaskDetail from "./views/TaskDetail";
 
 const NAV: { id: View; label: string; icon: typeof LayoutGrid }[] = [
-  { id: "control", label: "Mission Control", icon: LayoutGrid },
-  { id: "board", label: "Board", icon: KanbanSquare },
-  { id: "projects", label: "Projects", icon: FolderTree },
+  { icon: LayoutGrid, id: "control", label: "Mission Control" },
+  { icon: KanbanSquare, id: "board", label: "Board" },
+  { icon: FolderTree, id: "projects", label: "Projects" },
 ];
 
 export default function App() {
@@ -54,7 +49,9 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
+    if (!("__TAURI_INTERNALS__" in window)) {
+      return;
+    }
 
     let disposed = false;
     let allowClose = false;
@@ -62,16 +59,20 @@ export default function App() {
 
     void import("@tauri-apps/api/window")
       .then(async ({ getCurrentWindow }) => {
-        if (disposed) return;
+        if (disposed) {
+          return;
+        }
         const appWindow = getCurrentWindow();
         unlisten = await appWindow.onCloseRequested(async (event) => {
-          if (allowClose) return;
+          if (allowClose) {
+            return;
+          }
           event.preventDefault();
 
           const activeServices = daemon
             .getState()
-            .snapshot.services.filter((service) =>
-              service.status === "running" || service.status === "starting",
+            .snapshot.services.filter(
+              (service) => service.status === "running" || service.status === "starting",
             );
 
           if (activeServices.length > 0) {
@@ -86,14 +87,16 @@ export default function App() {
                 activeServices.length === 1 ? "" : "s"
               } still running:\n${preview}${suffix}\n\nStop them and quit Warpforge?`,
             );
-            if (!confirmed) return;
+            if (!confirmed) {
+              return;
+            }
           }
 
           try {
             await daemon.stopRuntime();
           } catch {
             // The app is closing; if the daemon is already gone there is
-            // nothing useful to surface here.
+            // Nothing useful to surface here.
           }
 
           allowClose = true;
@@ -115,12 +118,18 @@ export default function App() {
   // Cmd+T / Ctrl+T → update current task's branch from upstream.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.key !== "t") return;
+      if (!(e.metaKey || e.ctrlKey) || e.key !== "t") {
+        return;
+      }
       const id = useUi.getState().openTaskId;
-      if (!id) return;
+      if (!id) {
+        return;
+      }
       e.preventDefault();
       const task = state.snapshot.tasks.find((t) => t.id === id);
-      if (!task) return;
+      if (!task) {
+        return;
+      }
       daemon
         .request("git.update", { task_id: id })
         .then((r) => {
@@ -151,7 +160,9 @@ export default function App() {
   // Cmd+Shift+K / Ctrl+Shift+K → review outgoing commits and push.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.key.toLowerCase() !== "k") return;
+      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.key.toLowerCase() !== "k") {
+        return;
+      }
       e.preventDefault();
       const id = useUi.getState().openTaskId;
       if (!id || !state.snapshot.tasks.some((task) => task.id === id)) {
@@ -184,7 +195,14 @@ export default function App() {
             <PanelLeft className="size-4" />
           </Button>
 
-          <Button type="button" aria-label="New task" size="icon" variant="ghost" onClick={() => startNewTask()} className="size-7">
+          <Button
+            type="button"
+            aria-label="New task"
+            size="icon"
+            variant="ghost"
+            onClick={() => startNewTask()}
+            className="size-7"
+          >
             <Plus className="size-4" />
           </Button>
 
@@ -218,7 +236,8 @@ export default function App() {
               size="icon"
               variant="ghost"
               onClick={() => {
-                daemon.detectAgents()
+                daemon
+                  .detectAgents()
                   .then((detected) => setManualDetected(Array.isArray(detected) ? detected : []))
                   .catch(() => setManualDetected([]));
               }}
@@ -265,7 +284,11 @@ export default function App() {
               ) : view === "control" ? (
                 <MissionControl state={state} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
               ) : view === "board" ? (
-                <Board snapshot={state.snapshot} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
+                <Board
+                  snapshot={state.snapshot}
+                  onOpenTask={setOpenTaskId}
+                  onNewTask={startNewTask}
+                />
               ) : (
                 <Projects
                   snapshot={state.snapshot}

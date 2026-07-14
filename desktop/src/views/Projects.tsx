@@ -1,27 +1,29 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
 import {
-  Plus,
-  Play,
-  Square,
-  RotateCw,
-  PlugZap,
-  Radio,
-  FolderGit2,
-  Share2,
   ChevronDown,
   ChevronRight,
   Copy,
+  FolderGit2,
+  Play,
+  PlugZap,
+  Plus,
+  Radio,
+  RotateCw,
   Send,
+  Share2,
+  Square,
 } from "lucide-react";
-import { daemon } from "../daemon";
-import { ServiceInfo, Snapshot } from "../protocol";
-import { serviceBadge, pfBadge, taskBadge, elapsed } from "@/lib/status";
+import { useEffect, useState, useSyncExternalStore } from "react";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { elapsed, pfBadge, serviceBadge, taskBadge } from "@/lib/status";
 import { cn } from "@/lib/utils";
+
+import { daemon } from "../daemon";
+import type { ServiceInfo, Snapshot } from "../protocol";
 
 interface Props {
   snapshot: Snapshot;
@@ -111,7 +113,9 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => void daemon.request("portforward.startAll", { project: project.name })}
+                onClick={() =>
+                  void daemon.request("portforward.startAll", { project: project.name })
+                }
               >
                 <PlugZap className="size-4" />
                 start pfs
@@ -217,8 +221,8 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
                             className="h-7"
                             onClick={() =>
                               void daemon.request("portforward.start", {
-                                project: project.name,
                                 name: pf.name,
+                                project: project.name,
                               })
                             }
                           >
@@ -231,8 +235,8 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
                           className="h-7"
                           onClick={() =>
                             void daemon.request("portforward.stop", {
-                              project: project.name,
                               name: pf.name,
+                              project: project.name,
                             })
                           }
                         >
@@ -305,18 +309,20 @@ function ServiceRow({
   const canRestart = svc?.status === "running" || svc?.status === "starting";
   const primaryAction = canRestart
     ? {
-        label: `Restart ${name}`,
-        icon: <RotateCw className="size-3" />,
         action: "service.restart",
+        icon: <RotateCw className="size-3" />,
+        label: `Restart ${name}`,
       }
     : {
-        label: `Start ${name}`,
-        icon: <Play className="size-3" />,
         action: "service.start",
+        icon: <Play className="size-3" />,
+        label: `Start ${name}`,
       };
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      return;
+    }
     void daemon.fetchServiceLogs(project, name, { after: 0, limit: 300 });
   }, [open, project, name, svc?.logSeq]);
 

@@ -1,4 +1,3 @@
-import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   ChevronDown,
@@ -10,12 +9,15 @@ import {
   RefreshCw,
   Upload,
 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { daemon } from "../daemon";
-import type { GitOpResult, GitPushCommit, GitPushInfo, TaskInfo } from "../protocol";
-import { cn } from "@/lib/utils";
+
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
+
+import { daemon } from "../daemon";
+import type { GitOpResult, GitPushCommit, GitPushInfo, TaskInfo } from "../protocol";
 
 interface Props {
   open: boolean;
@@ -25,10 +27,10 @@ interface Props {
 
 const statusTone: Record<string, string> = {
   A: "text-ok",
-  M: "text-primary",
-  D: "text-destructive",
-  R: "text-warn",
   C: "text-warn",
+  D: "text-destructive",
+  M: "text-primary",
+  R: "text-warn",
 };
 
 export default function PushDialog({ open, onOpenChange, task }: Props) {
@@ -39,19 +41,22 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = async () => {
-    if (!task) return;
+  const taskId = task?.id;
+  const load = useCallback(async () => {
+    if (!taskId) {
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       const next = (await daemon.request("git.pushInfo", {
-        task_id: task.id,
+        task_id: taskId,
       })) as GitPushInfo;
       setInfo(next);
       setSelectedHash((current) =>
         next.commits.some((commit) => commit.hash === current)
           ? current
-          : next.commits[0]?.hash ?? null,
+          : (next.commits[0]?.hash ?? null),
       );
     } catch (reason) {
       setInfo(null);
@@ -59,7 +64,7 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [taskId]);
 
   useEffect(() => {
     if (!open) {
@@ -67,7 +72,7 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
       return;
     }
     void load();
-  }, [open, task?.id]);
+  }, [load, open]);
 
   const selected = useMemo(
     () => info?.commits.find((commit) => commit.hash === selectedHash) ?? null,
@@ -75,13 +80,15 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
   );
 
   const push = async (force: boolean) => {
-    if (!task || pushing) return;
+    if (!task || pushing) {
+      return;
+    }
     setMenuOpen(false);
     setPushing(force ? "force" : "push");
     try {
       const result = (await daemon.request("git.push", {
-        task_id: task.id,
         force,
+        task_id: task.id,
       })) as GitOpResult;
       if (result.status === "ok") {
         toast.success(result.message);
@@ -104,7 +111,9 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
       <DialogContent className="flex h-[72vh] max-h-[760px] w-[min(1050px,92vw)] max-w-none flex-col gap-0 overflow-hidden p-0">
         <div className="flex h-14 shrink-0 items-center border-b px-5">
           <div className="min-w-0">
-            <DialogTitle className="truncate text-base">Push commits to {task?.project ?? "project"}</DialogTitle>
+            <DialogTitle className="truncate text-base">
+              Push commits to {task?.project ?? "project"}
+            </DialogTitle>
             <DialogDescription className="sr-only">
               Review outgoing commits and their files before pushing the current branch.
             </DialogDescription>
@@ -114,7 +123,7 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
             size="icon"
             variant="ghost"
             className="ml-auto mr-8 size-8"
-            disabled={loading || !!pushing}
+            disabled={loading || Boolean(pushing)}
             onClick={() => void load()}
             title="Refresh push preview"
           >
@@ -140,7 +149,10 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
                 </div>
               )}
               {info && info.commits.length === 0 && (
-                <EmptyState title="Nothing to push" detail={`${info.branch} is up to date with ${info.upstream}.`} />
+                <EmptyState
+                  title="Nothing to push"
+                  detail={`${info.branch} is up to date with ${info.upstream}.`}
+                />
               )}
               {info?.commits.map((commit) => (
                 <CommitRow
@@ -157,7 +169,11 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
             <div className="flex h-11 shrink-0 items-center gap-2 border-b px-4 text-sm text-muted-foreground">
               <FolderTree className="size-4" />
               <span className="font-medium text-foreground">Files</span>
-              {selected && <span>{selected.files.length} {selected.files.length === 1 ? "file" : "files"}</span>}
+              {selected && (
+                <span>
+                  {selected.files.length} {selected.files.length === 1 ? "file" : "files"}
+                </span>
+              )}
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
               {selected ? (
@@ -169,14 +185,24 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
                     >
                       <FileCode2 className="size-4 shrink-0 text-muted-foreground" />
                       <span className="min-w-0 flex-1 truncate font-mono text-xs">{file.path}</span>
-                      <span className={cn("w-5 text-center font-mono text-xs font-semibold", statusTone[file.status] ?? "text-muted-foreground")}>
+                      <span
+                        className={cn(
+                          "w-5 text-center font-mono text-xs font-semibold",
+                          statusTone[file.status] ?? "text-muted-foreground",
+                        )}
+                      >
                         {file.status}
                       </span>
                     </div>
                   ))}
                 </div>
               ) : (
-                !loading && <EmptyState title="Select a commit" detail="Its changed files will appear here." />
+                !loading && (
+                  <EmptyState
+                    title="Select a commit"
+                    detail="Its changed files will appear here."
+                  />
+                )
               )}
             </div>
           </section>
@@ -185,31 +211,45 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
         <footer className="flex h-[72px] shrink-0 items-center border-t bg-card/50 px-5">
           <div className="min-w-0 text-xs text-muted-foreground">
             {info && !info.hasUpstream && info.commits.length > 0 && (
-              <span>First push will create upstream <span className="font-mono text-foreground">{info.upstream}</span>.</span>
+              <span>
+                First push will create upstream{" "}
+                <span className="font-mono text-foreground">{info.upstream}</span>.
+              </span>
             )}
             {info?.hasUpstream && info.commits.length > 0 && (
-              <span>{info.commits.length} outgoing {info.commits.length === 1 ? "commit" : "commits"}</span>
+              <span>
+                {info.commits.length} outgoing {info.commits.length === 1 ? "commit" : "commits"}
+              </span>
             )}
           </div>
           <div className="ml-auto flex items-center gap-3">
-            <Button type="button" variant="outline" disabled={!!pushing} onClick={() => onOpenChange(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={Boolean(pushing)}
+              onClick={() => onOpenChange(false)}
+            >
               Cancel
             </Button>
             <div className="relative flex">
               <Button
                 type="button"
                 className="rounded-r-none px-4"
-                disabled={!info?.commits.length || loading || !!pushing}
+                disabled={!info?.commits.length || loading || Boolean(pushing)}
                 onClick={() => void push(false)}
               >
-                {pushing === "push" ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                {pushing === "push" ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Upload className="size-4" />
+                )}
                 Push
               </Button>
               <Button
                 type="button"
                 size="icon"
                 className="rounded-l-none border-l border-primary-foreground/20"
-                disabled={!info?.commits.length || loading || !!pushing}
+                disabled={!info?.commits.length || loading || Boolean(pushing)}
                 aria-label="Push options"
                 aria-expanded={menuOpen}
                 onClick={() => setMenuOpen((value) => !value)}
@@ -224,7 +264,9 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
                     onClick={() => void push(true)}
                   >
                     <span className="block font-medium">Force Push</span>
-                    <span className="block text-xs text-muted-foreground">Uses force-with-lease</span>
+                    <span className="block text-xs text-muted-foreground">
+                      Uses force-with-lease
+                    </span>
                   </button>
                 </div>
               )}
@@ -254,13 +296,20 @@ function CommitRow({
         selected ? "bg-primary/15 text-foreground" : "hover:bg-secondary/60",
       )}
     >
-      <GitCommitHorizontal className={cn("mt-0.5 size-4 shrink-0", selected ? "text-primary" : "text-muted-foreground")} />
+      <GitCommitHorizontal
+        className={cn(
+          "mt-0.5 size-4 shrink-0",
+          selected ? "text-primary" : "text-muted-foreground",
+        )}
+      />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm">{commit.subject}</span>
         <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
           <span className="font-mono">{commit.shortHash}</span>
           <span className="truncate">{commit.author}</span>
-          <span className="ml-auto shrink-0">{commit.files.length} {commit.files.length === 1 ? "file" : "files"}</span>
+          <span className="ml-auto shrink-0">
+            {commit.files.length} {commit.files.length === 1 ? "file" : "files"}
+          </span>
         </span>
       </span>
     </button>

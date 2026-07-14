@@ -1,16 +1,20 @@
 import { Maximize2, Pin } from "lucide-react";
-import { daemon, DaemonState } from "../daemon";
-import { SessionUpdate, TaskInfo } from "../protocol";
-import { coalesceUpdates, StreamLine, streamKey } from "../views/MissionControl";
-import { useUi } from "../store/ui";
-import { pendingPermission, PermissionUpdate } from "@/lib/sessionPermissions";
-import { elapsed, taskBadge, taskEdge } from "@/lib/status";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import type { PermissionUpdate } from "@/lib/sessionPermissions";
+import { pendingPermission } from "@/lib/sessionPermissions";
+import { elapsed, taskBadge, taskEdge } from "@/lib/status";
 import { cn } from "@/lib/utils";
+
+import type { DaemonState } from "../daemon";
+import { daemon } from "../daemon";
+import type { SessionUpdate, TaskInfo } from "../protocol";
+import { useUi } from "../store/ui";
+import { StreamLine, coalesceUpdates, streamKey } from "../views/MissionControl";
 
 /**
  * "Needs you" rail — tasks blocked on a human (pending permission, review,
@@ -18,9 +22,11 @@ import { cn } from "@/lib/utils";
  */
 
 function previewableUpdate(update: SessionUpdate): boolean {
-  return update.kind !== "available_commands"
-    && update.kind !== "permission_request"
-    && update.kind !== "permission_resolved";
+  return (
+    update.kind !== "available_commands" &&
+    update.kind !== "permission_request" &&
+    update.kind !== "permission_resolved"
+  );
 }
 
 interface AttentionItem {
@@ -34,13 +40,15 @@ export function attentionQueue(state: DaemonState): AttentionItem[] {
   const items: AttentionItem[] = [];
   for (const task of state.snapshot.tasks) {
     const permission = pendingPermission(state.sessionUpdates[task.id] ?? []);
-    if (permission) items.push({ task, reason: permission.title, priority: 0, permission });
-    else if (task.status === "needs_review")
+    if (permission) {
+      items.push({ task, reason: permission.title, priority: 0, permission });
+    } else if (task.status === "needs_review") {
       items.push({ task, reason: "finished — review changes", priority: 1 });
-    else if (task.status === "blocked")
+    } else if (task.status === "blocked") {
       items.push({ task, reason: task.blockedReason ?? "blocked", priority: 2 });
-    else if (task.status === "interrupted")
+    } else if (task.status === "interrupted") {
       items.push({ task, reason: "session lost on daemon restart", priority: 3 });
+    }
   }
   return items.sort((a, b) => a.priority - b.priority || b.task.updatedAt - a.task.updatedAt);
 }
@@ -55,7 +63,9 @@ export default function AttentionRail({ state, onOpenTask }: Props) {
   const togglePin = useUi((s) => s.togglePinnedTask);
   const queue = attentionQueue(state);
   const attentionIds = new Set(queue.map((item) => item.task.id));
-  const permissions = new Map(queue.flatMap((item) => (item.permission ? [[item.task.id, item.permission]] : [])));
+  const permissions = new Map(
+    queue.flatMap((item) => (item.permission ? [[item.task.id, item.permission]] : [])),
+  );
   const reasons = new Map(queue.map((item) => [item.task.id, item.reason]));
   const live = state.snapshot.tasks
     .filter((t) => t.status !== "done")
@@ -143,7 +153,10 @@ function SessionRailCard({
         <span className="tnum ml-auto shrink-0">{elapsed(task.createdAt)}</span>
         <button
           type="button"
-          className={cn("rounded p-0.5 opacity-70 hover:bg-secondary hover:opacity-100", pinned && "text-primary opacity-100")}
+          className={cn(
+            "rounded p-0.5 opacity-70 hover:bg-secondary hover:opacity-100",
+            pinned && "text-primary opacity-100",
+          )}
           onClick={(e) => {
             e.stopPropagation();
             onPin();
@@ -173,7 +186,9 @@ function SessionRailCard({
             className="flex min-w-0 flex-col gap-1 text-xs leading-relaxed text-muted-foreground"
             onClick={(e) => e.stopPropagation()}
           >
-            {recent.map((u, i) => <StreamLine key={streamKey(u, i)} update={u} compact />)}
+            {recent.map((u, i) => (
+              <StreamLine key={streamKey(u, i)} update={u} compact />
+            ))}
           </div>
         </div>
       )}
@@ -194,9 +209,9 @@ function SessionRailCard({
               variant={opt === "deny" ? "destructive" : "default"}
               onClick={() =>
                 void daemon.request("session.permission", {
-                  task_id: task.id,
-                  request_id: permission.request_id,
                   outcome: opt,
+                  request_id: permission.request_id,
+                  task_id: task.id,
                 })
               }
             >

@@ -8,9 +8,9 @@ export interface TaskTree {
 }
 
 const lanePriority: Record<BoardLane, number> = {
+  active: 2,
   history: 0,
   queue: 1,
-  active: 2,
   review: 3,
 };
 
@@ -18,8 +18,12 @@ export function statusLane(status: TaskStatus): BoardLane {
   if (status === "needs_review" || status === "blocked" || status === "interrupted") {
     return "review";
   }
-  if (status === "running" || status === "idle") return "active";
-  if (status === "queued") return "queue";
+  if (status === "running" || status === "idle") {
+    return "active";
+  }
+  if (status === "queued") {
+    return "queue";
+  }
   return "history";
 }
 
@@ -48,18 +52,20 @@ export function buildTaskForest(tasks: TaskInfo[]): TaskTree[] {
     visited.add(task.id);
     const nextPath = new Set(path).add(task.id);
     return {
-      task,
       children: (children.get(task.id) ?? [])
         .filter((child) => !nextPath.has(child.id))
         .map((child) => build(child, nextPath)),
+      task,
     };
   };
 
   const forest = roots.map((task) => build(task, new Set()));
   // A pure cycle has no natural root. Preserve every task by promoting one
-  // unseen member; the path guard prevents recursion through the cycle.
+  // Unseen member; the path guard prevents recursion through the cycle.
   for (const task of tasks) {
-    if (!visited.has(task.id)) forest.push(build(task, new Set()));
+    if (!visited.has(task.id)) {
+      forest.push(build(task, new Set()));
+    }
   }
   return forest;
 }

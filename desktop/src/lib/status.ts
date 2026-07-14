@@ -1,23 +1,23 @@
-import { PortForwardStatus, ServiceStatus, TaskStatus } from "@/protocol";
+import type { PortForwardStatus, ServiceStatus, TaskStatus } from "@/protocol";
 
 type Variant = "default" | "outline" | "ok" | "warn" | "destructive";
 
 export function taskBadge(s: TaskStatus): { variant: Variant; label: string } {
   switch (s) {
     case "running":
-      return { variant: "ok", label: "running" };
+      return { label: "running", variant: "ok" };
     case "queued":
-      return { variant: "outline", label: "queued" };
+      return { label: "queued", variant: "outline" };
     case "idle":
-      return { variant: "outline", label: "idle" };
+      return { label: "idle", variant: "outline" };
     case "needs_review":
-      return { variant: "warn", label: "needs review" };
+      return { label: "needs review", variant: "warn" };
     case "blocked":
-      return { variant: "destructive", label: "blocked" };
+      return { label: "blocked", variant: "destructive" };
     case "interrupted":
-      return { variant: "destructive", label: "interrupted" };
+      return { label: "interrupted", variant: "destructive" };
     case "done":
-      return { variant: "default", label: "done" };
+      return { label: "done", variant: "default" };
   }
 }
 
@@ -28,33 +28,33 @@ export function activityBadge(
   label: string,
 ): { variant: Variant; label: string } {
   const variant: Variant = tone === "writing" ? "ok" : tone === "working" ? "warn" : "default";
-  return { variant, label };
+  return { label, variant };
 }
 
 export function serviceBadge(s: ServiceStatus): { variant: Variant; label: string } {
   switch (s) {
     case "running":
-      return { variant: "ok", label: "running" };
+      return { label: "running", variant: "ok" };
     case "starting":
-      return { variant: "warn", label: "starting" };
+      return { label: "starting", variant: "warn" };
     case "failed":
-      return { variant: "destructive", label: "failed" };
+      return { label: "failed", variant: "destructive" };
     case "stopped":
-      return { variant: "outline", label: "stopped" };
+      return { label: "stopped", variant: "outline" };
   }
 }
 
 export function pfBadge(s: PortForwardStatus): { variant: Variant; label: string } {
   switch (s) {
     case "active":
-      return { variant: "ok", label: "active" };
+      return { label: "active", variant: "ok" };
     case "starting":
     case "restarting":
-      return { variant: "warn", label: s };
+      return { label: s, variant: "warn" };
     case "failed":
-      return { variant: "destructive", label: "failed" };
+      return { label: "failed", variant: "destructive" };
     case "stopped":
-      return { variant: "outline", label: "stopped" };
+      return { label: "stopped", variant: "outline" };
   }
 }
 
@@ -64,15 +64,15 @@ export function orchNodeBadge(s: "pending" | "running" | "complete" | "failed" |
 } {
   switch (s) {
     case "running":
-      return { variant: "ok", label: "running" };
+      return { label: "running", variant: "ok" };
     case "pending":
-      return { variant: "outline", label: "pending" };
+      return { label: "pending", variant: "outline" };
     case "complete":
-      return { variant: "default", label: "done" };
+      return { label: "done", variant: "default" };
     case "failed":
-      return { variant: "destructive", label: "failed" };
+      return { label: "failed", variant: "destructive" };
     case "skipped":
-      return { variant: "outline", label: "skipped" };
+      return { label: "skipped", variant: "outline" };
   }
 }
 
@@ -93,8 +93,14 @@ export function taskEdge(s: TaskStatus): string {
 
 export function elapsed(sinceUnix: number): string {
   const s = Math.max(0, Math.floor(Date.now() / 1000) - sinceUnix);
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  if (s < 60) {
+    return `${s}s`;
+  }
+  if (s < 3600) {
+    return `${Math.floor(s / 60)}m`;
+  }
+  if (s < 86400) {
+    return `${Math.floor(s / 3600)}h`;
+  }
   return `${Math.floor(s / 86400)}d`;
 }

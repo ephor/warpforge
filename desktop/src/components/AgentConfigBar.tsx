@@ -1,8 +1,10 @@
 import { Check, ChevronDown } from "lucide-react";
 import { useState } from "react";
-import { daemon } from "../daemon";
-import { ConfigOption } from "../protocol";
+
 import { cn } from "@/lib/utils";
+
+import { daemon } from "../daemon";
+import type { ConfigOption } from "../protocol";
 
 /** Renders the agent's session selectors, keeping at most one menu open. */
 export function AgentConfigBar({ taskId, options }: { taskId: string; options: ConfigOption[] }) {
@@ -63,8 +65,8 @@ function AgentConfigSelect({
                 onClose();
                 if (o.value !== opt.currentValue) {
                   void daemon.request("session.setConfigOption", {
-                    task_id: taskId,
                     config_id: opt.id,
+                    task_id: taskId,
                     value: o.value,
                   });
                 }

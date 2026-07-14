@@ -1,13 +1,23 @@
 import type { ProjectFile } from "../protocol";
 
-export interface ActiveMention { start: number; end: number; query: string }
+export interface ActiveMention {
+  start: number;
+  end: number;
+  query: string;
+}
 
 export function findMentionAtCaret(text: string, caret: number): ActiveMention | null {
   const before = text.slice(0, caret);
   const match = before.match(/(?:^|\s)@(?:"([^"]*)|([^\s@]*))$/);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const token = match[0].trimStart();
-  return { start: caret - token.length, end: caret, query: (match[1] ?? match[2] ?? "").toLowerCase() };
+  return {
+    end: caret,
+    query: (match[1] ?? match[2] ?? "").toLowerCase(),
+    start: caret - token.length,
+  };
 }
 
 export function rankFiles(files: ProjectFile[], query: string): ProjectFile[] {
@@ -15,13 +25,23 @@ export function rankFiles(files: ProjectFile[], query: string): ProjectFile[] {
   const score = (path: string) => {
     const full = path.toLowerCase();
     const base = full.split("/").pop() ?? full;
-    if (base.startsWith(q)) return 0;
-    if (full.startsWith(q)) return 1;
-    if (base.includes(q)) return 2;
-    if (full.includes(q)) return 3;
+    if (base.startsWith(q)) {
+      return 0;
+    }
+    if (full.startsWith(q)) {
+      return 1;
+    }
+    if (base.includes(q)) {
+      return 2;
+    }
+    if (full.includes(q)) {
+      return 3;
+    }
     return 4;
   };
-  return files.filter((f) => score(f.path) < 4).sort((a, b) => score(a.path) - score(b.path) || a.path.localeCompare(b.path));
+  return files
+    .filter((f) => score(f.path) < 4)
+    .sort((a, b) => score(a.path) - score(b.path) || a.path.localeCompare(b.path));
 }
 
 export function mentionToken(path: string): string {
@@ -31,13 +51,15 @@ export function mentionToken(path: string): string {
 export function replaceMention(text: string, mention: ActiveMention, path: string) {
   const token = mentionToken(path);
   const value = `${text.slice(0, mention.start)}${token} ${text.slice(mention.end)}`;
-  return { value, caret: mention.start + token.length + 1 };
+  return { caret: mention.start + token.length + 1, value };
 }
 
 export function extractFileReferences(text: string): string[] {
   const refs: string[] = [];
   const regex = /(?:^|\s)@(?:"([^"]+)"|([^\s@]+))/g;
   let match: RegExpExecArray | null;
-  while ((match = regex.exec(text))) refs.push(match[1] ?? match[2]);
+  while ((match = regex.exec(text))) {
+    refs.push(match[1] ?? match[2]);
+  }
   return [...new Set(refs)];
 }
