@@ -1,21 +1,17 @@
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
-import { Send, X, FileDiff, FilePlus, FilePen, FileMinus } from "lucide-react";
-import { CommandInfo, FileDiff as FileDiffType } from "../protocol";
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Send, X, FileDiff, FilePlus, FilePen, FileMinus, ImagePlus } from "lucide-react";
+import { CommandInfo, FileDiff as FileDiffType, ProjectFile, PromptSubmission } from "../protocol";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { extractFileReferences, findMentionAtCaret, rankFiles, replaceMention } from "../lib/composerMentions";
+import { fileToImageAttachment, ImageAttachmentDraft, revokeImagePreviews, validateImageFiles } from "../lib/imageAttachments";
+import { FileMentionMenu } from "./composer/FileMentionMenu";
+import { ImageAttachmentPreview } from "./composer/ImageAttachmentPreview";
 
-export interface ComposerAttachment {
-  id: string;
-  filePath: string;
-  status: FileDiffType["status"];
-  content: string;
-  addedLines: number;
-  removedLines: number;
-}
-
-export interface ComposerHandle {
-  attachDiff: (file: FileDiffType, formattedContent: string) => void;
-}
+export interface ComposerAttachment { id: string; filePath: string; status: FileDiffType["status"]; content: string; addedLines: number; removedLines: number }
+export interface ComposerHandle { attachDiff: (file: FileDiffType, formattedContent: string) => void; submit: () => void }
+const EMPTY_COMMANDS: CommandInfo[] = [];
+const EMPTY_FILES: ProjectFile[] = [];
 
 const statusIcon = (s: FileDiffType["status"]) => {
   switch (s) {
@@ -26,199 +22,129 @@ const statusIcon = (s: FileDiffType["status"]) => {
   }
 };
 
-/**
- * Chat composer: an auto-growing textarea with ↵ to send (⇧↵ for a newline) and a slash-command
- * menu fed by the agent's advertised commands (ACP available_commands). Supports
- * file diff attachments rendered as styled pills above the textarea.
- */
 export const Composer = forwardRef<ComposerHandle, {
-  onSend: (text: string) => void;
-  commands?: CommandInfo[];
-  placeholder?: string;
-  disabled?: boolean;
-  toolbar?: React.ReactNode;
-}>(function Composer(
-  { onSend, commands = [], placeholder = "Message or steer the agent…", disabled = false, toolbar },
-  ref,
-) {
-  const [value, setValue] = useState("");
+  onSend: (submission: PromptSubmission) => void | Promise<void>;
+  commands?: CommandInfo[]; files?: ProjectFile[]; filesLoading?: boolean; imageSupported?: boolean;
+  placeholder?: string; disabled?: boolean; toolbar?: React.ReactNode; initialValue?: string;
+  onDraftChange?: (text: string) => void; hideSendButton?: boolean;
+}>(function Composer({ onSend, commands = EMPTY_COMMANDS, files = EMPTY_FILES, filesLoading = false, imageSupported = false, placeholder = "Message or steer the agent…", disabled = false, toolbar, initialValue = "", onDraftChange, hideSendButton = false }, ref) {
+  const [value, setValue] = useState(initialValue);
+  const [caret, setCaret] = useState(0);
   const [menuIndex, setMenuIndex] = useState(0);
-  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [diffs, setDiffs] = useState<ComposerAttachment[]>([]);
+  const [images, setImages] = useState<ImageAttachmentDraft[]>([]);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const textRef = useRef<HTMLTextAreaElement>(null);
-  const activeItem = useRef<HTMLButtonElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const imagesRef = useRef(images);
 
-  useImperativeHandle(ref, () => ({
-    attachDiff(file: FileDiffType, formattedContent: string) {
-      const addedLines = file.hunks.reduce(
-        (sum, h) => sum + h.lines.filter((l) => l.startsWith("+")).length, 0,
-      );
-      const removedLines = file.hunks.reduce(
-        (sum, h) => sum + h.lines.filter((l) => l.startsWith("-")).length, 0,
-      );
-      setAttachments((prev) => [
-        ...prev,
-        {
-          id: `${file.path}#${Date.now()}`,
-          filePath: file.status === "renamed" && file.oldPath
-            ? `${file.oldPath} → ${file.path}`
-            : file.path,
-          status: file.status,
-          content: formattedContent,
-          addedLines,
-          removedLines,
-        },
-      ]);
-      textRef.current?.focus();
-    },
-  }));
+  useEffect(() => { imagesRef.current = images; }, [images]);
+  useEffect(() => () => revokeImagePreviews(imagesRef.current), []);
+  useImperativeHandle(ref, () => ({ attachDiff(file, formattedContent) {
+    setDiffs((prev) => [...prev, {
+      id: `${file.path}#${Date.now()}`,
+      filePath: file.status === "renamed" && file.oldPath ? `${file.oldPath} → ${file.path}` : file.path,
+      status: file.status, content: formattedContent,
+      addedLines: file.hunks.reduce((sum, h) => sum + h.lines.filter((l) => l.startsWith("+")).length, 0),
+      removedLines: file.hunks.reduce((sum, h) => sum + h.lines.filter((l) => l.startsWith("-")).length, 0),
+    }]);
+    textRef.current?.focus();
+  }, submit() { void send(); }}));
 
-  // Auto-size to content, capped.
   useLayoutEffect(() => {
-    const el = textRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
+    const el = textRef.current; if (!el) return;
+    el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
   }, [value]);
 
-  // Slash menu: active when the whole input is a "/command" being typed.
-  const slash = value.startsWith("/") && !value.includes(" ") ? value.slice(1).toLowerCase() : null;
-  const matches =
-    slash !== null ? commands.filter((c) => c.name.toLowerCase().startsWith(slash)) : [];
-  const menuOpen = matches.length > 0;
-
+  const mention = findMentionAtCaret(value, caret);
+  const mentionMatches = mention ? rankFiles(files, mention.query).slice(0, 30) : [];
+  const mentionOpen = !!mention && !value.startsWith("/");
+  const slash = !mentionOpen && value.startsWith("/") && !value.includes(" ") ? value.slice(1).toLowerCase() : null;
+  const commandMatches = slash !== null ? commands.filter((c) => c.name.toLowerCase().startsWith(slash)) : [];
+  const slashOpen = commandMatches.length > 0;
   useEffect(() => setMenuIndex(0), [value]);
 
-  // Keep the highlighted command visible as you arrow through the menu.
-  useEffect(() => {
-    activeItem.current?.scrollIntoView({ block: "nearest" });
-  }, [menuIndex, menuOpen]);
+  const fileSet = useMemo(() => new Set(files.map((file) => file.path)), [files]);
+  const fileAttachments = extractFileReferences(value).filter((path) => fileSet.has(path));
 
-  const send = () => {
+  const addImages = async (incoming: File[]) => {
+    setError(null);
+    const imageFiles = incoming;
+    const validation = validateImageFiles(imageFiles, images);
+    if (validation) { setError(validation); return; }
+    try { const drafts = await Promise.all(imageFiles.map(fileToImageAttachment)); setImages((prev) => [...prev, ...drafts]); }
+    catch { setError("Could not read one of the selected images."); }
+  };
+
+  async function send() {
     const text = value.trim();
-    if ((!text && attachments.length === 0) || disabled) return;
+    if ((!text && diffs.length === 0 && images.length === 0) || disabled || sending) return;
+    const parts = text ? [text] : [];
+    diffs.forEach((diff) => parts.push(`\`\`\`diff\n${diff.content}\n\`\`\``));
+    setSending(true); setError(null);
+    try {
+      await onSend({ text: parts.join("\n\n"), attachments: [
+        ...fileAttachments.map((path) => ({ type: "file" as const, path })),
+        ...images.map((image) => image.attachment),
+      ] });
+      revokeImagePreviews(images); setValue(""); setDiffs([]); setImages([]); setCaret(0);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Message could not be sent."); }
+    finally { setSending(false); }
+  }
 
-    // Build message: user text + all attached diffs.
-    const parts: string[] = [];
-    if (text) parts.push(text);
-    for (const a of attachments) {
-      parts.push(`\`\`\`diff\n${a.content}\n\`\`\``);
+  const pickFile = (path: string) => {
+    if (!mention) return;
+    const result = replaceMention(value, mention, path);
+    setValue(result.value); setCaret(result.caret);
+    requestAnimationFrame(() => { textRef.current?.focus(); textRef.current?.setSelectionRange(result.caret, result.caret); });
+  };
+  const pickCommand = (command: CommandInfo) => { const next = `/${command.name} `; setValue(next); setCaret(next.length); textRef.current?.focus(); };
+
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "i") {
+      event.preventDefault(); if (imageSupported) inputRef.current?.click(); return;
     }
-    onSend(parts.join("\n\n"));
-    setValue("");
-    setAttachments([]);
-  };
-
-  const removeAttachment = (id: string) => {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
-  };
-
-  const pickCommand = (c: CommandInfo) => {
-    setValue(`/${c.name} `);
-    textRef.current?.focus();
-  };
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (menuOpen) {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setMenuIndex((i) => (i + 1) % matches.length);
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setMenuIndex((i) => (i - 1 + matches.length) % matches.length);
-        return;
-      }
-      if (e.key === "Tab" || (e.key === "Enter" && !e.metaKey && !e.ctrlKey)) {
-        e.preventDefault();
-        pickCommand(matches[menuIndex]);
-        return;
+    const open = mentionOpen || slashOpen;
+    const length = mentionOpen ? mentionMatches.length : commandMatches.length;
+    if (open) {
+      if (event.key === "Escape") { event.preventDefault(); setCaret(-1); return; }
+      if (length && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); setMenuIndex((i) => (i + (event.key === "ArrowDown" ? 1 : length - 1)) % length); return; }
+      if (length && (event.key === "Tab" || (event.key === "Enter" && !event.metaKey && !event.ctrlKey))) {
+        event.preventDefault(); mentionOpen ? pickFile(mentionMatches[menuIndex].path) : pickCommand(commandMatches[menuIndex]); return;
       }
     }
-    // Enter sends; Shift+Enter inserts a newline.
-    if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
-      e.preventDefault();
-      send();
-    }
+    if (!hideSendButton && event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) { event.preventDefault(); void send(); }
   };
 
-  const canSend = (value.trim() || attachments.length > 0) && !disabled;
-
+  const canSend = !!(value.trim() || diffs.length || images.length) && !disabled && !sending;
   return (
-    <div className="relative p-2">
-      {menuOpen && (
-        <div className="absolute bottom-full left-2 right-2 z-20 mb-1 max-h-[50vh] overflow-y-auto rounded-md border bg-popover shadow-md">
-          {matches.map((c, i) => (
-            <button
-              type="button"
-              key={c.name}
-              ref={i === menuIndex ? activeItem : undefined}
-              className={cn(
-                "flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left text-sm",
-                i === menuIndex ? "bg-accent" : "hover:bg-accent/50",
-              )}
-              onMouseEnter={() => setMenuIndex(i)}
-              onClick={() => pickCommand(c)}
-            >
-              <span className="font-mono text-primary">/{c.name}</span>
-              {c.description && (
-                <span className="text-xs text-muted-foreground">{c.description}</span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-      {/* Zed-style: textarea + a controls row (model/mode selectors, send) in one box. */}
-      <div className="flex flex-col rounded-lg border border-input bg-background focus-within:ring-2 focus-within:ring-ring">
-        {/* Attachment pills */}
-        {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 border-b border-input/50 px-2.5 pt-2 pb-2">
-            {attachments.map((a) => (
-              <div
-                key={a.id}
-                className="group flex items-center gap-1.5 rounded-md border border-border/80 bg-secondary/60 px-2 py-1 font-mono text-xs transition-colors hover:bg-secondary"
-              >
-                {statusIcon(a.status)}
-                <span className="max-w-[180px] truncate text-foreground/80">{a.filePath}</span>
-                <span className="text-muted-foreground">
-                  <span className="text-emerald-400">+{a.addedLines}</span>
-                  {" "}
-                  <span className="text-destructive">-{a.removedLines}</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => removeAttachment(a.id)}
-                  className="ml-0.5 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
-                  title="Remove"
-                >
-                  <X className="size-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        <textarea
-          ref={textRef}
-          rows={2}
-          value={value}
-          disabled={disabled}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={attachments.length > 0 ? "Add a message (optional)…" : placeholder}
-          className="max-h-[220px] min-h-[76px] resize-none bg-transparent px-3 py-2.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none disabled:opacity-50"
-        />
+    <div className="relative p-2" onDragEnter={(e) => { e.preventDefault(); if (imageSupported) setDragging(true); }}
+      onDragOver={(e) => e.preventDefault()} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }}
+      onDrop={(e) => { e.preventDefault(); setDragging(false); if (imageSupported) void addImages([...e.dataTransfer.files]); }}>
+      {mentionOpen && <FileMentionMenu files={mentionMatches} activeIndex={Math.min(menuIndex, Math.max(mentionMatches.length - 1, 0))} loading={filesLoading} onActive={setMenuIndex} onPick={(file) => pickFile(file.path)} />}
+      {slashOpen && <div className="absolute bottom-full left-2 right-2 z-20 mb-1 max-h-[50vh] overflow-y-auto rounded-md border bg-popover shadow-md">
+        {commandMatches.map((command, index) => <button type="button" key={command.name} onMouseDown={(e) => { e.preventDefault(); pickCommand(command); }} onMouseEnter={() => setMenuIndex(index)} className={cn("flex w-full flex-col items-start px-3 py-1.5 text-left text-sm", index === menuIndex ? "bg-accent" : "hover:bg-accent/50")}><span className="font-mono text-primary">/{command.name}</span>{command.description && <span className="text-xs text-muted-foreground">{command.description}</span>}</button>)}
+      </div>}
+      <div className="relative flex flex-col rounded-lg border border-input bg-background focus-within:ring-2 focus-within:ring-ring">
+        {dragging && <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-background/90 text-sm font-medium">Drop PNG or JPEG images</div>}
+        {(diffs.length > 0 || images.length > 0) && <div className="flex flex-wrap gap-1.5 border-b border-input/50 px-2.5 py-2">
+          {diffs.map((a) => <div key={a.id} className="group flex items-center gap-1.5 rounded-md border bg-secondary/60 px-2 py-1 font-mono text-xs">{statusIcon(a.status)}<span className="max-w-[180px] truncate">{a.filePath}</span><span><span className="text-emerald-400">+{a.addedLines}</span> <span className="text-destructive">-{a.removedLines}</span></span><button type="button" aria-label={`Remove ${a.filePath}`} onClick={() => setDiffs((prev) => prev.filter((d) => d.id !== a.id))}><X className="size-3" /></button></div>)}
+          {images.map((image) => <ImageAttachmentPreview key={image.id} image={image} onRemove={() => { URL.revokeObjectURL(image.previewUrl); setImages((prev) => prev.filter((item) => item.id !== image.id)); }} />)}
+        </div>}
+        <textarea ref={textRef} rows={2} value={value} disabled={disabled || sending}
+          onChange={(e) => { setValue(e.target.value); onDraftChange?.(e.target.value); setCaret(e.target.selectionStart); }}
+          onClick={(e) => setCaret(e.currentTarget.selectionStart)} onKeyUp={(e) => setCaret(e.currentTarget.selectionStart)} onKeyDown={onKeyDown}
+          placeholder={diffs.length || images.length ? "Add a message (optional)…" : placeholder}
+          className="max-h-[220px] min-h-[76px] resize-none bg-transparent px-3 py-2.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none disabled:opacity-50" />
+        {error && <div role="alert" className="px-3 pb-1 text-xs text-destructive">{error}</div>}
         <div className="flex items-center gap-1.5 px-2 pb-2 text-[11px] text-muted-foreground">
           {toolbar && <div className="flex flex-wrap items-center gap-1">{toolbar}</div>}
+          <input ref={inputRef} type="file" className="hidden" multiple accept="image/png,image/jpeg" onChange={(e) => { void addImages([...e.currentTarget.files ?? []]); e.currentTarget.value = ""; }} />
+          <Button type="button" variant="ghost" size="icon" className="size-7" disabled={!imageSupported || disabled || sending} title={imageSupported ? "Attach images (⌘⇧I)" : "This agent does not support images"} onClick={() => inputRef.current?.click()}><ImagePlus className="size-3.5" /></Button>
           <span className="ml-auto shrink-0">⇧↵ newline</span>
-          <Button
-            type="button"
-            size="icon"
-            className="size-7 shrink-0"
-            onClick={send}
-            disabled={!canSend}
-          >
-            <Send className="size-3.5" />
-          </Button>
+          {!hideSendButton && <Button type="button" size="icon" aria-label="Send" className="size-7 shrink-0" onClick={() => void send()} disabled={!canSend}><Send className="size-3.5" /></Button>}
         </div>
       </div>
     </div>

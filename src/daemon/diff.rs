@@ -199,7 +199,11 @@ fn op_error(msg: impl Into<String>) -> wire::GitOpResult {
     }
 }
 
-fn op_conflict(msg: impl Into<String>, conflicts: Vec<String>, branch: Option<String>) -> wire::GitOpResult {
+fn op_conflict(
+    msg: impl Into<String>,
+    conflicts: Vec<String>,
+    branch: Option<String>,
+) -> wire::GitOpResult {
     wire::GitOpResult {
         status: wire::GitOpStatus::Conflict,
         message: msg.into(),
@@ -213,11 +217,19 @@ fn op_conflict(msg: impl Into<String>, conflicts: Vec<String>, branch: Option<St
 pub async fn update_project(repo: &str) -> Result<wire::GitOpResult> {
     let branch = match current_branch(repo).await {
         Some(b) => b,
-        None => return Ok(op_error("not on a branch (detached HEAD or not a git repo)")),
+        None => {
+            return Ok(op_error(
+                "not on a branch (detached HEAD or not a git repo)",
+            ))
+        }
     };
 
     // Need an upstream to update from.
-    let upstream = git(repo, &["rev-parse", "--abbrev-ref", "--verify", "-q", "@{u}"]).await?;
+    let upstream = git(
+        repo,
+        &["rev-parse", "--abbrev-ref", "--verify", "-q", "@{u}"],
+    )
+    .await?;
     if !upstream.status.success() {
         return Ok(op_error(format!("no upstream configured for '{branch}'")));
     }
@@ -312,7 +324,11 @@ pub async fn list_branches(repo: &str) -> Result<wire::GitBranchList> {
 pub async fn switch_branch(repo: &str, target: &str) -> Result<wire::GitOpResult> {
     let from = match current_branch(repo).await {
         Some(b) => b,
-        None => return Ok(op_error("not on a branch (detached HEAD or not a git repo)")),
+        None => {
+            return Ok(op_error(
+                "not on a branch (detached HEAD or not a git repo)",
+            ))
+        }
     };
     if target == from {
         return Ok(wire::GitOpResult {
@@ -324,7 +340,12 @@ pub async fn switch_branch(repo: &str, target: &str) -> Result<wire::GitOpResult
     }
     let verify = git(
         repo,
-        &["rev-parse", "--verify", "-q", &format!("refs/heads/{target}")],
+        &[
+            "rev-parse",
+            "--verify",
+            "-q",
+            &format!("refs/heads/{target}"),
+        ],
     )
     .await?;
     if !verify.status.success() {
@@ -344,7 +365,10 @@ pub async fn switch_branch(repo: &str, target: &str) -> Result<wire::GitOpResult
         if dirty {
             let _ = git(repo, &["stash", "pop"]).await; // still on `from`, reapply
         }
-        return Ok(op_error(format!("git checkout failed: {}", errline(&checkout))));
+        return Ok(op_error(format!(
+            "git checkout failed: {}",
+            errline(&checkout)
+        )));
     }
 
     if dirty {
@@ -764,8 +788,14 @@ mod tests {
             "rolled back to the original branch"
         );
         let content = std::fs::read_to_string(dir.join("a.txt")).unwrap();
-        assert_eq!(content, "local-uncommitted\n", "dirty change restored intact");
-        assert!(!content.contains("<<<<<<<"), "no conflict markers left behind");
+        assert_eq!(
+            content, "local-uncommitted\n",
+            "dirty change restored intact"
+        );
+        assert!(
+            !content.contains("<<<<<<<"),
+            "no conflict markers left behind"
+        );
         assert!(
             unmerged_files(repo).await.is_empty(),
             "tree is not left in a half-merged state"

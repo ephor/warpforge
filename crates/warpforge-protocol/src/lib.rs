@@ -142,6 +142,9 @@ pub enum Method {
         /// task; its result is delivered back into that orchestrator's inbox.
         #[serde(default)]
         parent_task_id: Option<String>,
+        /// Files and images included with the initial prompt.
+        #[serde(default)]
+        attachments: Vec<PromptAttachment>,
     },
     #[serde(rename = "task.cancel")]
     TaskCancel { task_id: String },
@@ -192,7 +195,12 @@ pub enum Method {
     // ── ACP passthrough for a task's agent session ──
     /// Send a follow-up user message into a running session.
     #[serde(rename = "session.prompt")]
-    SessionPrompt { task_id: String, text: String },
+    SessionPrompt {
+        task_id: String,
+        text: String,
+        #[serde(default)]
+        attachments: Vec<PromptAttachment>,
+    },
     /// Answer a permission request raised by the agent.
     #[serde(rename = "session.permission")]
     SessionPermission {
@@ -224,7 +232,12 @@ pub enum Method {
     FileContents { task_id: String, path: String },
     /// List files in the task's project working tree.
     #[serde(rename = "file.list")]
-    FileList { task_id: String },
+    FileList {
+        #[serde(default)]
+        task_id: String,
+        #[serde(default)]
+        project: Option<String>,
+    },
     /// Write new contents to a file in the task's working tree (in-review edit).
     #[serde(rename = "file.save")]
     FileSave {
@@ -290,9 +303,7 @@ pub enum Method {
     OrchestrateGetConfig {},
     /// Save the orchestrator configuration.
     #[serde(rename = "orchestrate.saveConfig")]
-    OrchestrateSaveConfig {
-        config: OrchestratorConfigDto,
-    },
+    OrchestrateSaveConfig { config: OrchestratorConfigDto },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -557,6 +568,12 @@ pub enum SessionUpdate {
     /// every attached client shows the same conversation.
     UserMessage {
         text: String,
+        #[serde(default)]
+        attachments: Vec<PromptAttachmentSummary>,
+    },
+    PromptCapabilities {
+        image: bool,
+        embedded_context: bool,
     },
     AgentText {
         text: String,
@@ -600,6 +617,29 @@ pub enum SessionUpdate {
     TurnEnded {
         stop_reason: String,
     },
+}
+
+/// A transient attachment sent with a prompt. Image data is never persisted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PromptAttachment {
+    File {
+        path: String,
+    },
+    Image {
+        name: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        data: String,
+    },
+}
+
+/// Safe, persistence-friendly attachment metadata stored in the transcript.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PromptAttachmentSummary {
+    File { path: String },
+    Image { name: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -919,10 +959,16 @@ impl Default for OrchestratorConfigDto {
         Self {
             planner_agent: "claude".into(),
             worker_pool: vec![
-                OrchWorkerPoolDto { agent: "claude".into() },
-                OrchWorkerPoolDto { agent: "codex".into() },
+                OrchWorkerPoolDto {
+                    agent: "claude".into(),
+                },
+                OrchWorkerPoolDto {
+                    agent: "codex".into(),
+                },
             ],
-            reviewer_pool: vec![OrchReviewerPoolDto { agent: "opencode".into() }],
+            reviewer_pool: vec![OrchReviewerPoolDto {
+                agent: "opencode".into(),
+            }],
             worktrees_enabled: true,
         }
     }
@@ -964,6 +1010,9 @@ mod tests {
                 agent: "claude".into(),
                 tags: vec!["bug".into()],
                 include_runtime_context: true,
+                worktree: false,
+                parent_task_id: None,
+                attachments: vec![],
             },
         };
         let json = serde_json::to_value(&req).unwrap();
@@ -973,6 +1022,40 @@ mod tests {
 
         let back: Request = serde_json::from_value(json).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn prompt_attachments_are_backward_compatible_and_roundtrip() {
+        let old: Request = serde_json::from_str(
+            r#"{"id":1,"method":"session.prompt","params":{"task_id":"t1","text":"hi"}}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(old.method, Method::SessionPrompt { attachments, .. } if attachments.is_empty())
+        );
+
+        for attachment in [
+            PromptAttachment::File {
+                path: "src/main.rs".into(),
+            },
+            PromptAttachment::Image {
+                name: "shot.png".into(),
+                mime_type: "image/png".into(),
+                data: "AA==".into(),
+            },
+        ] {
+            let value = serde_json::to_value(&attachment).unwrap();
+            assert_eq!(
+                serde_json::from_value::<PromptAttachment>(value).unwrap(),
+                attachment
+            );
+        }
+
+        let old_history: SessionUpdate =
+            serde_json::from_str(r#"{"kind":"user_message","text":"hello"}"#).unwrap();
+        assert!(
+            matches!(old_history, SessionUpdate::UserMessage { attachments, .. } if attachments.is_empty())
+        );
     }
 
     #[test]

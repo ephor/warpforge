@@ -23,7 +23,7 @@ process.stdin.on("data", (chunk) => {
 
 function handle(msg) {
   if (msg.method === "initialize") {
-    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+    send({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1, agentCapabilities: { promptCapabilities: { image: true, embeddedContext: true } } } });
   } else if (msg.method === "session/new") {
     send({ jsonrpc: "2.0", id: msg.id, result: { sessionId: SID } });
   } else if (msg.method === "session/prompt") {

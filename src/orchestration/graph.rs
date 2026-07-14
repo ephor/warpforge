@@ -76,12 +76,7 @@ impl TaskGraph {
     }
 
     /// Add a node that depends on `depends_on` IDs.
-    pub fn add_node(
-        &mut self,
-        kind: NodeKind,
-        agent: &str,
-        depends_on: Vec<String>,
-    ) -> String {
+    pub fn add_node(&mut self, kind: NodeKind, agent: &str, depends_on: Vec<String>) -> String {
         let id = format!("{}_{}", self.id, &Uuid::new_v4().to_string()[..6]);
         let node = TaskNode {
             id: id.clone(),
@@ -176,7 +171,11 @@ impl TaskGraph {
 
     /// Parse planner output into implement/review nodes.
     /// Expects JSON like: {"tasks": [{"spec": "...", "depends_on": []}], "reviews": [...]}
-    pub fn parse_plan_output(&mut self, output: &str, config: &crate::orchestration::config::OrchestratorConfig) {
+    pub fn parse_plan_output(
+        &mut self,
+        output: &str,
+        config: &crate::orchestration::config::OrchestratorConfig,
+    ) {
         // Agents wrap JSON in ```json fences or surrounding prose; pull the
         // object out before parsing.
         let json = extract_json_object(output);
@@ -278,11 +277,19 @@ fn extract_json_object(output: &str) -> String {
 
 /// Pick a worker agent from the pool (planner decides how many to spawn).
 fn pick_worker(config: &crate::orchestration::config::OrchestratorConfig) -> String {
-    config.worker_pool.first().map(|w| w.agent.clone()).unwrap_or_else(|| "claude".into())
+    config
+        .worker_pool
+        .first()
+        .map(|w| w.agent.clone())
+        .unwrap_or_else(|| "claude".into())
 }
 
 fn pick_reviewer(config: &crate::orchestration::config::OrchestratorConfig) -> String {
-    config.reviewer_pool.first().map(|r| r.agent.clone()).unwrap_or_else(|| "opencode".into())
+    config
+        .reviewer_pool
+        .first()
+        .map(|r| r.agent.clone())
+        .unwrap_or_else(|| "opencode".into())
 }
 
 #[cfg(test)]
@@ -347,26 +354,14 @@ mod tests {
     fn topo_order_respects_deps() {
         let mut graph = TaskGraph::new("demo", "test", "claude");
 
-        let a = graph.add_node(
-            NodeKind::Implement {
-                spec: "a".into(),
-            },
-            "claude",
-            vec![],
-        );
+        let a = graph.add_node(NodeKind::Implement { spec: "a".into() }, "claude", vec![]);
         let b = graph.add_node(
-            NodeKind::Implement {
-                spec: "b".into(),
-            },
+            NodeKind::Implement { spec: "b".into() },
             "codex",
             vec![a.clone()],
         );
 
-        let order: Vec<String> = graph
-            .topo_order()
-            .iter()
-            .map(|n| n.id.clone())
-            .collect();
+        let order: Vec<String> = graph.topo_order().iter().map(|n| n.id.clone()).collect();
 
         // Root is first, then a, then b (b depends on a)
         let a_pos = order.iter().position(|x| x == &a).unwrap();

@@ -230,6 +230,10 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     }
     return [];
   }, [updates]);
+  const imageSupported = useMemo(() => {
+    for (let i = updates.length - 1; i >= 0; i--) { const update = updates[i]; if (update.kind === "prompt_capabilities") return update.image; }
+    return false;
+  }, [updates]);
 
   // Virtualize the conversation — histories run to thousands of updates
   // (codex re-sends every tool_call frame), so only mount what's on screen.
@@ -379,8 +383,11 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
             <Composer
               ref={composerRef}
               commands={commands}
+              files={projectFiles}
+              filesLoading={fileListQuery.isLoading}
+              imageSupported={imageSupported}
               disabled={task.status === "done"}
-              onSend={(text) => void daemon.request("session.prompt", { task_id: task.id, text })}
+              onSend={async (submission) => { await daemon.request("session.prompt", { task_id: task.id, ...submission }); }}
               toolbar={
                 task.configOptions && task.configOptions.length > 0 ? (
                   <AgentConfigBar taskId={task.id} options={task.configOptions} />

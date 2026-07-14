@@ -13,6 +13,7 @@ pub mod acp_server;
 pub mod actor;
 pub mod agents;
 pub mod diff;
+pub mod prompt;
 pub mod server;
 pub mod sessions;
 pub mod store;
@@ -49,7 +50,16 @@ mod tests {
         let mut events = daemon.subscribe();
 
         let id = daemon
-            .create_task("demo", "fix the bug", "claude", vec!["bug".into()], false, false, None)
+            .create_task(
+                "demo",
+                "fix the bug",
+                "claude",
+                vec!["bug".into()],
+                false,
+                false,
+                None,
+                vec![],
+            )
             .await;
 
         assert!(id.starts_with("t_"), "task id looks like a task id: {id}");
@@ -103,7 +113,16 @@ mod tests {
         );
         let agent = format!("node {mock}");
         let task_id = daemon
-            .create_task("demo", "fix the thing", &agent, vec![], false, false, None)
+            .create_task(
+                "demo",
+                "fix the thing",
+                &agent,
+                vec![],
+                false,
+                false,
+                None,
+                vec![],
+            )
             .await;
 
         let mut saw_running = false;
@@ -198,7 +217,16 @@ mod tests {
         );
         let agent = format!("node {mock}");
         let task_id = daemon
-            .create_task("demo", "what port is the api on?", &agent, vec![], false, false, None)
+            .create_task(
+                "demo",
+                "what port is the api on?",
+                &agent,
+                vec![],
+                false,
+                false,
+                None,
+                vec![],
+            )
             .await;
 
         let mut saw_running = false;
@@ -238,7 +266,7 @@ mod tests {
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let daemon = Daemon::spawn(test_projects(), store);
         let id = daemon
-            .create_task("demo", "p", "claude", vec![], false, false, None)
+            .create_task("demo", "p", "claude", vec![], false, false, None, vec![])
             .await;
         let mut events = daemon.subscribe();
 
@@ -255,5 +283,176 @@ mod tests {
             }
             _ => panic!("expected TaskUpdated"),
         }
+    }
+
+    #[tokio::test]
+    async fn acp_prompt_blocks_follow_capabilities_and_support_followups() {
+        use warpforge_protocol::PromptAttachment;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("note.txt"), "attached text").unwrap();
+        let projects = vec![ProjectEntry {
+            name: "demo".into(),
+            path: dir.path().to_string_lossy().into(),
+            added_at: "0".into(),
+        }];
+        let daemon = Daemon::spawn(
+            projects,
+            Store::open_at(std::path::Path::new(":memory:")).ok(),
+        );
+        let mut events = daemon.subscribe();
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/mock-acp-inspect.mjs"
+        );
+        let task_id = daemon
+            .create_task(
+                "demo",
+                "inspect",
+                &format!("node {fixture} true true"),
+                vec![],
+                false,
+                false,
+                None,
+                vec![
+                    PromptAttachment::File {
+                        path: "note.txt".into(),
+                    },
+                    PromptAttachment::Image {
+                        name: "tiny.png".into(),
+                        mime_type: "image/png".into(),
+                        data: "iVBORw0KGgpyZXN0".into(),
+                    },
+                ],
+            )
+            .await;
+        let mut initial = false;
+        for _ in 0..20 {
+            if let Ok(Ok(Event::SessionUpdate {
+                task_id: id,
+                update: warpforge_protocol::SessionUpdate::AgentText { text },
+            })) = timeout(Duration::from_secs(2), events.recv()).await
+            {
+                if id == task_id && text == "blocks:text,resource,image" {
+                    initial = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            initial,
+            "initial prompt should use resource and image blocks"
+        );
+        daemon
+            .session_prompt(
+                &task_id,
+                "follow up",
+                vec![PromptAttachment::File {
+                    path: "note.txt".into(),
+                }],
+            )
+            .await
+            .unwrap();
+        let mut followup = false;
+        for _ in 0..20 {
+            if let Ok(Ok(Event::SessionUpdate {
+                task_id: id,
+                update: warpforge_protocol::SessionUpdate::AgentText { text },
+            })) = timeout(Duration::from_secs(2), events.recv()).await
+            {
+                if id == task_id && text == "blocks:text,resource" {
+                    followup = true;
+                    break;
+                }
+            }
+        }
+        assert!(followup, "follow-up attachments should reach ACP");
+    }
+
+    #[tokio::test]
+    async fn acp_resource_falls_back_to_text_and_unsupported_images_block() {
+        use warpforge_protocol::PromptAttachment;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("note.txt"), "attached text").unwrap();
+        let projects = vec![ProjectEntry {
+            name: "demo".into(),
+            path: dir.path().to_string_lossy().into(),
+            added_at: "0".into(),
+        }];
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/mock-acp-inspect.mjs"
+        );
+
+        let daemon = Daemon::spawn(
+            projects.clone(),
+            Store::open_at(std::path::Path::new(":memory:")).ok(),
+        );
+        let mut events = daemon.subscribe();
+        let id = daemon
+            .create_task(
+                "demo",
+                "inspect",
+                &format!("node {fixture} true false"),
+                vec![],
+                false,
+                false,
+                None,
+                vec![PromptAttachment::File {
+                    path: "note.txt".into(),
+                }],
+            )
+            .await;
+        let mut fallback = false;
+        for _ in 0..20 {
+            if let Ok(Ok(Event::SessionUpdate {
+                task_id,
+                update: warpforge_protocol::SessionUpdate::AgentText { text },
+            })) = timeout(Duration::from_secs(2), events.recv()).await
+            {
+                if task_id == id && text == "blocks:text,text" {
+                    fallback = true;
+                    break;
+                }
+            }
+        }
+        assert!(fallback, "resource should fall back to delimited text");
+
+        let daemon = Daemon::spawn(
+            projects,
+            Store::open_at(std::path::Path::new(":memory:")).ok(),
+        );
+        let mut events = daemon.subscribe();
+        let id = daemon
+            .create_task(
+                "demo",
+                "inspect",
+                &format!("node {fixture} false true"),
+                vec![],
+                false,
+                false,
+                None,
+                vec![PromptAttachment::Image {
+                    name: "tiny.png".into(),
+                    mime_type: "image/png".into(),
+                    data: "iVBORw0KGgpyZXN0".into(),
+                }],
+            )
+            .await;
+        let mut blocked = false;
+        for _ in 0..20 {
+            if let Ok(Ok(Event::TaskUpdated(task))) =
+                timeout(Duration::from_secs(2), events.recv()).await
+            {
+                if task.id == id && task.status == TaskStatus::Blocked {
+                    blocked = true;
+                    break;
+                }
+            }
+        }
+        assert!(blocked, "unsupported images must be rejected by the daemon");
+        assert!(daemon
+            .session_prompt("missing", "not delivered", vec![])
+            .await
+            .is_err());
     }
 }

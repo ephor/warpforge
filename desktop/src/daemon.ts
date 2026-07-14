@@ -82,10 +82,18 @@ class DaemonClient {
   }) {
     this.demoDiff = seed.diffFor;
     this.demoFileDoc = seed.fileDocFor;
+    const sessionUpdates = Object.fromEntries(
+      Object.entries(seed.sessionUpdates).map(([taskId, updates]) => [
+        taskId,
+        updates.some((update) => update.kind === "prompt_capabilities")
+          ? updates
+          : [{ kind: "prompt_capabilities" as const, image: true, embedded_context: true }, ...updates],
+      ]),
+    );
     this.setState({
       connection: "connected",
       snapshot: seed.snapshot,
-      sessionUpdates: seed.sessionUpdates,
+      sessionUpdates,
     });
   }
 
@@ -179,7 +187,10 @@ class DaemonClient {
       }
       case "session.prompt": {
         const taskId = String(p.task_id);
-        this.appendUpdate(taskId, { kind: "user_message", text: String(p.text) });
+        const attachments = Array.isArray(p.attachments) ? p.attachments.map((attachment: any) =>
+          attachment.type === "file" ? { type: "file" as const, path: String(attachment.path) } : { type: "image" as const, name: String(attachment.name) }
+        ) : [];
+        this.appendUpdate(taskId, { kind: "user_message", text: String(p.text), attachments });
         // Fake an agent acknowledgement shortly after.
         setTimeout(
           () =>

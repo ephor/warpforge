@@ -119,7 +119,10 @@ mod tests {
     async fn allow_write_inside_worktree() {
         let p = WorktreeGuardPolicy::new(PathBuf::from("/workspace/.worktrees/t_1"));
         let r = p
-            .evaluate(&write_ctx("fs/write_text_file", ".worktrees/t_1/src/main.rs"))
+            .evaluate(&write_ctx(
+                "fs/write_text_file",
+                ".worktrees/t_1/src/main.rs",
+            ))
             .await;
         assert_eq!(r.action, crate::policies::PolicyAction::Allow);
     }
@@ -130,7 +133,10 @@ mod tests {
         let r = p
             .evaluate(&write_ctx("fs/write_text_file", "src/main.rs"))
             .await;
-        assert!(matches!(r.action, crate::policies::PolicyAction::Deny { .. }));
+        assert!(matches!(
+            r.action,
+            crate::policies::PolicyAction::Deny { .. }
+        ));
     }
 
     #[tokio::test]

@@ -91,11 +91,14 @@ impl Policy for BlastRadiusPolicy {
 
         // Also gate specific ACP file-edit tools if they touch sensitive paths.
         if tool == "fs/write_text_file" {
-            if let Some(path) = ctx.tool_input.as_ref().and_then(|i| i.get("path")).and_then(|p| p.as_str()) {
+            if let Some(path) = ctx
+                .tool_input
+                .as_ref()
+                .and_then(|i| i.get("path"))
+                .and_then(|p| p.as_str())
+            {
                 if is_sensitive_path(path) {
-                    return PolicyResult::ask(format!(
-                        "writing to sensitive path: {path}"
-                    ));
+                    return PolicyResult::ask(format!("writing to sensitive path: {path}"));
                 }
             }
         }
@@ -107,11 +110,21 @@ impl Policy for BlastRadiusPolicy {
 /// Try to extract a shell command from the policy context.
 fn extract_command(ctx: &PolicyContext) -> Option<String> {
     // Check tool_input for a "command" field.
-    if let Some(cmd) = ctx.tool_input.as_ref().and_then(|i| i.get("command")).and_then(|c| c.as_str()) {
+    if let Some(cmd) = ctx
+        .tool_input
+        .as_ref()
+        .and_then(|i| i.get("command"))
+        .and_then(|c| c.as_str())
+    {
         return Some(cmd.to_string());
     }
     // Check for "content" that looks like a shell script (for execute tools).
-    if let Some(content) = ctx.tool_input.as_ref().and_then(|i| i.get("content")).and_then(|c| c.as_str()) {
+    if let Some(content) = ctx
+        .tool_input
+        .as_ref()
+        .and_then(|i| i.get("content"))
+        .and_then(|c| c.as_str())
+    {
         // Only treat as command if it's short and looks like a single command.
         if content.len() < 200 && !content.contains('\n') {
             return Some(content.to_string());
@@ -157,28 +170,40 @@ mod tests {
     async fn deny_force_push() {
         let p = BlastRadiusPolicy::default();
         let r = p.evaluate(&ctx("git push --force origin main")).await;
-        assert!(matches!(r.action, crate::policies::PolicyAction::Deny { .. }));
+        assert!(matches!(
+            r.action,
+            crate::policies::PolicyAction::Deny { .. }
+        ));
     }
 
     #[tokio::test]
     async fn deny_rm_rf() {
         let p = BlastRadiusPolicy::default();
         let r = p.evaluate(&ctx("rm -rf /tmp/junk")).await;
-        assert!(matches!(r.action, crate::policies::PolicyAction::Deny { .. }));
+        assert!(matches!(
+            r.action,
+            crate::policies::PolicyAction::Deny { .. }
+        ));
     }
 
     #[tokio::test]
     async fn ask_on_push() {
         let p = BlastRadiusPolicy::default();
         let r = p.evaluate(&ctx("git push origin main")).await;
-        assert!(matches!(r.action, crate::policies::PolicyAction::Ask { .. }));
+        assert!(matches!(
+            r.action,
+            crate::policies::PolicyAction::Ask { .. }
+        ));
     }
 
     #[tokio::test]
     async fn ask_on_npm_publish() {
         let p = BlastRadiusPolicy::default();
         let r = p.evaluate(&ctx("npm publish")).await;
-        assert!(matches!(r.action, crate::policies::PolicyAction::Ask { .. }));
+        assert!(matches!(
+            r.action,
+            crate::policies::PolicyAction::Ask { .. }
+        ));
     }
 
     #[tokio::test]

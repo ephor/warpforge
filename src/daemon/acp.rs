@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -23,6 +23,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use warpforge_protocol as wire;
 
+use super::prompt::PreparedPrompt;
 use crate::policies::{Phase, PolicyAction, PolicyContext, PolicyResult};
 
 /// A request from the ACP reader to evaluate a policy before executing an op.
@@ -64,6 +65,10 @@ pub enum AcpUpdate {
     ConfigOptions {
         options: Vec<wire::ConfigOption>,
     },
+    PromptCapabilities {
+        image: bool,
+        embedded_context: bool,
+    },
     TurnEnded {
         stop_reason: String,
     },
@@ -71,7 +76,7 @@ pub enum AcpUpdate {
 }
 
 pub enum AcpCommand {
-    Prompt(String),
+    Prompt(PreparedPrompt),
     AnswerPermission { request_id: String, outcome: String },
     SetConfigOption { config_id: String, value: String },
     Cancel,
@@ -81,11 +86,17 @@ pub enum AcpCommand {
 #[derive(Clone)]
 pub struct AcpHandle {
     cmd_tx: mpsc::UnboundedSender<AcpCommand>,
+    image_capability: Arc<AtomicU8>,
 }
 
 impl AcpHandle {
-    pub fn prompt(&self, text: String) {
-        let _ = self.cmd_tx.send(AcpCommand::Prompt(text));
+    pub fn prompt(&self, prompt: PreparedPrompt) -> Result<(), String> {
+        if prompt.has_images && self.image_capability.load(Ordering::Acquire) != 2 {
+            return Err("this agent does not support image prompts".into());
+        }
+        self.cmd_tx
+            .send(AcpCommand::Prompt(prompt))
+            .map_err(|_| "agent session is no longer running".into())
     }
     pub fn answer(&self, request_id: String, outcome: String) {
         let _ = self.cmd_tx.send(AcpCommand::AnswerPermission {
@@ -122,7 +133,7 @@ pub fn spawn_acp_session(
     task_id: String,
     command: String,
     cwd: String,
-    initial_prompt: String,
+    initial_prompt: PreparedPrompt,
     // When set, resume this native session id via ACP `session/load` instead of
     // starting a fresh `session/new`. The agent replays history as updates.
     resume: Option<String>,
@@ -159,6 +170,7 @@ pub fn spawn_acp_session(
 
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<AcpCommand>();
+    let image_capability = Arc::new(AtomicU8::new(0));
 
     // Set WARPFORGE_ACP_DEBUG=1 to log the raw JSON-RPC exchange to the daemon's
     // stderr — the fastest way to see why a real agent isn't answering.
@@ -319,7 +331,10 @@ pub fn spawn_acp_session(
                                 cwd: PathBuf::from(&cwd),
                                 labels: HashMap::new(),
                             };
-                            let _ = ptx.send(PolicyCheck { ctx, reply: ptx_reply });
+                            let _ = ptx.send(PolicyCheck {
+                                ctx,
+                                reply: ptx_reply,
+                            });
                             match ptx_rx.await {
                                 Ok(result) => matches!(result.action, PolicyAction::Allow),
                                 Err(_) => true, // policy channel closed — allow
@@ -331,8 +346,9 @@ pub fn spawn_acp_session(
                         if allowed {
                             let _ = std::fs::write(resolve(&cwd, path), content);
                             if let Some(id) = id {
-                                let _ = out_tx
-                                    .send(json!({"jsonrpc":"2.0","id":id,"result":null}).to_string());
+                                let _ = out_tx.send(
+                                    json!({"jsonrpc":"2.0","id":id,"result":null}).to_string(),
+                                );
                             }
                         } else {
                             if let Some(id) = id {
@@ -367,6 +383,7 @@ pub fn spawn_acp_session(
         let next_id = Arc::clone(&next_id);
         let updates = updates.clone();
         let replaying = Arc::clone(&replaying);
+        let driver_image_capability = Arc::clone(&image_capability);
         tokio::spawn(async move {
             const HS: std::time::Duration = std::time::Duration::from_secs(15);
 
@@ -392,6 +409,26 @@ pub fn spawn_acp_session(
                 .and_then(|c| c.get("loadSession"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            let prompt_caps = init
+                .get("result")
+                .and_then(|r| r.get("agentCapabilities"))
+                .and_then(|c| c.get("promptCapabilities"));
+            let image_supported = prompt_caps
+                .and_then(|c| c.get("image"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let embedded_context = prompt_caps
+                .and_then(|c| c.get("embeddedContext"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            driver_image_capability.store(if image_supported { 2 } else { 1 }, Ordering::Release);
+            let _ = updates.send((
+                task_id.clone(),
+                AcpUpdate::PromptCapabilities {
+                    image: image_supported,
+                    embedded_context,
+                },
+            ));
 
             // Resume an existing session (session/load) or start a fresh one
             // (session/new). Resume replays history back as session/update.
@@ -500,7 +537,14 @@ pub fn spawn_acp_session(
 
             // On resume with no new instruction we only load history; the user
             // continues via session.prompt. Otherwise send the initial prompt.
-            if !initial_prompt.is_empty() {
+            if !initial_prompt.content.is_empty() {
+                if initial_prompt.has_images && !image_supported {
+                    let _ = updates.send((
+                        task_id.clone(),
+                        AcpUpdate::Error("this agent does not support image prompts".into()),
+                    ));
+                    return;
+                }
                 send_prompt(
                     &out_tx,
                     &pending,
@@ -509,12 +553,13 @@ pub fn spawn_acp_session(
                     &task_id,
                     &session_id,
                     initial_prompt,
+                    embedded_context,
                 );
             }
 
             while let Some(cmd) = cmd_rx.recv().await {
                 match cmd {
-                    AcpCommand::Prompt(text) => {
+                    AcpCommand::Prompt(prompt) => {
                         send_prompt(
                             &out_tx,
                             &pending,
@@ -522,7 +567,8 @@ pub fn spawn_acp_session(
                             &updates,
                             &task_id,
                             &session_id,
-                            text,
+                            prompt,
+                            embedded_context,
                         );
                     }
                     AcpCommand::AnswerPermission {
@@ -583,7 +629,10 @@ pub fn spawn_acp_session(
         });
     }
 
-    Ok(AcpHandle { cmd_tx })
+    Ok(AcpHandle {
+        cmd_tx,
+        image_capability,
+    })
 }
 
 /// Send a `session/prompt` in the background and emit a TurnEnded when it
@@ -596,7 +645,8 @@ fn send_prompt(
     updates: &mpsc::UnboundedSender<(String, AcpUpdate)>,
     task_id: &str,
     session_id: &str,
-    text: String,
+    prompt: PreparedPrompt,
+    embedded_context: bool,
 ) {
     let out_tx = out_tx.clone();
     let pending = Arc::clone(pending);
@@ -612,10 +662,17 @@ fn send_prompt(
             "session/prompt",
             json!({
                 "sessionId": session_id,
-                "prompt": [{ "type": "text", "text": text }]
+                "prompt": prompt.content.iter().map(|block| block.to_acp(embedded_context)).collect::<Vec<_>>()
             }),
         )
         .await;
+        if res.is_none() {
+            let _ = updates.send((
+                task_id,
+                AcpUpdate::Error("agent rejected or dropped the prompt".into()),
+            ));
+            return;
+        }
         let stop = res
             .and_then(|v| {
                 v.get("result")?
@@ -896,4 +953,33 @@ fn parse_permission(params: &Value) -> (String, Vec<String>, HashMap<String, Str
         }
     }
     (title, options, map)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::prompt::{PreparedPrompt, PromptContent};
+
+    #[test]
+    fn handle_enforces_negotiated_image_capability() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let capability = Arc::new(AtomicU8::new(1));
+        let handle = AcpHandle {
+            cmd_tx: tx,
+            image_capability: Arc::clone(&capability),
+        };
+        let prompt = PreparedPrompt {
+            content: vec![PromptContent::Image {
+                mime_type: "image/png".into(),
+                data: "abc".into(),
+            }],
+            summaries: vec![],
+            has_images: true,
+        };
+        assert!(handle.prompt(prompt.clone()).is_err());
+        assert!(rx.try_recv().is_err());
+        capability.store(2, Ordering::Release);
+        assert!(handle.prompt(prompt).is_ok());
+        assert!(matches!(rx.try_recv(), Ok(AcpCommand::Prompt(_))));
+    }
 }

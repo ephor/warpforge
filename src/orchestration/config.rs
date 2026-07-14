@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use warpforge_protocol::{OrchestratorConfigDto, OrchWorkerPoolDto, OrchReviewerPoolDto};
+use warpforge_protocol::{OrchReviewerPoolDto, OrchWorkerPoolDto, OrchestratorConfigDto};
 
 /// Top-level configuration for the multi-agent orchestrator.
 ///
@@ -35,12 +35,16 @@ impl Default for OrchestratorConfig {
         Self {
             planner_agent: "claude".into(),
             worker_pool: vec![
-                WorkerPoolEntry { agent: "claude".into() },
-                WorkerPoolEntry { agent: "codex".into() },
+                WorkerPoolEntry {
+                    agent: "claude".into(),
+                },
+                WorkerPoolEntry {
+                    agent: "codex".into(),
+                },
             ],
-            reviewer_pool: vec![
-                ReviewerPoolEntry { agent: "opencode".into() },
-            ],
+            reviewer_pool: vec![ReviewerPoolEntry {
+                agent: "opencode".into(),
+            }],
             worktrees_enabled: true,
         }
     }

@@ -105,7 +105,10 @@ mod tests {
         let p = CostBudgetPolicy::new(10.0, 8.0);
         p.record(8_000_000); // $8.00
         let r = p.evaluate(&ctx()).await;
-        assert!(matches!(r.action, crate::policies::PolicyAction::Ask { .. }));
+        assert!(matches!(
+            r.action,
+            crate::policies::PolicyAction::Ask { .. }
+        ));
     }
 
     #[tokio::test]
@@ -113,7 +116,10 @@ mod tests {
         let p = CostBudgetPolicy::new(10.0, 8.0);
         p.record(10_000_000); // $10.00
         let r = p.evaluate(&ctx()).await;
-        assert!(matches!(r.action, crate::policies::PolicyAction::Deny { .. }));
+        assert!(matches!(
+            r.action,
+            crate::policies::PolicyAction::Deny { .. }
+        ));
     }
 
     #[tokio::test]

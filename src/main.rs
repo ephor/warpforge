@@ -6,9 +6,9 @@ mod daemon;
 mod mcp;
 #[allow(dead_code)]
 mod orchestration;
-mod portforward;
 #[allow(dead_code)]
 mod policies;
+mod portforward;
 mod ports;
 mod registry;
 mod service;

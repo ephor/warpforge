@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Share2, History, GitBranch, GitMerge } from "lucide-react";
 import { daemon } from "../daemon";
-import { ExternalSession, Snapshot } from "../protocol";
+import { ExternalSession, ProjectFile, PromptSubmission, Snapshot } from "../protocol";
+import { daemonQuery } from "../query";
+import { Composer, ComposerHandle } from "../components/Composer";
 import {
   Dialog,
   DialogContent,
@@ -12,7 +14,6 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -47,6 +48,7 @@ export default function NewTaskDialog({
   // sub-agents (via the spawn_agent / read_inbox MCP tools) and processes their
   // results in one conversation. Tag "orchestrator-chat" wires the bridge.
   const [orchChat, setOrchChat] = useState(false);
+  const composerRef = useRef<ComposerHandle>(null);
 
   const projectInfo = snapshot.projects.find((p) => p.name === project);
   const agentOptions =
@@ -81,21 +83,28 @@ export default function NewTaskDialog({
     enabled: open && !!project,
   });
   const sessions = sessionsQuery.data ?? [];
+  const filesQuery = useQuery({
+    queryKey: ["fileList", "new", project],
+    queryFn: daemonQuery<ProjectFile[]>("file.list", { project }),
+    enabled: open && !!project,
+  });
+  const projectFiles = Array.isArray(filesQuery.data) ? filesQuery.data : [];
 
   const resume = (s: ExternalSession) => {
     void daemon.resumeTask(project, s.agent, s.sessionId, s.title);
     onOpenChange(false);
   };
 
-  const create = async () => {
-    if (!prompt.trim() || !project) return;
+  const create = async (submission: PromptSubmission) => {
+    if (!submission.text.trim() || !project) return;
     const userTags = tags
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
-    void daemon.request("task.create", {
+    await daemon.request("task.create", {
       project,
-      prompt: prompt.trim(),
+      prompt: submission.text.trim(),
+      attachments: submission.attachments,
       agent,
       // The "orchestrator-chat" tag makes the daemon wire the warpforge MCP
       // bridge (spawn_agent / read_inbox) into this session.
@@ -153,21 +162,22 @@ export default function NewTaskDialog({
             </Select>
           </label>
 
-          {/* Prompt */}
-          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
             Prompt
-            <Textarea
-              autoFocus
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder={
-                orchChat
-                  ? "What should the orchestrator coordinate? Name which agents to use for which roles."
-                  : "What should the agent do?"
-              }
-              className="min-h-[90px]"
+            <Composer
+              key={`${open}-${project}-${initialPrompt ?? ""}`}
+              ref={composerRef}
+              initialValue={prompt}
+              onDraftChange={setPrompt}
+              files={projectFiles}
+              filesLoading={filesQuery.isLoading}
+              imageSupported
+              hideSendButton
+              onSend={create}
+              placeholder={orchChat ? "What should the orchestrator coordinate?" : "What should the agent do?"}
             />
-          </label>
+            <span>Image support is negotiated when the agent starts; unsupported image prompts are marked blocked.</span>
+          </div>
 
           {/* Tags */}
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -303,7 +313,7 @@ export default function NewTaskDialog({
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={create} disabled={!prompt.trim() || !project}>
+          <Button onClick={() => composerRef.current?.submit()} disabled={!prompt.trim() || !project}>
             {orchChat ? "Start orchestrator" : "Start task"}
           </Button>
         </DialogFooter>
