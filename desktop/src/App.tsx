@@ -23,6 +23,7 @@ import Projects from "./views/Projects";
 import TaskDetail from "./views/TaskDetail";
 import NewTaskDialog from "./views/NewTaskDialog";
 import AgentSetupDialog from "./views/AgentSetupDialog";
+import PushDialog from "./views/PushDialog";
 
 const NAV: { id: View; label: string; icon: typeof LayoutGrid }[] = [
   { id: "control", label: "Mission Control", icon: LayoutGrid },
@@ -42,6 +43,7 @@ export default function App() {
   const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [manualDetected, setManualDetected] = useState<DetectedAgent[] | null>(null);
+  const [pushOpen, setPushOpen] = useState(false);
 
   const openTask = state.snapshot.tasks.find((t) => t.id === openTaskId) ?? null;
 
@@ -141,6 +143,22 @@ export default function App() {
           }
         })
         .catch((e: Error) => toast.error(e.message));
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [state.snapshot.tasks]);
+
+  // Cmd+Shift+K / Ctrl+Shift+K → review outgoing commits and push.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.key.toLowerCase() !== "k") return;
+      e.preventDefault();
+      const id = useUi.getState().openTaskId;
+      if (!id || !state.snapshot.tasks.some((task) => task.id === id)) {
+        toast.info("Open a task before pushing its branch");
+        return;
+      }
+      setPushOpen(true);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -266,6 +284,7 @@ export default function App() {
           defaultProject={newTaskProject}
           initialPrompt={newTaskPrompt}
         />
+        <PushDialog open={pushOpen} onOpenChange={setPushOpen} task={openTask} />
         {(state.pendingAgentSetup ?? manualDetected) && (
           <AgentSetupDialog
             detected={(state.pendingAgentSetup ?? manualDetected)!}

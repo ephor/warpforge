@@ -288,6 +288,15 @@ pub enum Command {
         branch: String,
         reply: oneshot::Sender<wire::GitOpResult>,
     },
+    GitPushInfo {
+        task_id: String,
+        reply: oneshot::Sender<Result<wire::GitPushInfo, String>>,
+    },
+    GitPush {
+        task_id: String,
+        force: bool,
+        reply: oneshot::Sender<wire::GitOpResult>,
+    },
     /// Send a follow-up prompt into a task's running agent session.
     SessionPrompt {
         task_id: String,
@@ -566,6 +575,33 @@ impl DaemonHandle {
         rx.await.unwrap_or_else(|_| wire::GitOpResult {
             status: wire::GitOpStatus::Error,
             message: "daemon dropped the switch request".into(),
+            conflicts: Vec::new(),
+            branch: None,
+        })
+    }
+
+    pub async fn git_push_info(&self, task_id: &str) -> Result<wire::GitPushInfo, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitPushInfo {
+            task_id: task_id.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the push preview request".into()))
+    }
+
+    pub async fn git_push(&self, task_id: &str, force: bool) -> wire::GitOpResult {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitPush {
+            task_id: task_id.to_string(),
+            force,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| wire::GitOpResult {
+            status: wire::GitOpStatus::Error,
+            message: "daemon dropped the push request".into(),
             conflicts: Vec::new(),
             branch: None,
         })
@@ -1495,6 +1531,51 @@ impl Daemon {
                     },
                 };
                 // Switching branches changes the whole working tree — refetch.
+                if result.status == wire::GitOpStatus::Ok {
+                    self.bump_task(&task_id);
+                }
+                let _ = reply.send(result);
+            }
+            Command::GitPushInfo { task_id, reply } => {
+                let repo = self.tasks.get(&task_id).and_then(|task| {
+                    task.worktree
+                        .clone()
+                        .or_else(|| self.project_path(&task.project))
+                });
+                let result = match repo {
+                    Some(path) => super::diff::push_info(&path)
+                        .await
+                        .map_err(|e| e.to_string()),
+                    None => Err(format!("no repo for task {task_id}")),
+                };
+                let _ = reply.send(result);
+            }
+            Command::GitPush {
+                task_id,
+                force,
+                reply,
+            } => {
+                let repo = self.tasks.get(&task_id).and_then(|task| {
+                    task.worktree
+                        .clone()
+                        .or_else(|| self.project_path(&task.project))
+                });
+                let result = match repo {
+                    Some(path) => super::diff::push(&path, force).await.unwrap_or_else(|e| {
+                        wire::GitOpResult {
+                            status: wire::GitOpStatus::Error,
+                            message: e.to_string(),
+                            conflicts: Vec::new(),
+                            branch: None,
+                        }
+                    }),
+                    None => wire::GitOpResult {
+                        status: wire::GitOpStatus::Error,
+                        message: format!("no repo for task {task_id}"),
+                        conflicts: Vec::new(),
+                        branch: None,
+                    },
+                };
                 if result.status == wire::GitOpStatus::Ok {
                     self.bump_task(&task_id);
                 }
