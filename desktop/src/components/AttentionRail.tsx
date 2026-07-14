@@ -42,7 +42,7 @@ export function attentionQueue(state: DaemonState): AttentionItem[] {
     else if (task.status === "interrupted")
       items.push({ task, reason: "session lost on daemon restart", priority: 3 });
   }
-  return items.sort((a, b) => a.priority - b.priority || a.task.updatedAt - b.task.updatedAt);
+  return items.sort((a, b) => a.priority - b.priority || b.task.updatedAt - a.task.updatedAt);
 }
 
 interface Props {
