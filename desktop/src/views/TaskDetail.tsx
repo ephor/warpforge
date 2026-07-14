@@ -25,6 +25,7 @@ import {
   Loader2,
   ListTodo,
   Send,
+  Archive,
 } from "lucide-react";
 import { RuntimePanel } from "../components/RuntimePanel";
 import { daemon, DaemonState } from "../daemon";
@@ -726,22 +727,36 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
         >
           <SquareTerminal className="size-4" />
         </button>
-        <button
-          type="button"
-          aria-label="Delete task"
-          title="Delete task"
-          onClick={() => {
-            if (!confirmDelete) {
-              setConfirmDelete(true);
-              return;
-            }
-            void daemon.deleteTask(task.id);
-            onClose();
-          }}
-          className={cn("mt-auto rounded-md p-1.5 hover:bg-destructive/20 hover:text-destructive", confirmDelete && "bg-destructive/20 text-destructive")}
-        >
-          <Trash2 className="size-4" />
-        </button>
+        <div className="mt-auto flex flex-col items-center gap-2">
+          <button
+            type="button"
+            aria-label="Archive task"
+            title="Archive task"
+            onClick={() => {
+              void daemon.archiveTask(task.id);
+              onClose();
+            }}
+            className="rounded-md p-1.5 hover:bg-secondary hover:text-foreground"
+          >
+            <Archive className="size-4" />
+          </button>
+          <button
+            type="button"
+            aria-label="Delete task"
+            title="Delete task"
+            onClick={() => {
+              if (!confirmDelete) {
+                setConfirmDelete(true);
+                return;
+              }
+              void daemon.deleteTask(task.id);
+              onClose();
+            }}
+            className={cn("rounded-md p-1.5 hover:bg-destructive/20 hover:text-destructive", confirmDelete && "bg-destructive/20 text-destructive")}
+          >
+            <Trash2 className="size-4" />
+          </button>
+        </div>
       </div>
       </div>
     </div>
