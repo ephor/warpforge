@@ -1,4 +1,3 @@
-import { Extension } from "@codemirror/state";
 import { css } from "@codemirror/lang-css";
 import { go } from "@codemirror/lang-go";
 import { html } from "@codemirror/lang-html";
@@ -8,6 +7,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { python } from "@codemirror/lang-python";
 import { rust } from "@codemirror/lang-rust";
 import { yaml } from "@codemirror/lang-yaml";
+import type { Extension } from "@codemirror/state";
 
 export function codemirrorLanguageForPath(path: string): Extension[] {
   const filename = path.split(/[\\/]/).pop()?.toLowerCase() ?? "";

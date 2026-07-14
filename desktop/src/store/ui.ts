@@ -14,7 +14,7 @@ export type RightPanel = "changes" | "files" | "subtasks" | null;
 interface UiState {
   // Navigation
   view: View;
-  openTaskId: string | null; // transient — not persisted
+  openTaskId: string | null; // Transient — not persisted
   // App shell
   attentionOpen: boolean;
   // TaskDetail zones
@@ -54,11 +54,11 @@ export const useUi = create<UiState>()(
       runtimeOpen: false,
       pinnedTaskIds: [],
 
-      setView: (view) => set({ view, openTaskId: null }),
+      setView: (view) => set({ openTaskId: null, view }),
       openTask: (openTaskId) => set({ openTaskId }),
       toggleAttention: () => set((s) => ({ attentionOpen: !s.attentionOpen })),
       // Chat + Center are the mutual pair — never let both close. Tree is a
-      // sub-panel of Center, so it toggles freely.
+      // Sub-panel of Center, so it toggles freely.
       toggleChat: () => set((s) => (!s.showChat || s.showDiff ? { showChat: !s.showChat } : s)),
       toggleDiff: () => set((s) => (!s.showDiff || s.showChat ? { showDiff: !s.showDiff } : s)),
       setShowDiff: (showDiff) => set((s) => (!showDiff && !s.showChat ? s : { showDiff })),
@@ -76,8 +76,8 @@ export const useUi = create<UiState>()(
     }),
     {
       name: "wf-ui",
-      // openTaskId is session-only — a reload shouldn't force-open a stale task.
-      partialize: ({ openTaskId, ...rest }) => rest,
+      // OpenTaskId is session-only — a reload shouldn't force-open a stale task.
+      partialize: ({ openTaskId: _openTaskId, ...rest }) => rest,
     },
   ),
 );

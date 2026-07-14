@@ -1,20 +1,22 @@
 import { describe, expect, it } from "vitest";
+
 import type { TaskInfo, TaskStatus } from "@/protocol";
+
 import { buildTaskForest, flattenTaskTree, treeLane, treeMatches } from "./taskGroups";
 
 function task(id: string, status: TaskStatus, parentTaskId?: string): TaskInfo {
   return {
+    agent: "codex",
+    blockedReason: null,
+    createdAt: 1,
+    filesChanged: 0,
     id,
+    parentTaskId,
     project: "warpforge",
     prompt: id,
-    agent: "codex",
     status,
     tags: [],
-    createdAt: 1,
     updatedAt: 1,
-    filesChanged: 0,
-    blockedReason: null,
-    parentTaskId,
   };
 }
 
@@ -27,8 +29,8 @@ describe("task orchestration groups", () => {
       task("child-1", "running", "parent"),
     ]);
 
-    expect(forest.map((tree) => tree.task.id)).toEqual(["standalone", "parent"]);
-    expect(forest[1].children.map((tree) => tree.task.id)).toEqual(["child-2", "child-1"]);
+    expect(forest.map((tree) => tree.task.id)).toStrictEqual(["standalone", "parent"]);
+    expect(forest[1].children.map((tree) => tree.task.id)).toStrictEqual(["child-2", "child-1"]);
   });
 
   it("keeps a review child attached and promotes the group to review", () => {
@@ -39,7 +41,7 @@ describe("task orchestration groups", () => {
     ]);
 
     expect(treeLane(group)).toBe("review");
-    expect(flattenTaskTree(group).map((item) => item.id)).toEqual([
+    expect(flattenTaskTree(group).map((item) => item.id)).toStrictEqual([
       "orchestrator",
       "finished-child",
       "working-child",
@@ -95,7 +97,7 @@ describe("task orchestration groups", () => {
 
   it("handles empty task list", () => {
     const forest = buildTaskForest([]);
-    expect(forest).toEqual([]);
+    expect(forest).toStrictEqual([]);
   });
 
   it("handles self-referencing parent (cycle to self)", () => {
@@ -107,16 +109,13 @@ describe("task orchestration groups", () => {
   });
 
   it("treeMatches filters trees where no member matches", () => {
-    const forest = buildTaskForest([
-      task("root", "running"),
-      task("child", "done", "root"),
-    ]);
+    const forest = buildTaskForest([task("root", "running"), task("child", "done", "root")]);
     const matchRunning = (t: TaskInfo) => t.status === "running";
 
     // Root matches running → whole tree passes
-    expect(treeMatches(forest[0], matchRunning)).toBe(true);
+    expect(treeMatches(forest[0], matchRunning)).toBeTruthy();
     // No member matches queued → tree filtered out
-    expect(treeMatches(forest[0], (t) => t.status === "queued")).toBe(false);
+    expect(treeMatches(forest[0], (t) => t.status === "queued")).toBeFalsy();
   });
 
   it("does not nest children under wrong parent", () => {
@@ -130,7 +129,7 @@ describe("task orchestration groups", () => {
     expect(forest).toHaveLength(2);
     const treeA = forest.find((t) => t.task.id === "a")!;
     const treeB = forest.find((t) => t.task.id === "b")!;
-    expect(treeA.children.map((c) => c.task.id)).toEqual(["child-of-a"]);
-    expect(treeB.children.map((c) => c.task.id)).toEqual(["child-of-b"]);
+    expect(treeA.children.map((c) => c.task.id)).toStrictEqual(["child-of-a"]);
+    expect(treeB.children.map((c) => c.task.id)).toStrictEqual(["child-of-b"]);
   });
 });

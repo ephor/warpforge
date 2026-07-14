@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from "react";
 import { EditorState } from "@codemirror/state";
-import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { Check, Save } from "lucide-react";
-import { FileDoc } from "../protocol";
-import { cn } from "@/lib/utils";
+import { useEffect, useRef, useState } from "react";
+
 import { codemirrorLanguageForPath } from "@/lib/codemirrorLanguages";
+import { cn } from "@/lib/utils";
+
+import type { FileDoc } from "../protocol";
 
 type SaveStatus = "clean" | "unsaved" | "saved";
 
@@ -28,8 +30,12 @@ export function CodeEditor({
 
   const flushSave = () => {
     const view = viewRef.current;
-    if (!view) return true;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (!view) {
+      return true;
+    }
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+    }
     const text = view.state.doc.toString();
     lastSaved.current = text;
     onSaveRef.current(text);
@@ -38,7 +44,9 @@ export function CodeEditor({
   };
 
   useEffect(() => {
-    if (!host.current) return;
+    if (!host.current) {
+      return;
+    }
     setStatus("clean");
     lastSaved.current = null;
     const view = new EditorView({
@@ -53,9 +61,13 @@ export function CodeEditor({
           EditorState.readOnly.of(!editable),
           keymap.of([{ key: "Mod-s", run: flushSave }]),
           EditorView.updateListener.of((u) => {
-            if (!u.docChanged) return;
+            if (!u.docChanged) {
+              return;
+            }
             setStatus("unsaved");
-            if (saveTimer.current) clearTimeout(saveTimer.current);
+            if (saveTimer.current) {
+              clearTimeout(saveTimer.current);
+            }
             const text = u.state.doc.toString();
             saveTimer.current = setTimeout(() => {
               lastSaved.current = text;
@@ -68,7 +80,9 @@ export function CodeEditor({
     });
     viewRef.current = view;
     return () => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+      }
       view.destroy();
       viewRef.current = null;
     };
@@ -77,11 +91,17 @@ export function CodeEditor({
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view) return;
-    if (doc.newText === lastSaved.current) return;
+    if (!view) {
+      return;
+    }
+    if (doc.newText === lastSaved.current) {
+      return;
+    }
     const cur = view.state.doc.toString();
-    if (doc.newText === cur) return;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: doc.newText } });
+    if (doc.newText === cur) {
+      return;
+    }
+    view.dispatch({ changes: { from: 0, insert: doc.newText, to: view.state.doc.length } });
     setStatus("clean");
     lastSaved.current = null;
   }, [doc.newText]);

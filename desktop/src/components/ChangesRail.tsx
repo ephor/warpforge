@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, GitCommitVertical, RefreshCw, Undo2 } from "lucide-react";
-import { FileDiff } from "../protocol";
-import { daemon } from "../daemon";
+import { useEffect, useMemo, useState } from "react";
+
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+import { daemon } from "../daemon";
+import type { FileDiff } from "../protocol";
 
 /**
  * JetBrains-Air "Changes" rail: a grouped tree of changed files with per-file
@@ -22,8 +24,11 @@ function stat(f: FileDiff): Stat {
   let dels = 0;
   for (const h of f.hunks) {
     for (const l of h.lines) {
-      if (l.startsWith("+")) adds++;
-      else if (l.startsWith("-")) dels++;
+      if (l.startsWith("+")) {
+        adds++;
+      } else if (l.startsWith("-")) {
+        dels++;
+      }
     }
   }
   return { adds, dels, status: f.status };
@@ -31,20 +36,20 @@ function stat(f: FileDiff): Stat {
 
 interface Node {
   name: string;
-  path?: string; // set on leaves
+  path?: string; // Set on leaves
   stat?: Stat;
   children: Map<string, Node>;
 }
 
 function buildTree(files: FileDiff[]): Node {
-  const root: Node = { name: "", children: new Map() };
+  const root: Node = { children: new Map(), name: "" };
   for (const f of files) {
     const parts = f.path.split("/");
     let node = root;
     parts.forEach((part, i) => {
       let child = node.children.get(part);
       if (!child) {
-        child = { name: part, children: new Map() };
+        child = { children: new Map(), name: part };
         node.children.set(part, child);
       }
       if (i === parts.length - 1) {
@@ -65,20 +70,24 @@ function compact(node: Node): Node {
     return { ...only, name: node.name ? `${node.name}/${only.name}` : only.name };
   }
   const map = new Map<string, Node>();
-  for (const c of children) map.set(c.name, c);
+  for (const c of children) {
+    map.set(c.name, c);
+  }
   return { ...node, children: map };
 }
 
 function leaves(node: Node): string[] {
-  if (node.path) return [node.path];
+  if (node.path) {
+    return [node.path];
+  }
   return [...node.children.values()].flatMap(leaves);
 }
 
 const STATUS: Record<FileDiff["status"], { glyph: string; color: string }> = {
-  added: { glyph: "A", color: "text-ok" },
-  deleted: { glyph: "D", color: "text-destructive" },
-  renamed: { glyph: "R", color: "text-warn" },
-  modified: { glyph: "M", color: "text-sky-400" },
+  added: { color: "text-ok", glyph: "A" },
+  deleted: { color: "text-destructive", glyph: "D" },
+  modified: { color: "text-sky-400", glyph: "M" },
+  renamed: { color: "text-warn", glyph: "R" },
 };
 
 function sortChildren(node: Node): Node[] {
@@ -126,7 +135,9 @@ function Row({
           onChange={() => onToggle([node.path!], !on)}
           className="size-3 shrink-0 accent-primary"
         />
-        <span className={cn("w-3 shrink-0 text-center font-mono text-[11px] font-semibold", s.color)}>
+        <span
+          className={cn("w-3 shrink-0 text-center font-mono text-[11px] font-semibold", s.color)}
+        >
           {s.glyph}
         </span>
         <button
@@ -166,7 +177,9 @@ function Row({
           onClick={() => setOpen((o) => !o)}
           className="flex min-w-0 flex-1 items-center gap-1 text-left hover:text-foreground"
         >
-          <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+          <ChevronRight
+            className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")}
+          />
           <span className="truncate">{node.name}</span>
           <span className="ml-1 shrink-0 text-[10px] text-muted-foreground/70">
             {paths.length} files
@@ -220,7 +233,9 @@ export function ChangesRail({
   useEffect(() => {
     setStaged((prev) => {
       const next = new Set(allPaths.filter((p) => prev.has(p) || prev.size === 0));
-      if (next.size === prev.size && [...next].every((path) => prev.has(path))) return prev;
+      if (next.size === prev.size && [...next].every((path) => prev.has(path))) {
+        return prev;
+      }
       return next;
     });
   }, [allPaths]);
@@ -232,13 +247,19 @@ export function ChangesRail({
   // Wrap the project's files under a single root labelled with the project.
   const root = useMemo(() => {
     const tree = compact(buildTree(files));
-    return { name: project, children: tree.children } as Node;
+    return { children: tree.children, name: project } as Node;
   }, [files, project]);
 
   const toggle = (paths: string[], on: boolean) =>
     setStaged((prev) => {
       const next = new Set(prev);
-      for (const p of paths) (on ? next.add(p) : next.delete(p));
+      for (const p of paths) {
+        if (on) {
+          next.add(p);
+        } else {
+          next.delete(p);
+        }
+      }
       return next;
     });
 
@@ -251,10 +272,10 @@ export function ChangesRail({
     try {
       const all = staged.size === allPaths.length;
       await daemon.request("git.commit", {
-        task_id: taskId,
-        message: message.trim(),
-        files: all ? null : [...staged],
         amend,
+        files: all ? null : [...staged],
+        message: message.trim(),
+        task_id: taskId,
       });
       setMessage("");
       setAmend(false);
@@ -267,7 +288,9 @@ export function ChangesRail({
   };
 
   const rollbackChecked = async () => {
-    if (!canRollback) return;
+    if (!canRollback) {
+      return;
+    }
     if (!rollbackConfirm) {
       setRollbackConfirm(true);
       return;
@@ -277,17 +300,16 @@ export function ChangesRail({
     try {
       for (const path of [...staged]) {
         const file = filesByPath.get(path);
-        if (!file) continue;
-        const indices =
-          file.status === "added"
-            ? [0]
-            : file.hunks.map((_, i) => i).reverse();
+        if (!file) {
+          continue;
+        }
+        const indices = file.status === "added" ? [0] : file.hunks.map((_, i) => i).reverse();
         for (const hunkIndex of indices) {
           await daemon.request("diff.resolveHunk", {
-            task_id: taskId,
             file: path,
             hunk_index: hunkIndex,
             resolution: "reject",
+            task_id: taskId,
           });
         }
       }
@@ -316,7 +338,9 @@ export function ChangesRail({
         <button
           type="button"
           aria-label={rollbackConfirm ? "Confirm rollback checked files" : "Rollback checked files"}
-          title={rollbackConfirm ? "Click again to rollback checked files" : "Rollback checked files"}
+          title={
+            rollbackConfirm ? "Click again to rollback checked files" : "Rollback checked files"
+          }
           disabled={!canRollback}
           onClick={rollbackChecked}
           className={cn(
@@ -371,7 +395,13 @@ export function ChangesRail({
             />
             amend
           </label>
-          <Button type="button" size="sm" className="ml-auto h-7" disabled={!canCommit} onClick={commit}>
+          <Button
+            type="button"
+            size="sm"
+            className="ml-auto h-7"
+            disabled={!canCommit}
+            onClick={commit}
+          >
             <GitCommitVertical className="size-3.5" />
             {busy ? "…" : amend ? "Amend" : "Commit"}
           </Button>

@@ -1,8 +1,18 @@
+import {
+  Activity,
+  ArrowDown,
+  ArrowUp,
+  CheckCheck,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  GitBranch,
+  GitPullRequestArrow,
+  Plus,
+  Workflow,
+} from "lucide-react";
 import { useMemo, useState } from "react";
-import { ArrowUp, ArrowDown, Plus, Clock, CheckCheck, GitPullRequestArrow, Activity, GitBranch, ChevronDown, ChevronRight, Workflow } from "lucide-react";
-import { Snapshot, TaskInfo, TaskStatus, OrchNodeInfo } from "../protocol";
-import { taskBadge, elapsed, orchNodeBadge } from "@/lib/status";
-import { buildTaskForest, flattenTaskTree, TaskTree, treeLane, treeMatches } from "@/lib/taskGroups";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -14,7 +24,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { elapsed, orchNodeBadge, taskBadge } from "@/lib/status";
+import type { TaskTree } from "@/lib/taskGroups";
+import { buildTaskForest, flattenTaskTree, treeLane, treeMatches } from "@/lib/taskGroups";
 import { cn } from "@/lib/utils";
+
+import type { OrchNodeInfo, Snapshot, TaskInfo, TaskStatus } from "../protocol";
 
 interface Props {
   snapshot: Snapshot;
@@ -70,7 +85,9 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
     const ids = queued.map((t) => t.id);
     const i = ids.indexOf(id);
     const j = i + dir;
-    if (j < 0 || j >= ids.length) return;
+    if (j < 0 || j >= ids.length) {
+      return;
+    }
     [ids[i], ids[j]] = [ids[j], ids[i]];
     setOrder(ids);
   };
@@ -78,8 +95,11 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
   const toggleExpanded = (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   };
@@ -87,9 +107,10 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
   const done = byStatus("done").sort((a, b) => b.updatedAt - a.updatedAt);
   const running = byStatus("running");
   // Open conversations: the agent is either working (running) or waiting for
-  // your next message (idle). Both are live, non-review, non-done.
+  // Your next message (idle). Both are live, non-review, non-done.
   const review = byStatus(["needs_review", "blocked", "interrupted"]);
-  const laneTrees = (lane: ReturnType<typeof treeLane>) => forest.filter((tree) => treeLane(tree) === lane);
+  const laneTrees = (lane: ReturnType<typeof treeLane>) =>
+    forest.filter((tree) => treeLane(tree) === lane);
   const queueTrees = laneTrees("queue");
   const activeTrees = laneTrees("active");
   const reviewTrees = laneTrees("review");
@@ -98,8 +119,11 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
   const toggleGroup = (id: string) => {
     setCollapsedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   };
@@ -112,7 +136,12 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
       <div className="grid grid-cols-4 gap-3">
         <Stat icon={Activity} label="Running now" value={running.length} tone="ok" />
         <Stat icon={Clock} label="In queue" value={queued.length} />
-        <Stat icon={GitPullRequestArrow} label="Awaiting review" value={review.length} tone="warn" />
+        <Stat
+          icon={GitPullRequestArrow}
+          label="Awaiting review"
+          value={review.length}
+          tone="warn"
+        />
         <Stat icon={CheckCheck} label="Done · 24h" value={doneToday} />
       </div>
 
@@ -155,38 +184,101 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
         <Column title="Queue" hint="arrows set standalone priority" count={queueTrees.length}>
           {queueTrees.map((tree) => {
             if (tree.children.length > 0) {
-              return <TaskGroupCard key={tree.task.id} tree={tree} onOpenTask={onOpenTask} collapsed={collapsedGroups.has(tree.task.id)} onToggle={() => toggleGroup(tree.task.id)} />;
+              return (
+                <TaskGroupCard
+                  key={tree.task.id}
+                  tree={tree}
+                  onOpenTask={onOpenTask}
+                  collapsed={collapsedGroups.has(tree.task.id)}
+                  onToggle={() => toggleGroup(tree.task.id)}
+                />
+              );
             }
             const i = queued.findIndex((task) => task.id === tree.task.id);
-            return <QueueCard key={tree.task.id} task={tree.task} rank={i + 1} first={i <= 0} last={i === queued.length - 1} onOpen={() => onOpenTask(tree.task.id)} onUp={() => move(tree.task.id, -1)} onDown={() => move(tree.task.id, 1)} />;
+            return (
+              <QueueCard
+                key={tree.task.id}
+                task={tree.task}
+                rank={i + 1}
+                first={i <= 0}
+                last={i === queued.length - 1}
+                onOpen={() => onOpenTask(tree.task.id)}
+                onUp={() => move(tree.task.id, -1)}
+                onDown={() => move(tree.task.id, 1)}
+              />
+            );
           })}
           {queueTrees.length === 0 && <Empty />}
         </Column>
 
         <Column title="Active" count={activeTrees.length}>
-          {activeTrees.map((tree) => tree.children.length > 0 ? (
-            <TaskGroupCard key={tree.task.id} tree={tree} onOpenTask={onOpenTask} collapsed={collapsedGroups.has(tree.task.id)} onToggle={() => toggleGroup(tree.task.id)} />
-          ) : (
-            <TaskCard key={tree.task.id} task={tree.task} onOpen={() => onOpenTask(tree.task.id)} expanded={expanded.has(tree.task.id)} onToggleExpand={() => toggleExpanded(tree.task.id)} />
-          ))}
+          {activeTrees.map((tree) =>
+            tree.children.length > 0 ? (
+              <TaskGroupCard
+                key={tree.task.id}
+                tree={tree}
+                onOpenTask={onOpenTask}
+                collapsed={collapsedGroups.has(tree.task.id)}
+                onToggle={() => toggleGroup(tree.task.id)}
+              />
+            ) : (
+              <TaskCard
+                key={tree.task.id}
+                task={tree.task}
+                onOpen={() => onOpenTask(tree.task.id)}
+                expanded={expanded.has(tree.task.id)}
+                onToggleExpand={() => toggleExpanded(tree.task.id)}
+              />
+            ),
+          )}
           {activeTrees.length === 0 && <Empty />}
         </Column>
 
         <Column title="Review / blocked" count={reviewTrees.length}>
-          {reviewTrees.map((tree) => tree.children.length > 0 ? (
-            <TaskGroupCard key={tree.task.id} tree={tree} onOpenTask={onOpenTask} collapsed={collapsedGroups.has(tree.task.id)} onToggle={() => toggleGroup(tree.task.id)} />
-          ) : (
-            <TaskCard key={tree.task.id} task={tree.task} onOpen={() => onOpenTask(tree.task.id)} expanded={expanded.has(tree.task.id)} onToggleExpand={() => toggleExpanded(tree.task.id)} />
-          ))}
+          {reviewTrees.map((tree) =>
+            tree.children.length > 0 ? (
+              <TaskGroupCard
+                key={tree.task.id}
+                tree={tree}
+                onOpenTask={onOpenTask}
+                collapsed={collapsedGroups.has(tree.task.id)}
+                onToggle={() => toggleGroup(tree.task.id)}
+              />
+            ) : (
+              <TaskCard
+                key={tree.task.id}
+                task={tree.task}
+                onOpen={() => onOpenTask(tree.task.id)}
+                expanded={expanded.has(tree.task.id)}
+                onToggleExpand={() => toggleExpanded(tree.task.id)}
+              />
+            ),
+          )}
           {reviewTrees.length === 0 && <Empty />}
         </Column>
 
         <Column title="History" count={historyTrees.length}>
-          {historyTrees.map((tree) => tree.children.length > 0 ? (
-            <TaskGroupCard key={tree.task.id} tree={tree} onOpenTask={onOpenTask} collapsed={collapsedGroups.has(tree.task.id)} onToggle={() => toggleGroup(tree.task.id)} muted />
-          ) : (
-            <TaskCard key={tree.task.id} task={tree.task} onOpen={() => onOpenTask(tree.task.id)} muted expanded={expanded.has(tree.task.id)} onToggleExpand={() => toggleExpanded(tree.task.id)} />
-          ))}
+          {historyTrees.map((tree) =>
+            tree.children.length > 0 ? (
+              <TaskGroupCard
+                key={tree.task.id}
+                tree={tree}
+                onOpenTask={onOpenTask}
+                collapsed={collapsedGroups.has(tree.task.id)}
+                onToggle={() => toggleGroup(tree.task.id)}
+                muted
+              />
+            ) : (
+              <TaskCard
+                key={tree.task.id}
+                task={tree.task}
+                onOpen={() => onOpenTask(tree.task.id)}
+                muted
+                expanded={expanded.has(tree.task.id)}
+                onToggleExpand={() => toggleExpanded(tree.task.id)}
+              />
+            ),
+          )}
           {historyTrees.length === 0 && <Empty />}
         </Column>
       </div>
@@ -273,7 +365,12 @@ function TaskGroupCard({
       {/* A restrained card stack signals ownership even while collapsed. */}
       <div className="pointer-events-none absolute inset-x-1 top-1 h-full rounded-md border border-border/60 bg-secondary/20" />
       <div className="relative pb-1">
-        <TaskCard task={tree.task} onOpen={() => onOpenTask(tree.task.id)} hideOrchAccordion flattenBottom />
+        <TaskCard
+          task={tree.task}
+          onOpen={() => onOpenTask(tree.task.id)}
+          hideOrchAccordion
+          flattenBottom
+        />
         <button
           className="relative -mt-px flex w-full items-center gap-1.5 rounded-b-md border border-t-0 border-border bg-secondary/60 px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground"
           onClick={onToggle}
@@ -421,7 +518,9 @@ function NodeRow({ node }: { node: OrchNodeInfo }) {
       </Badge>
       <span className="font-medium text-foreground">{node.kind}</span>
       <span className="text-muted-foreground">{node.agent}</span>
-      {node.taskId && <span className="ml-auto text-[10px] text-muted-foreground/60">{node.taskId}</span>}
+      {node.taskId && (
+        <span className="ml-auto text-[10px] text-muted-foreground/60">{node.taskId}</span>
+      )}
     </div>
   );
 }

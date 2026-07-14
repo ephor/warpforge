@@ -50,7 +50,11 @@ body {
   margin: 0;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
-  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    sans-serif;
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
 }
@@ -81,10 +85,10 @@ textarea {
 }
 .cm-merge-a .cm-changedText,
 .cm-merge-a .cm-deletedChunk .cm-deletedText {
-  background: hsl(var(--destructive) / 0.30) !important;
+  background: hsl(var(--destructive) / 0.3) !important;
   border-radius: 2px;
 }
 .cm-merge-b .cm-changedText {
-  background: hsl(var(--ok) / 0.20) !important;
+  background: hsl(var(--ok) / 0.2) !important;
   border-radius: 2px;
 }

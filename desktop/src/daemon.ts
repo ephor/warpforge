@@ -7,20 +7,19 @@
  * daemon events onto the last snapshot.
  */
 
-import {
+import type {
   AgentConfig,
   DaemonEndpoint,
   DaemonEvent,
   DetectedAgent,
   ExternalSession,
-  EMPTY_SNAPSHOT,
   FileDoc,
   ServerMessage,
   SessionUpdate,
   Snapshot,
   TaskDiff,
-  isEvent,
 } from "./protocol";
+import { EMPTY_SNAPSHOT, isEvent } from "./protocol";
 
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 
@@ -52,10 +51,10 @@ class DaemonClient {
   private reconnectDelay = 500;
   private state: DaemonState = {
     connection: "disconnected",
-    snapshot: EMPTY_SNAPSHOT,
-    sessionUpdates: {},
-    serviceLogs: {},
     pendingAgentSetup: null,
+    serviceLogs: {},
+    sessionUpdates: {},
+    snapshot: EMPTY_SNAPSHOT,
   };
 
   // ── external store interface (for useSyncExternalStore) ──
@@ -87,19 +86,24 @@ class DaemonClient {
         taskId,
         updates.some((update) => update.kind === "prompt_capabilities")
           ? updates
-          : [{ kind: "prompt_capabilities" as const, image: true, embedded_context: true }, ...updates],
+          : [
+              { embedded_context: true, image: true, kind: "prompt_capabilities" as const },
+              ...updates,
+            ],
       ]),
     );
     this.setState({
       connection: "connected",
-      snapshot: seed.snapshot,
       sessionUpdates,
+      snapshot: seed.snapshot,
     });
   }
 
   /** Inject a daemon event locally (demo mode only). */
   demoEvent(ev: DaemonEvent) {
-    if (this.demoDiff) this.applyEvent(ev);
+    if (this.demoDiff) {
+      this.applyEvent(ev);
+    }
   }
 
   // ── connection ──
@@ -110,7 +114,9 @@ class DaemonClient {
     this.ws = ws;
 
     ws.onopen = () => {
-      if (endpoint.token) ws.send(JSON.stringify({ auth: endpoint.token }));
+      if (endpoint.token) {
+        ws.send(JSON.stringify({ auth: endpoint.token }));
+      }
       this.setState({ connection: "connected" });
       this.reconnectDelay = 500;
       void this.request("state.subscribe", { topics: [] });
@@ -134,15 +140,17 @@ class DaemonClient {
 
   // ── RPC ──
   request(method: string, params?: unknown): Promise<unknown> {
-    if (this.demoDiff) return this.demoRequest(method, params);
-    const ws = this.ws;
+    if (this.demoDiff) {
+      return this.demoRequest(method, params);
+    }
+    const { ws } = this;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("not connected to daemon"));
     }
     const id = this.nextId++;
     ws.send(JSON.stringify({ id, method, params }));
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { reject, resolve });
     });
   }
 
@@ -162,7 +170,7 @@ class DaemonClient {
         return Promise.resolve(this.demoFileDoc!(String(p.path)));
       case "file.list": {
         const diff = this.demoDiff!(String(p.task_id));
-        const files = diff.files.map((f) => ({ path: f.path, changed: true }));
+        const files = diff.files.map((f) => ({ changed: true, path: f.path }));
         return Promise.resolve(files);
       }
       case "file.save":
@@ -172,10 +180,6 @@ class DaemonClient {
         const task = this.state.snapshot.tasks.find((item) => item.id === taskId);
         return Promise.resolve({
           branch: "feature/demo-push",
-          remote: "origin",
-          remoteBranch: "feature/demo-push",
-          upstream: "origin/feature/demo-push",
-          hasUpstream: true,
           commits: [
             {
               hash: "7bc91e2d36d05a89f86e58d27060edeb36cf91c2",
@@ -188,14 +192,18 @@ class DaemonClient {
               })),
             },
           ],
+          hasUpstream: true,
+          remote: "origin",
+          remoteBranch: "feature/demo-push",
+          upstream: "origin/feature/demo-push",
         });
       }
       case "git.push":
         return Promise.resolve({
-          status: "ok",
-          message: p.force ? "pushed with force-with-lease" : "pushed to origin",
-          conflicts: [],
           branch: "feature/demo-push",
+          conflicts: [],
+          message: p.force ? "pushed with force-with-lease" : "pushed to origin",
+          status: "ok",
         });
       case "service.logs":
         return Promise.resolve([
@@ -217,10 +225,14 @@ class DaemonClient {
       }
       case "session.prompt": {
         const taskId = String(p.task_id);
-        const attachments = Array.isArray(p.attachments) ? p.attachments.map((attachment: any) =>
-          attachment.type === "file" ? { type: "file" as const, path: String(attachment.path) } : { type: "image" as const, name: String(attachment.name) }
-        ) : [];
-        this.appendUpdate(taskId, { kind: "user_message", text: String(p.text), attachments });
+        const attachments = Array.isArray(p.attachments)
+          ? p.attachments.map((attachment: any) =>
+              attachment.type === "file"
+                ? { path: String(attachment.path), type: "file" as const }
+                : { name: String(attachment.name), type: "image" as const },
+            )
+          : [];
+        this.appendUpdate(taskId, { attachments, kind: "user_message", text: String(p.text) });
         // Fake an agent acknowledgement shortly after.
         setTimeout(
           () =>
@@ -235,18 +247,18 @@ class DaemonClient {
       case "task.create": {
         const id = `t${Math.random().toString(36).slice(2, 7)}`;
         const task = {
+          agent: String(p.agent ?? "claude"),
+          blockedReason: null,
+          createdAt: nowSecs(),
+          filesChanged: 0,
           id,
           project: String(p.project),
           prompt: String(p.prompt),
-          agent: String(p.agent ?? "claude"),
           status: "running" as const,
           tags: (p.tags as string[]) ?? [],
-          createdAt: nowSecs(),
           updatedAt: nowSecs(),
-          filesChanged: 0,
-          blockedReason: null,
         };
-        this.applyEvent({ event: "task.created", data: task });
+        this.applyEvent({ data: task, event: "task.created" });
         if (p.include_runtime_context) {
           this.appendUpdate(id, {
             kind: "agent_text",
@@ -272,7 +284,7 @@ class DaemonClient {
         return Promise.resolve({});
       }
       case "task.delete": {
-        this.applyEvent({ event: "task.removed", data: { id: String(p.task_id) } });
+        this.applyEvent({ data: { id: String(p.task_id) }, event: "task.removed" });
         return Promise.resolve({});
       }
       case "sessions.list":
@@ -283,8 +295,8 @@ class DaemonClient {
         const goal = String(p.goal ?? "");
         // Create a parent task with orchestration graph
         const graph = {
-          id: graphId,
           goal,
+          id: graphId,
           nodes: [
             {
               id: `${graphId}_plan`,
@@ -296,19 +308,19 @@ class DaemonClient {
           ],
         };
         const task = {
+          agent: "claude",
+          blockedReason: null,
+          createdAt: nowSecs(),
+          filesChanged: 0,
           id: taskId,
+          orchestrationGraph: graph,
           project: String(p.project),
           prompt: goal,
-          agent: "claude",
           status: "running" as const,
           tags: ["orchestrator"],
-          createdAt: nowSecs(),
           updatedAt: nowSecs(),
-          filesChanged: 0,
-          blockedReason: null,
-          orchestrationGraph: graph,
         };
-        this.applyEvent({ event: "task.created", data: task });
+        this.applyEvent({ data: task, event: "task.created" });
         return Promise.resolve({ graphId, taskId });
       }
       case "orchestrate.list":
@@ -316,8 +328,8 @@ class DaemonClient {
           graphs: this.state.snapshot.tasks
             .filter((t) => t.orchestrationGraph)
             .map((t) => ({
-              id: t.orchestrationGraph!.id,
               goal: t.orchestrationGraph!.goal,
+              id: t.orchestrationGraph!.id,
               project: t.project,
               totalNodes: t.orchestrationGraph!.nodes.length,
             })),
@@ -327,9 +339,14 @@ class DaemonClient {
     }
   }
 
-  private patchTask(id: string, fn: (t: import("./protocol").TaskInfo) => import("./protocol").TaskInfo) {
+  private patchTask(
+    id: string,
+    fn: (t: import("./protocol").TaskInfo) => import("./protocol").TaskInfo,
+  ) {
     const task = this.state.snapshot.tasks.find((t) => t.id === id);
-    if (task) this.applyEvent({ event: "task.updated", data: fn(task) });
+    if (task) {
+      this.applyEvent({ event: "task.updated", data: fn(task) });
+    }
   }
 
   private handleMessage(msg: ServerMessage) {
@@ -338,7 +355,9 @@ class DaemonClient {
       return;
     }
     const pending = this.pending.get(msg.id);
-    if (!pending) return;
+    if (!pending) {
+      return;
+    }
     this.pending.delete(msg.id);
     if ("error" in msg) {
       pending.reject(new Error(`${msg.error.code}: ${msg.error.message}`));
@@ -379,21 +398,21 @@ class DaemonClient {
         const services = exists
           ? snap.services.map((s) =>
               s.project === ev.data.project && s.name === ev.data.service
-                ? { ...s, status: ev.data.status, allocatedPort: ev.data.allocated_port }
+                ? { ...s, allocatedPort: ev.data.allocated_port, status: ev.data.status }
                 : s,
             )
           : // A service started after we subscribed — add it. command/originalPort
-            // fill in on the next full snapshot; status + port are what matter now.
+            // Fill in on the next full snapshot; status + port are what matter now.
             [
               ...snap.services,
               {
-                project: ev.data.project,
-                name: ev.data.service,
-                command: "",
-                status: ev.data.status,
-                originalPort: 0,
                 allocatedPort: ev.data.allocated_port,
+                command: "",
                 logSeq: 0,
+                name: ev.data.service,
+                originalPort: 0,
+                project: ev.data.project,
+                status: ev.data.status,
               },
             ];
         this.setState({ snapshot: { ...snap, services } });
@@ -427,14 +446,14 @@ class DaemonClient {
       case "task.removed": {
         const { [ev.data.id]: _dropped, ...sessionUpdates } = this.state.sessionUpdates;
         this.setState({
-          snapshot: { ...snap, tasks: snap.tasks.filter((t) => t.id !== ev.data.id) },
           sessionUpdates,
+          snapshot: { ...snap, tasks: snap.tasks.filter((t) => t.id !== ev.data.id) },
         });
         break;
       }
       case "session.update": {
         // No cap: the snapshot loads the full persisted history unbounded, so
-        // trimming here only chops long codex chats the moment a new update
+        // Trimming here only chops long codex chats the moment a new update
         // (e.g. a permission answer) arrives — inconsistent and lossy.
         const { task_id, update } = ev.data;
         const existing = this.state.sessionUpdates[task_id] ?? [];
@@ -455,8 +474,8 @@ class DaemonClient {
         break;
       case "agents.updated":
         this.setState({
-          snapshot: { ...snap, agents: ev.data.agents },
           pendingAgentSetup: null,
+          snapshot: { ...snap, agents: ev.data.agents },
         });
         break;
       // High-frequency events with no retained state yet.
@@ -506,10 +525,10 @@ class DaemonClient {
     options: { after?: number; limit?: number } = {},
   ): Promise<string[]> {
     const result = await this.request("service.logs", {
-      project,
-      service,
       after: options.after ?? 0,
       limit: options.limit ?? 300,
+      project,
+      service,
     });
     const payload = result as { lines?: unknown };
     const rawLines = Array.isArray(result)
@@ -543,8 +562,8 @@ class DaemonClient {
     title: string,
   ): Promise<string> {
     const result = await this.request("task.resume", {
-      project,
       agent,
+      project,
       session_id: sessionId,
       title,
     });
@@ -556,7 +575,7 @@ class DaemonClient {
     project: string,
     goal: string,
   ): Promise<{ graphId: string; taskId: string }> {
-    const result = await this.request("orchestrate.start", { project, goal });
+    const result = await this.request("orchestrate.start", { goal, project });
     const r = result as { graphId?: string; taskId?: string };
     return { graphId: r.graphId ?? "", taskId: r.taskId ?? "" };
   }
@@ -575,9 +594,7 @@ class DaemonClient {
   }
 
   /** Save the orchestrator configuration. */
-  async orchestrateSaveConfig(
-    config: import("./protocol").OrchestratorConfig,
-  ): Promise<boolean> {
+  async orchestrateSaveConfig(config: import("./protocol").OrchestratorConfig): Promise<boolean> {
     const result = await this.request("orchestrate.saveConfig", { config });
     return (result as { ok?: boolean })?.ok ?? false;
   }
@@ -593,7 +610,7 @@ async function discoverEndpoint(): Promise<DaemonEndpoint> {
     const { invoke } = await import("@tauri-apps/api/core");
     return await invoke<DaemonEndpoint>("daemon_endpoint");
   }
-  return { pid: 0, url: "ws://127.0.0.1:61814", token: "", version: "dev" };
+  return { pid: 0, token: "", url: "ws://127.0.0.1:61814", version: "dev" };
 }
 
 export const daemon = new DaemonClient();

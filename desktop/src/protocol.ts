@@ -18,12 +18,7 @@ export type ServerMessage =
   | DaemonEvent;
 
 export interface RpcError {
-  code:
-    | "invalid_request"
-    | "not_found"
-    | "conflict"
-    | "agent_unavailable"
-    | "internal";
+  code: "invalid_request" | "not_found" | "conflict" | "agent_unavailable" | "internal";
   message: string;
 }
 
@@ -113,9 +108,9 @@ export interface Snapshot {
 }
 
 export const EMPTY_SNAPSHOT: Snapshot = {
+  portforwards: [],
   projects: [],
   services: [],
-  portforwards: [],
   tasks: [],
   terminals: [],
 };
@@ -140,12 +135,7 @@ export interface ServiceInfo {
   logSeq: number;
 }
 
-export type PortForwardStatus =
-  | "starting"
-  | "active"
-  | "restarting"
-  | "failed"
-  | "stopped";
+export type PortForwardStatus = "starting" | "active" | "restarting" | "failed" | "stopped";
 
 export interface PortForwardInfo {
   project: string;
@@ -220,12 +210,7 @@ export interface OrchNodeInfo {
 
 export type OrchNodeKind = "plan" | "implement" | "review" | "merge";
 
-export type OrchNodeStatus =
-  | "pending"
-  | "running"
-  | "complete"
-  | "failed"
-  | "skipped";
+export type OrchNodeStatus = "pending" | "running" | "complete" | "failed" | "skipped";
 
 export interface OrchestratorConfig {
   plannerAgent: string;

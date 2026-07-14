@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
 import { Activity } from "lucide-react";
-import { SessionActivity } from "@/lib/sessionActivity";
+import { useEffect, useState } from "react";
+
+import type { SessionActivity } from "@/lib/sessionActivity";
 import { cn } from "@/lib/utils";
 
 /** Ticking elapsed since mount — mounts when a turn starts (activity appears)

@@ -1,33 +1,37 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
-  Clock3,
-  FileText,
-  Maximize2,
-  X,
-  Wrench,
-  FilePen,
-  TriangleAlert,
-  Plus,
-  ListTodo,
   ChevronRight,
+  Clock3,
+  FilePen,
+  FileText,
+  ListTodo,
+  Maximize2,
+  Plus,
+  TriangleAlert,
+  Wrench,
+  X,
 } from "lucide-react";
-import { daemon, DaemonState } from "../daemon";
-import { CommandInfo, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
-import { daemonQuery } from "../query";
-import { useUi } from "../store/ui";
-import { FileLinkResolver, Markdown } from "../components/Markdown";
-import { AgentConfigBar } from "../components/AgentConfigBar";
-import { Composer } from "../components/Composer";
-import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
-import { sessionActivity } from "@/lib/sessionActivity";
-import { pendingPermission, resolvedPermissions } from "@/lib/sessionPermissions";
-import { activityBadge, elapsed, taskBadge } from "@/lib/status";
+import { useState } from "react";
+
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { sessionActivity } from "@/lib/sessionActivity";
+import { pendingPermission, resolvedPermissions } from "@/lib/sessionPermissions";
+import { activityBadge, elapsed, taskBadge } from "@/lib/status";
 import { cn } from "@/lib/utils";
+
+import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
+import { AgentConfigBar } from "../components/AgentConfigBar";
+import { Composer } from "../components/Composer";
+import type { FileLinkResolver } from "../components/Markdown";
+import { Markdown } from "../components/Markdown";
+import type { DaemonState } from "../daemon";
+import { daemon } from "../daemon";
+import type { CommandInfo, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
+import { daemonQuery } from "../query";
+import { useUi } from "../store/ui";
 
 /**
  * Mission Control — the default, attention-driven operating view.
@@ -50,41 +54,41 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
 
   const pinnedTasks = pinned
     .map((id) => live.find((t) => t.id === id))
-    .filter((t): t is TaskInfo => !!t);
+    .filter((t): t is TaskInfo => Boolean(t));
 
   return (
     <ScrollArea className="h-full min-h-0">
       <div className="flex flex-col gap-4 pr-3">
-          {pinnedTasks.length > 0 ? (
-            <div className="grid grid-cols-2 gap-3">
-              {pinnedTasks.map((task) => (
-                <FocusPane
-                  key={task.id}
-                  task={task}
-                  updates={state.sessionUpdates[task.id] ?? []}
-                  onUnpin={() => togglePin(task.id)}
-                  onOpen={() => onOpenTask(task.id)}
-                />
-              ))}
-            </div>
-          ) : live.length > 0 ? (
-            <div className="mt-16 flex flex-col items-center gap-2 text-center text-muted-foreground">
-              <p className="text-foreground">No pinned sessions.</p>
-              <p className="max-w-md text-sm">
-                Pin sessions from the sidebar when you want them on the Mission Control board.
-              </p>
-            </div>
-          ) : null}
+        {pinnedTasks.length > 0 ? (
+          <div className="grid grid-cols-2 gap-3">
+            {pinnedTasks.map((task) => (
+              <FocusPane
+                key={task.id}
+                task={task}
+                updates={state.sessionUpdates[task.id] ?? []}
+                onUnpin={() => togglePin(task.id)}
+                onOpen={() => onOpenTask(task.id)}
+              />
+            ))}
+          </div>
+        ) : live.length > 0 ? (
+          <div className="mt-16 flex flex-col items-center gap-2 text-center text-muted-foreground">
+            <p className="text-foreground">No pinned sessions.</p>
+            <p className="max-w-md text-sm">
+              Pin sessions from the sidebar when you want them on the Mission Control board.
+            </p>
+          </div>
+        ) : null}
 
-          {live.length === 0 ? (
-            <div className="mt-16 flex flex-col items-center gap-3 text-muted-foreground">
-              <p>No live sessions.</p>
-              <Button variant="outline" onClick={() => onNewTask()}>
-                <Plus className="size-4" />
-                Start a task
-              </Button>
-            </div>
-          ) : null}
+        {live.length === 0 ? (
+          <div className="mt-16 flex flex-col items-center gap-3 text-muted-foreground">
+            <p>No live sessions.</p>
+            <Button variant="outline" onClick={() => onNewTask()}>
+              <Plus className="size-4" />
+              Start a task
+            </Button>
+          </div>
+        ) : null}
       </div>
     </ScrollArea>
   );
@@ -109,15 +113,15 @@ function FocusPane({
   const files = summarizeFiles(stream);
   const commands = latestCommands(updates);
   const fileListQuery = useQuery({
-    queryKey: ["fileList", task.id, task.updatedAt],
     queryFn: daemonQuery<ProjectFile[]>("file.list", { task_id: task.id }),
+    queryKey: ["fileList", task.id, task.updatedAt],
   });
   const projectFiles = Array.isArray(fileListQuery.data) ? fileListQuery.data : [];
   const capability = [...updates].reverse().find((update) => update.kind === "prompt_capabilities");
   const imageSupported = capability?.kind === "prompt_capabilities" ? capability.image : false;
   const activity = sessionActivity(task, stream);
   const badge = pending
-    ? { variant: "warn" as const, label: "permission" }
+    ? { label: "permission", variant: "warn" as const }
     : activity
       ? activityBadge(activity.tone, activity.label)
       : taskBadge(task.status);
@@ -196,7 +200,11 @@ function FocusPane({
 
       {pending && (
         <div className="border-b border-warn/20 bg-warn/[0.06] px-3 py-2">
-          <PermissionLine update={pending} taskId={task.id} resolvedOutcome={resolved[pending.request_id]} />
+          <PermissionLine
+            update={pending}
+            taskId={task.id}
+            resolvedOutcome={resolved[pending.request_id]}
+          />
         </div>
       )}
 
@@ -239,7 +247,9 @@ function FocusPane({
           imageSupported={imageSupported}
           disabled={task.status === "done"}
           placeholder="Steer this session..."
-          onSend={async (submission) => { await daemon.request("session.prompt", { task_id: task.id, ...submission }); }}
+          onSend={async (submission) => {
+            await daemon.request("session.prompt", { task_id: task.id, ...submission });
+          }}
           toolbar={
             task.configOptions && task.configOptions.length > 0 ? (
               <AgentConfigBar taskId={task.id} options={task.configOptions} />
@@ -261,7 +271,10 @@ function latestCommands(updates: SessionUpdate[]): CommandInfo[] {
   return [];
 }
 
-function pinnedPreview(updates: SessionUpdate[], limit: number): {
+function pinnedPreview(
+  updates: SessionUpdate[],
+  limit: number,
+): {
   items: SessionUpdate[];
   hidden: number;
 } {
@@ -281,17 +294,23 @@ function pinnedPreview(updates: SessionUpdate[], limit: number): {
     return true;
   });
   return {
-    items: items.slice(-limit),
     hidden: Math.max(0, items.length - limit),
+    items: items.slice(-limit),
   };
 }
 
-function summarizeTools(updates: SessionUpdate[]): { total: number; active: number; failed: number } {
-  const tools = updates.filter((u): u is Extract<SessionUpdate, { kind: "tool_call" }> => u.kind === "tool_call");
+function summarizeTools(updates: SessionUpdate[]): {
+  total: number;
+  active: number;
+  failed: number;
+} {
+  const tools = updates.filter(
+    (u): u is Extract<SessionUpdate, { kind: "tool_call" }> => u.kind === "tool_call",
+  );
   return {
-    total: tools.length,
     active: tools.filter((t) => t.status === "pending" || t.status === "in_progress").length,
     failed: tools.filter((t) => t.status === "failed").length,
+    total: tools.length,
   };
 }
 
@@ -413,9 +432,15 @@ function PinnedStreamLine({
  * to the index.
  */
 export function streamKey(u: SessionUpdate, i: number): string {
-  if (u.kind === "tool_call") return `tool:${u.tool_call_id}`;
-  if (u.kind === "permission_request") return `perm:${u.request_id}`;
-  if (u.kind === "permission_resolved") return `res:${u.request_id}`;
+  if (u.kind === "tool_call") {
+    return `tool:${u.tool_call_id}`;
+  }
+  if (u.kind === "permission_request") {
+    return `perm:${u.request_id}`;
+  }
+  if (u.kind === "permission_resolved") {
+    return `res:${u.request_id}`;
+  }
   return `i:${i}`;
 }
 
@@ -424,10 +449,7 @@ export function coalesceUpdates(updates: SessionUpdate[]): SessionUpdate[] {
   const toolAt = new Map<string, number>();
   for (const u of updates) {
     const prev = out[out.length - 1];
-    if (
-      (u.kind === "agent_text" || u.kind === "agent_thought") &&
-      prev?.kind === u.kind
-    ) {
+    if ((u.kind === "agent_text" || u.kind === "agent_thought") && prev?.kind === u.kind) {
       out[out.length - 1] = { ...prev, text: prev.text + u.text };
     } else if (u.kind === "tool_call") {
       const at = toolAt.get(u.tool_call_id);
@@ -435,10 +457,10 @@ export function coalesceUpdates(updates: SessionUpdate[]): SessionUpdate[] {
       if (existing?.kind === "tool_call") {
         out[at!] = {
           ...existing,
+          content: u.content ?? existing.content,
           status: u.status,
           title: u.title || existing.title,
           tool_kind: u.tool_kind || existing.tool_kind,
-          content: u.content ?? existing.content,
         };
       } else {
         toolAt.set(u.tool_call_id, out.length);
@@ -462,7 +484,7 @@ function ToolCallLine({
   dot: string;
 }) {
   const [open, setOpen] = useState(false);
-  const hasContent = !!update.content;
+  const hasContent = Boolean(update.content);
   return (
     <div className="min-w-0 overflow-hidden rounded-md border bg-secondary/30">
       <button
@@ -531,13 +553,9 @@ function PermissionLine({
         )}
       >
         <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">
-          {update.title}
-        </span>
+        <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{update.title}</span>
         {answered && (
-          <span className="shrink-0 whitespace-nowrap text-xs">
-            ✓ {answered.replace("_", " ")}
-          </span>
+          <span className="shrink-0 whitespace-nowrap text-xs">✓ {answered.replace("_", " ")}</span>
         )}
       </p>
       {!answered &&
@@ -551,9 +569,9 @@ function PermissionLine({
                 onClick={() => {
                   setClicked(opt);
                   void daemon.request("session.permission", {
-                    task_id: taskId,
-                    request_id: update.request_id,
                     outcome: opt,
+                    request_id: update.request_id,
+                    task_id: taskId,
                   });
                 }}
               >
@@ -580,7 +598,7 @@ export function StreamLine({
   compact?: boolean;
   /** When set, permission requests render inline allow/deny buttons. */
   taskId?: string;
-  /** request_id → recorded outcome, from persisted permission_resolved updates. */
+  /** Request_id → recorded outcome, from persisted permission_resolved updates. */
   resolved?: Record<string, string>;
   resolveFilePath?: FileLinkResolver;
   onOpenFile?: (path: string) => void;
@@ -588,7 +606,12 @@ export function StreamLine({
   switch (update.kind) {
     case "user_message":
       return (
-        <div className={cn("rounded-md bg-primary/10 px-2.5 py-1.5 text-primary", compact && "text-xs")}>
+        <div
+          className={cn(
+            "rounded-md bg-primary/10 px-2.5 py-1.5 text-primary",
+            compact && "text-xs",
+          )}
+        >
           <Markdown
             className={compact ? "text-current" : undefined}
             resolveFilePath={resolveFilePath}
@@ -596,9 +619,18 @@ export function StreamLine({
           >
             {compact ? `› ${update.text}` : update.text}
           </Markdown>
-          {!!update.attachments?.length && <div className="mt-1.5 flex flex-wrap gap-1">
-            {update.attachments.map((attachment, index) => <span key={`${attachment.type}-${index}`} className="rounded border border-primary/20 bg-background/40 px-1.5 py-0.5 font-mono text-[10px]">{attachment.type === "file" ? `@${attachment.path}` : `image: ${attachment.name}`}</span>)}
-          </div>}
+          {!!update.attachments?.length && (
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {update.attachments.map((attachment, index) => (
+                <span
+                  key={`${attachment.type}-${index}`}
+                  className="rounded border border-primary/20 bg-background/40 px-1.5 py-0.5 font-mono text-[10px]"
+                >
+                  {attachment.type === "file" ? `@${attachment.path}` : `image: ${attachment.name}`}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       );
     case "agent_text":
@@ -711,7 +743,9 @@ export function StreamLine({
                 >
                   {e.status === "completed" ? "✓" : e.status === "in_progress" ? "◐" : "○"}
                 </span>
-                <span className={cn(e.status === "completed" && "text-muted-foreground line-through")}>
+                <span
+                  className={cn(e.status === "completed" && "text-muted-foreground line-through")}
+                >
                   {e.content}
                 </span>
               </li>
@@ -724,7 +758,9 @@ export function StreamLine({
       // Metadata for the composer's slash menu — not shown inline.
       return null;
     case "turn_ended":
-      if (compact) return null;
+      if (compact) {
+        return null;
+      }
       return (
         <p className="text-center text-xs text-muted-foreground">
           Agent is waiting for the next instruction.

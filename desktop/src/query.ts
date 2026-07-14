@@ -1,4 +1,5 @@
 import { QueryClient } from "@tanstack/react-query";
+
 import { daemon } from "./daemon";
 
 /**
@@ -15,8 +16,8 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       // Nothing to poll — the daemon pushes changes. A read stays fresh until
-      // its key changes (updatedAt) or a mutation invalidates it. Window focus
-      // still refetches, to catch edits made outside the app.
+      // Its key changes (updatedAt) or a mutation invalidates it. Window focus
+      // Still refetches, to catch edits made outside the app.
       staleTime: 5_000,
       retry: false,
       refetchOnWindowFocus: true,

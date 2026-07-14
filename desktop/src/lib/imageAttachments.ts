@@ -13,18 +13,30 @@ export interface ImageAttachmentDraft {
   attachment: Extract<PromptAttachment, { type: "image" }>;
 }
 
-export function validateImageFiles(files: File[], existing: ImageAttachmentDraft[] = []): string | null {
-  if (existing.length + files.length > MAX_IMAGES) return `You can attach up to ${MAX_IMAGES} images.`;
+export function validateImageFiles(
+  files: File[],
+  existing: ImageAttachmentDraft[] = [],
+): string | null {
+  if (existing.length + files.length > MAX_IMAGES) {
+    return `You can attach up to ${MAX_IMAGES} images.`;
+  }
   let total = existing.reduce((sum, image) => sum + image.size, 0);
   for (const file of files) {
     const extensionOk = /\.(png|jpe?g)$/i.test(file.name);
-    if (!extensionOk || !ALLOWED_IMAGE_MIMES.includes(file.type as typeof ALLOWED_IMAGE_MIMES[number])) {
+    if (
+      !extensionOk ||
+      !ALLOWED_IMAGE_MIMES.includes(file.type as (typeof ALLOWED_IMAGE_MIMES)[number])
+    ) {
       return `${file.name} must be a PNG or JPEG image.`;
     }
-    if (file.size > MAX_IMAGE_BYTES) return `${file.name} exceeds 5 MiB.`;
+    if (file.size > MAX_IMAGE_BYTES) {
+      return `${file.name} exceeds 5 MiB.`;
+    }
     total += file.size;
   }
-  if (total > MAX_IMAGE_TOTAL_BYTES) return "Combined images exceed 10 MiB.";
+  if (total > MAX_IMAGE_TOTAL_BYTES) {
+    return "Combined images exceed 10 MiB.";
+  }
   return null;
 }
 
@@ -35,11 +47,16 @@ export async function fileToImageAttachment(file: File): Promise<ImageAttachment
     binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
   }
   return {
+    attachment: {
+      data: btoa(binary),
+      mimeType: file.type as "image/png" | "image/jpeg",
+      name: file.name,
+      type: "image",
+    },
     id: `${file.name}-${file.size}-${crypto.randomUUID()}`,
     name: file.name,
-    size: file.size,
     previewUrl: URL.createObjectURL(file),
-    attachment: { type: "image", name: file.name, mimeType: file.type as "image/png" | "image/jpeg", data: btoa(binary) },
+    size: file.size,
   };
 }
 

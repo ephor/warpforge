@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Play, PlugZap, RefreshCw, RotateCw, Server, Square, TerminalSquare } from "lucide-react";
-import { daemon } from "../daemon";
-import { PortForwardInfo, ServiceInfo } from "../protocol";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+
 import { pfBadge, serviceBadge } from "@/lib/status";
 import { cn } from "@/lib/utils";
+
+import { daemon } from "../daemon";
+import type { PortForwardInfo, ServiceInfo } from "../protocol";
 
 type RuntimeTab =
   | { key: string; kind: "service"; name: string }
@@ -47,12 +49,10 @@ export function RuntimePanel({
   const activeServiceName = activeService?.name ?? null;
   const activePortForward =
     active?.kind === "portforward" ? portforwards.find((p) => p.name === active.name) : null;
-  const liveLogs = useSyncExternalStore(
-    daemon.subscribe,
-    () =>
-      activeService
-        ? (daemon.getState().serviceLogs[`${project}/${activeService.name}`] ?? [])
-        : EMPTY_LOGS,
+  const liveLogs = useSyncExternalStore(daemon.subscribe, () =>
+    activeService
+      ? (daemon.getState().serviceLogs[`${project}/${activeService.name}`] ?? [])
+      : EMPTY_LOGS,
   );
   const displayLogs = activeService && liveLogs.length > 0 ? liveLogs : logs;
 
@@ -179,13 +179,7 @@ Port-forward logs will appear here when daemon streaming is wired to this panel.
   );
 }
 
-function ServiceRuntimeControls({
-  project,
-  service,
-}: {
-  project: string;
-  service: ServiceInfo;
-}) {
+function ServiceRuntimeControls({ project, service }: { project: string; service: ServiceInfo }) {
   const canStop = service.status === "running" || service.status === "starting";
   const canRestart = service.status === "running" || service.status === "starting";
   const action = canRestart ? "service.restart" : "service.start";
