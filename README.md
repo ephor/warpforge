@@ -2,7 +2,7 @@
 
 **One desktop command center for your projects, dev services, and coding agents.**
 
-Warpforge is a local-first workspace orchestrator for developers who use more than one coding agent. It brings Claude Code, Codex, OpenCode, and other ACP-compatible agents into the same desktop workflow as your repositories, services, logs, ports, diffs, and git branches.
+Warpforge is a local-first workspace orchestrator for developers who use more than one coding agent. It brings five built-in agent integrations—including Claude Code, Codex, and OpenCode—into the same desktop workflow as your repositories, services, logs, ports, diffs, and git branches. Projects can also define custom ACP commands.
 
 Instead of replacing the tools you already use, Warpforge is a **hybrid meta-harness** around them: your agent CLIs still do the work, while Warpforge supplies the shared workspace context, parallel execution, isolation, review surface, and an optional lead agent that can delegate to sub-agents.
 
@@ -15,14 +15,14 @@ AI-assisted development quickly turns into window management: an agent in one te
 
 Warpforge gives that work a shared operating layer:
 
-- See every active agent session from Mission Control.
-- Queue, filter, and review work on a task board across projects.
-- Start project services and port-forwards without leaving the app.
-- Give new agents the live URLs and ports of already-running services.
-- Run tasks in isolated git worktrees so parallel agents do not edit the same checkout.
-- Inspect the conversation, tool calls, commands, files, and diff for each task.
-- Accept or reject individual diff hunks, edit files, commit, update, and push from one place.
-- Let a lead agent act as an orchestrator and delegate bounded work to sub-agents.
+- Keep every active agent session visible in Mission Control instead of hunting through terminal tabs.
+- Turn agent work into a cross-project task board you can queue, filter, and review.
+- Bring project services and port-forwards online without reconstructing the runtime by hand.
+- Give each new agent the live URLs and ports it needs, so it can work against the running app rather than guess at its environment.
+- Isolate parallel tasks in git worktrees so agents can move quickly without editing the same checkout.
+- See the full trail—conversation, tool calls, commands, files, and diff—before trusting the result.
+- Take work from diff to branch in one place: accept or reject hunks, edit files, commit, update, preview, and push.
+- Hand a larger objective to a lead agent that can delegate bounded work to visible sub-agents.
 
 ## Bring your own agents
 
@@ -55,13 +55,15 @@ The daemon also contains an experimental planner → worker → reviewer task-gr
 
 ## Core workflow
 
-1. **Register a project.** Warpforge reads its `.workspace.yaml` and assigns it a dedicated 100-port range.
-2. **Start the runtime.** Services run with dependency ordering, captured logs, interpolated environment variables, and readiness detection from ports or log patterns. Kubernetes port-forwards can live beside them.
-3. **Create a task.** Choose a project and agent, attach files or images when supported, and optionally share the running-service context or create an isolated git worktree.
-4. **Stay at the control layer.** Pin live sessions in Mission Control, move between tasks on the board, answer permission requests, or steer an agent with another prompt.
-5. **Review the result.** Browse changed files, inspect unified or split diffs, accept/reject hunks, edit, commit, update the branch, and preview before pushing.
+Warpforge keeps the whole loop—from opening a repository to shipping reviewed agent work—in one shared context:
 
-The Tauri desktop shell is intentionally thin. A Rust daemon owns projects, services, agent sessions, task state, and the local WebSocket API, which allows sessions to outlive a UI restart. Task history and agent configuration are persisted in `~/.warpforge/warpforge.db`.
+1. **Add a project once.** Choose a folder in the desktop app. Warpforge reads or creates its `.warpforge.yaml`, registers it locally, and gives it an isolated port range.
+2. **Bring its real runtime online.** Services start in dependency order with captured logs, interpolated environment variables, and readiness detection. Kubernetes port-forwards can live beside local processes.
+3. **Give the agent the environment, not just a prompt.** Choose a project and agent, attach files or images when supported, share live service context, and optionally isolate the task in a git worktree.
+4. **Stay in control while work runs.** Pin live sessions in Mission Control, move between tasks on the board, answer permission requests, or steer an agent with another prompt.
+5. **Review before you trust.** Browse changed files, inspect unified or split diffs, accept or reject hunks, edit, commit, update the branch, and preview before pushing.
+
+Agent work is not tied to an open window. A Rust daemon owns projects, services, sessions, task state, and the local WebSocket API, so closing or restarting the thin Tauri UI does not tear down the working context. Task history and agent configuration are persisted in `~/.warpforge/warpforge.db`.
 
 ## Getting started from source
 
@@ -82,21 +84,7 @@ cd warpforge
 cargo build
 ```
 
-### 2. Register a workspace
-
-```bash
-./target/debug/warpforge add ~/projects/my-app
-```
-
-`add` creates `.workspace.yaml` when one does not exist. Warpforge can prefill a basic configuration when it finds a `package.json` `dev` script or a Docker Compose file.
-
-You can also initialize the current directory and register it in one step:
-
-```bash
-./target/debug/warpforge init --add
-```
-
-### 3. Start the desktop app
+### 2. Start the desktop app
 
 ```bash
 cd desktop
@@ -105,6 +93,24 @@ npm run tauri dev
 ```
 
 The Tauri shell starts or reuses the local Warpforge daemon. On first use, select the installed agents you want Warpforge to enable.
+
+### 3. Add a project
+
+Open **Projects**, select **Add Project**, and choose the project folder. The name is optional. If the project does not have a config yet, Warpforge creates `.warpforge.yaml` and can prefill basic services from a `package.json` `dev` script or a Docker Compose file.
+
+Removing a project from Warpforge only unregisters it: it does not delete the project directory or its configuration.
+
+The CLI remains available as an alternative:
+
+```bash
+./target/debug/warpforge add ~/projects/my-app
+```
+
+You can also initialize the current directory and register it in one step:
+
+```bash
+./target/debug/warpforge init --add
+```
 
 ### Build a local release binary
 
@@ -118,7 +124,7 @@ Release bundles/installers are not enabled in the current Tauri configuration, s
 
 ## Workspace configuration
 
-Warpforge keeps project-specific runtime configuration in `.workspace.yaml`:
+Warpforge keeps project-specific runtime configuration in `.warpforge.yaml`. The alternative `.wf.yaml` and `.workspace.yaml` names are also supported:
 
 ```yaml
 name: my-app
@@ -147,7 +153,11 @@ agentTemplates:
     description: Custom project agent
 ```
 
-Each registered project receives a range beginning at port `4000`. When a service starts, Warpforge picks the first available port in that project's range, sets `PORT`, and expands `${service.port}` references in configured environment variables.
+### Conflict-free dev environments
+
+Warpforge gives every project its own predictable 100-port range beginning at `4000`, so multiple projects can keep their frontend, API, database, and other services running at the same time without fighting over `3000`, `5173`, or other common defaults. For each service with a configured `port`, Warpforge picks an available port, sets `PORT`, and expands `${service.port}` references in environment variables.
+
+Those resolved URLs become part of the live project context shared with agents. You can switch projects—or let several agents work in parallel—without stopping services, rewriting local configuration, or chasing `address already in use` errors.
 
 ## CLI and TUI
 
@@ -157,7 +167,7 @@ The Rust binary still provides project management and the original terminal UI:
 warpforge add <path>        # register a project
 warpforge remove <name>     # unregister it
 warpforge list              # list projects and port ranges
-warpforge init [path]       # create .workspace.yaml
+warpforge init [path]       # create .warpforge.yaml
 warpforge ui                # launch the TUI (also the default command)
 warpforge daemon            # run the local daemon explicitly
 ```
