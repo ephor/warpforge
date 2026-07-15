@@ -705,7 +705,7 @@ fn render_pf_tail(
     let selected = state.selected_pf.get(project_name).copied().unwrap_or(0);
 
     if pf_list.is_empty() {
-        let hint = Paragraph::new(" No port-forwards configured in .workspace.yaml")
+        let hint = Paragraph::new(" No port-forwards configured in .warpforge.yaml")
             .style(Style::default().fg(Color::DarkGray))
             .block(
                 Block::default()

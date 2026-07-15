@@ -209,6 +209,8 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
         Event::AgentsUpdated { agents } => Some(wire::Event::AgentsUpdated {
             agents: agents.clone(),
         }),
+        Event::ProjectAdded(info) => Some(wire::Event::ProjectAdded(info.clone())),
+        Event::ProjectRemoved { name } => Some(wire::Event::ProjectRemoved { name: name.clone() }),
         // Internal-only: the wire conveys terminals via screen/exited events.
         Event::AgentSpawned { .. } | Event::AgentStatus { .. } => None,
         // Orchestration events forwarded from the orchestrator actor.

@@ -555,11 +555,26 @@ async fn dispatch(
             let ok = rx.await.unwrap_or(false);
             Ok(json!({ "ok": ok }))
         }
-        // Not yet in this build: project.* (use `wf add` + restart).
-        _ => Err(wire::RpcError {
-            code: wire::ErrorCode::NotFound,
-            message: "method not implemented in this build".to_string(),
-        }),
+        ProjectAdd { path, name } => {
+            let entry = handle
+                .add_project(&path, name.as_deref())
+                .await
+                .map_err(|e| wire::RpcError {
+                    code: wire::ErrorCode::InvalidRequest,
+                    message: e,
+                })?;
+            Ok(json!({ "name": entry.name, "path": entry.path }))
+        }
+        ProjectRemove { name } => {
+            handle
+                .remove_project(&name)
+                .await
+                .map_err(|e| wire::RpcError {
+                    code: wire::ErrorCode::InvalidRequest,
+                    message: e,
+                })?;
+            Ok(json!(null))
+        }
     }
 }
 

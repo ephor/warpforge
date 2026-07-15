@@ -39,7 +39,7 @@ pub struct ManagedService {
     pub command: String,
     pub status: ServiceStatus,
     pub logs: Vec<String>,
-    /// Port declared in .workspace.yaml (0 = none)
+    /// Port declared in .warpforge.yaml (0 = none)
     pub original_port: u16,
     /// Actual port the process is listening on (allocated from range)
     pub allocated_port: u16,

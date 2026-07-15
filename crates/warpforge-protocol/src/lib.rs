@@ -91,7 +91,7 @@ pub enum Method {
     ServiceStop { project: String, service: String },
     #[serde(rename = "service.restart")]
     ServiceRestart { project: String, service: String },
-    /// Start every service declared in the project's .workspace.yaml
+    /// Start every service declared in the project's .warpforge.yaml
     /// (what the TUI did implicitly on "Enter project").
     #[serde(rename = "service.startAll")]
     ServiceStartAll { project: String },
@@ -123,7 +123,7 @@ pub enum Method {
         project: String,
         /// Prompt / instruction handed to the agent.
         prompt: String,
-        /// Agent template name from .workspace.yaml, or a raw command.
+        /// Agent template name from .warpforge.yaml, or a raw command.
         agent: String,
         #[serde(default)]
         tags: Vec<String>,
@@ -470,7 +470,7 @@ pub struct ProjectInfo {
     pub path: String,
     /// Inclusive port range assigned to this project.
     pub port_range: (u16, u16),
-    /// Services declared in .workspace.yaml (may not be running).
+    /// Services declared in .warpforge.yaml (may not be running).
     pub declared_services: Vec<String>,
     pub agent_templates: HashMap<String, String>,
 }

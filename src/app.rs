@@ -56,6 +56,8 @@ pub struct AppState {
     pub log_scroll: HashMap<String, usize>,
     pub log_wrap: HashMap<String, bool>,
     pub spawn_picker: Option<Vec<SpawnOption>>,
+    /// Set to `true` when the file picker dialog should open on next render.
+    pub picking_folder: bool,
 }
 
 impl AppState {
@@ -72,6 +74,7 @@ impl AppState {
             log_scroll: HashMap::new(),
             log_wrap: HashMap::new(),
             spawn_picker: None,
+            picking_folder: false,
         }
     }
 
@@ -131,6 +134,27 @@ async fn event_loop(
             let cs = client.state();
             tui::render(frame, state, &cs);
         })?;
+
+        // Handle file picker: temporarily leave raw mode, show native dialog.
+        if state.picking_folder {
+            state.picking_folder = false;
+            // Leave raw mode so the native dialog can receive input.
+            crossterm::terminal::disable_raw_mode().ok();
+            let folder = rfd::FileDialog::new()
+                .set_title("Select project folder")
+                .pick_folder();
+            crossterm::terminal::enable_raw_mode().ok();
+            if let Some(path) = folder {
+                let path_str = path.to_string_lossy().to_string();
+                if let Some(name) = client.add_project(&path_str, None).await {
+                    // Select the newly added project.
+                    state.projects = client.state().projects.clone();
+                    if let Some(idx) = state.projects.iter().position(|p| p.name == name) {
+                        state.selected_project = idx;
+                    }
+                }
+            }
+        }
 
         tokio::select! {
             maybe_event = events.next() => {
@@ -258,6 +282,9 @@ async fn handle_dashboard_key(
 ) -> Result<bool> {
     match key.code {
         KeyCode::Char('q') => return Ok(true),
+        KeyCode::Char('a') | KeyCode::Char('+') => {
+            state.picking_folder = true;
+        }
         KeyCode::Up | KeyCode::Char('k') => {
             if state.selected_project > 0 {
                 state.selected_project -= 1;

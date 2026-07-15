@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicholasgriffintn/tauri-plugin-dialog/v2/capabilities/schema.json",
+  "identifier": "default",
+  "description": "Default capabilities for Warpforge desktop",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-ask"
+  ]
+}

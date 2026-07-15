@@ -2,21 +2,31 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  EllipsisVertical,
   FolderGit2,
+  Pencil,
+  Plus,
   Play,
   PlugZap,
-  Plus,
   Radio,
   RotateCw,
   Send,
   Share2,
   Square,
+  Trash2,
 } from "lucide-react";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useCallback, useSyncExternalStore } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { elapsed, pfBadge, serviceBadge, taskBadge } from "@/lib/status";
@@ -24,6 +34,7 @@ import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
 import type { ServiceInfo, Snapshot } from "../protocol";
+import AddProjectDialog from "./AddProjectDialog";
 
 interface Props {
   snapshot: Snapshot;
@@ -35,17 +46,29 @@ interface Props {
  * Projects — per-project drilldown, not just an infra table. Crucially, the
  * running services are framed as *agent context*: the block a new task from
  * this project inherits, so the agent knows the app is already up on real
- * ports and can hit endpoints / run tests. This is what stops Projects being
- * a fifth wheel (see UI_CONCEPT.md).
+ * ports and can hit endpoints / run tests.
  */
 export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
   const [selected, setSelected] = useState(snapshot.projects[0]?.name ?? "");
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [hoveredProject, setHoveredProject] = useState<string | null>(null);
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
+
+  const onRowMouseEnter = useCallback((name: string) => setHoveredProject(name), []);
+  const onRowMouseLeave = useCallback(() => setHoveredProject(null), []);
 
   if (snapshot.projects.length === 0) {
     return (
-      <div className="mt-16 text-center text-muted-foreground">
-        No projects registered. Run <code className="text-foreground">wf add &lt;path&gt;</code> —
-        the list updates live.
+      <div className="mt-16 flex flex-col items-center gap-4 text-center text-muted-foreground">
+        <p>
+          No projects registered. Run <code className="text-foreground">wf add &lt;path&gt;</code> or
+          add one below.
+        </p>
+        <Button variant="outline" onClick={() => setShowAddDialog(true)}>
+          <Plus className="mr-1 size-4" />
+          Add Project
+        </Button>
+        <AddProjectDialog open={showAddDialog} onOpenChange={setShowAddDialog} />
       </div>
     );
   }
@@ -72,28 +95,76 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
                 (s) => s.project === p.name && s.status === "running",
               ).length;
               return (
-                <button
+                <div
                   key={p.name}
-                  type="button"
-                  onClick={() => setSelected(p.name)}
+                  onMouseEnter={() => onRowMouseEnter(p.name)}
+                  onMouseLeave={onRowMouseLeave}
                   className={cn(
-                    "flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+                    "relative flex items-center rounded-md px-2.5 py-2 text-sm transition-colors",
                     active ? "bg-secondary" : "hover:bg-secondary/50",
                   )}
                 >
-                  <FolderGit2 className="size-4 text-muted-foreground" />
-                  <span className="flex-1 truncate">{p.name}</span>
-                  {up > 0 && (
-                    <span className="tnum flex items-center gap-1 text-xs text-ok">
-                      <Radio className="size-3" />
-                      {up}
-                    </span>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(p.name)}
+                    className="flex flex-1 items-center gap-2 text-left"
+                  >
+                    <FolderGit2 className="size-4 text-muted-foreground" />
+                    <span className="flex-1 truncate">{p.name}</span>
+                    {up > 0 && (
+                      <span className="tnum flex items-center gap-1 text-xs text-ok">
+                        <Radio className="size-3" />
+                        {up}
+                      </span>
+                    )}
+                  </button>
+                  {(hoveredProject === p.name || openMenu === p.name) && (
+                    <DropdownMenu
+                      open={openMenu === p.name}
+                      onOpenChange={(open) => setOpenMenu(open ? p.name : null)}
+                    >
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className="ml-1 shrink-0 rounded p-0.5 text-muted-foreground/60 hover:text-foreground"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <EllipsisVertical className="size-3.5" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" side="right">
+                        <DropdownMenuItem disabled>
+                          <Pencil className="size-4" />
+                          Edit
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={() => {
+                            void daemon.removeProject(p.name);
+                          }}
+                        >
+                          <Trash2 className="size-4" />
+                          Delete
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   )}
-                </button>
+                </div>
               );
             })}
           </div>
         </ScrollArea>
+        <Separator />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="m-2 gap-1.5 text-muted-foreground"
+          onClick={() => setShowAddDialog(true)}
+        >
+          <Plus className="size-4" />
+          Add Project
+        </Button>
       </Card>
 
       {/* Detail */}
@@ -131,14 +202,11 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
               <Button
                 variant="destructive"
                 size="sm"
+                disabled={running.length === 0}
                 onClick={() => void daemon.request("service.stopAll", { project: project.name })}
               >
                 <Square className="size-4" />
                 stop all
-              </Button>
-              <Button size="sm" onClick={() => onNewTask(project.name)}>
-                <Plus className="size-4" />
-                New task here
               </Button>
             </div>
           </div>
@@ -174,7 +242,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
             <div className="divide-y">
               {project.declaredServices.length === 0 && (
                 <div className="px-3 py-4 text-sm text-muted-foreground">
-                  No services declared in .workspace.yaml.
+                  No services declared in .warpforge.yaml.
                 </div>
               )}
               {project.declaredServices.map((name) => {
@@ -280,6 +348,8 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
           </Card>
         </div>
       </ScrollArea>
+
+      <AddProjectDialog open={showAddDialog} onOpenChange={setShowAddDialog} />
     </div>
   );
 }

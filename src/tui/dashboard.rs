@@ -142,7 +142,7 @@ pub fn render(
     frame.render_stateful_widget(list, chunks[1].inner(Margin::new(0, 0)), &mut list_state);
 
     if state.projects.is_empty() {
-        let hint = Paragraph::new("  No projects. Run `warpforge add <path>` to register one.")
+        let hint = Paragraph::new("  No projects. Press [a] to add a folder, or run `warpforge add <path>`.")
             .style(Style::default().fg(Color::DarkGray));
         frame.render_widget(hint, chunks[1].inner(Margin::new(1, 1)));
     }
@@ -152,6 +152,8 @@ pub fn render(
         help_key("↑↓/jk", "navigate"),
         Span::raw("  "),
         help_key("Enter", "open"),
+        Span::raw("  "),
+        help_key("a", "add project"),
         Span::raw("  "),
         help_key("q", "quit"),
     ]));

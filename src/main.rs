@@ -39,7 +39,7 @@ enum Commands {
     Remove { name: String },
     /// List registered projects
     List,
-    /// Generate .workspace.yaml in the current (or given) directory
+    /// Generate .warpforge.yaml in the current (or given) directory
     Init {
         /// Directory to init (defaults to current directory)
         path: Option<String>,
@@ -72,11 +72,11 @@ async fn main() -> Result<()> {
         Commands::Add { path, name } => {
             let entry = registry::add_project(&path, name.as_deref())?;
             println!("Registered \"{}\" at {}", entry.name, entry.path);
-            let workspace_yaml = std::path::Path::new(&entry.path).join(".workspace.yaml");
-            if !workspace_yaml.exists() {
+            let config_file = config::find_config_file(std::path::Path::new(&entry.path));
+            if !config_file.exists() {
                 match config::generate_workspace_yaml(std::path::Path::new(&entry.path)) {
-                    Ok(_) => println!("Created .workspace.yaml — edit it to configure services"),
-                    Err(e) => println!("Note: could not create .workspace.yaml: {}", e),
+                    Ok(_) => println!("Created .warpforge.yaml — edit it to configure services"),
+                    Err(e) => println!("Note: could not create .warpforge.yaml: {}", e),
                 }
             }
         }
