@@ -547,6 +547,11 @@ class DaemonClient {
     return lines;
   }
 
+  /** Remove a project from the registry. */
+  async removeProject(name: string): Promise<void> {
+    await this.request("project.remove", { name });
+  }
+
   /** List resumable claude/codex sessions on disk for a project's cwd. */
   async listSessions(project: string): Promise<ExternalSession[]> {
     const result = await this.request("sessions.list", { project });

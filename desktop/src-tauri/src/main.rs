@@ -123,6 +123,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![daemon_endpoint])
+        .plugin(tauri_plugin_dialog::init())
         .build(tauri::generate_context!())
         .expect("error building warpforge desktop")
         // Daemon remains a background service so ACP sessions can survive UI

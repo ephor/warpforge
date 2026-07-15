@@ -365,6 +365,9 @@ export const Composer = forwardRef<
               onDraftChange?.(e.target.value);
               setCaret(e.target.selectionStart);
             }}
+            autocorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             onClick={(e) => setCaret(e.currentTarget.selectionStart)}
             onKeyUp={(e) => setCaret(e.currentTarget.selectionStart)}
             onKeyDown={onKeyDown}
@@ -393,12 +396,12 @@ export const Composer = forwardRef<
               type="button"
               variant="ghost"
               size="icon"
-              className="size-7"
+              className="size-5"
               disabled={!imageSupported || disabled || sending}
               title={imageSupported ? "Attach images (⌘⇧I)" : "This agent does not support images"}
               onClick={() => inputRef.current?.click()}
             >
-              <ImagePlus className="size-3.5" />
+              <ImagePlus className="size-3" />
             </Button>
             <span className="ml-auto shrink-0">⇧↵ newline</span>
             {!hideSendButton && (

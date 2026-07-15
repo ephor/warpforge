@@ -248,10 +248,6 @@ export default function App() {
             >
               <Bot className="size-4" />
             </Button>
-            <Button type="button" size="sm" onClick={() => startNewTask()}>
-              <Plus className="size-4" />
-              New task
-            </Button>
             <span
               className={cn(
                 "flex items-center gap-1.5 text-xs",

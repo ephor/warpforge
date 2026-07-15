@@ -349,6 +349,17 @@ pub enum Command {
         id: String,
         status: TaskStatus,
     },
+    /// Add a project to the registry, generate config if needed, broadcast update.
+    AddProject {
+        path: String,
+        name: Option<String>,
+        reply: oneshot::Sender<Result<ProjectEntry, String>>,
+    },
+    /// Remove a project from the registry and broadcast the update.
+    RemoveProject {
+        name: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -375,6 +386,10 @@ pub enum Event {
         project: String,
         name: String,
         line: String,
+    },
+    ProjectAdded(wire::ProjectInfo),
+    ProjectRemoved {
+        name: String,
     },
     AgentsSetupNeeded {
         detected: Vec<wire::DetectedAgent>,
@@ -640,6 +655,33 @@ impl DaemonHandle {
         })
         .await;
         rx.await.unwrap_or_default()
+    }
+
+    /// Register a new project, generate config if needed, broadcast to clients.
+    pub async fn add_project(
+        &self,
+        path: &str,
+        name: Option<&str>,
+    ) -> Result<ProjectEntry, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::AddProject {
+            path: path.to_string(),
+            name: name.map(str::to_string),
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or(Err("daemon dropped reply".into()))
+    }
+
+    /// Remove a project from the registry and broadcast to clients.
+    pub async fn remove_project(&self, name: &str) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::RemoveProject {
+            name: name.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or(Err("daemon dropped reply".into()))
     }
 
     /// Ask the daemon to tear down (stop services, port-forwards, agents) and
@@ -1183,6 +1225,14 @@ impl Daemon {
 
     async fn handle_command(&mut self, cmd: Command) {
         match cmd {
+            Command::AddProject { path, name, reply } => {
+                let result = self.add_project(&path, name.as_deref()).await;
+                let _ = reply.send(result);
+            }
+            Command::RemoveProject { name, reply } => {
+                let result = self.remove_project(&name).await;
+                let _ = reply.send(result);
+            }
             Command::Shutdown => {}
             Command::Projects(reply) => {
                 let _ = reply.send(self.projects.clone());
@@ -1905,6 +1955,62 @@ impl Daemon {
     async fn open_project(&mut self, name: &str) {
         self.start_services(name).await;
         self.start_portforwards(name).await;
+    }
+
+    /// Register a new project: write to registry, generate config if missing,
+    /// add to in-memory list, and broadcast the update to all clients.
+    async fn add_project(
+        &mut self,
+        path: &str,
+        name: Option<&str>,
+    ) -> Result<ProjectEntry, String> {
+        let entry = crate::registry::add_project(path, name)
+            .map_err(|e| format!("registry: {e}"))?;
+
+        // Generate .warpforge.yaml if none exists.
+        let config_file = crate::config::find_config_file(std::path::Path::new(&entry.path));
+        if !config_file.exists() {
+            crate::config::generate_workspace_yaml(std::path::Path::new(&entry.path))
+                .ok(); // non-fatal if it fails
+        }
+
+        // Add to in-memory list.
+        self.projects.push(entry.clone());
+
+        // Broadcast to all subscribed clients.
+        let index = self.projects.len() - 1;
+        let (start, end) = crate::ports::port_range(index);
+        let config = load_workspace_config(std::path::Path::new(&entry.path));
+        let declared_services = config.as_ref().map(sorted_services).unwrap_or_default();
+        let agent_templates = config
+            .as_ref()
+            .and_then(|c| c.agent_templates.clone())
+            .map(|m| m.into_iter().map(|(k, v)| (k, v.command)).collect())
+            .unwrap_or_default();
+        let info = wire::ProjectInfo {
+            name: entry.name.clone(),
+            path: entry.path.clone(),
+            port_range: (start, end),
+            declared_services,
+            agent_templates,
+        };
+        self.emit(Event::ProjectAdded(info));
+
+        Ok(entry)
+    }
+
+    /// Remove a project from the registry, in-memory list, and broadcast.
+    async fn remove_project(&mut self, name: &str) -> Result<(), String> {
+        crate::registry::remove_project(name)
+            .map_err(|e| format!("registry: {e}"))?;
+
+        self.projects.retain(|p| p.name != name);
+
+        self.emit(Event::ProjectRemoved {
+            name: name.to_string(),
+        });
+
+        Ok(())
     }
 
     /// Start every declared service for a project (no port-forwards).

@@ -265,6 +265,16 @@ impl Client {
     pub fn terminal_kill(&self, terminal_id: &str) {
         self.notify("terminal.kill", json!({ "terminalId": terminal_id }));
     }
+
+    pub async fn add_project(&self, path: &str, name: Option<&str>) -> Option<String> {
+        let resp = self
+            .request(
+                "project.add",
+                json!({ "path": path, "name": name }),
+            )
+            .await?;
+        resp.get("result")?.get("name")?.as_str().map(String::from)
+    }
 }
 
 // ── Event application ──
@@ -366,6 +376,18 @@ fn apply_event(state: &Arc<Mutex<ClientState>>, ev: wire::Event) {
                 Some(x) => *x = t,
                 None => s.tasks.push(t),
             }
+        }
+        wire::Event::ProjectAdded(info) => {
+            if !s.projects.iter().any(|p| p.name == info.name) {
+                s.projects.push(ProjectEntry {
+                    name: info.name.clone(),
+                    path: info.path.clone(),
+                    added_at: String::new(),
+                });
+            }
+        }
+        wire::Event::ProjectRemoved { name } => {
+            s.projects.retain(|p| p.name != name);
         }
         _ => {}
     }
