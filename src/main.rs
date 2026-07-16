@@ -56,12 +56,31 @@ enum Commands {
         /// no Tauri) can connect. For development only.
         #[arg(long)]
         dev: bool,
+        /// Marks a daemon bundled and launched by the desktop application.
+        /// Only such a daemon accepts an in-app update handoff.
+        #[arg(long, value_enum, default_value_t = DaemonOwnerArg::External)]
+        owner: DaemonOwnerArg,
     },
     /// (internal) MCP server bridging an orchestrator agent to the daemon.
     /// Spawned by the daemon via an orchestrator session's mcpServers config,
     /// not meant to be run by hand.
     #[command(name = "__mcp-orchestrator", hide = true)]
     McpOrchestrator,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum DaemonOwnerArg {
+    Desktop,
+    External,
+}
+
+impl From<DaemonOwnerArg> for warpforge_protocol::DaemonOwner {
+    fn from(value: DaemonOwnerArg) -> Self {
+        match value {
+            DaemonOwnerArg::Desktop => Self::Desktop,
+            DaemonOwnerArg::External => Self::External,
+        }
+    }
 }
 
 #[tokio::main]
@@ -106,11 +125,11 @@ async fn main() -> Result<()> {
         Commands::Ui => {
             app::run().await?;
         }
-        Commands::Daemon { dev } => {
+        Commands::Daemon { dev, owner } => {
             let projects = registry::list_projects().unwrap_or_default();
             let store = daemon::Store::open().ok();
             let handle = daemon::Daemon::spawn(projects, store);
-            daemon::server::serve(handle, dev).await?;
+            daemon::server::serve(handle, dev, owner.into()).await?;
         }
         Commands::McpOrchestrator => {
             mcp::run().await?;

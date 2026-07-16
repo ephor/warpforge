@@ -338,17 +338,18 @@ mod tests {
         };
         let addr = start_acp_server(config, daemon).await.unwrap();
 
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let (reader, mut writer) = stream.into_split();
+        let mut lines = BufReader::new(reader).lines();
+        use tokio::io::AsyncWriteExt;
 
         // initialize
         let init = json!({"jsonrpc": "2.0", "method": "initialize", "id": 1, "params": {}});
-        stream
+        writer
             .write_all(format!("{init}\n").as_bytes())
             .await
             .unwrap();
-        let mut buf = vec![0u8; 4096];
-        let n = stream.read(&mut buf).await.unwrap();
+        let _init_response = lines.next_line().await.unwrap().unwrap();
 
         // session/new
         let new = json!({
@@ -361,12 +362,12 @@ mod tests {
                 "agent": "claude"
             }
         });
-        stream
+        writer
             .write_all(format!("{new}\n").as_bytes())
             .await
             .unwrap();
-        let n = stream.read(&mut buf).await.unwrap();
-        let resp: Value = serde_json::from_slice(&buf[..n]).unwrap();
+        let response = lines.next_line().await.unwrap().unwrap();
+        let resp: Value = serde_json::from_str(&response).unwrap();
 
         assert_eq!(resp["id"], 2);
         assert!(resp["result"]["sessionId"]

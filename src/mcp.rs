@@ -74,7 +74,7 @@ async fn connect_daemon() -> Result<WsStream> {
         .await
         .with_context(|| format!("connecting to daemon at {url}"))?;
     if !token.is_empty() {
-        ws.send(Message::Text(json!({ "auth": token }).to_string().into()))
+        ws.send(Message::Text(json!({ "auth": token }).to_string()))
             .await?;
     }
     Ok(ws)
@@ -112,7 +112,7 @@ impl DaemonClient {
             .as_mut()
             .ok_or_else(|| anyhow!("no daemon connection"))?;
         let frame = json!({ "id": id, "method": method, "params": params });
-        ws.send(Message::Text(frame.to_string().into())).await?;
+        ws.send(Message::Text(frame.to_string())).await?;
 
         while let Some(msg) = ws.next().await {
             let text = match msg? {

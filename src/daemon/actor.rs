@@ -138,6 +138,12 @@ pub enum Command {
     StopProject {
         project: String,
     },
+    /// Atomically check whether an update can interrupt this daemon. If no
+    /// blockers exist, the actor tears down and acknowledges only afterward;
+    /// commands queued behind this one are never allowed to start new work.
+    UpdateSafety {
+        reply: oneshot::Sender<Vec<String>>,
+    },
     /// Stop every service and port-forward while keeping the daemon and agent
     /// sessions alive. Used when the desktop UI closes.
     StopRuntime,
@@ -360,7 +366,9 @@ pub enum Command {
         name: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
-    Shutdown,
+    Shutdown {
+        reply: oneshot::Sender<()>,
+    },
 }
 
 /// State deltas broadcast to every subscribed client.
@@ -429,6 +437,7 @@ pub enum Event {
         screen: wire::TerminalScreen,
     },
     /// Orchestration pipeline event (plan created, node dispatched, etc.)
+    #[allow(clippy::enum_variant_names)]
     OrchestrationEvent(crate::orchestration::OrchEvent),
 }
 
@@ -687,7 +696,16 @@ impl DaemonHandle {
     /// Ask the daemon to tear down (stop services, port-forwards, agents) and
     /// end its actor loop. Used on SIGTERM so we don't leave orphans.
     pub async fn shutdown(&self) {
-        self.send(Command::Shutdown).await;
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::Shutdown { reply: tx }).await;
+        let _ = rx.await;
+    }
+
+    pub async fn update_blockers(&self) -> Vec<String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::UpdateSafety { reply: tx }).await;
+        rx.await
+            .unwrap_or_else(|_| vec!["daemon closed during update safety check".into()])
     }
 
     pub async fn session_prompt(
@@ -1113,11 +1131,24 @@ impl Daemon {
         mut acp_rx: mpsc::UnboundedReceiver<(String, AcpUpdate)>,
         mut policy_rx: mpsc::UnboundedReceiver<PolicyCheck>,
     ) {
-        loop {
+        enum ShutdownReply {
+            Requested(oneshot::Sender<()>),
+            Update(oneshot::Sender<Vec<String>>),
+        }
+
+        let shutdown_reply = loop {
             tokio::select! {
                 maybe_cmd = cmd_rx.recv() => {
                     match maybe_cmd {
-                        Some(Command::Shutdown) | None => break,
+                        Some(Command::Shutdown { reply }) => break Some(ShutdownReply::Requested(reply)),
+                        Some(Command::UpdateSafety { reply }) => {
+                            let blockers = self.update_blockers_snapshot();
+                            if blockers.is_empty() {
+                                break Some(ShutdownReply::Update(reply));
+                            }
+                            let _ = reply.send(blockers);
+                        }
+                        None => break None,
                         Some(cmd) => self.handle_command(cmd).await,
                     }
                 }
@@ -1127,13 +1158,22 @@ impl Daemon {
                 Some((task_id, update)) = acp_rx.recv() => self.handle_acp_update(task_id, update),
                 Some(check) = policy_rx.recv() => self.handle_policy_check(check).await,
             }
-        }
+        };
 
         // Teardown — stop everything we started.
         self.services.stop_all().await.ok();
         self.portforwards.stop_all().await.ok();
         kill_listeners_in_ranges(&self.project_port_ranges()).await;
         self.agents.kill_all();
+        match shutdown_reply {
+            Some(ShutdownReply::Requested(reply)) => {
+                let _ = reply.send(());
+            }
+            Some(ShutdownReply::Update(reply)) => {
+                let _ = reply.send(Vec::new());
+            }
+            None => {}
+        }
     }
 
     fn handle_agent_event(&mut self, ev: AgentEvent) {
@@ -1223,6 +1263,53 @@ impl Daemon {
         self.emit(broadcast);
     }
 
+    fn update_blockers_snapshot(&self) -> Vec<String> {
+        let mut blockers = Vec::new();
+        let active_tasks = self
+            .tasks
+            .values()
+            .filter(|task| matches!(task.status, TaskStatus::Queued | TaskStatus::Running))
+            .count();
+        if active_tasks > 0 {
+            blockers.push(format!("{active_tasks} agent task(s) are active"));
+        }
+        let terminals = self
+            .agents
+            .all()
+            .filter(|agent| {
+                matches!(
+                    agent.status,
+                    AgentStatus::Spawning | AgentStatus::Running | AgentStatus::NeedsReview
+                )
+            })
+            .count();
+        if terminals > 0 {
+            blockers.push(format!("{terminals} terminal session(s) are active"));
+        }
+        let transitioning_services = self
+            .services
+            .all()
+            .filter(|service| matches!(service.status, ServiceStatus::Starting))
+            .count();
+        if transitioning_services > 0 {
+            blockers.push(format!(
+                "{transitioning_services} service(s) are still starting"
+            ));
+        }
+        let transitioning_forwards = self
+            .portforwards
+            .forwards
+            .values()
+            .filter(|forward| matches!(forward.status, PfStatus::Starting | PfStatus::Restarting))
+            .count();
+        if transitioning_forwards > 0 {
+            blockers.push(format!(
+                "{transitioning_forwards} port-forward(s) are transitioning"
+            ));
+        }
+        blockers
+    }
+
     async fn handle_command(&mut self, cmd: Command) {
         match cmd {
             Command::AddProject { path, name, reply } => {
@@ -1233,7 +1320,12 @@ impl Daemon {
                 let result = self.remove_project(&name).await;
                 let _ = reply.send(result);
             }
-            Command::Shutdown => {}
+            Command::Shutdown { .. } => unreachable!(
+                "Shutdown commands are intercepted by the actor loop before handle_command"
+            ),
+            Command::UpdateSafety { .. } => unreachable!(
+                "UpdateSafety commands are intercepted by the actor loop before handle_command"
+            ),
             Command::Projects(reply) => {
                 let _ = reply.send(self.projects.clone());
             }
@@ -1799,12 +1891,13 @@ impl Daemon {
                     text: text.clone(),
                     attachments: prepared.summaries.clone(),
                 };
-                match self.sessions.get(&task_id).cloned() {
-                    Some(handle) => {
-                        if let Err(error) = handle.prompt(prepared) {
-                            let _ = reply.send(Err(error));
-                            return;
-                        }
+                let live_delivery = self
+                    .sessions
+                    .get(&task_id)
+                    .cloned()
+                    .map(|handle| handle.prompt(prepared.clone()));
+                match live_delivery {
+                    Some(Ok(())) => {
                         self.mark_task_running(&task_id);
                         // Echo the developer's message through the same
                         // persisted stream as agent updates. If a reconnect
@@ -1815,7 +1908,11 @@ impl Daemon {
                         self.emit_session_unless_last_duplicate(&task_id, user_update);
                         let _ = reply.send(Ok(()));
                     }
-                    None => {
+                    Some(Err(_)) | None => {
+                        // A closed command channel is a stale handle. Remove it
+                        // before reconnecting so its last process guard can
+                        // terminate/reap the old child.
+                        self.sessions.remove(&task_id);
                         let resume = self.tasks.get(&task_id).and_then(|task| {
                             task.session_id.as_ref().map(|session_id| {
                                 (task.project.clone(), task.agent.clone(), session_id.clone())
@@ -1825,7 +1922,6 @@ impl Daemon {
                         if let Some((project, agent, session_id)) = resume {
                             self.mark_task_running(&task_id);
                             self.prepare_resume_replay_guard(&task_id);
-                            self.emit_session_unless_last_duplicate(&task_id, user_update);
                             self.emit_session(
                                 &task_id,
                                 wire::SessionUpdate::AgentText {
@@ -1964,14 +2060,14 @@ impl Daemon {
         path: &str,
         name: Option<&str>,
     ) -> Result<ProjectEntry, String> {
-        let entry = crate::registry::add_project(path, name)
-            .map_err(|e| format!("registry: {e}"))?;
+        let entry =
+            crate::registry::add_project(path, name).map_err(|e| format!("registry: {e}"))?;
 
         // Generate .warpforge.yaml if none exists.
         let config_file = crate::config::find_config_file(std::path::Path::new(&entry.path));
         if !config_file.exists() {
-            crate::config::generate_workspace_yaml(std::path::Path::new(&entry.path))
-                .ok(); // non-fatal if it fails
+            crate::config::generate_workspace_yaml(std::path::Path::new(&entry.path)).ok();
+            // non-fatal if it fails
         }
 
         // Add to in-memory list.
@@ -2001,8 +2097,7 @@ impl Daemon {
 
     /// Remove a project from the registry, in-memory list, and broadcast.
     async fn remove_project(&mut self, name: &str) -> Result<(), String> {
-        crate::registry::remove_project(name)
-            .map_err(|e| format!("registry: {e}"))?;
+        crate::registry::remove_project(name).map_err(|e| format!("registry: {e}"))?;
 
         self.projects.retain(|p| p.name != name);
 
@@ -2171,6 +2266,7 @@ impl Daemon {
     ///
     /// If the task has a worktree, the agent runs in the worktree directory
     /// instead of the project root — so its edits are isolated.
+    #[allow(clippy::too_many_arguments)]
     fn start_session(
         &mut self,
         task_id: &str,
@@ -2200,7 +2296,7 @@ impl Daemon {
         let is_orchestrator = self
             .tasks
             .get(task_id)
-            .map_or(false, |t| t.tags.iter().any(|x| x == "orchestrator-chat"));
+            .is_some_and(|t| t.tags.iter().any(|x| x == "orchestrator-chat"));
         let (mcp_servers, base_prompt) = if is_orchestrator {
             let agents = self.available_agent_ids();
             let roster = if agents.is_empty() {
@@ -2394,8 +2490,17 @@ impl Daemon {
                     self.wake_parent(&task_id);
                 }
             }
-            AcpUpdate::Error(message) => {
+            AcpUpdate::Error { run_id, message } => {
+                if self
+                    .sessions
+                    .get(&task_id)
+                    .is_some_and(|handle| handle.run_id() != run_id)
+                {
+                    return;
+                }
                 let reason = message.clone();
+                // Remove dead ACP handle so subsequent prompts trigger resume.
+                self.sessions.remove(&task_id);
                 if let Some(task) = self.tasks.get_mut(&task_id) {
                     task.blocked_reason = Some(message);
                     task.set_status(TaskStatus::Blocked);
@@ -2507,7 +2612,7 @@ impl Daemon {
         let is_orch = self
             .tasks
             .get(task_id)
-            .map_or(false, |t| t.tags.iter().any(|tag| tag == "orchestrator"));
+            .is_some_and(|t| t.tags.iter().any(|tag| tag == "orchestrator"));
         if !is_orch {
             return;
         }
@@ -2547,7 +2652,7 @@ impl Daemon {
         let running = self
             .tasks
             .get(&parent_id)
-            .map_or(false, |t| t.status == TaskStatus::Running);
+            .is_some_and(|t| t.status == TaskStatus::Running);
         if running {
             self.pending_wake.insert(parent_id);
         } else {

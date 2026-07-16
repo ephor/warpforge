@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 
 import AttentionRail from "./components/AttentionRail";
 import ErrorBoundary from "./components/ErrorBoundary";
+import UpdateControl from "./components/UpdateControl";
 import { daemon } from "./daemon";
 import type { DetectedAgent, GitOpResult } from "./protocol";
 import { useUi } from "./store/ui";
@@ -232,6 +233,7 @@ export default function App() {
           </nav>
 
           <div className="ml-auto flex items-center gap-3">
+            <UpdateControl daemonConnected={state.connection === "connected"} />
             <Button
               size="icon"
               variant="ghost"
@@ -248,20 +250,31 @@ export default function App() {
             >
               <Bot className="size-4" />
             </Button>
-            <span
-              className={cn(
-                "flex items-center gap-1.5 text-xs",
-                state.connection === "connected" ? "text-ok" : "text-warn",
-              )}
-            >
-              <Circle
+            <div className="flex min-w-0 items-center gap-2 text-xs">
+              <span
                 className={cn(
-                  "size-2 fill-current",
+                  "flex shrink-0 items-center gap-1.5",
                   state.connection === "connected" ? "text-ok" : "text-warn",
                 )}
-              />
-              {state.connection === "connected" ? "daemon" : state.connection}
-            </span>
+              >
+                <Circle
+                  className={cn(
+                    "size-2 fill-current",
+                    state.connection === "connected" ? "text-ok" : "text-warn",
+                  )}
+                />
+                {state.connection === "connected" ? "daemon" : state.connection}
+              </span>
+              {state.connectionError && state.connection !== "connected" && (
+                <span
+                  className="max-w-80 truncate text-warn"
+                  role="status"
+                  title={state.connectionError}
+                >
+                  {state.connectionError}
+                </span>
+              )}
+            </div>
           </div>
         </header>
 

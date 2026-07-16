@@ -1,66 +1,350 @@
-name: Release
+name: Draft release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing immutable vX.Y.Z tag to release
+        required: true
+        type: string
+      include_windows_x64:
+        description: Also build Windows x64 desktop and CLI preview artifacts
+        required: true
+        default: false
+        type: boolean
+      include_linux_x64:
+        description: Also build Linux x64 desktop and CLI preview artifacts
+        required: true
+        default: false
+        type: boolean
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: macos-14
-            target: aarch64-apple-darwin
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            use_cross: true
-
+  preflight:
+    name: Validate tagged source
+    runs-on: ubuntu-22.04
+    outputs:
+      desktop_matrix: ${{ steps.matrix.outputs.desktop_matrix }}
+      cli_matrix: ${{ steps.matrix.outputs.cli_matrix }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify immutable tag and synchronized versions
+        env:
+          RELEASE_TAG: ${{ inputs.version }}
+          TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+            echo "version must be an existing stable vX.Y.Z tag" >&2
+            exit 1
+          }
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG" || {
+            echo "tag does not exist: $RELEASE_TAG" >&2
+            exit 1
+          }
+          tag_sha="$(git rev-parse "refs/tags/$RELEASE_TAG^{}")"
+          test "$tag_sha" = "$(git rev-parse HEAD)" || {
+            echo "checkout does not match refs/tags/$RELEASE_TAG" >&2
+            exit 1
+          }
+          node scripts/check-release-version.mjs "$RELEASE_TAG"
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: npm ci
+        working-directory: desktop
+      - run: npm run lint
+        working-directory: desktop
+      - run: npm run typecheck
+        working-directory: desktop
+      - run: npm test
+        working-directory: desktop
+      - run: cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml
+      - name: Select release targets
+        id: matrix
+        env:
+          INCLUDE_WINDOWS: ${{ inputs.include_windows_x64 }}
+          INCLUDE_LINUX: ${{ inputs.include_linux_x64 }}
+        run: |
+          desktop='{"include":[{"label":"macOS arm64","os":"macos-14","target":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin","macos":true}]}'
+          cli='{"include":[{"os":"macos-14","target":"aarch64-apple-darwin","cross":false},{"os":"ubuntu-22.04","target":"aarch64-unknown-linux-gnu","cross":true}]}'
+          if [ "$INCLUDE_WINDOWS" = true ]; then
+            desktop="$(jq -c '.include += [{"label":"Windows x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","args":"--target x86_64-pc-windows-msvc --bundles nsis","macos":false}]' <<<"$desktop")"
+            cli="$(jq -c '.include += [{"os":"windows-latest","target":"x86_64-pc-windows-msvc","cross":false}]' <<<"$cli")"
+          fi
+          if [ "$INCLUDE_LINUX" = true ]; then
+            desktop="$(jq -c '.include += [{"label":"Linux x64","os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","args":"--target x86_64-unknown-linux-gnu --bundles appimage,deb","macos":false}]' <<<"$desktop")"
+            cli="$(jq -c '.include += [{"os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","cross":false}]' <<<"$cli")"
+          fi
+          echo "desktop_matrix=$desktop" >> "$GITHUB_OUTPUT"
+          echo "cli_matrix=$cli" >> "$GITHUB_OUTPUT"
 
+  release-gate:
+    name: Approve signed release
+    needs: preflight
+    runs-on: ubuntu-22.04
+    environment: release
+    steps:
+      - name: Require updater and macOS signing credentials
+        env:
+          TAURI_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
+          TAURI_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_KEY_ID: ${{ secrets.APPLE_API_KEY }}
+          APPLE_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          test -n "$TAURI_PUBLIC_KEY" || { echo "Missing repository variable TAURI_UPDATER_PUBLIC_KEY" >&2; exit 1; }
+          CONFIGURED_PUBLIC_KEY="$(node -p "require('./desktop/src-tauri/tauri.conf.json').plugins.updater.pubkey")"
+          test "$TAURI_PUBLIC_KEY" = "$CONFIGURED_PUBLIC_KEY" || { echo "TAURI_UPDATER_PUBLIC_KEY does not match tauri.conf.json" >&2; exit 1; }
+          test -n "$TAURI_KEY" || { echo "Missing TAURI_SIGNING_PRIVATE_KEY" >&2; exit 1; }
+          test -n "$APPLE_CERT" || { echo "Missing APPLE_CERTIFICATE" >&2; exit 1; }
+          test -n "$APPLE_CERT_PASSWORD" || { echo "Missing APPLE_CERTIFICATE_PASSWORD" >&2; exit 1; }
+          test -n "$APPLE_IDENTITY" || { echo "Missing APPLE_SIGNING_IDENTITY" >&2; exit 1; }
+          test -n "$APPLE_ISSUER" || { echo "Missing APPLE_API_ISSUER" >&2; exit 1; }
+          test -n "$APPLE_KEY_ID" || { echo "Missing APPLE_API_KEY" >&2; exit 1; }
+          test -n "$APPLE_PRIVATE_KEY" || { echo "Missing APPLE_API_PRIVATE_KEY" >&2; exit 1; }
+
+  prepare-release:
+    name: Create draft
+    needs: release-gate
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.release.outputs.release_id }}
+    steps:
+      - name: Create or reset the exact draft release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.version }}
+        run: |
+          if release_json="$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" 2>/dev/null)"; then
+            draft="$(jq -r .draft <<<"$release_json")"
+            test "$draft" = true || { echo "Release $RELEASE_TAG is already published" >&2; exit 1; }
+
+            # A rerun may select a different preview matrix. Remove every old
+            # asset so stale installers cannot remain advertised by latest.json.
+            jq -r '.assets[].id' <<<"$release_json" | while IFS= read -r asset_id; do
+              gh api --method DELETE "repos/$GH_REPO/releases/assets/$asset_id"
+            done
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes \
+              --title "Warpforge ${RELEASE_TAG#v}"
+            release_json="$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG")"
+          fi
+          echo "release_id=$(jq -r .id <<<"$release_json")" >> "$GITHUB_OUTPUT"
+
+  desktop:
+    name: Desktop ${{ matrix.label }}
+    needs: [preflight, prepare-release]
+    strategy:
+      fail-fast: false
+      # Each invocation merges its platform into latest.json. Serializing the
+      # matrix prevents two jobs from overwriting the same release asset.
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.preflight.outputs.desktop_matrix) }}
+    runs-on: ${{ matrix.os }}
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install cross
-        if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Build
-        run: |
-          if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
-          else
-            cargo build --release --target ${{ matrix.target }}
-          fi
-
-      - name: Package
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../warpforge-${{ matrix.target }}.tar.gz warpforge
-          cd -
-
-      - uses: actions/upload-artifact@v4
+      - uses: Swatinem/rust-cache@v2
         with:
-          name: warpforge-${{ matrix.target }}
-          path: warpforge-${{ matrix.target }}.tar.gz
+          workspaces: |
+            . -> target
+            desktop/src-tauri -> target
+          shared-key: release-${{ matrix.target }}
+      - name: Install Linux bundle dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libappindicator3-dev \
+            libfuse2 \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf
+      - run: npm ci
+        working-directory: desktop
+      - name: Prepare App Store Connect private key
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_API_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+      # v1 pinned to an immutable commit; updater metadata is release-critical.
+      - uses: tauri-apps/tauri-action@944946e3e4cac6603d1fe8f514171e9ecd3c78aa
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ matrix.macos && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ matrix.macos && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.macos && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_ISSUER: ${{ matrix.macos && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ matrix.macos && secrets.APPLE_API_KEY || '' }}
+        with:
+          projectPath: desktop
+          releaseId: ${{ needs.prepare-release.outputs.release_id }}
+          tagName: ${{ inputs.version }}
+          releaseDraft: true
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }}
 
-  release:
-    name: Release
-    needs: build
-    runs-on: ubuntu-latest
+  cli:
+    name: CLI ${{ matrix.target }}
+    needs: [preflight, prepare-release]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.preflight.outputs.cli_matrix) }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          merge-multiple: true
+          ref: ${{ inputs.version }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cli-release-${{ matrix.target }}
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --version 0.2.5 --locked
+      - name: Build archive
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = true ]; then
+            cross build --locked --release --target "${{ matrix.target }}"
+          else
+            cargo build --locked --release --target "${{ matrix.target }}"
+          fi
+          binary="target/${{ matrix.target }}/release/warpforge"
+          if [ "${{ runner.os }}" = Windows ]; then binary="${binary}.exe"; fi
+          tar -czf "warpforge-${{ matrix.target }}.tar.gz" -C "$(dirname "$binary")" "$(basename "$binary")"
+          gh release upload "$RELEASE_TAG" "warpforge-${{ matrix.target }}.tar.gz" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.version }}
 
-      - uses: softprops/action-gh-release@v2
+  verify-draft:
+    name: Verify draft assets
+    needs: [prepare-release, desktop, cli]
+    if: ${{ always() && needs.prepare-release.result == 'success' && needs.desktop.result == 'success' && needs.cli.result == 'success' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
         with:
-          files: "*.tar.gz"
-          generate_release_notes: true
+          ref: ${{ inputs.version }}
+      - name: Download and verify release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.version }}
+          INCLUDE_WINDOWS: ${{ inputs.include_windows_x64 }}
+          INCLUDE_LINUX: ${{ inputs.include_linux_x64 }}
+        run: |
+          mkdir release-assets
+          gh release download "$RELEASE_TAG" --dir release-assets
+          test -f release-assets/latest.json
+          test -f release-assets/warpforge-aarch64-apple-darwin.tar.gz
+          test -f release-assets/warpforge-aarch64-unknown-linux-gnu.tar.gz
+          if [ "$INCLUDE_WINDOWS" = true ]; then
+            test -f release-assets/warpforge-x86_64-pc-windows-msvc.tar.gz
+          fi
+          if [ "$INCLUDE_LINUX" = true ]; then
+            test -f release-assets/warpforge-x86_64-unknown-linux-gnu.tar.gz
+          fi
+          jq -e --arg version "${RELEASE_TAG#v}" '.version == $version' release-assets/latest.json
+          jq -e '
+            .platforms
+            | length > 0 and all(.[];
+                (.url | type) == "string" and (.url | length) > 0 and
+                (.signature | type) == "string" and (.signature | length) > 0
+              )
+          ' release-assets/latest.json
+          jq -e '.platforms | keys | any(.[]; startswith("darwin-aarch64"))' release-assets/latest.json
+          if [ "$INCLUDE_WINDOWS" = true ]; then
+            jq -e '.platforms | keys | any(.[]; startswith("windows-x86_64"))' release-assets/latest.json
+          else
+            jq -e '.platforms | keys | all(.[]; startswith("windows-x86_64") | not)' release-assets/latest.json
+          fi
+          if [ "$INCLUDE_LINUX" = true ]; then
+            jq -e '.platforms | keys | any(.[]; startswith("linux-x86_64"))' release-assets/latest.json
+          else
+            jq -e '.platforms | keys | all(.[]; startswith("linux-x86_64") | not)' release-assets/latest.json
+          fi
+          jq -er '.platforms[].url' release-assets/latest.json | while IFS= read -r url; do
+            case "$url" in
+              *"/releases/download/$RELEASE_TAG/"*) ;;
+              *) echo "Updater URL does not use the immutable release tag: $url" >&2; exit 1 ;;
+            esac
+            asset="${url##*/}"
+            test -f "release-assets/$asset" || { echo "Missing updater asset: $asset" >&2; exit 1; }
+            test -f "release-assets/$asset.sig" || { echo "Missing updater signature: $asset.sig" >&2; exit 1; }
+          done
+          cd release-assets
+          sha256sum -- * > SHA256SUMS
+          gh release upload "$RELEASE_TAG" SHA256SUMS --clobber
+          test "$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq .draft)" = true
+          echo "Draft verified. Install and update-test these assets before publishing:"
+          gh release view "$RELEASE_TAG" --json url --jq .url

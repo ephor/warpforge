@@ -18,9 +18,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use warpforge_protocol as wire;
 
 use super::prompt::PreparedPrompt;
@@ -72,7 +72,10 @@ pub enum AcpUpdate {
     TurnEnded {
         stop_reason: String,
     },
-    Error(String),
+    Error {
+        run_id: u64,
+        message: String,
+    },
 }
 
 pub enum AcpCommand {
@@ -87,6 +90,8 @@ pub enum AcpCommand {
 pub struct AcpHandle {
     cmd_tx: mpsc::UnboundedSender<AcpCommand>,
     image_capability: Arc<AtomicU8>,
+    process: Arc<ProcessGuard>,
+    run_id: u64,
 }
 
 impl AcpHandle {
@@ -110,8 +115,211 @@ impl AcpHandle {
             .send(AcpCommand::SetConfigOption { config_id, value });
     }
     pub fn cancel(&self) {
+        self.process.stop_intentionally();
         let _ = self.cmd_tx.send(AcpCommand::Cancel);
     }
+
+    pub fn run_id(&self) -> u64 {
+        self.run_id
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ChildExit {
+    code: Option<i32>,
+    status: String,
+}
+
+#[derive(Clone, Debug)]
+enum ChildState {
+    Running,
+    Exited(ChildExit),
+}
+
+struct ProcessGuard {
+    kill_tx: mpsc::UnboundedSender<()>,
+    stopping: Arc<AtomicBool>,
+}
+
+impl ProcessGuard {
+    fn stop_intentionally(&self) {
+        self.stopping.store(true, Ordering::Release);
+        let _ = self.kill_tx.send(());
+    }
+}
+
+impl Drop for ProcessGuard {
+    fn drop(&mut self) {
+        self.stopping.store(true, Ordering::Release);
+        let _ = self.kill_tx.send(());
+    }
+}
+
+#[derive(Clone)]
+struct FailureReporter {
+    task_id: String,
+    run_id: u64,
+    updates: mpsc::UnboundedSender<(String, AcpUpdate)>,
+    reported: Arc<AtomicBool>,
+}
+
+impl FailureReporter {
+    fn report(&self, message: String) {
+        if self
+            .reported
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let _ = self.updates.send((
+                self.task_id.clone(),
+                AcpUpdate::Error {
+                    run_id: self.run_id,
+                    message,
+                },
+            ));
+        }
+    }
+}
+
+const STDERR_LINE_BYTES: usize = 512;
+const STDERR_TOTAL_BYTES: usize = 4096;
+
+fn sanitize_stderr(input: &[u8]) -> String {
+    let text = String::from_utf8_lossy(input);
+    let clean: String = text
+        .chars()
+        .filter_map(|ch| match ch {
+            '\n' | '\t' => Some(ch),
+            ch if !ch.is_control() => Some(ch),
+            _ => None,
+        })
+        .collect();
+    bound_diagnostic(&redact_secrets(&clean))
+}
+
+fn bound_diagnostic(input: &str) -> String {
+    let mut output = String::new();
+    let mut total_bytes = 0usize;
+    for (index, line) in input.lines().enumerate() {
+        if index > 0 && total_bytes < STDERR_TOTAL_BYTES {
+            output.push('\n');
+            total_bytes += 1;
+        }
+        let mut line_bytes = 0usize;
+        for ch in line.chars() {
+            let bytes = ch.len_utf8();
+            if line_bytes + bytes > STDERR_LINE_BYTES || total_bytes + bytes > STDERR_TOTAL_BYTES {
+                break;
+            }
+            output.push(ch);
+            line_bytes += bytes;
+            total_bytes += bytes;
+        }
+        if total_bytes >= STDERR_TOTAL_BYTES {
+            break;
+        }
+    }
+    output
+}
+
+fn redact_secrets(input: &str) -> String {
+    input
+        .lines()
+        .map(|line| {
+            let lower = line.to_ascii_lowercase();
+            if lower
+                .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                .any(|term| {
+                    matches!(
+                        term,
+                        "auth"
+                            | "token"
+                            | "bearer"
+                            | "authorization"
+                            | "auth_token"
+                            | "access_token"
+                            | "api_token"
+                            | "api_key"
+                            | "apikey"
+                    )
+                })
+            {
+                "[REDACTED]".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn append_stderr_chunk(captured: &mut Vec<u8>, line_bytes: &mut usize, chunk: &[u8]) {
+    for &byte in chunk {
+        if captured.len() >= STDERR_TOTAL_BYTES {
+            return;
+        }
+        if byte == b'\n' {
+            captured.push(byte);
+            *line_bytes = 0;
+        } else if *line_bytes < STDERR_LINE_BYTES {
+            captured.push(byte);
+            *line_bytes += 1;
+        }
+    }
+}
+
+async fn capture_pre_initialize_stderr(
+    mut stderr: tokio::process::ChildStderr,
+    initialized: Arc<AtomicBool>,
+    captured: Arc<Mutex<Vec<u8>>>,
+) {
+    let mut line_bytes = 0usize;
+    let mut buf = [0u8; 256];
+    loop {
+        let Ok(n) = stderr.read(&mut buf).await else {
+            break;
+        };
+        if n == 0 {
+            break;
+        }
+        if initialized.load(Ordering::Acquire) {
+            continue;
+        }
+        for &byte in &buf[..n] {
+            if initialized.load(Ordering::Acquire) {
+                break;
+            }
+            append_stderr_chunk(&mut captured.lock().unwrap(), &mut line_bytes, &[byte]);
+        }
+    }
+}
+
+async fn kill_process_group(pgid: Option<u32>) {
+    #[cfg(unix)]
+    if let Some(pgid) = pgid {
+        let _ = Command::new("kill")
+            .args(["-KILL", &format!("-{pgid}")])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+    }
+    #[cfg(not(unix))]
+    let _ = pgid;
+}
+
+fn child_exit_message(command: &str, exit: &ChildExit, stderr: &str) -> String {
+    let safe_command = sanitize_stderr(command.as_bytes());
+    let detail = if stderr.trim().is_empty() {
+        String::new()
+    } else {
+        format!(" Pre-initialize stderr: {}", stderr.trim())
+    };
+    format!(
+        "Agent command '{safe_command}' exited \
+         (status: {}; code: {:?}).{detail}",
+        exit.status, exit.code
+    )
 }
 
 struct PendingPerm {
@@ -122,6 +330,7 @@ struct PendingPerm {
 }
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
+static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Spawn an agent process and its ACP session. Returns immediately; the
 /// `initialize` → `session/new` → initial `session/prompt` handshake runs in
@@ -129,6 +338,7 @@ type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
 ///
 /// When `policy_tx` is provided, file write operations are gated through the
 /// daemon's policy engine before execution.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_acp_session(
     task_id: String,
     command: String,
@@ -143,27 +353,78 @@ pub fn spawn_acp_session(
     updates: mpsc::UnboundedSender<(String, AcpUpdate)>,
     policy_tx: Option<mpsc::UnboundedSender<PolicyCheck>>,
 ) -> anyhow::Result<AcpHandle> {
-    let mut child = Command::new("sh")
+    let run_id = NEXT_RUN_ID.fetch_add(1, Ordering::Relaxed);
+    let mut child_command = Command::new("sh");
+    child_command
         .args(["-c", &command])
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    child_command.process_group(0);
+    let mut child = child_command.spawn()?;
 
     let stdin = child.stdin.take().expect("piped stdin");
     let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let initialized = Arc::new(AtomicBool::new(false));
+    let stderr_capture = Arc::new(Mutex::new(Vec::with_capacity(STDERR_TOTAL_BYTES)));
+    let mut stderr_task = tokio::spawn(capture_pre_initialize_stderr(
+        stderr,
+        Arc::clone(&initialized),
+        Arc::clone(&stderr_capture),
+    ));
 
-    // Surface the agent's own stderr to the daemon's stderr — real agents log
-    // handshake/protocol errors there, and without this they vanish. Run
-    // `wf daemon` in a terminal to see them.
-    if let Some(stderr) = child.stderr.take() {
-        let tid = task_id.clone();
+    let reporter = FailureReporter {
+        task_id: task_id.clone(),
+        run_id,
+        updates: updates.clone(),
+        reported: Arc::new(AtomicBool::new(false)),
+    };
+    let stopping = Arc::new(AtomicBool::new(false));
+    let (kill_tx, mut kill_rx) = mpsc::unbounded_channel();
+    let process = Arc::new(ProcessGuard {
+        kill_tx,
+        stopping: Arc::clone(&stopping),
+    });
+    let (exit_tx, exit_rx) = watch::channel(ChildState::Running);
+    let pgid = child.id();
+    {
+        let reporter = reporter.clone();
+        let command = command.clone();
+        let monitor_stderr_capture = Arc::clone(&stderr_capture);
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                eprintln!("[acp {tid} stderr] {line}");
+            let status = tokio::select! {
+                status = child.wait() => status,
+                _ = kill_rx.recv() => {
+                    kill_process_group(pgid).await;
+                    let _ = child.start_kill();
+                    child.wait().await
+                }
+            };
+            kill_process_group(pgid).await;
+            if tokio::time::timeout(std::time::Duration::from_millis(100), &mut stderr_task)
+                .await
+                .is_err()
+            {
+                stderr_task.abort();
+            }
+            let stderr = sanitize_stderr(&monitor_stderr_capture.lock().unwrap());
+            let exit = match status {
+                Ok(status) => ChildExit {
+                    code: status.code(),
+                    status: status.to_string(),
+                },
+                Err(error) => ChildExit {
+                    code: None,
+                    status: format!("wait failed: {error}"),
+                },
+            };
+            exit_tx.send_replace(ChildState::Exited(exit.clone()));
+            if !stopping.load(Ordering::Acquire) {
+                reporter.report(child_exit_message(&command, &exit, &stderr));
             }
         });
     }
@@ -222,7 +483,6 @@ pub fn spawn_acp_session(
         let policy_tx_reader = policy_tx.clone();
         let replaying = Arc::clone(&replaying);
         tokio::spawn(async move {
-            let _child = child; // hold so kill_on_drop fires when the reader ends
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 let line = line.trim();
@@ -367,12 +627,7 @@ pub fn spawn_acp_session(
                     }
                 }
             }
-            let _ = updates.send((
-                task_id.clone(),
-                AcpUpdate::TurnEnded {
-                    stop_reason: "disconnected".into(),
-                },
-            ));
+            pending.lock().unwrap().clear();
         });
     }
 
@@ -384,25 +639,67 @@ pub fn spawn_acp_session(
         let updates = updates.clone();
         let replaying = Arc::clone(&replaying);
         let driver_image_capability = Arc::clone(&image_capability);
+        let command_for_err = command.clone();
+        let reporter = reporter.clone();
+        let driver_kill_tx = process.kill_tx.clone();
+        let driver_stderr_capture = Arc::clone(&stderr_capture);
         tokio::spawn(async move {
-            const HS: std::time::Duration = std::time::Duration::from_secs(15);
+            const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+            const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+            let agent_name = sanitize_stderr(command_for_err.trim().as_bytes());
+            let mut driver_exit_rx = exit_rx.clone();
 
-            // initialize — must reply within 15 s or we surface a clear error
-            // instead of hanging in Queued forever.
-            let init = match tokio::time::timeout(HS, rpc(&out_tx, &pending, &next_id, "initialize", json!({
-                "protocolVersion": 1,
-                "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true } }
-            }))).await {
-                Ok(Some(v)) => v,
-                _ => {
-                    let _ = updates.send((task_id.clone(), AcpUpdate::Error(
-                        "ACP handshake timed out — no 'initialize' reply in 15 s. \
-                         The agent command must be an ACP server (JSON-RPC 2.0 over stdio). \
-                         For Claude Code use: npx @agentclientprotocol/claude-agent-acp@latest --acp".into()
-                    )));
+            let init = match tokio::time::timeout(
+                INITIALIZE_TIMEOUT,
+                rpc_with_exit(
+                    &out_tx,
+                    &pending,
+                    &next_id,
+                    "initialize",
+                    json!({
+                        "protocolVersion": 1,
+                        "clientCapabilities": { "fs": { "readTextFile": true, "writeTextFile": true } }
+                    }),
+                    &mut driver_exit_rx,
+                ),
+            )
+            .await
+            {
+                Ok(RpcOutcome::Response(v)) => v,
+                Ok(RpcOutcome::Exited(_)) => {
+                    return;
+                }
+                Ok(RpcOutcome::TransportClosed) => {
+                    let stderr = sanitize_stderr(&driver_stderr_capture.lock().unwrap());
+                    let detail = if stderr.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!(" Pre-initialize stderr: {}", stderr.trim())
+                    };
+                    reporter.report(format!(
+                        "Agent command '{agent_name}' closed its ACP stdout before replying to initialize.{detail}"
+                    ));
+                    let _ = driver_kill_tx.send(());
+                    return;
+                }
+                Err(_) => {
+                    reporter.report(format!(
+                        "Agent command '{agent_name}' is still alive but did not reply to ACP \
+                         'initialize' within 60 seconds. Verify that it starts an ACP \
+                         JSON-RPC server over stdio."
+                    ));
+                    let _ = driver_kill_tx.send(());
                     return;
                 }
             };
+            if init.get("error").is_some() {
+                reporter.report(format!(
+                    "Agent command '{agent_name}' rejected the ACP initialize request."
+                ));
+                let _ = driver_kill_tx.send(());
+                return;
+            }
+            initialized.store(true, Ordering::Release);
             let load_supported = init
                 .get("result")
                 .and_then(|r| r.get("agentCapabilities"))
@@ -434,14 +731,11 @@ pub fn spawn_acp_session(
             // (session/new). Resume replays history back as session/update.
             let session_id = if let Some(sid) = resume {
                 if !load_supported {
-                    let _ = updates.send((
-                        task_id.clone(),
-                        AcpUpdate::Error(
-                            "This agent does not support resuming sessions \
-                         (no ACP 'loadSession' capability). Start a new task instead."
-                                .into(),
-                        ),
+                    reporter.report(format!(
+                        "Agent command '{agent_name}' does not advertise ACP session/load; \
+                         saved session '{sid}' cannot be resumed."
                     ));
+                    let _ = driver_kill_tx.send(());
                     return;
                 }
                 // Replay window: the agent streams its whole transcript back
@@ -449,8 +743,8 @@ pub fn spawn_acp_session(
                 // updates while the flag is set.
                 replaying.store(true, Ordering::Release);
                 let loaded = tokio::time::timeout(
-                    HS,
-                    rpc(
+                    RPC_TIMEOUT,
+                    rpc_with_exit(
                         &out_tx,
                         &pending,
                         &next_id,
@@ -458,27 +752,42 @@ pub fn spawn_acp_session(
                         json!({
                             "sessionId": sid, "cwd": cwd, "mcpServers": mcp_servers
                         }),
+                        &mut driver_exit_rx,
                     ),
                 )
                 .await;
                 replaying.store(false, Ordering::Release);
                 match loaded {
-                    Ok(Some(_)) => sid,
-                    _ => {
-                        let _ = updates.send((
-                            task_id.clone(),
-                            AcpUpdate::Error(format!(
-                                "ACP session/load failed for session {sid} — the agent \
-                                     could not resume it (it may have been deleted)."
-                            )),
+                    Ok(RpcOutcome::Response(response)) if response.get("error").is_none() => sid,
+                    Ok(RpcOutcome::Response(_)) => {
+                        reporter.report(format!(
+                            "Agent command '{agent_name}' rejected ACP session/load for saved \
+                             session '{sid}'."
                         ));
+                        let _ = driver_kill_tx.send(());
+                        return;
+                    }
+                    Ok(RpcOutcome::Exited(_)) => return,
+                    Ok(RpcOutcome::TransportClosed) => {
+                        reporter.report(format!(
+                            "Agent command '{agent_name}' closed its ACP stdout during session/load for saved session '{sid}'."
+                        ));
+                        let _ = driver_kill_tx.send(());
+                        return;
+                    }
+                    Err(_) => {
+                        reporter.report(format!(
+                            "Agent command '{agent_name}' did not complete ACP session/load \
+                             for saved session '{sid}' within 15 seconds."
+                        ));
+                        let _ = driver_kill_tx.send(());
                         return;
                     }
                 }
             } else {
                 match tokio::time::timeout(
-                    HS,
-                    rpc(
+                    RPC_TIMEOUT,
+                    rpc_with_exit(
                         &out_tx,
                         &pending,
                         &next_id,
@@ -486,11 +795,19 @@ pub fn spawn_acp_session(
                         json!({
                             "cwd": cwd, "mcpServers": mcp_servers
                         }),
+                        &mut driver_exit_rx,
                     ),
                 )
                 .await
                 {
-                    Ok(Some(v)) => {
+                    Ok(RpcOutcome::Response(v)) => {
+                        if v.get("error").is_some() {
+                            reporter.report(format!(
+                                "Agent command '{agent_name}' rejected the ACP session/new request."
+                            ));
+                            let _ = driver_kill_tx.send(());
+                            return;
+                        }
                         // Model/mode selectors the agent advertises up-front.
                         if let Some(result) = v.get("result") {
                             let opts = parse_config_options(result.get("configOptions"));
@@ -501,28 +818,35 @@ pub fn spawn_acp_session(
                                 ));
                             }
                         }
-                        v.get("result")
+                        let Some(session_id) = v
+                            .get("result")
                             .and_then(|r| r.get("sessionId"))
                             .and_then(|s| s.as_str())
                             .map(String::from)
-                            .unwrap_or_else(|| "unknown".into())
+                        else {
+                            reporter.report(format!(
+                                "Agent command '{agent_name}' returned no session ID from ACP \
+                                 session/new."
+                            ));
+                            let _ = driver_kill_tx.send(());
+                            return;
+                        };
+                        session_id
                     }
-                    Ok(None) => {
-                        let _ = updates.send((
-                            task_id.clone(),
-                            AcpUpdate::Error(
-                                "ACP session/new failed — agent closed the connection.".into(),
-                            ),
+                    Ok(RpcOutcome::Exited(_)) => return,
+                    Ok(RpcOutcome::TransportClosed) => {
+                        reporter.report(format!(
+                            "Agent command '{agent_name}' closed its ACP stdout during session/new."
                         ));
+                        let _ = driver_kill_tx.send(());
                         return;
                     }
                     Err(_) => {
-                        let _ = updates.send((
-                            task_id.clone(),
-                            AcpUpdate::Error(
-                                "ACP handshake timed out — no 'session/new' reply in 15 s.".into(),
-                            ),
+                        reporter.report(format!(
+                            "Agent command '{agent_name}' did not reply to ACP session/new \
+                             within 15 seconds."
                         ));
+                        let _ = driver_kill_tx.send(());
                         return;
                     }
                 }
@@ -539,10 +863,10 @@ pub fn spawn_acp_session(
             // continues via session.prompt. Otherwise send the initial prompt.
             if !initial_prompt.content.is_empty() {
                 if initial_prompt.has_images && !image_supported {
-                    let _ = updates.send((
-                        task_id.clone(),
-                        AcpUpdate::Error("this agent does not support image prompts".into()),
+                    reporter.report(format!(
+                        "Agent command '{agent_name}' does not support image prompts."
                     ));
+                    let _ = driver_kill_tx.send(());
                     return;
                 }
                 send_prompt(
@@ -554,6 +878,10 @@ pub fn spawn_acp_session(
                     &session_id,
                     initial_prompt,
                     embedded_context,
+                    exit_rx.clone(),
+                    reporter.clone(),
+                    driver_kill_tx.clone(),
+                    &agent_name,
                 );
             }
 
@@ -569,6 +897,10 @@ pub fn spawn_acp_session(
                             &session_id,
                             prompt,
                             embedded_context,
+                            exit_rx.clone(),
+                            reporter.clone(),
+                            driver_kill_tx.clone(),
+                            &agent_name,
                         );
                     }
                     AcpCommand::AnswerPermission {
@@ -632,6 +964,8 @@ pub fn spawn_acp_session(
     Ok(AcpHandle {
         cmd_tx,
         image_capability,
+        process,
+        run_id,
     })
 }
 
@@ -647,6 +981,10 @@ fn send_prompt(
     session_id: &str,
     prompt: PreparedPrompt,
     embedded_context: bool,
+    mut exit_rx: watch::Receiver<ChildState>,
+    reporter: FailureReporter,
+    kill_tx: mpsc::UnboundedSender<()>,
+    agent_name: &str,
 ) {
     let out_tx = out_tx.clone();
     let pending = Arc::clone(pending);
@@ -654,8 +992,9 @@ fn send_prompt(
     let updates = updates.clone();
     let task_id = task_id.to_string();
     let session_id = session_id.to_string();
+    let agent_name = agent_name.to_string();
     tokio::spawn(async move {
-        let res = rpc(
+        let res = rpc_with_exit(
             &out_tx,
             &pending,
             &next_id,
@@ -664,16 +1003,26 @@ fn send_prompt(
                 "sessionId": session_id,
                 "prompt": prompt.content.iter().map(|block| block.to_acp(embedded_context)).collect::<Vec<_>>()
             }),
+            &mut exit_rx,
         )
         .await;
-        if res.is_none() {
-            let _ = updates.send((
-                task_id,
-                AcpUpdate::Error("agent rejected or dropped the prompt".into()),
-            ));
+        let response = match res {
+            RpcOutcome::Response(response) => response,
+            RpcOutcome::Exited(_) => return,
+            RpcOutcome::TransportClosed => {
+                reporter.report(format!(
+                    "Agent command '{agent_name}' closed its ACP stdout during session/prompt."
+                ));
+                let _ = kill_tx.send(());
+                return;
+            }
+        };
+        if response.get("error").is_some() {
+            reporter.report("The agent rejected the ACP session/prompt request.".into());
+            let _ = kill_tx.send(());
             return;
         }
-        let stop = res
+        let stop = Some(response)
             .and_then(|v| {
                 v.get("result")?
                     .get("stopReason")?
@@ -703,6 +1052,73 @@ async fn rpc(
         return None;
     }
     rx.await.ok()
+}
+
+enum RpcOutcome {
+    Response(Value),
+    Exited(ChildExit),
+    TransportClosed,
+}
+
+/// Send an RPC while observing a durable child-exit state. If stdout closes,
+/// wait for the process monitor so callers receive the real exit status rather
+/// than racing a consumed channel notification.
+async fn rpc_with_exit(
+    out_tx: &mpsc::UnboundedSender<String>,
+    pending: &Pending,
+    next_id: &Arc<AtomicU64>,
+    method: &str,
+    params: Value,
+    exit_rx: &mut watch::Receiver<ChildState>,
+) -> RpcOutcome {
+    if let ChildState::Exited(exit) = exit_rx.borrow().clone() {
+        return RpcOutcome::Exited(exit);
+    }
+    let id = next_id.fetch_add(1, Ordering::SeqCst);
+    let (tx, rx) = oneshot::channel();
+    pending.lock().unwrap().insert(id, tx);
+    if out_tx
+        .send(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }).to_string())
+        .is_err()
+    {
+        return wait_for_exit_with_grace(exit_rx).await;
+    }
+    tokio::select! {
+        result = rx => match result {
+            Ok(value) => RpcOutcome::Response(value),
+            Err(_) => wait_for_exit_with_grace(exit_rx).await,
+        },
+        _ = exit_rx.changed() => {
+            let state = exit_rx.borrow().clone();
+            match state {
+                ChildState::Exited(exit) => RpcOutcome::Exited(exit),
+                ChildState::Running => wait_for_exit(exit_rx).await,
+            }
+        }
+    }
+}
+
+async fn wait_for_exit_with_grace(exit_rx: &mut watch::Receiver<ChildState>) -> RpcOutcome {
+    tokio::time::timeout(
+        std::time::Duration::from_millis(250),
+        wait_for_exit(exit_rx),
+    )
+    .await
+    .unwrap_or(RpcOutcome::TransportClosed)
+}
+
+async fn wait_for_exit(exit_rx: &mut watch::Receiver<ChildState>) -> RpcOutcome {
+    loop {
+        if let ChildState::Exited(exit) = exit_rx.borrow().clone() {
+            return RpcOutcome::Exited(exit);
+        }
+        if exit_rx.changed().await.is_err() {
+            return RpcOutcome::Exited(ChildExit {
+                code: None,
+                status: "process monitor closed".into(),
+            });
+        }
+    }
 }
 
 fn compact_id(id: &Value) -> String {
@@ -960,6 +1376,22 @@ mod tests {
     use super::*;
     use crate::daemon::prompt::{PreparedPrompt, PromptContent};
 
+    fn test_process_guard() -> Arc<ProcessGuard> {
+        let (kill_tx, _kill_rx) = mpsc::unbounded_channel();
+        Arc::new(ProcessGuard {
+            kill_tx,
+            stopping: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    fn empty_prompt() -> PreparedPrompt {
+        PreparedPrompt {
+            content: Vec::new(),
+            summaries: Vec::new(),
+            has_images: false,
+        }
+    }
+
     #[test]
     fn handle_enforces_negotiated_image_capability() {
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -967,6 +1399,8 @@ mod tests {
         let handle = AcpHandle {
             cmd_tx: tx,
             image_capability: Arc::clone(&capability),
+            process: test_process_guard(),
+            run_id: 1,
         };
         let prompt = PreparedPrompt {
             content: vec![PromptContent::Image {
@@ -981,5 +1415,147 @@ mod tests {
         capability.store(2, Ordering::Release);
         assert!(handle.prompt(prompt).is_ok());
         assert!(matches!(rx.try_recv(), Ok(AcpCommand::Prompt(_))));
+    }
+
+    #[test]
+    fn stderr_is_control_sanitized_redacted_and_bounded() {
+        let secret = b"use Authorization: Bearer super-secret\nnormal\x1b[31m diagnostic";
+        let sanitized = sanitize_stderr(secret);
+        assert!(!sanitized.contains("super-secret"));
+        assert!(!sanitized.contains('\x1b'));
+        assert!(sanitized.contains("[REDACTED]"));
+        assert!(sanitized.contains("normal[31m diagnostic"));
+
+        let mut captured = Vec::new();
+        let mut line_bytes = 0;
+        let mut input = vec![b'x'; STDERR_LINE_BYTES * 2];
+        input.push(b'\n');
+        input.extend(std::iter::repeat_n(b'y', STDERR_TOTAL_BYTES * 2));
+        append_stderr_chunk(&mut captured, &mut line_bytes, &input);
+        assert_eq!(
+            captured.iter().position(|byte| *byte == b'\n'),
+            Some(STDERR_LINE_BYTES)
+        );
+        assert!(captured.len() <= STDERR_TOTAL_BYTES);
+        let invalid_utf8 = vec![0xff; STDERR_TOTAL_BYTES];
+        let sanitized = sanitize_stderr(&invalid_utf8);
+        assert!(sanitized.len() <= STDERR_LINE_BYTES);
+    }
+
+    #[tokio::test]
+    async fn child_exit_reports_once_with_status_and_safe_stderr() {
+        let (updates, mut rx) = mpsc::unbounded_channel();
+        let _handle = spawn_acp_session(
+            "task".into(),
+            "printf 'token=secret\\nuseful diagnostic\\n' >&2; exit 23".into(),
+            ".".into(),
+            empty_prompt(),
+            None,
+            Vec::new(),
+            updates,
+            None,
+        )
+        .unwrap();
+
+        let (
+            _,
+            AcpUpdate::Error {
+                message: reason, ..
+            },
+        ) = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .expect("failure should be prompt")
+            .expect("failure update")
+        else {
+            panic!("expected terminal error");
+        };
+        assert!(
+            reason.contains("23"),
+            "actual exit status missing: {reason}"
+        );
+        assert!(reason.contains("useful diagnostic"));
+        assert!(!reason.contains("secret"));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            rx.try_recv().is_err(),
+            "child failure must be reported once"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn closed_stdout_is_reported_without_waiting_for_initialize_timeout() {
+        let (updates, mut rx) = mpsc::unbounded_channel();
+        let _handle = spawn_acp_session(
+            "task".into(),
+            "exec 1>&-; sleep 30".into(),
+            ".".into(),
+            empty_prompt(),
+            None,
+            Vec::new(),
+            updates,
+            None,
+        )
+        .unwrap();
+
+        let (_, AcpUpdate::Error { message, .. }) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+                .await
+                .expect("closed stdout should fail promptly")
+                .expect("failure update")
+        else {
+            panic!("expected terminal error");
+        };
+        assert!(message.contains("closed its ACP stdout"), "{message}");
+        assert!(message.contains("exec 1>&-; sleep 30"), "{message}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_last_handle_kills_child_process_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_path = dir.path().join("pid");
+        let command = format!("echo $$ > {}; exec sleep 30", pid_path.display());
+        let (updates, _rx) = mpsc::unbounded_channel();
+        let handle = spawn_acp_session(
+            "task".into(),
+            command,
+            dir.path().to_string_lossy().into_owned(),
+            empty_prompt(),
+            None,
+            Vec::new(),
+            updates,
+            None,
+        )
+        .unwrap();
+        let pid = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Ok(pid) = std::fs::read_to_string(&pid_path) {
+                    break pid.trim().to_string();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("child should write pid");
+
+        drop(handle);
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let alive = Command::new("kill")
+                    .args(["-0", &pid])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await
+                    .is_ok_and(|status| status.success());
+                if !alive {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("dropping the handle should kill the child");
     }
 }

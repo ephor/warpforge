@@ -19,6 +19,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Version of the daemon WebSocket contract. Bump this only for a breaking
+/// wire change; application versions may advance without changing it.
+pub const PROTOCOL_VERSION: u32 = 1;
+
 fn default_true() -> bool {
     true
 }
@@ -36,6 +40,9 @@ pub struct Request {
 /// A daemon → client frame.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
+// Events intentionally stay inline: this is the shared wire envelope and
+// boxing only one variant would leak an allocation detail into every client.
+#[allow(clippy::large_enum_variant)]
 pub enum ServerMessage {
     Response { id: u64, result: serde_json::Value },
     Error { id: u64, error: RpcError },
@@ -56,6 +63,7 @@ pub enum ErrorCode {
     Conflict,
     AgentUnavailable,
     Internal,
+    Updating,
 }
 
 // ─── Methods (client → daemon) ───────────────────────────────────────────────
@@ -63,6 +71,20 @@ pub enum ErrorCode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "method", content = "params", rename_all = "camelCase")]
 pub enum Method {
+    /// Negotiate the wire contract before a client enables mutations.
+    #[serde(rename = "system.handshake")]
+    SystemHandshake {
+        client_version: String,
+        protocol_version: u32,
+    },
+    /// Quiesce a desktop-owned daemon and shut it down for an atomic app
+    /// update. Refused for externally started daemons or active work.
+    #[serde(rename = "update.prepareShutdown")]
+    UpdatePrepareShutdown {
+        expected_daemon_version: String,
+        protocol_version: u32,
+    },
+
     /// Subscribe to state updates. Response is a [`Snapshot`]; events follow.
     #[serde(rename = "state.subscribe")]
     StateSubscribe {
@@ -943,6 +965,36 @@ pub struct DaemonEndpoint {
     /// `{ "auth": "<token>" }`.
     pub token: String,
     pub version: String,
+    #[serde(default)]
+    pub protocol_version: u32,
+    #[serde(default)]
+    pub owner: DaemonOwner,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DaemonOwner {
+    Desktop,
+    #[default]
+    External,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonHandshake {
+    pub daemon_version: String,
+    pub protocol_version: u32,
+    pub owner: DaemonOwner,
+    pub protocol_compatible: bool,
+    pub exact_version_match: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateHandoff {
+    pub ready: bool,
+    #[serde(default)]
+    pub blockers: Vec<String>,
 }
 
 // ─── Orchestration DTOs ──────────────────────────────────────────────────────
@@ -1138,6 +1190,41 @@ mod tests {
             }
             other => panic!("expected error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn old_daemon_endpoint_defaults_to_external_and_unknown_protocol() {
+        let endpoint: DaemonEndpoint = serde_json::from_str(
+            r#"{"pid":42,"url":"ws://127.0.0.1:1","token":"t","version":"0.1.0"}"#,
+        )
+        .unwrap();
+        assert_eq!(endpoint.protocol_version, 0);
+        assert_eq!(endpoint.owner, DaemonOwner::External);
+    }
+
+    #[test]
+    fn update_methods_keep_the_documented_wire_shape() {
+        let handshake = serde_json::to_value(Request {
+            id: 1,
+            method: Method::SystemHandshake {
+                client_version: "0.2.0".into(),
+                protocol_version: PROTOCOL_VERSION,
+            },
+        })
+        .unwrap();
+        assert_eq!(handshake["method"], "system.handshake");
+        assert_eq!(handshake["params"]["client_version"], "0.2.0");
+
+        let handoff = serde_json::to_value(Request {
+            id: 2,
+            method: Method::UpdatePrepareShutdown {
+                expected_daemon_version: "0.2.0".into(),
+                protocol_version: PROTOCOL_VERSION,
+            },
+        })
+        .unwrap();
+        assert_eq!(handoff["method"], "update.prepareShutdown");
+        assert_eq!(handoff["params"]["expected_daemon_version"], "0.2.0");
     }
 
     #[test]

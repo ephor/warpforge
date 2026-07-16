@@ -18,7 +18,13 @@ export type ServerMessage =
   | DaemonEvent;
 
 export interface RpcError {
-  code: "invalid_request" | "not_found" | "conflict" | "agent_unavailable" | "internal";
+  code:
+    | "invalid_request"
+    | "not_found"
+    | "conflict"
+    | "agent_unavailable"
+    | "internal"
+    | "updating";
   message: string;
 }
 
@@ -428,4 +434,19 @@ export interface DaemonEndpoint {
   url: string;
   token: string;
   version: string;
+  protocolVersion: number;
+  owner: "desktop" | "external";
+}
+
+export interface DaemonHandshake {
+  daemonVersion: string;
+  protocolVersion: number;
+  owner: "desktop" | "external";
+  protocolCompatible: boolean;
+  exactVersionMatch: boolean;
+}
+
+export interface UpdateHandoff {
+  ready: boolean;
+  blockers: string[];
 }

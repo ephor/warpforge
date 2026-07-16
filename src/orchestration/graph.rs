@@ -105,7 +105,7 @@ impl TaskGraph {
                     && n.depends_on.iter().all(|dep_id| {
                         self.nodes
                             .get(dep_id)
-                            .map_or(false, |dep| dep.status == NodeStatus::Complete)
+                            .is_some_and(|dep| dep.status == NodeStatus::Complete)
                     })
             })
             .collect()

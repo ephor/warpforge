@@ -86,6 +86,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn successful_update_safety_check_stops_commands_queued_behind_it() {
+        let daemon = Daemon::spawn(Vec::new(), None);
+        let (safety_tx, safety_rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::UpdateSafety { reply: safety_tx })
+            .await;
+
+        let (task_tx, task_rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::CreateTask {
+                project: "demo".into(),
+                prompt: "must not start".into(),
+                agent: "claude".into(),
+                tags: Vec::new(),
+                include_runtime_context: false,
+                worktree: false,
+                parent_task_id: None,
+                attachments: Vec::new(),
+                reply: task_tx,
+            })
+            .await;
+
+        assert!(safety_rx.await.unwrap().is_empty());
+        assert!(
+            task_rx.await.is_err(),
+            "the actor must drop mutations queued after an accepted handoff"
+        );
+    }
+
+    #[tokio::test]
     async fn session_id_stays_separate_from_task_id_when_attached() {
         // A task can attach a session without the two ids ever being unified —
         // this is what keeps multi-agent-per-task additive later.
@@ -454,5 +484,132 @@ mod tests {
             .session_prompt("missing", "not delivered", vec![])
             .await
             .is_err());
+    }
+
+    /// Regression: child command-not-found exits before initialize. The task
+    /// must go Blocked with an actionable error (not hang in Queued).
+    #[tokio::test]
+    async fn child_command_not_found_surfaces_error() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(test_projects(), store);
+        let mut events = daemon.subscribe();
+
+        let task_id = daemon
+            .create_task(
+                "demo",
+                "fix the bug",
+                "nonexistent-acp-agent-test-xyz-$$",
+                vec![],
+                false,
+                false,
+                None,
+                vec![],
+            )
+            .await;
+
+        let blocked_reason = timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(Event::TaskUpdated(task)) = events.recv().await {
+                    if task.id == task_id && task.status == TaskStatus::Blocked {
+                        break task.blocked_reason.unwrap_or_default();
+                    }
+                }
+            }
+        })
+        .await
+        .expect("command-not-found should block promptly");
+        assert!(blocked_reason.contains("nonexistent-acp-agent-test-xyz-$$"));
+        assert!(blocked_reason.contains("127"), "{blocked_reason}");
+        assert!(blocked_reason.to_ascii_lowercase().contains("not found"));
+        assert!(!blocked_reason.contains('\x1b'));
+
+        let mut duplicate_failures = 0;
+        while let Ok(Ok(event)) = timeout(Duration::from_millis(200), events.recv()).await {
+            if matches!(event, Event::TaskUpdated(ref task) if task.id == task_id && task.status == TaskStatus::Blocked)
+            {
+                duplicate_failures += 1;
+            }
+        }
+        assert_eq!(
+            duplicate_failures, 0,
+            "failure must be notified exactly once"
+        );
+    }
+
+    /// Regression: when a stale ACP handle is in sessions and a prompt
+    /// arrives, the daemon must detect the dead handle and trigger resume
+    /// via the stored session_id rather than failing with "no live session".
+    #[tokio::test]
+    async fn stale_handle_prompt_triggers_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("warpforge.db");
+        let log_path = dir.path().join("acp.log");
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/mock-acp-recovery.mjs"
+        );
+        let session_id = "persisted-session-42";
+        let agent = format!("node {} {} {}", fixture, log_path.display(), session_id);
+        let store = Store::open_at(&db_path).unwrap();
+        let mut persisted = Task::new("demo", "original prompt", &agent, vec![]);
+        persisted.attach_session(session_id.into());
+        persisted.blocked_reason = Some("previous process exited".into());
+        persisted.set_status(TaskStatus::Blocked);
+        let task_id = persisted.id.clone();
+        store.upsert_task(&persisted).unwrap();
+
+        let daemon = Daemon::spawn(test_projects(), Some(store));
+        let mut events = daemon.subscribe();
+        daemon
+            .session_prompt(&task_id, "follow up after recovery", vec![])
+            .await
+            .unwrap();
+        timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(Event::TaskUpdated(task)) = events.recv().await {
+                    if task.id == task_id && task.status == TaskStatus::Idle {
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("resumed prompt should complete");
+
+        let log = std::fs::read_to_string(&log_path).unwrap();
+        let calls: Vec<serde_json::Value> = log
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let load = calls
+            .iter()
+            .find(|call| call["method"] == "session/load")
+            .expect("recovery must call session/load");
+        assert_eq!(load["params"]["sessionId"], session_id);
+        let prompt = calls
+            .iter()
+            .find(|call| call["method"] == "session/prompt")
+            .expect("follow-up must be delivered after load");
+        assert_eq!(prompt["params"]["sessionId"], session_id);
+        let tasks = daemon.tasks().await;
+        assert_eq!(
+            tasks
+                .iter()
+                .find(|task| task.id == task_id)
+                .unwrap()
+                .session_id
+                .as_deref(),
+            Some(session_id)
+        );
+
+        daemon.shutdown().await;
+        let store = Store::open_at(&db_path).unwrap();
+        let user_messages = store
+            .load_session_updates(&task_id)
+            .unwrap()
+            .into_iter()
+            .filter(|update| matches!(update, warpforge_protocol::SessionUpdate::UserMessage { text, .. } if text == "follow up after recovery"))
+            .count();
+        assert_eq!(user_messages, 1, "reconnect must persist the prompt once");
     }
 }
