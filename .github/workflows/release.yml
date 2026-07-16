@@ -87,10 +87,26 @@ jobs:
             patchelf
       - run: cargo fmt --all --check
       - name: Build Rust tests
-        run: cargo test --locked --no-run
+        run: |
+          status=0
+          timeout --signal=TERM --kill-after=30s 5m \
+            cargo test --locked --no-run >cargo-test-build.log 2>&1 || status=$?
+          cat cargo-test-build.log
+          if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+            ps -eo pid,ppid,stat,etime,cmd --forest
+          fi
+          exit "$status"
         timeout-minutes: 15
       - name: Run Rust tests
-        run: cargo test --locked
+        run: |
+          status=0
+          timeout --signal=TERM --kill-after=30s 3m \
+            cargo test --locked >cargo-test-run.log 2>&1 || status=$?
+          cat cargo-test-run.log
+          if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+            ps -eo pid,ppid,stat,etime,cmd --forest
+          fi
+          exit "$status"
         timeout-minutes: 5
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: bun install --frozen-lockfile
