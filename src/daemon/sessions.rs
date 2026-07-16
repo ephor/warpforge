@@ -38,7 +38,7 @@ pub fn external_sessions(
     if enabled.contains(&"codex") {
         out.extend(codex_sessions(project_path));
     }
-    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    out.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
     out
 }
 

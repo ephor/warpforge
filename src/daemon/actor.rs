@@ -1062,7 +1062,7 @@ impl Daemon {
         portforwards.sort_by(|a, b| a.name.cmp(&b.name));
 
         let mut tasks: Vec<wire::TaskInfo> = self.tasks.values().map(wireconv::task_info).collect();
-        tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        tasks.sort_by_key(|task| std::cmp::Reverse(task.created_at));
 
         let terminals = self
             .agents
@@ -1331,7 +1331,7 @@ impl Daemon {
             }
             Command::Tasks(reply) => {
                 let mut tasks: Vec<Task> = self.tasks.values().cloned().collect();
-                tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+                tasks.sort_by_key(|task| std::cmp::Reverse(task.created_at));
                 let _ = reply.send(tasks);
             }
             Command::Snapshot(reply) => {
