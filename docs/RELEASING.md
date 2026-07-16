@@ -48,7 +48,7 @@ export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/warpforge.key)"
 read -s "TAURI_SIGNING_PRIVATE_KEY_PASSWORD?Updater key password: "
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 echo
-CI=true npm run tauri -- build -vv \
+CI=true bun run tauri -- build -vv \
   --bundles app,dmg \
   --target aarch64-apple-darwin
 ```
@@ -68,15 +68,15 @@ produces a valid installer but no `.app.tar.gz` updater payload or signature.
 2. Set that exact version in all release metadata:
    `Cargo.toml`, `crates/warpforge-protocol/Cargo.toml`,
    `desktop/src-tauri/Cargo.toml`, `desktop/src-tauri/tauri.conf.json`,
-   `desktop/package.json`, and `desktop/package-lock.json` (including its root
-   package entry).
+   `desktop/package.json`, and regenerate `desktop/bun.lock` when dependencies
+   change.
 3. Add exactly one `## [X.Y.Z]` heading to `CHANGELOG.md` with user-facing
    release notes.
 4. Run the normal CI checks and the release metadata check locally:
 
    ```bash
    TAURI_UPDATER_PUBLIC_KEY="$(cat ~/.tauri/warpforge.key.pub)" \
-     node scripts/check-release-version.mjs vX.Y.Z
+     bun scripts/check-release-version.mjs vX.Y.Z
    ```
 
    Use the same public-key text stored in the repository variable; this command
