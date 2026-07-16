@@ -11,6 +11,7 @@ import type {
   AgentConfig,
   DaemonEndpoint,
   DaemonEvent,
+  DaemonHandshake,
   DetectedAgent,
   ExternalSession,
   FileDoc,
@@ -18,6 +19,7 @@ import type {
   SessionUpdate,
   Snapshot,
   TaskDiff,
+  UpdateHandoff,
 } from "./protocol";
 import { EMPTY_SNAPSHOT, isEvent } from "./protocol";
 
@@ -27,6 +29,8 @@ const nowSecs = () => Math.floor(Date.now() / 1000);
 
 export interface DaemonState {
   connection: ConnectionState;
+  /** Most recent connection, discovery, or handshake failure. Cleared after a successful handshake. */
+  connectionError: string | null;
   snapshot: Snapshot;
   /** Retained per-task ACP stream (bounded), keyed by task id. */
   sessionUpdates: Record<string, SessionUpdate[]>;
@@ -37,10 +41,11 @@ export interface DaemonState {
 }
 
 const MAX_SERVICE_LOGS = 1000;
+export const DAEMON_PROTOCOL_VERSION = 1;
 
 type Listener = () => void;
 
-class DaemonClient {
+export class DaemonClient {
   private ws: WebSocket | null = null;
   private nextId = 1;
   private pending = new Map<
@@ -49,8 +54,12 @@ class DaemonClient {
   >();
   private listeners = new Set<Listener>();
   private reconnectDelay = 500;
+  private reconnectTimer: number | null = null;
+  private reconnectSuspended = false;
+  private handshake: DaemonHandshake | null = null;
   private state: DaemonState = {
     connection: "disconnected",
+    connectionError: null,
     pendingAgentSetup: null,
     serviceLogs: {},
     sessionUpdates: {},
@@ -94,6 +103,7 @@ class DaemonClient {
     );
     this.setState({
       connection: "connected",
+      connectionError: null,
       sessionUpdates,
       snapshot: seed.snapshot,
     });
@@ -108,40 +118,111 @@ class DaemonClient {
 
   // ── connection ──
   async connect(): Promise<void> {
+    if (this.reconnectSuspended || this.state.connection !== "disconnected") return;
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.setState({ connection: "connecting" });
-    const endpoint = await discoverEndpoint();
-    const ws = new WebSocket(endpoint.url);
+    let endpoint: DaemonEndpoint;
+    try {
+      endpoint = await discoverEndpoint();
+    } catch (error) {
+      this.setState({
+        connection: "disconnected",
+        connectionError: connectionErrorMessage(error),
+      });
+      this.scheduleReconnect();
+      throw error;
+    }
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(endpoint.url);
+    } catch (error) {
+      this.setState({
+        connection: "disconnected",
+        connectionError: connectionErrorMessage(error),
+      });
+      this.scheduleReconnect();
+      throw error;
+    }
     this.ws = ws;
 
-    ws.onopen = () => {
+    ws.onopen = async () => {
       if (endpoint.token) {
         ws.send(JSON.stringify({ auth: endpoint.token }));
       }
-      this.setState({ connection: "connected" });
-      this.reconnectDelay = 500;
-      void this.request("state.subscribe", { topics: [] });
+      try {
+        const clientVersion = await desktopVersion();
+        const handshake = (await this.request("system.handshake", {
+          client_version: clientVersion,
+          protocol_version: DAEMON_PROTOCOL_VERSION,
+        })) as DaemonHandshake;
+        const requiresExactVersion = clientVersion !== "dev";
+        if (
+          !handshake.protocolCompatible ||
+          (requiresExactVersion && !handshake.exactVersionMatch)
+        ) {
+          throw new Error(
+            !handshake.protocolCompatible
+              ? `daemon protocol ${handshake.protocolVersion} is incompatible with desktop protocol ${DAEMON_PROTOCOL_VERSION}`
+              : `daemon version ${handshake.daemonVersion} does not match this desktop app (${clientVersion})`,
+          );
+        }
+        this.handshake = handshake;
+        this.setState({ connection: "connected", connectionError: null });
+        this.reconnectDelay = 500;
+        await this.request("state.subscribe", { topics: [] });
+      } catch (error) {
+        this.setState({ connectionError: connectionErrorMessage(error) });
+        ws.close();
+      }
     };
     ws.onmessage = (msg) => {
       const parsed = JSON.parse(msg.data as string) as ServerMessage;
       this.handleMessage(parsed);
     };
     ws.onclose = () => this.scheduleReconnect();
-    ws.onerror = () => ws.close();
+    ws.onerror = () => {
+      this.setState({
+        connectionError: "Could not connect to the daemon. Warpforge will keep retrying.",
+      });
+      ws.close();
+    };
   }
 
   private scheduleReconnect() {
-    this.setState({ connection: "disconnected" });
+    this.ws = null;
+    this.handshake = null;
+    this.setState({
+      connection: "disconnected",
+      ...(!this.state.connectionError && !this.reconnectSuspended
+        ? { connectionError: "Daemon disconnected. Warpforge will keep retrying." }
+        : {}),
+    });
     this.pending.forEach((p) => p.reject(new Error("daemon disconnected")));
     this.pending.clear();
+    if (this.reconnectSuspended || this.reconnectTimer !== null) {
+      return;
+    }
     const delay = this.reconnectDelay;
     this.reconnectDelay = Math.min(delay * 2, 15_000);
-    setTimeout(() => void this.connect().catch(() => this.scheduleReconnect()), delay);
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect().catch(() => {
+        // Endpoint discovery failures schedule their own retry. WebSocket
+        // failures flow through onclose and do the same.
+      });
+    }, delay);
   }
 
   // ── RPC ──
   request(method: string, params?: unknown): Promise<unknown> {
     if (this.demoDiff) {
       return this.demoRequest(method, params);
+    }
+    if (method !== "system.handshake" && this.state.connection !== "connected") {
+      return Promise.reject(new Error("daemon handshake has not completed"));
     }
     const { ws } = this;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -152,6 +233,63 @@ class DaemonClient {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { reject, resolve });
     });
+  }
+
+  async prepareUpdateHandoff(): Promise<UpdateHandoff> {
+    if (!this.handshake) {
+      throw new Error("The daemon handshake has not completed");
+    }
+    if (this.handshake.owner !== "desktop") {
+      throw new Error(
+        "This daemon was started outside the desktop app. Stop it and relaunch Warpforge before updating.",
+      );
+    }
+    this.reconnectSuspended = true;
+    try {
+      const handoff = (await this.request("update.prepareShutdown", {
+        expected_daemon_version: this.handshake.daemonVersion,
+        protocol_version: DAEMON_PROTOCOL_VERSION,
+      })) as UpdateHandoff;
+      if (!handoff.ready) {
+        this.reconnectSuspended = false;
+      }
+      return handoff;
+    } catch (error) {
+      this.reconnectSuspended = false;
+      throw error;
+    }
+  }
+
+  waitForDisconnect(timeoutMs = 5_000): Promise<void> {
+    if (
+      this.state.connection === "disconnected" ||
+      !this.ws ||
+      this.ws.readyState === WebSocket.CLOSED
+    ) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      const timeout = window.setTimeout(() => {
+        unsubscribe();
+        reject(new Error("The daemon did not stop in time; the update was not installed"));
+      }, timeoutMs);
+      const unsubscribe = this.subscribe(() => {
+        if (this.state.connection === "disconnected") {
+          window.clearTimeout(timeout);
+          unsubscribe();
+          resolve();
+        }
+      });
+    });
+  }
+
+  resumeAfterFailedUpdate() {
+    this.reconnectSuspended = false;
+    if (this.state.connection === "disconnected") {
+      void this.connect().catch(() => {
+        // connect() owns retry scheduling.
+      });
+    }
   }
 
   private appendUpdate(taskId: string, update: SessionUpdate) {
@@ -615,7 +753,36 @@ async function discoverEndpoint(): Promise<DaemonEndpoint> {
     const { invoke } = await import("@tauri-apps/api/core");
     return await invoke<DaemonEndpoint>("daemon_endpoint");
   }
-  return { pid: 0, token: "", url: "ws://127.0.0.1:61814", version: "dev" };
+  return {
+    owner: "external",
+    pid: 0,
+    protocolVersion: DAEMON_PROTOCOL_VERSION,
+    token: "",
+    url: "ws://127.0.0.1:61814",
+    version: "dev",
+  };
+}
+
+async function desktopVersion(): Promise<string> {
+  if (!("__TAURI_INTERNALS__" in window)) {
+    return "dev";
+  }
+  const { getVersion } = await import("@tauri-apps/api/app");
+  return getVersion();
+}
+
+function connectionErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    message.includes("does not match") ||
+    (message.includes("daemon protocol") && message.includes("incompatible"))
+  ) {
+    if (message.toLowerCase().includes("stop the running daemon")) {
+      return message;
+    }
+    return `${message}. Stop the running daemon and relaunch Warpforge.`;
+  }
+  return message || "Could not connect to the daemon. Warpforge will keep retrying.";
 }
 
 export const daemon = new DaemonClient();

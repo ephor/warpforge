@@ -122,23 +122,19 @@ impl Client {
         // Auth then subscribe.
         if !endpoint.token.is_empty() {
             let _ = sink
-                .send(Message::Text(
-                    json!({ "auth": endpoint.token }).to_string().into(),
-                ))
+                .send(Message::Text(json!({ "auth": endpoint.token }).to_string()))
                 .await;
         }
         let _ = sink
             .send(Message::Text(
-                json!({ "id": 0, "method": "state.subscribe", "params": {} })
-                    .to_string()
-                    .into(),
+                json!({ "id": 0, "method": "state.subscribe", "params": {} }).to_string(),
             ))
             .await;
 
         // Writer task.
         tokio::spawn(async move {
             while let Some(line) = out_rx.recv().await {
-                if sink.send(Message::Text(line.into())).await.is_err() {
+                if sink.send(Message::Text(line)).await.is_err() {
                     break;
                 }
             }
@@ -268,10 +264,7 @@ impl Client {
 
     pub async fn add_project(&self, path: &str, name: Option<&str>) -> Option<String> {
         let resp = self
-            .request(
-                "project.add",
-                json!({ "path": path, "name": name }),
-            )
+            .request("project.add", json!({ "path": path, "name": name }))
             .await?;
         resp.get("result")?.get("name")?.as_str().map(String::from)
     }

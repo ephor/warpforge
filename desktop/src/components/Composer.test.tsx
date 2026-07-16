@@ -112,7 +112,7 @@ describe("Composer", () => {
   });
 
   it("accepts image drag-and-drop", async () => {
-    render(<Composer onSend={vi.fn<OnSend>()} />);
+    render(<Composer onSend={vi.fn<OnSend>()} imageSupported />);
     const png = new File(["png"], "drop.png", { type: "image/png" });
     Object.defineProperty(png, "arrayBuffer", {
       value: async () => new TextEncoder().encode("png").buffer,

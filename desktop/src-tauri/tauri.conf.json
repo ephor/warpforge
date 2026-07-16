@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "dev.warpforge.desktop",
   "build": {
-    "beforeDevCommand": "sh -c 'cargo build --manifest-path ../Cargo.toml & npm run dev'",
+    "beforeDevCommand": "node scripts/stage-sidecar.mjs --profile debug --no-target && npm run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "cargo build --release --manifest-path ../../Cargo.toml && npm run build",
+    "beforeBuildCommand": "node scripts/stage-sidecar.mjs --profile release && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -24,6 +24,23 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": "all",
+    "externalBin": ["binaries/warpforge"],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc2Rjk5RDZDMjFFODhCREIKUldUYmkrZ2hiSjM1ZGd2NmptODMvZWlJTFVzK3BXZTBTWWkvT215Y0dpT3JsSlpramVCcTdIakkK",
+      "endpoints": [
+        "https://github.com/ephor/warpforge/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

@@ -206,6 +206,7 @@ pub fn render(
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn render_sidebar(
     frame: &mut Frame,
     state: &AppState,
@@ -914,7 +915,7 @@ fn visual_rows(line: &str, width: usize) -> usize {
     if width == 0 || line.is_empty() {
         return 1;
     }
-    (line.len() + width - 1) / width
+    line.len().div_ceil(width)
 }
 
 fn help_key<'a>(key: &'a str, desc: &'a str) -> Span<'a> {

@@ -112,7 +112,7 @@ pub fn prepare_prompt(
                 if mime_type != "image/png" && mime_type != "image/jpeg" {
                     return Err(format!("unsupported image MIME type: {mime_type}"));
                 }
-                if data.len() > ((MAX_IMAGE_BYTES + 2) / 3) * 4 {
+                if data.len() > MAX_IMAGE_BYTES.div_ceil(3) * 4 {
                     return Err(format!("image exceeds 5 MiB: {name}"));
                 }
                 let decoded = base64::engine::general_purpose::STANDARD
@@ -230,7 +230,7 @@ mod tests {
             mime_type: "image/png".into(),
             data: png,
         };
-        assert!(prepare_prompt(dir.path(), String::new(), &[image.clone()]).is_ok());
+        assert!(prepare_prompt(dir.path(), String::new(), std::slice::from_ref(&image)).is_ok());
         let bad = PromptAttachment::Image {
             name: "a.png".into(),
             mime_type: "image/png".into(),

@@ -365,7 +365,7 @@ export const Composer = forwardRef<
               onDraftChange?.(e.target.value);
               setCaret(e.target.selectionStart);
             }}
-            autocorrect="off"
+            autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
             onClick={(e) => setCaret(e.currentTarget.selectionStart)}

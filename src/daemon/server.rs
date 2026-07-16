@@ -11,6 +11,8 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
@@ -18,6 +20,7 @@ use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
+use tokio::sync::{Notify, RwLock};
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 use warpforge_protocol as wire;
@@ -32,12 +35,14 @@ fn daemon_json_path() -> PathBuf {
         .join("daemon.json")
 }
 
-fn write_endpoint(addr: SocketAddr, token: &str) -> Result<()> {
+fn write_endpoint(addr: SocketAddr, token: &str, owner: wire::DaemonOwner) -> Result<()> {
     let endpoint = wire::DaemonEndpoint {
         pid: std::process::id(),
         url: format!("ws://{addr}"),
         token: token.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        protocol_version: wire::PROTOCOL_VERSION,
+        owner,
     };
     let path = daemon_json_path();
     if let Some(dir) = path.parent() {
@@ -49,7 +54,7 @@ fn write_endpoint(addr: SocketAddr, token: &str) -> Result<()> {
 
 /// Bind, publish the endpoint, and serve forever. `dev` disables the auth token
 /// so a browser (vite dev, no Tauri) can connect to a known address.
-pub async fn serve(handle: DaemonHandle, dev: bool) -> Result<()> {
+pub async fn serve(handle: DaemonHandle, dev: bool, owner: wire::DaemonOwner) -> Result<()> {
     let bind = if dev {
         "127.0.0.1:61814"
     } else {
@@ -62,15 +67,21 @@ pub async fn serve(handle: DaemonHandle, dev: bool) -> Result<()> {
     } else {
         Uuid::new_v4().to_string()
     };
-    write_endpoint(addr, &token)?;
+    write_endpoint(addr, &token, owner)?;
     eprintln!("warpforge daemon listening on ws://{addr}");
+
+    let lifecycle = Arc::new(ServerLifecycle::new(owner));
 
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
         let mut sigterm = signal(SignalKind::terminate())?;
         tokio::select! {
-            r = run(listener, handle.clone(), token) => r,
+            r = run_controlled(listener, handle.clone(), token, Arc::clone(&lifecycle)) => {
+                handle.shutdown().await;
+                std::fs::remove_file(daemon_json_path()).ok();
+                r
+            },
             _ = sigterm.recv() => {
                 eprintln!("warpforge daemon: SIGTERM — stopping services");
                 handle.shutdown().await;
@@ -80,24 +91,75 @@ pub async fn serve(handle: DaemonHandle, dev: bool) -> Result<()> {
         }
     }
     #[cfg(not(unix))]
-    run(listener, handle, token).await
+    {
+        let result = run_controlled(listener, handle.clone(), token, lifecycle).await;
+        handle.shutdown().await;
+        std::fs::remove_file(daemon_json_path()).ok();
+        result
+    }
+}
+
+struct ServerLifecycle {
+    owner: wire::DaemonOwner,
+    quiescing: AtomicBool,
+    /// Serializes the safety snapshot against mutations arriving on other
+    /// WebSocket connections. Mutations hold a read guard until their daemon
+    /// command has been accepted; the update handoff takes the write guard
+    /// before it flips `quiescing` and asks the actor for blockers.
+    mutations: RwLock<()>,
+    shutdown: Notify,
+}
+
+impl ServerLifecycle {
+    fn new(owner: wire::DaemonOwner) -> Self {
+        Self {
+            owner,
+            quiescing: AtomicBool::new(false),
+            mutations: RwLock::new(()),
+            shutdown: Notify::new(),
+        }
+    }
 }
 
 /// Accept loop, split out so tests can drive it against a pre-bound listener.
 pub async fn run(listener: TcpListener, handle: DaemonHandle, token: String) -> Result<()> {
+    run_controlled(
+        listener,
+        handle,
+        token,
+        Arc::new(ServerLifecycle::new(wire::DaemonOwner::External)),
+    )
+    .await
+}
+
+async fn run_controlled(
+    listener: TcpListener,
+    handle: DaemonHandle,
+    token: String,
+    lifecycle: Arc<ServerLifecycle>,
+) -> Result<()> {
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = tokio::select! {
+            accepted = listener.accept() => accepted?,
+            _ = lifecycle.shutdown.notified() => return Ok(()),
+        };
         let handle = handle.clone();
         let token = token.clone();
+        let lifecycle = Arc::clone(&lifecycle);
         tokio::spawn(async move {
-            if let Err(e) = handle_conn(stream, handle, token).await {
+            if let Err(e) = handle_conn(stream, handle, token, lifecycle).await {
                 eprintln!("warpforge: connection ended: {e}");
             }
         });
     }
 }
 
-async fn handle_conn(stream: TcpStream, handle: DaemonHandle, token: String) -> Result<()> {
+async fn handle_conn(
+    stream: TcpStream,
+    handle: DaemonHandle,
+    token: String,
+    lifecycle: Arc<ServerLifecycle>,
+) -> Result<()> {
     let ws = tokio_tungstenite::accept_async(stream).await?;
     let (mut tx, mut rx) = ws.split();
     let mut events = handle.subscribe();
@@ -107,7 +169,7 @@ async fn handle_conn(stream: TcpStream, handle: DaemonHandle, token: String) -> 
     macro_rules! send {
         ($msg:expr) => {{
             let text = serde_json::to_string(&$msg)?;
-            if tx.send(Message::Text(text.into())).await.is_err() {
+            if tx.send(Message::Text(text)).await.is_err() {
                 break;
             }
         }};
@@ -156,9 +218,38 @@ async fn handle_conn(stream: TcpStream, handle: DaemonHandle, token: String) -> 
                     continue;
                 }
 
-                match dispatch(&handle, req.method).await {
-                    Ok(result) => send!(wire::ServerMessage::Response { id, result }),
-                    Err(error) => send!(wire::ServerMessage::Error { id, error }),
+                let is_handoff = matches!(&req.method, wire::Method::UpdatePrepareShutdown { .. });
+                let result = if method_is_mutation(&req.method) && !is_handoff {
+                    let _guard = lifecycle.mutations.read().await;
+                    if lifecycle.quiescing.load(Ordering::Acquire) {
+                        Err(wire::RpcError {
+                            code: wire::ErrorCode::Updating,
+                            message: "daemon is quiescing for an application update".into(),
+                        })
+                    } else {
+                        dispatch(&handle, req.method, &lifecycle).await
+                    }
+                } else {
+                    dispatch(&handle, req.method, &lifecycle).await
+                };
+
+                let handoff_ready = is_handoff
+                    && matches!(&result, Ok(value) if value.get("ready").and_then(|ready| ready.as_bool()) == Some(true));
+                let message = match result {
+                    Ok(result) => wire::ServerMessage::Response { id, result },
+                    Err(error) => wire::ServerMessage::Error { id, error },
+                };
+                let text = serde_json::to_string(&message)?;
+                let sent = tx.send(Message::Text(text)).await.is_ok();
+
+                if handoff_ready {
+                    // Queue the acknowledgement on the socket before stopping
+                    // the accept loop. Even if the client disconnects at this
+                    // point, the daemon must not remain stuck quiescing.
+                    lifecycle.shutdown.notify_one();
+                }
+                if !sent {
+                    break;
                 }
             }
             event = events.recv() => {
@@ -182,9 +273,73 @@ async fn handle_conn(stream: TcpStream, handle: DaemonHandle, token: String) -> 
 async fn dispatch(
     handle: &DaemonHandle,
     method: wire::Method,
+    lifecycle: &Arc<ServerLifecycle>,
 ) -> Result<serde_json::Value, wire::RpcError> {
     use wire::Method::*;
     match method {
+        SystemHandshake {
+            client_version,
+            protocol_version,
+        } => Ok(json!(wire::DaemonHandshake {
+            daemon_version: env!("CARGO_PKG_VERSION").into(),
+            protocol_version: wire::PROTOCOL_VERSION,
+            owner: lifecycle.owner,
+            protocol_compatible: protocol_version == wire::PROTOCOL_VERSION,
+            exact_version_match: client_version == env!("CARGO_PKG_VERSION"),
+        })),
+        UpdatePrepareShutdown {
+            expected_daemon_version,
+            protocol_version,
+        } => {
+            if lifecycle.owner != wire::DaemonOwner::Desktop {
+                return Err(wire::RpcError {
+                    code: wire::ErrorCode::Conflict,
+                    message: "the running daemon was started externally; stop it before updating"
+                        .into(),
+                });
+            }
+            if protocol_version != wire::PROTOCOL_VERSION
+                || expected_daemon_version != env!("CARGO_PKG_VERSION")
+            {
+                return Err(wire::RpcError {
+                    code: wire::ErrorCode::Conflict,
+                    message: format!(
+                        "daemon compatibility changed (expected version {expected_daemon_version}, protocol {protocol_version}; running version {}, protocol {})",
+                        env!("CARGO_PKG_VERSION"),
+                        wire::PROTOCOL_VERSION
+                    ),
+                });
+            }
+
+            // Wait for every mutation that already passed the gate to enqueue
+            // (or complete) before taking the actor's safety snapshot.
+            let _mutation_guard = lifecycle.mutations.write().await;
+
+            if lifecycle
+                .quiescing
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return Err(wire::RpcError {
+                    code: wire::ErrorCode::Updating,
+                    message: "an update handoff is already in progress".into(),
+                });
+            }
+
+            let blockers = handle.update_blockers().await;
+            if !blockers.is_empty() {
+                lifecycle.quiescing.store(false, Ordering::Release);
+                return Ok(json!(wire::UpdateHandoff {
+                    ready: false,
+                    blockers,
+                }));
+            }
+
+            Ok(json!(wire::UpdateHandoff {
+                ready: true,
+                blockers: Vec::new(),
+            }))
+        }
         StateSubscribe { .. } => Ok(json!(null)), // handled by caller
         RuntimeStopAll {} => {
             handle.send(Command::StopRuntime).await;
@@ -578,6 +733,26 @@ async fn dispatch(
     }
 }
 
+fn method_is_mutation(method: &wire::Method) -> bool {
+    use wire::Method::*;
+    !matches!(
+        method,
+        SystemHandshake { .. }
+            | StateSubscribe { .. }
+            | ServiceLogs { .. }
+            | TaskListWorktrees { .. }
+            | SessionsList { .. }
+            | AgentsDetect {}
+            | DiffGet { .. }
+            | FileContents { .. }
+            | FileList { .. }
+            | GitBranches { .. }
+            | GitPushInfo { .. }
+            | OrchestrateList {}
+            | OrchestrateGetConfig {}
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,9 +783,7 @@ mod tests {
 
         // Subscribe.
         ws.send(Message::Text(
-            json!({ "id": 1, "method": "state.subscribe", "params": { "topics": [] } })
-                .to_string()
-                .into(),
+            json!({ "id": 1, "method": "state.subscribe", "params": { "topics": [] } }).to_string(),
         ))
         .await
         .unwrap();
@@ -641,8 +814,7 @@ mod tests {
                 "method": "task.create",
                 "params": { "project": "demo", "prompt": "do it", "agent": "claude" }
             })
-            .to_string()
-            .into(),
+            .to_string(),
         ))
         .await
         .unwrap();
@@ -694,9 +866,7 @@ mod tests {
             .await
             .unwrap();
         ws.send(Message::Text(
-            json!({ "id": 1, "method": "state.subscribe", "params": {} })
-                .to_string()
-                .into(),
+            json!({ "id": 1, "method": "state.subscribe", "params": {} }).to_string(),
         ))
         .await
         .unwrap();
@@ -707,8 +877,7 @@ mod tests {
                 "id": 2, "method": "terminal.spawn",
                 "params": { "project": "demo", "command": "printf WARPMARK; sleep 2" }
             })
-            .to_string()
-            .into(),
+            .to_string(),
         ))
         .await
         .unwrap();
@@ -735,5 +904,217 @@ mod tests {
             saw_marker,
             "expected a terminal.screen event containing the printed marker"
         );
+    }
+
+    #[tokio::test]
+    async fn handshake_reports_protocol_version_and_external_owner() {
+        let handle = Daemon::spawn(Vec::new(), None);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(run(listener, handle, String::new()));
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}"))
+            .await
+            .unwrap();
+        ws.send(Message::Text(
+            json!({
+                "id": 1,
+                "method": "system.handshake",
+                "params": {
+                    "client_version": env!("CARGO_PKG_VERSION"),
+                    "protocol_version": wire::PROTOCOL_VERSION
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let Message::Text(frame) = timeout(Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("expected text response");
+        };
+        let response: serde_json::Value = serde_json::from_str(frame.as_str()).unwrap();
+        assert_eq!(
+            response["result"]["protocolVersion"],
+            wire::PROTOCOL_VERSION
+        );
+        assert_eq!(response["result"]["owner"], "external");
+        assert_eq!(response["result"]["protocolCompatible"], true);
+        assert_eq!(response["result"]["exactVersionMatch"], true);
+    }
+
+    #[tokio::test]
+    async fn update_handoff_refuses_external_daemon() {
+        let handle = Daemon::spawn(Vec::new(), None);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(run(listener, handle, String::new()));
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}"))
+            .await
+            .unwrap();
+        ws.send(Message::Text(
+            json!({
+                "id": 1,
+                "method": "update.prepareShutdown",
+                "params": {
+                    "expected_daemon_version": env!("CARGO_PKG_VERSION"),
+                    "protocol_version": wire::PROTOCOL_VERSION
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let Message::Text(frame) = timeout(Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("expected text response");
+        };
+        let response: serde_json::Value = serde_json::from_str(frame.as_str()).unwrap();
+        assert_eq!(response["error"]["code"], "conflict");
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("started externally"));
+    }
+
+    #[tokio::test]
+    async fn desktop_update_handoff_acknowledges_then_stops_server() {
+        let handle = Daemon::spawn(Vec::new(), None);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let lifecycle = Arc::new(ServerLifecycle::new(wire::DaemonOwner::Desktop));
+        let server = tokio::spawn(run_controlled(listener, handle, String::new(), lifecycle));
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}"))
+            .await
+            .unwrap();
+        ws.send(Message::Text(
+            json!({
+                "id": 1,
+                "method": "update.prepareShutdown",
+                "params": {
+                    "expected_daemon_version": env!("CARGO_PKG_VERSION"),
+                    "protocol_version": wire::PROTOCOL_VERSION
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let Message::Text(frame) = timeout(Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("expected text response");
+        };
+        let response: serde_json::Value = serde_json::from_str(frame.as_str()).unwrap();
+        assert_eq!(response["result"]["ready"], true);
+        timeout(Duration::from_secs(2), server)
+            .await
+            .expect("server should stop after acknowledging handoff")
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn refused_handoff_reopens_mutation_gate() {
+        let projects = vec![ProjectEntry {
+            name: "demo".into(),
+            path: ".".into(),
+            added_at: "0".into(),
+        }];
+        let handle = Daemon::spawn(projects, None);
+        let task_id = handle
+            .create_task(
+                "demo",
+                "keep working",
+                "definitely-not-an-installed-agent",
+                Vec::new(),
+                false,
+                false,
+                None,
+                Vec::new(),
+            )
+            .await;
+        handle
+            .set_task_status(&task_id, crate::daemon::TaskStatus::Queued)
+            .await;
+        // A query is an actor-queue barrier for the status update above.
+        let _ = handle.tasks().await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let lifecycle = Arc::new(ServerLifecycle::new(wire::DaemonOwner::Desktop));
+        tokio::spawn(run_controlled(listener, handle, String::new(), lifecycle));
+
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}"))
+            .await
+            .unwrap();
+        ws.send(Message::Text(
+            json!({
+                "id": 1,
+                "method": "update.prepareShutdown",
+                "params": {
+                    "expected_daemon_version": env!("CARGO_PKG_VERSION"),
+                    "protocol_version": wire::PROTOCOL_VERSION
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let Message::Text(frame) = timeout(Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("expected handoff response");
+        };
+        let response: serde_json::Value = serde_json::from_str(frame.as_str()).unwrap();
+        assert_eq!(response["result"]["ready"], false);
+        assert!(response["result"]["blockers"][0]
+            .as_str()
+            .unwrap()
+            .contains("agent task"));
+
+        // A refused handoff must clear quiescing so ordinary mutations work.
+        ws.send(Message::Text(
+            json!({
+                "id": 2,
+                "method": "agents.update",
+                "params": { "agents": [] }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let Message::Text(frame) = timeout(Duration::from_secs(2), ws.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("expected mutation response");
+        };
+        let response: serde_json::Value = serde_json::from_str(frame.as_str()).unwrap();
+        assert_eq!(response["id"], 2);
+        assert!(response.get("result").is_some());
+        assert!(response.get("error").is_none());
     }
 }

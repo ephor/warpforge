@@ -167,8 +167,7 @@ impl Orchestrator {
                     self.graphs.remove(&graph_id);
                 }
                 OrchCommand::List(reply) => {
-                    let infos: Vec<GraphInfo> =
-                        self.graphs.values().map(|g| graph_info(g)).collect();
+                    let infos: Vec<GraphInfo> = self.graphs.values().map(graph_info).collect();
                     let _ = reply.send(infos);
                 }
             }

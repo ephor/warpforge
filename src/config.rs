@@ -162,8 +162,11 @@ fn auto_detect(project_path: &Path) -> Option<WorkspaceConfig> {
                             let svc_name = k.as_str().unwrap_or_default().to_string();
                             if let Some(ports) = v["ports"].as_sequence() {
                                 if let Some(port_str) = ports.first().and_then(|p| p.as_str()) {
-                                    if let Ok(port) =
-                                        port_str.split(':').last().unwrap_or("0").parse::<u16>()
+                                    if let Ok(port) = port_str
+                                        .split(':')
+                                        .next_back()
+                                        .unwrap_or("0")
+                                        .parse::<u16>()
                                     {
                                         if port > 0 {
                                             services.insert(
@@ -255,12 +258,12 @@ services:
 /// Parse human-readable interval string ("5s", "100ms", "2m") to milliseconds.
 #[allow(dead_code)]
 pub fn parse_interval_ms(interval: &str) -> u64 {
-    let (num_str, unit) = if interval.ends_with("ms") {
-        (&interval[..interval.len() - 2], "ms")
-    } else if interval.ends_with('s') {
-        (&interval[..interval.len() - 1], "s")
-    } else if interval.ends_with('m') {
-        (&interval[..interval.len() - 1], "m")
+    let (num_str, unit) = if let Some(stripped) = interval.strip_suffix("ms") {
+        (stripped, "ms")
+    } else if let Some(stripped) = interval.strip_suffix('s') {
+        (stripped, "s")
+    } else if let Some(stripped) = interval.strip_suffix('m') {
+        (stripped, "m")
     } else {
         return 5000;
     };

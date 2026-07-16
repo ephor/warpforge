@@ -1,5 +1,7 @@
 # Rust build artifacts
 target/
+desktop/src-tauri/binaries/*
+!desktop/src-tauri/binaries/.gitkeep
 
 # Environment
 .env
