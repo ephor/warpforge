@@ -295,7 +295,7 @@ async fn kill_process_group(pgid: Option<u32>) {
     #[cfg(unix)]
     if let Some(pgid) = pgid {
         let _ = Command::new("kill")
-            .args(["-KILL", &format!("-{pgid}")])
+            .args(["-KILL", "--", &format!("-{pgid}")])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -1482,11 +1482,14 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn closed_stdout_is_reported_without_waiting_for_initialize_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_path = dir.path().join("pid");
+        let command = format!("echo $$ > {}; exec 1>&-; sleep 30", pid_path.display());
         let (updates, mut rx) = mpsc::unbounded_channel();
-        let _handle = spawn_acp_session(
+        let handle = spawn_acp_session(
             "task".into(),
-            "exec 1>&-; sleep 30".into(),
-            ".".into(),
+            command,
+            dir.path().to_string_lossy().into_owned(),
             empty_prompt(),
             None,
             Vec::new(),
@@ -1505,6 +1508,35 @@ mod tests {
         };
         assert!(message.contains("closed its ACP stdout"), "{message}");
         assert!(message.contains("exec 1>&-; sleep 30"), "{message}");
+
+        let pid = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Ok(pid) = std::fs::read_to_string(&pid_path) {
+                    break pid.trim().to_string();
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("child should write pid");
+        handle.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let alive = Command::new("kill")
+                    .args(["-0", &pid])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await
+                    .is_ok_and(|status| status.success());
+                if !alive {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancel should kill the child before the test returns");
     }
 
     #[cfg(unix)]
