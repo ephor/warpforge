@@ -275,10 +275,7 @@ async fn capture_pre_initialize_stderr(
 ) {
     let mut line_bytes = 0usize;
     let mut buf = [0u8; 256];
-    loop {
-        let Ok(n) = stderr.read(&mut buf).await else {
-            break;
-        };
+    while let Ok(n) = stderr.read(&mut buf).await {
         if n == 0 {
             break;
         }
