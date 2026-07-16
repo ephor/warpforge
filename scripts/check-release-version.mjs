@@ -38,7 +38,7 @@ function cargoMetadata(manifestPath) {
 const rootMetadata = cargoMetadata("Cargo.toml");
 const desktopMetadata = cargoMetadata("desktop/src-tauri/Cargo.toml");
 const desktopPackage = json("desktop/package.json");
-const desktopLock = json("desktop/package-lock.json");
+const desktopLock = readFileSync(resolve(root, "desktop/bun.lock"), "utf8");
 const tauriConfig = json("desktop/src-tauri/tauri.conf.json");
 const updaterPublicKey =
   process.env.TAURI_UPDATER_PUBLIC_KEY?.trim() ||
@@ -62,8 +62,6 @@ const versions = new Map([
   ],
   ["desktop/src-tauri/tauri.conf.json", tauriConfig.version],
   ["desktop/package.json", desktopPackage.version],
-  ["desktop/package-lock.json", desktopLock.version],
-  ["desktop/package-lock.json packages[\"\"]", desktopLock.packages?.[""]?.version],
 ]);
 
 let valid = true;
@@ -95,8 +93,7 @@ const releaseConfiguration = [
   ],
   [
     "the frontend updater dependency is locked",
-    typeof desktopLock.packages?.[""]?.dependencies?.["@tauri-apps/plugin-updater"] ===
-      "string",
+    desktopLock.includes('"@tauri-apps/plugin-updater":'),
   ],
 ];
 

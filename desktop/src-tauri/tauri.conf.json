@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "dev.warpforge.desktop",
   "build": {
-    "beforeDevCommand": "node scripts/stage-sidecar.mjs --profile debug --no-target && npm run dev",
+    "beforeDevCommand": "bun scripts/stage-sidecar.mjs --profile debug --no-target && bun run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "node scripts/stage-sidecar.mjs --profile release && npm run build",
+    "beforeBuildCommand": "bun scripts/stage-sidecar.mjs --profile release && bun run build",
     "frontendDist": "../dist"
   },
   "app": {
