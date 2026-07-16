@@ -74,6 +74,7 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             libssl-dev \
+            libwayland-dev \
             libwebkit2gtk-4.1-dev \
             patchelf
       - run: cargo fmt --all --check
@@ -87,6 +88,7 @@ jobs:
         working-directory: desktop
       - run: bun run test
         working-directory: desktop
+      - run: bun desktop/scripts/stage-sidecar.mjs --profile debug
       - run: cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml
       - name: Select release targets
         id: matrix
@@ -206,6 +208,7 @@ jobs:
             libfuse2 \
             librsvg2-dev \
             libssl-dev \
+            libwayland-dev \
             libwebkit2gtk-4.1-dev \
             patchelf
       - run: bun install --frozen-lockfile
