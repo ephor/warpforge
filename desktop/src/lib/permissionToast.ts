@@ -10,12 +10,27 @@ const GENERIC_PERMISSION_TITLES = new Set([
 
 const SENSITIVE_NAME =
   "(?:api[_-]?key|access[_-]?key|auth|bearer|credential|password|passwd|private[_-]?key|secret|token)";
+export const PERMISSION_TOAST_CONTEXT_LIMIT = 160;
+
+const ONE_SHOT_APPROVALS = new Set(["allow", "allow_once", "approve", "approve_once"]);
+
+/** Pick only an explicitly one-shot approval. Persistent grants always require review. */
+export function permissionToastApproveOption(options: string[]): string | undefined {
+  return options.find((option) =>
+    ONE_SHOT_APPROVALS.has(
+      option
+        .trim()
+        .toLowerCase()
+        .replace(/[\s-]+/g, "_"),
+    ),
+  );
+}
 
 /** Keep permission notifications useful without copying arbitrary tool payloads into a toast. */
 export function permissionToastContext(
   request: PermissionRequest,
   updates: SessionUpdate[],
-  maxLength = 112,
+  maxLength = PERMISSION_TOAST_CONTEXT_LIMIT,
 ): string {
   const explicitTitle = normalize(request.title);
   if (explicitTitle && !GENERIC_PERMISSION_TITLES.has(explicitTitle.toLowerCase())) {
@@ -57,13 +72,22 @@ function safeSummary(value: string, maxLength: number): string {
     .replace(/(^|\s)[*-]\s+/g, "$1")
     .replace(/(?:\*\*|__|~~|`)/g, "")
     .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi, "$1[redacted]@")
-    .replace(new RegExp(`(\\b${SENSITIVE_NAME}\\s*=\\s*)(?:"[^"]*"|'[^']*'|[^\\s]+)`, "gi"), "$1[redacted]")
-    .replace(new RegExp(`(--${SENSITIVE_NAME})(?:=|\\s+)(?:"[^"]*"|'[^']*'|[^\\s]+)`, "gi"), "$1 [redacted]")
+    .replace(
+      new RegExp(`(\\b${SENSITIVE_NAME}\\s*=\\s*)(?:"[^"]*"|'[^']*'|[^\\s]+)`, "gi"),
+      "$1[redacted]",
+    )
+    .replace(
+      new RegExp(`(--${SENSITIVE_NAME})(?:=|\\s+)(?:"[^"]*"|'[^']*'|[^\\s]+)`, "gi"),
+      "$1 [redacted]",
+    )
     .replace(/\bBearer\s+[^\s]+/gi, "Bearer [redacted]");
 
   const characters = Array.from(summary);
   if (characters.length > maxLength) {
-    summary = `${characters.slice(0, Math.max(1, maxLength - 1)).join("").trimEnd()}…`;
+    summary = `${characters
+      .slice(0, Math.max(1, maxLength - 1))
+      .join("")
+      .trimEnd()}…`;
   }
   return summary || "Permission request";
 }

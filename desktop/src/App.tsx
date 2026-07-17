@@ -8,9 +8,10 @@ import { cn } from "@/lib/utils";
 
 import AttentionRail from "./components/AttentionRail";
 import ErrorBoundary from "./components/ErrorBoundary";
+import PermissionToast from "./components/PermissionToast";
 import UpdateControl from "./components/UpdateControl";
 import { daemon } from "./daemon";
-import { permissionToastContext } from "./lib/permissionToast";
+import { permissionToastApproveOption, permissionToastContext } from "./lib/permissionToast";
 import type { DaemonEvent, DetectedAgent, GitOpResult, TaskInfo, TaskStatus } from "./protocol";
 import { useUi } from "./store/ui";
 import type { View } from "./store/ui";
@@ -85,6 +86,11 @@ export default function App() {
     }
 
     const openInRail = (taskId: string) => useUi.getState().focusAttentionTask(taskId);
+    const openInChat = (taskId: string) => {
+      const ui = useUi.getState();
+      ui.openTask(taskId);
+      ui.setAttentionOpen(false);
+    };
     const notifyTask = (task: TaskInfo) => {
       toast.warning(attentionToastTitle(task.status), {
         id: `attention:${task.id}:${task.status}`,
@@ -115,22 +121,43 @@ export default function App() {
             update,
             daemon.getState().sessionUpdates[taskId] ?? [],
           );
-          toast.warning("Permission needed", {
-            id: `attention:permission:${update.request_id}`,
-            description: task ? `${task.project} · ${task.agent} — ${context}` : context,
-            action: { label: "Review request", onClick: () => openInRail(taskId) },
-            className: "!border-border !bg-popover !text-popover-foreground !shadow-xl",
-            classNames: {
-              actionButton:
-                "!bg-primary !text-primary-foreground hover:!bg-primary/90 focus-visible:!outline-none focus-visible:!ring-2 focus-visible:!ring-ring focus-visible:!ring-offset-2 focus-visible:!ring-offset-popover",
-              closeButton:
-                "!border-border !bg-secondary !text-secondary-foreground hover:!bg-accent hover:!text-accent-foreground focus-visible:!outline-none focus-visible:!ring-2 focus-visible:!ring-ring",
-              description: "!text-muted-foreground",
-              icon: "!text-primary",
-              title: "!text-popover-foreground",
+          const approveOption = permissionToastApproveOption(update.options);
+          const toastId = `attention:permission:${update.request_id}`;
+          toast.custom(
+            (sonnerId) => (
+              <PermissionToast
+                context={context}
+                identity={task ? `${task.project} · ${task.agent}` : undefined}
+                onApprove={
+                  approveOption
+                    ? async () => {
+                        try {
+                          await daemon.request("session.permission", {
+                            outcome: approveOption,
+                            request_id: update.request_id,
+                            task_id: taskId,
+                          });
+                          toast.dismiss(sonnerId);
+                        } catch (error) {
+                          toast.error(
+                            error instanceof Error ? error.message : "Could not approve permission",
+                          );
+                        }
+                      }
+                    : undefined
+                }
+                onDismiss={() => toast.dismiss(sonnerId)}
+                onReview={() => {
+                  openInChat(taskId);
+                  toast.dismiss(sonnerId);
+                }}
+              />
+            ),
+            {
+              id: toastId,
+              duration: Number.POSITIVE_INFINITY,
             },
-            duration: Number.POSITIVE_INFINITY,
-          });
+          );
         } else if (update.kind === "permission_resolved") {
           toast.dismiss(`attention:permission:${update.request_id}`);
         }
