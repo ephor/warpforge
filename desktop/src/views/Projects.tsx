@@ -15,7 +15,7 @@ import {
   Square,
   Trash2,
 } from "lucide-react";
-import { useEffect, useState, useCallback, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -74,10 +74,32 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
   }
 
   const project = snapshot.projects.find((p) => p.name === selected) ?? snapshot.projects[0];
-  const services = snapshot.services.filter((s) => s.project === project.name);
-  const pfs = snapshot.portforwards.filter((pf) => pf.project === project.name);
-  const projectTasks = snapshot.tasks.filter((t) => t.project === project.name);
-  const running = services.filter((s) => s.status === "running" && s.allocatedPort > 0);
+  const services = useMemo(
+    () => snapshot.services.filter((s) => s.project === project.name),
+    [snapshot.services, project.name],
+  );
+  const pfs = useMemo(
+    () => snapshot.portforwards.filter((pf) => pf.project === project.name),
+    [snapshot.portforwards, project.name],
+  );
+  const projectTasks = useMemo(
+    () => snapshot.tasks.filter((t) => t.project === project.name),
+    [snapshot.tasks, project.name],
+  );
+  const running = useMemo(
+    () => services.filter((s) => s.status === "running" && s.allocatedPort > 0),
+    [services],
+  );
+  // Pre-compute running service count per project to avoid O(projects × services) in the map.
+  const runningByProject = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of snapshot.services) {
+      if (s.status === "running") {
+        map.set(s.project, (map.get(s.project) ?? 0) + 1);
+      }
+    }
+    return map;
+  }, [snapshot.services]);
 
   return (
     <div className="grid h-full grid-cols-[220px_1fr] gap-4">
@@ -91,9 +113,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
           <div className="flex flex-col gap-1 p-2">
             {snapshot.projects.map((p) => {
               const active = p.name === project.name;
-              const up = snapshot.services.filter(
-                (s) => s.project === p.name && s.status === "running",
-              ).length;
+              const up = runningByProject.get(p.name) ?? 0;
               return (
                 <div
                   key={p.name}
