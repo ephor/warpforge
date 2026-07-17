@@ -10,6 +10,7 @@ import AttentionRail from "./components/AttentionRail";
 import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateControl from "./components/UpdateControl";
 import { daemon } from "./daemon";
+import { permissionToastContext } from "./lib/permissionToast";
 import type { DaemonEvent, DetectedAgent, GitOpResult, TaskInfo, TaskStatus } from "./protocol";
 import { useUi } from "./store/ui";
 import type { View } from "./store/ui";
@@ -110,9 +111,13 @@ export default function App() {
           if (seenPermissionIds.current.has(update.request_id)) return;
           seenPermissionIds.current.add(update.request_id);
           const task = daemon.getState().snapshot.tasks.find((item) => item.id === taskId);
+          const context = permissionToastContext(
+            update,
+            daemon.getState().sessionUpdates[taskId] ?? [],
+          );
           toast.warning("Permission needed", {
             id: `attention:permission:${update.request_id}`,
-            description: task ? `${task.project} · ${task.agent} — ${update.title}` : update.title,
+            description: task ? `${task.project} · ${task.agent} — ${context}` : context,
             action: { label: "Review request", onClick: () => openInRail(taskId) },
             duration: 10_000,
           });

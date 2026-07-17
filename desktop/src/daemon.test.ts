@@ -105,5 +105,4 @@ describe("DaemonClient connection state", () => {
     await expect(client.waitForDisconnect()).resolves.toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
   });
-
 });
