@@ -863,6 +863,8 @@ pub struct Daemon {
     /// their current turn ends (deferred so a fan-out of N completions yields
     /// one wake, and an ignored wake never re-fires into a loop).
     pending_wake: std::collections::HashSet<String>,
+    /// Stable first-seen timestamps for streamed frames of the same tool call.
+    tool_call_starts: HashMap<(String, String), u64>,
 }
 
 impl Daemon {
@@ -902,6 +904,23 @@ impl Daemon {
             .flatten()
             .unwrap_or_default();
 
+        let tool_call_starts = store
+            .as_ref()
+            .and_then(|s| s.load_all_session_updates().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|(task_id, updates)| {
+                updates.into_iter().filter_map(move |update| match update {
+                    wire::SessionUpdate::ToolCall {
+                        tool_call_id,
+                        started_at: Some(started_at),
+                        ..
+                    } => Some(((task_id.clone(), tool_call_id), started_at)),
+                    _ => None,
+                })
+            })
+            .collect();
+
         let daemon = Daemon {
             projects,
             tasks,
@@ -922,6 +941,7 @@ impl Daemon {
             orch_config,
             orchestrator_inbox: HashMap::new(),
             pending_wake: std::collections::HashSet::new(),
+            tool_call_starts,
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -1771,6 +1791,8 @@ impl Daemon {
                     }
                 }
                 if self.tasks.remove(&id).is_some() {
+                    self.tool_call_starts
+                        .retain(|(task_id, _), _| task_id != &id);
                     if let Some(store) = &self.store {
                         let _ = store.delete_task(&id);
                     }
@@ -2394,16 +2416,26 @@ impl Daemon {
                 status,
                 kind,
                 content,
-            } => self.emit_acp_session(
-                &task_id,
-                wire::SessionUpdate::ToolCall {
-                    tool_call_id: id,
-                    title,
-                    status: wireconv::tool_status(&status),
-                    tool_kind: kind,
-                    content,
-                },
-            ),
+            } => {
+                let key = (task_id.clone(), id.clone());
+                let started_at = *self.tool_call_starts.entry(key).or_insert_with(|| {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64
+                });
+                self.emit_acp_session(
+                    &task_id,
+                    wire::SessionUpdate::ToolCall {
+                        tool_call_id: id,
+                        title,
+                        status: wireconv::tool_status(&status),
+                        started_at: Some(started_at),
+                        tool_kind: kind,
+                        content,
+                    },
+                )
+            }
             AcpUpdate::Plan { entries } => {
                 self.emit_acp_session(&task_id, wire::SessionUpdate::Plan { entries })
             }

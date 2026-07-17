@@ -27,6 +27,7 @@ import { AgentConfigBar } from "../components/AgentConfigBar";
 import { Composer } from "../components/Composer";
 import type { FileLinkResolver } from "../components/Markdown";
 import { Markdown } from "../components/Markdown";
+import { ThinkingBlock } from "../components/ThinkingBlock";
 import type { DaemonState } from "../daemon";
 import { daemon } from "../daemon";
 import type { CommandInfo, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
@@ -57,20 +58,12 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
 
   const pinnedTasks = useMemo(
     () =>
-      pinned
-        .map((id) => live.find((t) => t.id === id))
-        .filter((t): t is TaskInfo => Boolean(t)),
+      pinned.map((id) => live.find((t) => t.id === id)).filter((t): t is TaskInfo => Boolean(t)),
     [pinned, live],
   );
 
-  const handleUnpin = useCallback(
-    (taskId: string) => () => togglePin(taskId),
-    [togglePin],
-  );
-  const handleOpen = useCallback(
-    (taskId: string) => () => onOpenTask(taskId),
-    [onOpenTask],
-  );
+  const handleUnpin = useCallback((taskId: string) => () => togglePin(taskId), [togglePin]);
+  const handleOpen = useCallback((taskId: string) => () => onOpenTask(taskId), [onOpenTask]);
 
   return (
     <ScrollArea className="h-full min-h-0">
@@ -475,6 +468,7 @@ export function coalesceUpdates(updates: SessionUpdate[]): SessionUpdate[] {
           ...existing,
           content: u.content ?? existing.content,
           status: u.status,
+          started_at: existing.started_at ?? u.started_at,
           title: u.title || existing.title,
           tool_kind: u.tool_kind || existing.tool_kind,
         };
@@ -609,6 +603,7 @@ export function StreamLine({
   resolved,
   resolveFilePath,
   onOpenFile,
+  thinkingActive,
 }: {
   update: SessionUpdate;
   compact?: boolean;
@@ -618,6 +613,8 @@ export function StreamLine({
   resolved?: Record<string, string>;
   resolveFilePath?: FileLinkResolver;
   onOpenFile?: (path: string) => void;
+  /** True only for the thought block currently receiving streamed deltas. */
+  thinkingActive?: boolean;
 }) {
   switch (update.kind) {
     case "user_message":
@@ -673,7 +670,12 @@ export function StreamLine({
           {update.text}
         </Markdown>
       ) : (
-        <p className="italic text-muted-foreground">💭 {update.text}</p>
+        <ThinkingBlock
+          text={update.text}
+          streaming={Boolean(thinkingActive)}
+          resolveFilePath={resolveFilePath}
+          onOpenFile={onOpenFile}
+        />
       );
     case "tool_call": {
       const dot =

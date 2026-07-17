@@ -7,6 +7,7 @@
  * daemon events onto the last snapshot.
  */
 
+import { stampSessionHistoryStartTimes } from "./lib/sessionTiming";
 import type {
   AgentConfig,
   DaemonEndpoint,
@@ -44,6 +45,7 @@ const MAX_SERVICE_LOGS = 1000;
 export const DAEMON_PROTOCOL_VERSION = 1;
 
 type Listener = () => void;
+type EventListener = (event: DaemonEvent) => void;
 
 export class DaemonClient {
   private ws: WebSocket | null = null;
@@ -53,10 +55,12 @@ export class DaemonClient {
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
   >();
   private listeners = new Set<Listener>();
+  private eventListeners = new Set<EventListener>();
   private reconnectDelay = 500;
   private reconnectTimer: number | null = null;
   private reconnectSuspended = false;
   private handshake: DaemonHandshake | null = null;
+  private toolCallStarts = new Map<string, number>();
   private state: DaemonState = {
     connection: "disconnected",
     connectionError: null,
@@ -70,6 +74,10 @@ export class DaemonClient {
   subscribe = (fn: Listener): (() => void) => {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  };
+  subscribeEvents = (fn: EventListener): (() => void) => {
+    this.eventListeners.add(fn);
+    return () => this.eventListeners.delete(fn);
   };
   getState = (): DaemonState => this.state;
 
@@ -90,16 +98,18 @@ export class DaemonClient {
   }) {
     this.demoDiff = seed.diffFor;
     this.demoFileDoc = seed.fileDocFor;
-    const sessionUpdates = Object.fromEntries(
-      Object.entries(seed.sessionUpdates).map(([taskId, updates]) => [
-        taskId,
-        updates.some((update) => update.kind === "prompt_capabilities")
-          ? updates
-          : [
-              { embedded_context: true, image: true, kind: "prompt_capabilities" as const },
-              ...updates,
-            ],
-      ]),
+    const sessionUpdates = this.stampSessionHistories(
+      Object.fromEntries(
+        Object.entries(seed.sessionUpdates).map(([taskId, updates]) => [
+          taskId,
+          updates.some((update) => update.kind === "prompt_capabilities")
+            ? updates
+            : [
+                { embedded_context: true, image: true, kind: "prompt_capabilities" as const },
+                ...updates,
+              ],
+        ]),
+      ),
     );
     this.setState({
       connection: "connected",
@@ -294,9 +304,33 @@ export class DaemonClient {
 
   private appendUpdate(taskId: string, update: SessionUpdate) {
     const updates = this.state.sessionUpdates[taskId] ?? [];
+    const stamped = this.stampSessionUpdate(taskId, update);
     this.setState({
-      sessionUpdates: { ...this.state.sessionUpdates, [taskId]: [...updates, update] },
+      sessionUpdates: { ...this.state.sessionUpdates, [taskId]: [...updates, stamped] },
     });
+  }
+
+  private stampSessionUpdate(taskId: string, update: SessionUpdate): SessionUpdate {
+    if (update.kind !== "tool_call") return update;
+    const key = `${taskId}\0${update.tool_call_id}`;
+    const startedAt = update.started_at ?? this.toolCallStarts.get(key) ?? Date.now();
+    this.toolCallStarts.set(key, startedAt);
+    return update.started_at === startedAt ? update : { ...update, started_at: startedAt };
+  }
+
+  private stampSessionHistories(histories: Record<string, SessionUpdate[]>) {
+    this.toolCallStarts.clear();
+    return Object.fromEntries(
+      Object.entries(histories).map(([taskId, updates]) => {
+        const stamped = stampSessionHistoryStartTimes(updates);
+        for (const update of stamped) {
+          if (update.kind === "tool_call" && update.started_at !== undefined) {
+            this.toolCallStarts.set(`${taskId}\0${update.tool_call_id}`, update.started_at);
+          }
+        }
+        return [taskId, stamped];
+      }),
+    );
   }
 
   private demoRequest(method: string, params?: unknown): Promise<unknown> {
@@ -506,13 +540,14 @@ export class DaemonClient {
 
   // ── event → state ──
   private applyEvent(ev: DaemonEvent) {
+    this.eventListeners.forEach((listener) => listener(ev));
     const snap = this.state.snapshot;
     switch (ev.event) {
       case "state.snapshot": {
         const { sessionHistory, ...snap } = ev.data;
         this.setState({
           snapshot: snap as Snapshot,
-          ...(sessionHistory ? { sessionUpdates: sessionHistory } : {}),
+          ...(sessionHistory ? { sessionUpdates: this.stampSessionHistories(sessionHistory) } : {}),
         });
         break;
       }
@@ -582,6 +617,10 @@ export class DaemonClient {
         });
         break;
       case "task.removed": {
+        const prefix = `${ev.data.id}\0`;
+        for (const key of this.toolCallStarts.keys()) {
+          if (key.startsWith(prefix)) this.toolCallStarts.delete(key);
+        }
         const { [ev.data.id]: _dropped, ...sessionUpdates } = this.state.sessionUpdates;
         this.setState({
           sessionUpdates,
@@ -595,8 +634,9 @@ export class DaemonClient {
         // (e.g. a permission answer) arrives — inconsistent and lossy.
         const { task_id, update } = ev.data;
         const existing = this.state.sessionUpdates[task_id] ?? [];
+        const stamped = this.stampSessionUpdate(task_id, update);
         this.setState({
-          sessionUpdates: { ...this.state.sessionUpdates, [task_id]: [...existing, update] },
+          sessionUpdates: { ...this.state.sessionUpdates, [task_id]: [...existing, stamped] },
         });
         break;
       }

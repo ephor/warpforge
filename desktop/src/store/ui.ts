@@ -17,6 +17,8 @@ interface UiState {
   openTaskId: string | null; // Transient — not persisted
   // App shell
   attentionOpen: boolean;
+  attentionTargetId: string | null;
+  attentionTargetNonce: number;
   // TaskDetail zones
   showChat: boolean;
   showDiff: boolean;
@@ -29,6 +31,8 @@ interface UiState {
   setView: (v: View) => void;
   openTask: (id: string | null) => void;
   toggleAttention: () => void;
+  setAttentionOpen: (open: boolean) => void;
+  focusAttentionTask: (id: string) => void;
   toggleChat: () => void;
   toggleDiff: () => void;
   setShowDiff: (open: boolean) => void;
@@ -46,6 +50,8 @@ export const useUi = create<UiState>()(
       view: "control",
       openTaskId: null,
       attentionOpen: true,
+      attentionTargetId: null,
+      attentionTargetNonce: 0,
       showChat: true,
       showDiff: true,
       centerTab: "changes",
@@ -57,6 +63,13 @@ export const useUi = create<UiState>()(
       setView: (view) => set({ openTaskId: null, view }),
       openTask: (openTaskId) => set({ openTaskId }),
       toggleAttention: () => set((s) => ({ attentionOpen: !s.attentionOpen })),
+      setAttentionOpen: (attentionOpen) => set({ attentionOpen }),
+      focusAttentionTask: (attentionTargetId) =>
+        set((s) => ({
+          attentionOpen: true,
+          attentionTargetId,
+          attentionTargetNonce: s.attentionTargetNonce + 1,
+        })),
       // Chat + Center are the mutual pair — never let both close. Tree is a
       // Sub-panel of Center, so it toggles freely.
       toggleChat: () => set((s) => (!s.showChat || s.showDiff ? { showChat: !s.showChat } : s)),
@@ -77,7 +90,12 @@ export const useUi = create<UiState>()(
     {
       name: "wf-ui",
       // OpenTaskId is session-only — a reload shouldn't force-open a stale task.
-      partialize: ({ openTaskId: _openTaskId, ...rest }) => rest,
+      partialize: ({
+        openTaskId: _openTaskId,
+        attentionTargetId: _attentionTargetId,
+        attentionTargetNonce: _attentionTargetNonce,
+        ...rest
+      }) => rest,
     },
   ),
 );
