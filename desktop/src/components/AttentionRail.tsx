@@ -1,4 +1,5 @@
 import { Maximize2, Pin } from "lucide-react";
+import { useMemo } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -62,21 +63,38 @@ export default function AttentionRail({ state, onOpenTask }: Props) {
   const pinned = useUi((s) => s.pinnedTaskIds);
   const togglePin = useUi((s) => s.togglePinnedTask);
   const queue = attentionQueue(state);
-  const attentionIds = new Set(queue.map((item) => item.task.id));
-  const permissions = new Map(
-    queue.flatMap((item) => (item.permission ? [[item.task.id, item.permission]] : [])),
+  const attentionIds = useMemo(() => new Set(queue.map((item) => item.task.id)), [queue]);
+  const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
+  const permissions = useMemo(
+    () =>
+      new Map(queue.flatMap((item) => (item.permission ? [[item.task.id, item.permission]] : []))),
+    [queue],
   );
-  const reasons = new Map(queue.map((item) => [item.task.id, item.reason]));
-  const live = state.snapshot.tasks
-    .filter((t) => t.status !== "done")
-    .sort((a, b) => {
+  const reasons = useMemo(() => new Map(queue.map((item) => [item.task.id, item.reason])), [queue]);
+
+  // Pre-compute coalesced + filtered preview for every task once.
+  const previewCache = useMemo(() => {
+    const map = new Map<string, SessionUpdate[]>();
+    for (const task of state.snapshot.tasks) {
+      const updates = state.sessionUpdates[task.id];
+      if (updates) {
+        map.set(task.id, coalesceUpdates(updates).filter(previewableUpdate).slice(-4));
+      }
+    }
+    return map;
+  }, [state.snapshot.tasks, state.sessionUpdates]);
+
+  const live = useMemo(() => {
+    const tasks = state.snapshot.tasks.filter((t) => t.status !== "done");
+    return tasks.sort((a, b) => {
       const ap = attentionIds.has(a.id) ? 0 : 1;
       const bp = attentionIds.has(b.id) ? 0 : 1;
       return ap - bp || b.updatedAt - a.updatedAt;
     });
+  }, [state.snapshot.tasks, attentionIds]);
 
   return (
-    <Card className="flex min-h-0 w-[340px] shrink-0 flex-col overflow-hidden bg-card/90">
+    <Card className="flex h-full min-h-0 flex-col overflow-hidden bg-card/90">
       <div className="flex h-11 items-center justify-between px-4">
         <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
           Sessions
@@ -100,8 +118,8 @@ export default function AttentionRail({ state, onOpenTask }: Props) {
               <SessionRailCard
                 key={task.id}
                 task={task}
-                updates={state.sessionUpdates[task.id] ?? []}
-                pinned={pinned.includes(task.id)}
+                recent={previewCache.get(task.id) ?? []}
+                pinned={pinnedSet.has(task.id)}
                 attention={attentionIds.has(task.id)}
                 reason={reasons.get(task.id)}
                 permission={permissions.get(task.id)}
@@ -118,7 +136,7 @@ export default function AttentionRail({ state, onOpenTask }: Props) {
 
 function SessionRailCard({
   task,
-  updates,
+  recent,
   pinned,
   attention,
   reason,
@@ -127,7 +145,7 @@ function SessionRailCard({
   onOpen,
 }: {
   task: TaskInfo;
-  updates: SessionUpdate[];
+  recent: SessionUpdate[];
   pinned: boolean;
   attention: boolean;
   reason?: string;
@@ -136,7 +154,6 @@ function SessionRailCard({
   onOpen: () => void;
 }) {
   const badge = taskBadge(task.status);
-  const recent = coalesceUpdates(updates).filter(previewableUpdate).slice(-4);
 
   return (
     <Card

@@ -178,7 +178,7 @@ export default function App() {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex h-screen flex-col bg-background">
+      <div className="relative flex h-screen flex-col bg-background">
         <header className="flex h-11 items-center gap-3 border-b border-border/70 bg-card/80 px-2.5">
           <div className="px-1 text-xs font-semibold uppercase tracking-[0.18em] text-foreground">
             WARP<span className="text-primary">FORGE</span>
@@ -279,7 +279,6 @@ export default function App() {
         </header>
 
         <div className="flex min-h-0 flex-1 gap-3 overflow-hidden p-3">
-          {attentionOpen && <AttentionRail state={state} onOpenTask={setOpenTaskId} />}
           <main className="min-h-0 flex-1 overflow-hidden">
             <ErrorBoundary>
               {openTask ? (
@@ -307,6 +306,15 @@ export default function App() {
               )}
             </ErrorBoundary>
           </main>
+        </div>
+
+        <div
+          className={cn(
+            "absolute bottom-0 left-0 top-11 z-20 w-[340px] p-3 pb-0 transition-transform duration-300 ease-in-out",
+            attentionOpen ? "translate-x-0" : "-translate-x-full pointer-events-none",
+          )}
+        >
+          <AttentionRail state={state} onOpenTask={setOpenTaskId} />
         </div>
 
         <NewTaskDialog
