@@ -119,7 +119,17 @@ export default function App() {
             id: `attention:permission:${update.request_id}`,
             description: task ? `${task.project} · ${task.agent} — ${context}` : context,
             action: { label: "Review request", onClick: () => openInRail(taskId) },
-            duration: 10_000,
+            className: "!border-border !bg-popover !text-popover-foreground !shadow-xl",
+            classNames: {
+              actionButton:
+                "!bg-primary !text-primary-foreground hover:!bg-primary/90 focus-visible:!outline-none focus-visible:!ring-2 focus-visible:!ring-ring focus-visible:!ring-offset-2 focus-visible:!ring-offset-popover",
+              closeButton:
+                "!border-border !bg-secondary !text-secondary-foreground hover:!bg-accent hover:!text-accent-foreground focus-visible:!outline-none focus-visible:!ring-2 focus-visible:!ring-ring",
+              description: "!text-muted-foreground",
+              icon: "!text-primary",
+              title: "!text-popover-foreground",
+            },
+            duration: Number.POSITIVE_INFINITY,
           });
         } else if (update.kind === "permission_resolved") {
           toast.dismiss(`attention:permission:${update.request_id}`);
