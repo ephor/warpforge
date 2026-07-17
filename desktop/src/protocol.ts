@@ -271,6 +271,8 @@ export type SessionUpdate =
       status: ToolCallStatus;
       tool_kind: string;
       content?: string;
+      /** Daemon-preserved start of this tool call, in Unix milliseconds. */
+      started_at?: number;
     }
   | { kind: "file_edit"; path: string }
   | {

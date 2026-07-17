@@ -1,5 +1,5 @@
 import { Bot, Circle, FolderTree, KanbanSquare, LayoutGrid, PanelLeft, Plus } from "lucide-react";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import AttentionRail from "./components/AttentionRail";
 import ErrorBoundary from "./components/ErrorBoundary";
 import UpdateControl from "./components/UpdateControl";
 import { daemon } from "./daemon";
-import type { DetectedAgent, GitOpResult } from "./protocol";
+import type { DaemonEvent, DetectedAgent, GitOpResult, TaskInfo, TaskStatus } from "./protocol";
 import { useUi } from "./store/ui";
 import type { View } from "./store/ui";
 import AgentSetupDialog from "./views/AgentSetupDialog";
@@ -27,6 +27,18 @@ const NAV: { id: View; label: string; icon: typeof LayoutGrid }[] = [
   { icon: FolderTree, id: "projects", label: "Projects" },
 ];
 
+const ATTENTION_STATUS = new Set<TaskStatus>(["needs_review", "blocked", "interrupted"]);
+
+function attentionToastTitle(status: TaskStatus): string {
+  if (status === "needs_review") return "Ready for review";
+  if (status === "blocked") return "Task blocked";
+  return "Session interrupted";
+}
+
+function attentionDescription(task: TaskInfo): string {
+  return `${task.project} · ${task.agent} — ${task.prompt}`;
+}
+
 export default function App() {
   const state = useSyncExternalStore(daemon.subscribe, daemon.getState);
   const view = useUi((s) => s.view);
@@ -35,13 +47,22 @@ export default function App() {
   const setOpenTaskId = useUi((s) => s.openTask);
   const attentionOpen = useUi((s) => s.attentionOpen);
   const toggleAttention = useUi((s) => s.toggleAttention);
+  const setAttentionOpen = useUi((s) => s.setAttentionOpen);
+  const seenPermissionIds = useRef(new Set<string>());
+  const notificationsReady = useRef(false);
   const [newTaskProject, setNewTaskProject] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [manualDetected, setManualDetected] = useState<DetectedAgent[] | null>(null);
   const [pushOpen, setPushOpen] = useState(false);
 
-  const handleOpenTask = useCallback((id: string) => setOpenTaskId(id), [setOpenTaskId]);
+  const handleOpenTask = useCallback(
+    (id: string) => {
+      setOpenTaskId(id);
+      setAttentionOpen(false);
+    },
+    [setAttentionOpen, setOpenTaskId],
+  );
 
   const openTask = state.snapshot.tasks.find((t) => t.id === openTaskId) ?? null;
 
@@ -50,6 +71,78 @@ export default function App() {
     setNewTaskPrompt(prompt);
     setNewTaskOpen(true);
   };
+
+  useEffect(() => {
+    if (!notificationsReady.current) {
+      for (const updates of Object.values(daemon.getState().sessionUpdates)) {
+        for (const update of updates) {
+          if (update.kind === "permission_request")
+            seenPermissionIds.current.add(update.request_id);
+        }
+      }
+      notificationsReady.current = true;
+    }
+
+    const openInRail = (taskId: string) => useUi.getState().focusAttentionTask(taskId);
+    const notifyTask = (task: TaskInfo) => {
+      toast.warning(attentionToastTitle(task.status), {
+        id: `attention:${task.id}:${task.status}`,
+        description: attentionDescription(task),
+        action: { label: "Open sessions", onClick: () => openInRail(task.id) },
+        duration: 10_000,
+      });
+    };
+
+    return daemon.subscribeEvents((event: DaemonEvent) => {
+      if (event.event === "state.snapshot") {
+        for (const updates of Object.values(event.data.sessionHistory ?? {})) {
+          for (const update of updates) {
+            if (update.kind === "permission_request") {
+              seenPermissionIds.current.add(update.request_id);
+            }
+          }
+        }
+        return;
+      }
+      if (event.event === "session.update") {
+        const { task_id: taskId, update } = event.data;
+        if (update.kind === "permission_request") {
+          if (seenPermissionIds.current.has(update.request_id)) return;
+          seenPermissionIds.current.add(update.request_id);
+          const task = daemon.getState().snapshot.tasks.find((item) => item.id === taskId);
+          toast.warning("Permission needed", {
+            id: `attention:permission:${update.request_id}`,
+            description: task ? `${task.project} · ${task.agent} — ${update.title}` : update.title,
+            action: { label: "Review request", onClick: () => openInRail(taskId) },
+            duration: 10_000,
+          });
+        } else if (update.kind === "permission_resolved") {
+          toast.dismiss(`attention:permission:${update.request_id}`);
+        }
+        return;
+      }
+
+      if (event.event === "task.updated") {
+        const previous = daemon
+          .getState()
+          .snapshot.tasks.find((task) => task.id === event.data.id)?.status;
+        if (ATTENTION_STATUS.has(event.data.status) && previous !== event.data.status) {
+          if (previous && ATTENTION_STATUS.has(previous)) {
+            toast.dismiss(`attention:${event.data.id}:${previous}`);
+          }
+          notifyTask(event.data);
+        } else if (!ATTENTION_STATUS.has(event.data.status) && previous) {
+          toast.dismiss(`attention:${event.data.id}:${previous}`);
+        }
+      } else if (event.event === "task.created" && ATTENTION_STATUS.has(event.data.status)) {
+        notifyTask(event.data);
+      } else if (event.event === "task.removed") {
+        for (const status of ATTENTION_STATUS) {
+          toast.dismiss(`attention:${event.data.id}:${status}`);
+        }
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) {
@@ -312,11 +405,27 @@ export default function App() {
 
         <div
           className={cn(
-            "absolute bottom-0 left-0 top-11 z-20 w-[340px] p-3 pb-0 transition-transform duration-300 ease-in-out",
-            attentionOpen ? "translate-x-0" : "-translate-x-full pointer-events-none",
+            "absolute bottom-0 left-0 right-0 top-11 z-20",
+            attentionOpen ? "pointer-events-auto" : "pointer-events-none",
           )}
         >
-          <AttentionRail state={state} onOpenTask={handleOpenTask} />
+          <button
+            type="button"
+            aria-label="Close sessions rail"
+            className="absolute inset-0 cursor-default"
+            disabled={!attentionOpen}
+            onClick={toggleAttention}
+          />
+          <div
+            aria-hidden={!attentionOpen}
+            {...(!attentionOpen ? { inert: "" } : {})}
+            className={cn(
+              "absolute bottom-0 left-0 top-0 w-[340px] p-3 pb-0 transition-transform duration-300 ease-in-out",
+              attentionOpen ? "translate-x-0" : "-translate-x-full",
+            )}
+          >
+            <AttentionRail state={state} onOpenTask={handleOpenTask} />
+          </div>
         </div>
 
         <NewTaskDialog

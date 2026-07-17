@@ -5,6 +5,8 @@ export interface SessionActivity {
   label: string;
   detail: string;
   tone: "thinking" | "working" | "writing";
+  toolCallId?: string;
+  startedAt?: number;
 }
 
 export function sessionActivity(
@@ -26,17 +28,19 @@ export function sessionActivity(
     return null;
   }
 
-  const activeTool = [...updates]
-    .reverse()
-    .find(
-      (u): u is Extract<SessionUpdate, { kind: "tool_call" }> =>
-        u.kind === "tool_call" && (u.status === "pending" || u.status === "in_progress"),
-    );
+  // Only the newest chronological phase may drive activity. Looking backwards
+  // for any pending frame resurrects old calls after a newer completion.
+  const activeTool =
+    last?.kind === "tool_call" && (last.status === "pending" || last.status === "in_progress")
+      ? last
+      : null;
   if (activeTool) {
     return {
       detail: activeTool.title,
       label: activeTool.tool_kind === "execute" ? "forging" : "working",
+      startedAt: activeTool.started_at,
       tone: "working",
+      toolCallId: activeTool.tool_call_id,
     };
   }
 
