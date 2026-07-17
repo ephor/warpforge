@@ -1,5 +1,6 @@
 import { ChevronRight, GitCommitVertical, RefreshCw, Undo2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -11,6 +12,9 @@ import type { FileDiff } from "../protocol";
  * JetBrains-Air "Changes" rail: a grouped tree of changed files with per-file
  * (and per-folder) staging checkboxes and +adds/-dels counts, plus an inline
  * commit box at the bottom. Clicking a file selects it in the diff view.
+ *
+ * Performance: the tree is flattened into a virtual list — only visible rows
+ * are mounted in the DOM, so 900+ files render without jank.
  */
 
 interface Stat {
@@ -98,109 +102,54 @@ function sortChildren(node: Node): Node[] {
   });
 }
 
-function Row({
-  node,
-  depth,
-  selected,
-  staged,
-  onSelect,
-  onToggle,
-}: {
+/** Folder key: unique identifier for open/closed tracking. */
+function folderKey(parentPath: string, name: string): string {
+  return parentPath ? `${parentPath}/${name}` : name;
+}
+
+/** Collect all folder keys in the tree (for initial "expand all" state). */
+function collectFolderKeys(node: Node, parentPath: string, out: Set<string>): void {
+  for (const child of node.children.values()) {
+    if (!child.path) {
+      const fk = folderKey(parentPath, child.name);
+      out.add(fk);
+      collectFolderKeys(child, fk, out);
+    }
+  }
+}
+
+/** One row in the flattened tree. */
+interface FlatRow {
+  key: string;
   node: Node;
   depth: number;
-  selected: string | null;
-  staged: Set<string>;
-  onSelect: (path: string) => void;
-  onToggle: (paths: string[], on: boolean) => void;
-}) {
-  const [open, setOpen] = useState(true);
-  const pad = { paddingLeft: `${depth * 12 + 8}px` };
-
-  if (node.path) {
-    const st = node.stat!;
-    const s = STATUS[st.status];
-    const on = staged.has(node.path);
-    return (
-      <div
-        className={cn(
-          "group flex h-7 items-center gap-1.5 pr-2 text-xs",
-          selected === node.path ? "bg-secondary text-foreground" : "hover:bg-secondary/50",
-        )}
-        style={pad}
-      >
-        <input
-          aria-label={`Stage ${node.path}`}
-          type="checkbox"
-          checked={on}
-          onChange={() => onToggle([node.path!], !on)}
-          className="size-3 shrink-0 accent-primary"
-        />
-        <span
-          className={cn("w-3 shrink-0 text-center font-mono text-[11px] font-semibold", s.color)}
-        >
-          {s.glyph}
-        </span>
-        <button
-          type="button"
-          onClick={() => onSelect(node.path!)}
-          title={node.path}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-        >
-          <span className="truncate">{node.name}</span>
-          <span className="tnum ml-auto shrink-0 font-mono text-[10px]">
-            {st.adds > 0 && <span className="text-ok">+{st.adds}</span>}
-            {st.adds > 0 && st.dels > 0 && " "}
-            {st.dels > 0 && <span className="text-destructive">-{st.dels}</span>}
-          </span>
-        </button>
-      </div>
-    );
-  }
-
-  const kids = sortChildren(node);
-  const paths = leaves(node);
-  const on = paths.filter((p) => staged.has(p)).length;
-  const state = on === 0 ? "off" : on === paths.length ? "on" : "some";
-  return (
-    <>
-      <div className="flex h-7 items-center gap-1.5 pr-2 text-xs text-muted-foreground" style={pad}>
-        <input
-          aria-label={`Stage ${node.name}`}
-          type="checkbox"
-          checked={state === "on"}
-          ref={(el) => el && (el.indeterminate = state === "some")}
-          onChange={() => onToggle(paths, state !== "on")}
-          className="size-3 shrink-0 accent-primary"
-        />
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          className="flex min-w-0 flex-1 items-center gap-1 text-left hover:text-foreground"
-        >
-          <ChevronRight
-            className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")}
-          />
-          <span className="truncate">{node.name}</span>
-          <span className="ml-1 shrink-0 text-[10px] text-muted-foreground/70">
-            {paths.length} files
-          </span>
-        </button>
-      </div>
-      {open &&
-        kids.map((c) => (
-          <Row
-            key={c.name}
-            node={c}
-            depth={depth + 1}
-            selected={selected}
-            staged={staged}
-            onSelect={onSelect}
-            onToggle={onToggle}
-          />
-        ))}
-    </>
-  );
+  /** For folders: the folder's unique key in the openFolders set. */
+  fKey?: string;
 }
+
+/** Recursively flatten a tree into visible rows based on which folders are open. */
+function flattenNode(
+  node: Node,
+  depth: number,
+  parentPath: string,
+  openFolders: Set<string>,
+  out: FlatRow[],
+): void {
+  const kids = sortChildren(node);
+  for (const child of kids) {
+    if (child.path) {
+      out.push({ key: child.path, node: child, depth });
+    } else {
+      const fk = folderKey(parentPath, child.name);
+      out.push({ key: `f:${fk}`, node: child, depth, fKey: fk });
+      if (openFolders.has(fk)) {
+        flattenNode(child, depth + 1, fk, openFolders, out);
+      }
+    }
+  }
+}
+
+const ROW_HEIGHT = 28; // h-7
 
 export function ChangesRail({
   project,
@@ -228,6 +177,18 @@ export function ChangesRail({
   const [rollbackBusy, setRollbackBusy] = useState(false);
   const [rollbackConfirm, setRollbackConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Small change sets: expand all folders. Large ones: start collapsed for performance.
+  const [openFolders, setOpenFolders] = useState<Set<string>>(() => {
+    if (files.length <= 50) {
+      const tree = compact(buildTree(files));
+      const root = { children: tree.children, name: project } as Node;
+      const all = new Set<string>();
+      collectFolderKeys(root, "", all);
+      return all;
+    }
+    return new Set();
+  });
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   // Re-sync selection as the diff's file set changes (keep prior choices).
   useEffect(() => {
@@ -249,6 +210,32 @@ export function ChangesRail({
     const tree = compact(buildTree(files));
     return { children: tree.children, name: project } as Node;
   }, [files, project]);
+
+  // Flatten visible tree rows.
+  const rows = useMemo(() => {
+    const out: FlatRow[] = [];
+    flattenNode(root, 0, "", openFolders, out);
+    return out;
+  }, [root, openFolders]);
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    estimateSize: () => ROW_HEIGHT,
+    getScrollElement: () => scrollRef.current,
+    overscan: 20,
+  });
+
+  const toggleFolder = useCallback((fk: string) => {
+    setOpenFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(fk)) {
+        next.delete(fk);
+      } else {
+        next.add(fk);
+      }
+      return next;
+    });
+  }, []);
 
   const toggle = (paths: string[], on: boolean) =>
     setStaged((prev) => {
@@ -365,15 +352,104 @@ export function ChangesRail({
         </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto py-1.5">
-        <Row
-          node={root}
-          depth={0}
-          selected={selected}
-          staged={staged}
-          onSelect={onSelect}
-          onToggle={toggle}
-        />
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto py-1.5">
+        {rows.length === 0 ? (
+          <p className="px-3 py-2 text-xs text-muted-foreground">No changes.</p>
+        ) : (
+          <div
+            className="relative w-full"
+            style={{ height: virtualizer.getTotalSize() }}
+          >
+            {virtualizer.getVirtualItems().map((vi) => {
+              const row = rows[vi.index];
+              const pad = { paddingLeft: `${row.depth * 12 + 8}px` };
+
+              if (row.node.path) {
+                // Leaf (file) row
+                const st = row.node.stat!;
+                const s = STATUS[st.status];
+                const on = staged.has(row.node.path);
+                return (
+                  <div
+                    key={vi.key}
+                    className={cn(
+                      "group absolute left-0 top-0 flex h-7 w-full items-center gap-1.5 pr-2 text-xs",
+                      selected === row.node.path
+                        ? "bg-secondary text-foreground"
+                        : "hover:bg-secondary/50",
+                    )}
+                    style={{ ...pad, transform: `translateY(${vi.start}px)` }}
+                  >
+                    <input
+                      aria-label={`Stage ${row.node.path}`}
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => toggle([row.node.path!], !on)}
+                      className="size-3 shrink-0 accent-primary"
+                    />
+                    <span
+                      className={cn(
+                        "w-3 shrink-0 text-center font-mono text-[11px] font-semibold",
+                        s.color,
+                      )}
+                    >
+                      {s.glyph}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onSelect(row.node.path!)}
+                      title={row.node.path}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                    >
+                      <span className="truncate">{row.node.name}</span>
+                      <span className="tnum ml-auto shrink-0 font-mono text-[10px]">
+                        {st.adds > 0 && <span className="text-ok">+{st.adds}</span>}
+                        {st.adds > 0 && st.dels > 0 && " "}
+                        {st.dels > 0 && <span className="text-destructive">-{st.dels}</span>}
+                      </span>
+                    </button>
+                  </div>
+                );
+              }
+
+              // Folder row
+              const paths = leaves(row.node);
+              const folderStaged = paths.filter((p) => staged.has(p)).length;
+              const state =
+                folderStaged === 0 ? "off" : folderStaged === paths.length ? "on" : "some";
+              const isOpen = openFolders.has(row.fKey!);
+              return (
+                <div
+                  key={vi.key}
+                  className="absolute left-0 top-0 flex h-7 w-full items-center gap-1.5 pr-2 text-xs text-muted-foreground"
+                  style={{ ...pad, transform: `translateY(${vi.start}px)` }}
+                >
+                  <input
+                    aria-label={`Stage ${row.node.name}`}
+                    type="checkbox"
+                    checked={state === "on"}
+                    ref={(el) => el && (el.indeterminate = state === "some")}
+                    onChange={() => toggle(paths, state !== "on")}
+                    className="size-3 shrink-0 accent-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => toggleFolder(row.fKey!)}
+                    className="flex min-w-0 flex-1 items-center gap-1 text-left hover:text-foreground"
+                  >
+                    <ChevronRight
+                      className={cn("size-3.5 shrink-0 transition-transform", isOpen && "rotate-90")}
+                    />
+                    <span className="truncate">{row.node.name}</span>
+                    <span className="ml-1 shrink-0 text-[10px] text-muted-foreground/70">
+                      {paths.length} files
+                    </span>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col gap-2 border-t bg-background/30 p-2.5">
