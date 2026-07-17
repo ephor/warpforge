@@ -1,57 +1,161 @@
-import { Maximize2, Pin } from "lucide-react";
-import { memo, useCallback, useMemo } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { Activity, ChevronRight, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import type { PermissionUpdate } from "@/lib/sessionPermissions";
-import { pendingPermission } from "@/lib/sessionPermissions";
-import { elapsed, taskBadge, taskEdge } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 import type { DaemonState } from "../daemon";
-import { daemon } from "../daemon";
-import type { SessionUpdate, TaskInfo } from "../protocol";
+import type { SessionUpdate, TaskInfo, TaskStatus } from "../protocol";
 import { useUi } from "../store/ui";
-import { StreamLine, coalesceUpdates, streamKey } from "../views/MissionControl";
+import SessionRailCard from "./SessionRailCard";
 
 /**
- * "Needs you" rail — tasks blocked on a human (pending permission, review,
- * blocked, interrupted). Lives at the app shell so it shows on every screen.
+ * "Needs you" rail — live tasks, with human-blocked work promoted to the top.
+ * The flattened row model allows cards and collapsible headers to share one
+ * virtualizer, keeping the mounted tree bounded during busy sessions.
  */
 
-function previewableUpdate(update: SessionUpdate): boolean {
-  return (
-    update.kind !== "available_commands" &&
-    update.kind !== "permission_request" &&
-    update.kind !== "permission_resolved"
-  );
-}
-
-interface AttentionItem {
+export interface AttentionItem {
   task: TaskInfo;
   reason: string;
   priority: number;
   permission?: PermissionUpdate;
 }
 
-export function attentionQueue(state: DaemonState): AttentionItem[] {
+interface PermissionCacheEntry {
+  updates: SessionUpdate[];
+  pending: Map<string, PermissionUpdate>;
+}
+
+const permissionCache = new Map<string, PermissionCacheEntry>();
+
+function applyPermissionUpdate(pending: Map<string, PermissionUpdate>, update: SessionUpdate) {
+  if (update.kind === "permission_request") {
+    pending.delete(update.request_id);
+    pending.set(update.request_id, update);
+  } else if (update.kind === "permission_resolved") {
+    pending.delete(update.request_id);
+  }
+}
+
+function cachedPendingPermission(taskId: string, updates: SessionUpdate[] | undefined) {
+  if (!updates) {
+    return null;
+  }
+  let cached = permissionCache.get(taskId);
+  if (cached?.updates !== updates) {
+    const extendsCached =
+      cached !== undefined &&
+      cached.updates.length <= updates.length &&
+      (cached.updates.length === 0 ||
+        cached.updates[cached.updates.length - 1] === updates[cached.updates.length - 1]);
+    const pending =
+      extendsCached && cached ? new Map(cached.pending) : new Map<string, PermissionUpdate>();
+    const start = extendsCached && cached ? cached.updates.length : 0;
+    for (let index = start; index < updates.length; index += 1) {
+      applyPermissionUpdate(pending, updates[index]);
+    }
+    cached = { pending, updates };
+    permissionCache.set(taskId, cached);
+  }
+  let latest: PermissionUpdate | null = null;
+  for (const permission of cached.pending.values()) latest = permission;
+  return latest;
+}
+
+function buildAttentionQueue(
+  tasks: TaskInfo[],
+  sessionUpdates: DaemonState["sessionUpdates"],
+): AttentionItem[] {
   const items: AttentionItem[] = [];
-  for (const task of state.snapshot.tasks) {
-    const permission = pendingPermission(state.sessionUpdates[task.id] ?? []);
+  const taskIds = new Set(tasks.map((task) => task.id));
+  for (const taskId of permissionCache.keys()) {
+    if (!taskIds.has(taskId)) permissionCache.delete(taskId);
+  }
+  for (const task of tasks) {
+    const permission = cachedPendingPermission(task.id, sessionUpdates[task.id]);
     if (permission) {
-      items.push({ task, reason: permission.title, priority: 0, permission });
+      items.push({ permission, priority: 0, reason: permission.title, task });
     } else if (task.status === "needs_review") {
-      items.push({ task, reason: "finished — review changes", priority: 1 });
+      items.push({ priority: 1, reason: "finished — review changes", task });
     } else if (task.status === "blocked") {
-      items.push({ task, reason: task.blockedReason ?? "blocked", priority: 2 });
+      items.push({ priority: 2, reason: task.blockedReason ?? "blocked", task });
     } else if (task.status === "interrupted") {
-      items.push({ task, reason: "session lost on daemon restart", priority: 3 });
+      items.push({ priority: 3, reason: "session lost on daemon restart", task });
     }
   }
   return items.sort((a, b) => a.priority - b.priority || b.task.updatedAt - a.task.updatedAt);
+}
+
+export function attentionQueue(state: DaemonState): AttentionItem[] {
+  return buildAttentionQueue(state.snapshot.tasks, state.sessionUpdates);
+}
+
+type SortMode = "updated" | "created" | "status" | "project";
+type GroupMode = "none" | "project" | "agent" | "status";
+type FilterMode = "attention" | "running" | "all";
+
+interface GroupInfo {
+  key: string;
+  label: string;
+  rank: number;
+}
+
+type RailRow =
+  | { key: string; kind: "group"; group: GroupInfo; count: number }
+  | { key: string; kind: "task"; task: TaskInfo };
+
+const STATUS_RANK: Record<TaskStatus, number> = {
+  needs_review: 1,
+  blocked: 2,
+  interrupted: 3,
+  running: 4,
+  idle: 5,
+  queued: 6,
+  done: 7,
+};
+
+const STATUS_LABEL: Record<TaskStatus, string> = {
+  needs_review: "Needs review",
+  blocked: "Blocked",
+  interrupted: "Interrupted",
+  running: "Running",
+  idle: "Idle",
+  queued: "Queued",
+  done: "Done",
+};
+
+function statusGroup(task: TaskInfo, permission: PermissionUpdate | undefined): GroupInfo {
+  if (permission) {
+    return { key: "permission", label: "Permission", rank: 0 };
+  }
+  return {
+    key: task.status,
+    label: STATUS_LABEL[task.status],
+    rank: STATUS_RANK[task.status],
+  };
+}
+
+function groupInfo(
+  task: TaskInfo,
+  mode: Exclude<GroupMode, "none">,
+  permission: PermissionUpdate | undefined,
+): GroupInfo {
+  if (mode === "status") {
+    return statusGroup(task, permission);
+  }
+  const value = mode === "project" ? task.project : task.agent;
+  return { key: value, label: value, rank: 0 };
 }
 
 interface Props {
@@ -60,190 +164,295 @@ interface Props {
 }
 
 export default function AttentionRail({ state, onOpenTask }: Props) {
-  const pinned = useUi((s) => s.pinnedTaskIds);
-  const togglePin = useUi((s) => s.togglePinnedTask);
-  const queue = attentionQueue(state);
-  const attentionIds = useMemo(() => new Set(queue.map((item) => item.task.id)), [queue]);
+  const pinned = useUi((store) => store.pinnedTaskIds);
+  const togglePin = useUi((store) => store.togglePinnedTask);
+  const attentionTargetId = useUi((store) => store.attentionTargetId);
+  const attentionTargetNonce = useUi((store) => store.attentionTargetNonce);
+  const [sort, setSort] = useState<SortMode>("updated");
+  const [group, setGroup] = useState<GroupMode>("none");
+  const [filter, setFilter] = useState<FilterMode>("all");
+  const [query, setQuery] = useState("");
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const handledTargetNonce = useRef<number | null>(null);
+
+  const queue = useMemo(
+    () => buildAttentionQueue(state.snapshot.tasks, state.sessionUpdates),
+    [state.sessionUpdates, state.snapshot.tasks],
+  );
+  const attentionById = useMemo(() => new Map(queue.map((item) => [item.task.id, item])), [queue]);
   const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
-  const permissions = useMemo(
-    () =>
-      new Map(queue.flatMap((item) => (item.permission ? [[item.task.id, item.permission]] : []))),
-    [queue],
-  );
-  const reasons = useMemo(() => new Map(queue.map((item) => [item.task.id, item.reason])), [queue]);
+  const effectiveGroup: GroupMode = sort === "status" || sort === "project" ? sort : group;
 
-  const live = useMemo(() => {
-    const tasks = state.snapshot.tasks.filter((t) => t.status !== "done");
-    return tasks.sort((a, b) => {
-      const ap = attentionIds.has(a.id) ? 0 : 1;
-      const bp = attentionIds.has(b.id) ? 0 : 1;
-      return ap - bp || b.updatedAt - a.updatedAt;
+  const tasks = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const result = state.snapshot.tasks.filter((task) => {
+      if (task.status === "done") {
+        return false;
+      }
+      if (filter === "attention" && !attentionById.has(task.id)) {
+        return false;
+      }
+      if (filter === "running" && task.status !== "running") {
+        return false;
+      }
+      return (
+        !normalizedQuery ||
+        task.prompt.toLocaleLowerCase().includes(normalizedQuery) ||
+        task.project.toLocaleLowerCase().includes(normalizedQuery)
+      );
     });
-  }, [state.snapshot.tasks, attentionIds]);
 
-  // Stable callbacks — avoid inline arrows that create new refs per task per render.
-  const handlePin = useCallback(
-    (taskId: string) => () => togglePin(taskId),
-    [togglePin],
-  );
-  const handleOpen = useCallback(
-    (taskId: string) => () => onOpenTask(taskId),
-    [onOpenTask],
+    return result.sort((a, b) => {
+      if (sort === "created") {
+        return b.createdAt - a.createdAt;
+      }
+      if (sort === "project") {
+        return a.project.localeCompare(b.project) || b.updatedAt - a.updatedAt;
+      }
+      if (sort === "status") {
+        const aGroup = statusGroup(a, attentionById.get(a.id)?.permission);
+        const bGroup = statusGroup(b, attentionById.get(b.id)?.permission);
+        return aGroup.rank - bGroup.rank || b.updatedAt - a.updatedAt;
+      }
+      const updatedDifference = b.updatedAt - a.updatedAt;
+      if (updatedDifference !== 0) {
+        return updatedDifference;
+      }
+      const aStatusRank = statusGroup(a, attentionById.get(a.id)?.permission).rank;
+      const bStatusRank = statusGroup(b, attentionById.get(b.id)?.permission).rank;
+      return aStatusRank - bStatusRank || a.id.localeCompare(b.id);
+    });
+  }, [attentionById, filter, query, sort, state.snapshot.tasks]);
+
+  const rows = useMemo(() => {
+    if (effectiveGroup === "none") {
+      return tasks.map((task): RailRow => ({ key: `task:${task.id}`, kind: "task", task }));
+    }
+
+    const grouped = new Map<string, { info: GroupInfo; tasks: TaskInfo[] }>();
+    for (const task of tasks) {
+      const info = groupInfo(task, effectiveGroup, attentionById.get(task.id)?.permission);
+      const existing = grouped.get(info.key);
+      if (existing) {
+        existing.tasks.push(task);
+      } else {
+        grouped.set(info.key, { info, tasks: [task] });
+      }
+    }
+
+    const groups = [...grouped.values()].sort((a, b) => {
+      if (effectiveGroup === "status") {
+        return a.info.rank - b.info.rank;
+      }
+      return a.info.label.localeCompare(b.info.label);
+    });
+    return groups.flatMap(({ info, tasks: groupedTasks }): RailRow[] => {
+      const groupKey = `${effectiveGroup}:${info.key}`;
+      const header: RailRow = {
+        count: groupedTasks.length,
+        group: info,
+        key: `group:${groupKey}`,
+        kind: "group",
+      };
+      return collapsed.has(groupKey)
+        ? [header]
+        : [
+            header,
+            ...groupedTasks.map(
+              (task): RailRow => ({ key: `task:${task.id}`, kind: "task", task }),
+            ),
+          ];
+    });
+  }, [attentionById, collapsed, effectiveGroup, tasks]);
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    estimateSize: (index) => (rows[index]?.kind === "group" ? 36 : 120),
+    getItemKey: (index) => rows[index]?.key ?? index,
+    getScrollElement: () => scrollRef.current,
+    overscan: 5,
+    // Each mounted wrapper is observed through measureElement below. Do not
+    // call virtualizer.measure() for content changes: it clears every cached
+    // mixed-height measurement, while only the changed row emits a resize.
+  });
+
+  useEffect(() => {
+    if (!attentionTargetId) return;
+    setQuery("");
+    setFilter("all");
+    setCollapsed(new Set());
+  }, [attentionTargetId, attentionTargetNonce]);
+
+  useEffect(() => {
+    if (!attentionTargetId || handledTargetNonce.current === attentionTargetNonce) return;
+    const index = rows.findIndex((row) => row.kind === "task" && row.task.id === attentionTargetId);
+    if (index < 0) return;
+    handledTargetNonce.current = attentionTargetNonce;
+    virtualizer.scrollToIndex(index, { align: "center" });
+    const frame = window.requestAnimationFrame(() => {
+      scrollRef.current
+        ?.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(attentionTargetId)}"]`)
+        ?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [attentionTargetId, attentionTargetNonce, rows, virtualizer]);
+
+  const handleOpen = useCallback((taskId: string) => onOpenTask(taskId), [onOpenTask]);
+  const handlePin = useCallback((taskId: string) => togglePin(taskId), [togglePin]);
+  const handleTogglePreview = useCallback((taskId: string) => {
+    setExpandedTaskId((current) => (current === taskId ? null : taskId));
+  }, []);
+  const toggleGroup = useCallback((groupKey: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
+      return next;
+    });
+  }, []);
+  const handleGroupChange = useCallback(
+    (value: string) => {
+      setGroup(value as GroupMode);
+      if (sort === "status" || sort === "project") {
+        setSort("updated");
+      }
+    },
+    [sort],
   );
 
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden bg-card/90">
-      <div className="flex h-11 items-center justify-between px-4">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-          Sessions
+    <Card className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border-border/80 bg-card/95 shadow-2xl backdrop-blur">
+      <div className="flex h-14 shrink-0 items-center gap-2.5 px-3.5">
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-secondary/55 text-primary">
+          <Activity className="size-3.5" />
         </span>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-foreground">Sessions</p>
+          <p className="truncate text-[10px] text-muted-foreground">Live workspace activity</p>
+        </div>
         {queue.length > 0 && (
-          <span className="tnum flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive/90 px-1.5 text-xs font-semibold text-destructive-foreground">
+          <span className="tnum ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive/90 px-1.5 text-xs font-semibold text-destructive-foreground shadow-sm">
             {queue.length}
           </span>
         )}
       </div>
       <Separator />
-      <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-2 p-2.5">
-          {live.length === 0 ? (
-            <div className="mt-10 px-4 text-center text-sm leading-relaxed text-muted-foreground">
-              <p className="mb-1 text-foreground">All quiet.</p>
-              No live sessions.
-            </div>
-          ) : (
-            live.map((task) => (
-              <SessionRailCard
-                key={task.id}
-                task={task}
-                updates={state.sessionUpdates[task.id]}
-                pinned={pinnedSet.has(task.id)}
-                attention={attentionIds.has(task.id)}
-                reason={reasons.get(task.id)}
-                permission={permissions.get(task.id)}
-                onPin={handlePin(task.id)}
-                onOpen={handleOpen(task.id)}
-              />
-            ))
-          )}
+
+      <div className="space-y-2 border-b bg-secondary/15 p-2.5">
+        <label className="flex h-8 items-center gap-2 rounded-md border border-border/80 bg-background/70 px-2 text-muted-foreground shadow-sm focus-within:ring-1 focus-within:ring-ring">
+          <Search className="size-3.5 shrink-0" />
+          <input
+            aria-label="Search sessions"
+            className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search task or project"
+            type="search"
+            value={query}
+          />
+        </label>
+
+        <div className="grid grid-cols-2 gap-2">
+          <Select value={sort} onValueChange={(value) => setSort(value as SortMode)}>
+            <SelectTrigger aria-label="Sort sessions" className="h-8 px-2 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="updated">Recently updated</SelectItem>
+              <SelectItem value="created">Recently created</SelectItem>
+              <SelectItem value="status">Status (grouped)</SelectItem>
+              <SelectItem value="project">Project (grouped)</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={effectiveGroup} onValueChange={handleGroupChange}>
+            <SelectTrigger aria-label="Group sessions" className="h-8 px-2 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No grouping</SelectItem>
+              <SelectItem value="project">By project</SelectItem>
+              <SelectItem value="agent">By agent</SelectItem>
+              <SelectItem value="status">By status</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
-      </ScrollArea>
+
+        <div className="grid grid-cols-3 rounded-md border border-border/50 bg-secondary/45 p-0.5">
+          {(["attention", "running", "all"] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={cn(
+                "rounded px-1.5 py-1 text-[11px] capitalize text-muted-foreground transition-colors",
+                filter === value && "bg-background text-foreground shadow-sm",
+              )}
+              onClick={() => setFilter(value)}
+            >
+              {value === "attention" ? "Needs you" : value}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-background/15">
+        {rows.length === 0 ? (
+          <div className="mt-10 px-4 text-center text-sm leading-relaxed text-muted-foreground">
+            <p className="mb-1 text-foreground">All quiet.</p>
+            No matching live sessions.
+          </div>
+        ) : (
+          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const row = rows[virtualRow.index];
+              return (
+                <div
+                  key={row.key}
+                  ref={virtualizer.measureElement}
+                  data-index={virtualRow.index}
+                  className="absolute left-0 top-0 w-full px-2.5 py-1"
+                  style={{ transform: `translateY(${virtualRow.start}px)` }}
+                >
+                  {row.kind === "group" ? (
+                    <button
+                      type="button"
+                      className="flex h-7 w-full items-center gap-1.5 rounded-md border border-transparent px-1.5 text-left text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground hover:border-border/60 hover:bg-secondary/50 hover:text-foreground"
+                      onClick={() => toggleGroup(`${effectiveGroup}:${row.group.key}`)}
+                    >
+                      <ChevronRight
+                        className={cn(
+                          "size-3.5 transition-transform",
+                          !collapsed.has(`${effectiveGroup}:${row.group.key}`) && "rotate-90",
+                        )}
+                      />
+                      <span className="truncate">{row.group.label}</span>
+                      <span className="tnum ml-auto font-normal">{row.count}</span>
+                    </button>
+                  ) : (
+                    <SessionRailCard
+                      task={row.task}
+                      updates={state.sessionUpdates[row.task.id]}
+                      pinned={pinnedSet.has(row.task.id)}
+                      attention={attentionById.has(row.task.id)}
+                      reason={attentionById.get(row.task.id)?.reason}
+                      permission={attentionById.get(row.task.id)?.permission}
+                      focused={attentionTargetId === row.task.id}
+                      timeMode={sort === "created" ? "created" : "updated"}
+                      expanded={expandedTaskId === row.task.id}
+                      onPin={handlePin}
+                      onOpen={handleOpen}
+                      onTogglePreview={handleTogglePreview}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </Card>
   );
 }
-
-/**
- * Memoized card — only re-renders when its specific task data changes.
- * Coalesces its own updates internally so the parent doesn't have to
- * pre-compute for every task on every render.
- */
-const SessionRailCard = memo(function SessionRailCard({
-  task,
-  updates,
-  pinned,
-  attention,
-  reason,
-  permission,
-  onPin,
-  onOpen,
-}: {
-  task: TaskInfo;
-  updates: SessionUpdate[] | undefined;
-  pinned: boolean;
-  attention: boolean;
-  reason?: string;
-  permission?: PermissionUpdate;
-  onPin: () => void;
-  onOpen: () => void;
-}) {
-  const badge = taskBadge(task.status);
-  const recent = useMemo(
-    () => (updates ? coalesceUpdates(updates).filter(previewableUpdate).slice(-4) : []),
-    [updates],
-  );
-
-  return (
-    <Card
-      className={cn(
-        "group flex cursor-pointer flex-col border-l-2 bg-card/70 p-3 transition-colors hover:border-primary/60 hover:bg-secondary/20",
-        taskEdge(task.status),
-        attention && "border-warn/40 bg-card",
-      )}
-      onClick={onOpen}
-    >
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="min-w-0 truncate font-semibold text-foreground">{task.project}</span>
-        <span className="shrink-0 font-mono">{task.agent}</span>
-        <span className="tnum ml-auto shrink-0">{elapsed(task.createdAt)}</span>
-        <button
-          type="button"
-          className={cn(
-            "rounded p-0.5 opacity-70 hover:bg-secondary hover:opacity-100",
-            pinned && "text-primary opacity-100",
-          )}
-          onClick={(e) => {
-            e.stopPropagation();
-            onPin();
-          }}
-          title={pinned ? "Unpin from Mission Control" : "Pin to Mission Control"}
-        >
-          <Pin className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          className="rounded p-0.5 opacity-70 hover:bg-secondary hover:opacity-100"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpen();
-          }}
-          title="Open full detail"
-        >
-          <Maximize2 className="size-3.5" />
-        </button>
-      </div>
-      <p className="mt-2 line-clamp-2 text-sm font-medium leading-snug">{task.prompt}</p>
-      {reason && <p className="mt-1 truncate text-xs text-warn/90">{reason}</p>}
-
-      {recent.length > 0 && (
-        <div className="mt-2 max-h-24 min-w-0 overflow-hidden rounded-md border border-border/50 bg-background/35 px-2.5 py-2">
-          <div
-            className="flex min-w-0 flex-col gap-1 text-xs leading-relaxed text-muted-foreground"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {recent.map((u, i) => (
-              <StreamLine key={streamKey(u, i)} update={u} compact />
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="mt-2 flex items-center gap-2">
-        <Badge variant={badge.variant}>{badge.label}</Badge>
-        {task.filesChanged > 0 && (
-          <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
-        )}
-      </div>
-
-      {permission && (
-        <div className="mt-2 flex flex-wrap gap-1.5" onClick={(e) => e.stopPropagation()}>
-          {permission.options.map((opt) => (
-            <Button
-              key={opt}
-              size="sm"
-              variant={opt === "deny" ? "destructive" : "default"}
-              onClick={() =>
-                void daemon.request("session.permission", {
-                  outcome: opt,
-                  request_id: permission.request_id,
-                  task_id: task.id,
-                })
-              }
-            >
-              {opt}
-            </Button>
-          ))}
-        </div>
-      )}
-    </Card>
-  );
-});

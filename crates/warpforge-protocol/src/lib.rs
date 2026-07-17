@@ -621,6 +621,10 @@ pub enum SessionUpdate {
         tool_call_id: String,
         title: String,
         status: ToolCallStatus,
+        /// Unix epoch milliseconds when the daemon first observed this call.
+        /// Optional for histories written by older Warpforge versions.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        started_at: Option<u64>,
         /// ACP tool kind: read/edit/delete/move/search/execute/think/fetch/other.
         #[serde(default)]
         tool_kind: String,
@@ -1155,6 +1159,18 @@ mod tests {
         assert!(
             matches!(old_history, SessionUpdate::UserMessage { attachments, .. } if attachments.is_empty())
         );
+
+        let old_tool: SessionUpdate = serde_json::from_str(
+            r#"{"kind":"tool_call","tool_call_id":"t1","title":"wait","status":"in_progress","tool_kind":"execute"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            old_tool,
+            SessionUpdate::ToolCall {
+                started_at: None,
+                ..
+            }
+        ));
     }
 
     #[test]

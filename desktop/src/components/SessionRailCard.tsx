@@ -1,0 +1,173 @@
+import { ChevronDown, ChevronUp, FilePen, ListTodo, Pin, Wrench } from "lucide-react";
+import { memo, useMemo } from "react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import type { PermissionUpdate } from "@/lib/sessionPermissions";
+import { latestSessionPreview } from "@/lib/sessionPreview";
+import { elapsed, taskBadge, taskEdge } from "@/lib/status";
+import { cn } from "@/lib/utils";
+
+import { daemon } from "../daemon";
+import type { SessionUpdate, TaskInfo } from "../protocol";
+
+export interface SessionRailCardProps {
+  task: TaskInfo;
+  updates: SessionUpdate[] | undefined;
+  pinned: boolean;
+  attention: boolean;
+  reason?: string;
+  permission?: PermissionUpdate;
+  focused?: boolean;
+  timeMode: "created" | "updated";
+  expanded: boolean;
+  onPin: (taskId: string) => void;
+  onOpen: (taskId: string) => void;
+  onTogglePreview: (taskId: string) => void;
+}
+
+/**
+ * Only the card whose task or update array changed re-renders. In particular,
+ * the callbacks are shared by every card rather than recreated while mapping.
+ */
+const SessionRailCard = memo(function SessionRailCard({
+  task,
+  updates,
+  pinned,
+  attention,
+  reason,
+  permission,
+  focused,
+  timeMode,
+  expanded,
+  onPin,
+  onOpen,
+  onTogglePreview,
+}: SessionRailCardProps) {
+  const badge = taskBadge(task.status);
+  const latestUpdate = updates?.[updates.length - 1];
+  const activelyStreaming =
+    task.status === "running" && !permission && latestUpdate?.kind !== "turn_ended";
+  const preview = useMemo(
+    () => latestSessionPreview(updates, { active: activelyStreaming, expanded }),
+    [activelyStreaming, expanded, updates],
+  );
+  const timestamp = timeMode === "created" ? task.createdAt : task.updatedAt;
+  const timeLabel = timeMode === "created" ? "Created" : "Updated";
+
+  return (
+    <Card
+      className={cn(
+        "group relative flex cursor-pointer flex-col rounded-md border-l-2 bg-card/75 p-3 shadow-sm transition-colors hover:border-primary/60 hover:bg-secondary/25 hover:shadow-md",
+        taskEdge(task.status),
+        attention && "border-warn/50 bg-card ring-1 ring-warn/10",
+        focused && "ring-2 ring-primary/60",
+      )}
+    >
+      <button
+        type="button"
+        className="absolute inset-0 z-0 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+        onClick={() => onOpen(task.id)}
+        aria-label={`Open ${task.project} session: ${task.prompt}`}
+        data-task-id={task.id}
+      />
+      <div className="pointer-events-none relative z-10 flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="min-w-0 truncate font-semibold text-foreground">{task.project}</span>
+        <span className="shrink-0 font-mono">{task.agent}</span>
+        <span
+          className="tnum ml-auto shrink-0"
+          aria-label={`${timeLabel} ${elapsed(timestamp)} ago`}
+          title={`${timeLabel} ${elapsed(timestamp)} ago`}
+        >
+          {elapsed(timestamp)}
+        </span>
+        <button
+          type="button"
+          aria-label={pinned ? "Unpin from Mission Control" : "Pin to Mission Control"}
+          className={cn(
+            "pointer-events-auto",
+            "rounded p-0.5 opacity-70 hover:bg-secondary hover:opacity-100",
+            pinned && "text-primary opacity-100",
+          )}
+          onClick={() => onPin(task.id)}
+          title={pinned ? "Unpin from Mission Control" : "Pin to Mission Control"}
+        >
+          <Pin className="size-3.5" />
+        </button>
+      </div>
+      <p className="pointer-events-none relative z-10 mt-2 line-clamp-2 text-sm font-medium leading-snug">
+        {task.prompt}
+      </p>
+      {reason && (
+        <p className="pointer-events-none relative z-10 mt-1 truncate text-xs text-warn/90">
+          {reason}
+        </p>
+      )}
+
+      {preview && !permission && (
+        <div className="pointer-events-none relative z-10 mt-2 min-w-0 rounded-md border border-border/50 bg-background/35 px-2.5 py-2">
+          <div className="mb-1 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80">
+            {preview.kind === "tool" && <Wrench className="size-3" />}
+            {preview.kind === "file" && <FilePen className="size-3" />}
+            {preview.kind === "plan" && <ListTodo className="size-3" />}
+            {preview.label}
+          </div>
+          <p
+            className={cn(
+              "break-words text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]",
+              preview.kind === "thought" && "italic",
+              (preview.kind === "tool" || preview.kind === "file") && "font-mono",
+            )}
+            title={preview.text}
+          >
+            {preview.text}
+          </p>
+          {(preview.truncated || expanded) && (
+            <button
+              type="button"
+              className="pointer-events-auto mt-1.5 flex items-center gap-1 rounded-sm text-[11px] font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              aria-expanded={expanded}
+              onClick={() => onTogglePreview(task.id)}
+            >
+              {expanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+              {expanded ? "Show less" : "Show more"}
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="pointer-events-none relative z-10 mt-2 flex items-center gap-2">
+        <Badge variant={badge.variant}>{badge.label}</Badge>
+        {task.filesChanged > 0 && (
+          <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
+        )}
+      </div>
+
+      {permission && (
+        <div className="pointer-events-none relative z-10 mt-2 flex flex-wrap gap-1.5">
+          {permission.options.map((option) => (
+            <Button
+              key={option}
+              aria-label={`${option} permission for ${task.project}`}
+              className="pointer-events-auto"
+              size="sm"
+              variant={option === "deny" ? "destructive" : "default"}
+              onClick={() => {
+                void daemon.request("session.permission", {
+                  outcome: option,
+                  request_id: permission.request_id,
+                  task_id: task.id,
+                });
+              }}
+            >
+              {option}
+            </Button>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+});
+
+export default SessionRailCard;

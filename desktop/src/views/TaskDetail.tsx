@@ -8,6 +8,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Archive,
+  ArrowDown,
   ArrowLeft,
   Check,
   ChevronDown,
@@ -33,8 +34,11 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { createChatFollowGate, shouldFollowAfterScroll } from "@/lib/chatScroll";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { resolvedPermissions } from "@/lib/sessionPermissions";
+import { activeThinkingIndex } from "@/lib/sessionThinking";
 import { activityBadge, orchNodeBadge, taskBadge } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
@@ -105,6 +109,14 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
 
   const composerRef = useRef<ComposerHandle>(null);
   const streamParent = useRef<HTMLDivElement>(null);
+  const streamContent = useRef<HTMLDivElement>(null);
+  const followingStream = useRef(true);
+  const previousStreamScrollTop = useRef(0);
+  const streamScrollFrame = useRef<number | null>(null);
+  const streamFollowGate = useMemo(() => createChatFollowGate(), []);
+  const streamTouchY = useRef<number | null>(null);
+  const streamPointerY = useRef<number | null>(null);
+  const [streamFollowing, setStreamFollowing] = useState(true);
   const diffScrollParent = useRef<HTMLDivElement>(null);
   const splitScrollParent = useRef<HTMLDivElement>(null);
   const badge = taskBadge(task.status);
@@ -175,27 +187,32 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     setCenterTab("editor");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const openDiffFile = useCallback((path: string) => {
-    setSelectedFile(path);
-    setActiveTab({ kind: "changes" });
-    setShowDiff(true);
-    setCenterTab("changes");
-    requestAnimationFrame(() => {
-      const idx = diff?.files.findIndex((f) => f.path === path);
-      if (idx !== undefined && idx >= 0) {
-        const viz = diffView === "unified" ? diffVirtualizer : splitVirtualizer;
-        viz.scrollToIndex(idx, { align: "start" });
-      }
-      // After virtualizer scrolls, the DOM element should be mounted.
+  /* oxlint-disable react-hooks/exhaustive-deps -- virtualizers are initialized below; callbacks run after render */
+  const openDiffFile = useCallback(
+    (path: string) => {
+      setSelectedFile(path);
+      setActiveTab({ kind: "changes" });
+      setShowDiff(true);
+      setCenterTab("changes");
       requestAnimationFrame(() => {
-        document.getElementById(fileAnchor(path))?.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
+        const idx = diff?.files.findIndex((f) => f.path === path);
+        if (idx !== undefined && idx >= 0) {
+          const viz = diffView === "unified" ? diffVirtualizer : splitVirtualizer;
+          viz.scrollToIndex(idx, { align: "start" });
+        }
+        // After virtualizer scrolls, the DOM element should be mounted.
+        requestAnimationFrame(() => {
+          document.getElementById(fileAnchor(path))?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          });
         });
       });
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [diff?.files, diffView]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [diff?.files, diffView],
+  );
+  /* oxlint-enable react-hooks/exhaustive-deps */
   const openChangesTab = useCallback(() => {
     setActiveTab({ kind: "changes" });
     setShowDiff(true);
@@ -233,7 +250,21 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   }, [diff]);
 
   const merged = useMemo(() => coalesceUpdates(updates), [updates]);
-  const activity = useMemo(() => sessionActivity(task, merged), [task, merged]);
+  // Phase chronology must come from raw updates: coalescing replaces repeated
+  // tool frames in place, which can make a later completion appear before the
+  // thought it actually ended.
+  const streamingThoughtIndex = useMemo(() => {
+    if (activeThinkingIndex(updates, task.status) === null) {
+      return null;
+    }
+    for (let index = merged.length - 1; index >= 0; index--) {
+      if (merged[index].kind === "agent_thought") {
+        return index;
+      }
+    }
+    return null;
+  }, [merged, task.status, updates]);
+  const activity = useMemo(() => sessionActivity(task, updates), [task, updates]);
   // While the agent is actively working a turn, the header chip reflects the
   // Live activity (thinking/working/writing) instead of the coarse status.
   const headerBadge = activity ? activityBadge(activity.tone, activity.label) : badge;
@@ -262,22 +293,142 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     return false;
   }, [updates]);
 
-  // Virtualize the conversation — histories run to thousands of updates
-  // (codex re-sends every tool_call frame), so only mount what's on screen.
-  const streamVirtualizer = useVirtualizer({
-    count: merged.length,
-    estimateSize: () => 100,
-    getItemKey: (i) => streamKey(merged[i], i),
-    getScrollElement: () => streamParent.current,
-    overscan: 30,
-  });
+  const setFollowingStream = useCallback((following: boolean) => {
+    followingStream.current = following;
+    setStreamFollowing((current) => (current === following ? current : following));
+  }, []);
+
+  const cancelPendingStreamScroll = useCallback(() => {
+    streamFollowGate.cancel();
+    if (streamScrollFrame.current !== null) {
+      cancelAnimationFrame(streamScrollFrame.current);
+      streamScrollFrame.current = null;
+    }
+  }, [streamFollowGate]);
+
+  const pauseFollowingStream = useCallback(() => {
+    cancelPendingStreamScroll();
+    setFollowingStream(false);
+  }, [cancelPendingStreamScroll, setFollowingStream]);
+
+  const queueStreamToBottom = useCallback(() => {
+    const token = streamFollowGate.issue();
+    if (streamScrollFrame.current !== null) cancelAnimationFrame(streamScrollFrame.current);
+    streamScrollFrame.current = requestAnimationFrame(() => {
+      streamScrollFrame.current = null;
+      if (!streamFollowGate.isCurrent(token) || !followingStream.current) return;
+      const element = streamParent.current;
+      if (!element) return;
+      element.scrollTo({ behavior: "auto", top: element.scrollHeight });
+      previousStreamScrollTop.current = element.scrollTop;
+    });
+  }, [streamFollowGate]);
+
+  const resumeStreamFollowing = useCallback(() => {
+    cancelPendingStreamScroll();
+    setFollowingStream(true);
+    const element = streamParent.current;
+    if (!element) return;
+    // Explicit resume and send are immediate so a smooth/programmatic scroll
+    // cannot race the next streaming resize.
+    element.scrollTo({ behavior: "auto", top: element.scrollHeight });
+    previousStreamScrollTop.current = element.scrollTop;
+  }, [cancelPendingStreamScroll, setFollowingStream]);
+
+  const handleStreamScroll = useCallback(() => {
+    const element = streamParent.current;
+    if (!element) return;
+    // Once detached, only the explicit resume affordance re-enables following.
+    // Virtualizer measurement can itself change scrollTop, so treating every
+    // scroll event near the bottom as user intent causes surprise reattachment.
+    if (!followingStream.current) {
+      previousStreamScrollTop.current = element.scrollTop;
+      return;
+    }
+    const nextFollowing = shouldFollowAfterScroll(previousStreamScrollTop.current, element);
+    if (!nextFollowing) cancelPendingStreamScroll();
+    setFollowingStream(nextFollowing);
+    previousStreamScrollTop.current = element.scrollTop;
+  }, [cancelPendingStreamScroll, setFollowingStream]);
+
+  const handleStreamWheel = useCallback(
+    (event: React.WheelEvent) => {
+      if (event.deltaY < 0) pauseFollowingStream();
+    },
+    [pauseFollowingStream],
+  );
+
+  const handleStreamKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      if (["ArrowUp", "Home", "PageUp"].includes(event.key)) pauseFollowingStream();
+    },
+    [pauseFollowingStream],
+  );
+
+  const handleStreamTouchStart = useCallback((event: React.TouchEvent) => {
+    streamTouchY.current = event.touches[0]?.clientY ?? null;
+  }, []);
+
+  const handleStreamTouchMove = useCallback(
+    (event: React.TouchEvent) => {
+      const nextY = event.touches[0]?.clientY;
+      if (nextY === undefined) return;
+      if (streamTouchY.current !== null && nextY > streamTouchY.current + 1) {
+        pauseFollowingStream();
+      }
+      streamTouchY.current = nextY;
+    },
+    [pauseFollowingStream],
+  );
+
+  const handleStreamPointerDown = useCallback((event: React.PointerEvent) => {
+    streamPointerY.current = event.pointerType === "mouse" ? event.clientY : null;
+  }, []);
+
+  const handleStreamPointerMove = useCallback(
+    (event: React.PointerEvent) => {
+      if (event.pointerType !== "mouse" || event.buttons !== 1) return;
+      if (streamPointerY.current !== null && event.clientY < streamPointerY.current - 1) {
+        pauseFollowingStream();
+      }
+      streamPointerY.current = event.clientY;
+    },
+    [pauseFollowingStream],
+  );
+
+  // Content can grow without adding a merged item (streamed text), and measured
+  // virtual rows can resize when Thinking is toggled. Follow those changes only
+  // while the user has chosen to stay at the latest message.
+  useEffect(() => {
+    if (!showChat) return;
+    const content = streamContent.current;
+    if (!content) return;
+    const observer = new ResizeObserver(() => {
+      if (followingStream.current) {
+        queueStreamToBottom();
+      }
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [queueStreamToBottom, showChat]);
 
   useEffect(() => {
-    if (merged.length > 0) {
-      streamVirtualizer.scrollToIndex(merged.length - 1, { align: "end" });
+    if (!showChat) {
+      cancelPendingStreamScroll();
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [merged.length]);
+    setFollowingStream(true);
+    previousStreamScrollTop.current = 0;
+    resumeStreamFollowing();
+    return cancelPendingStreamScroll;
+  }, [cancelPendingStreamScroll, resumeStreamFollowing, setFollowingStream, showChat, task.id]);
+
+  useEffect(
+    () => () => {
+      cancelPendingStreamScroll();
+    },
+    [cancelPendingStreamScroll],
+  );
 
   // Virtualize the unified diff — large change sets (900+ files) would mount
   // thousands of DOM nodes if every FileDiffView were rendered at once.
@@ -414,40 +565,61 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
                     </div>
                   </div>
                 </div>
-                <div
-                  ref={streamParent}
-                  className="min-w-0 flex-1 overflow-y-auto px-4 py-4 text-sm"
-                >
-                  {merged.length === 0 ? (
-                    <p className="text-muted-foreground">No session activity yet.</p>
-                  ) : (
-                    <div
-                      className="relative w-full"
-                      style={{ height: streamVirtualizer.getTotalSize() }}
-                    >
-                      {streamVirtualizer.getVirtualItems().map((vi) => (
-                        <div
-                          key={vi.key}
-                          data-index={vi.index}
-                          ref={streamVirtualizer.measureElement}
-                          className="absolute left-0 top-0 w-full pb-3"
-                          style={{ transform: `translateY(${vi.start}px)` }}
-                        >
-                          <StreamLine
-                            update={merged[vi.index]}
-                            taskId={task.id}
-                            resolved={resolvedPerms}
-                            resolveFilePath={resolveSessionFilePath}
-                            onOpenFile={openFileTab}
-                          />
+                <div className="relative min-h-0 flex-1">
+                  <div
+                    ref={streamParent}
+                    onScroll={handleStreamScroll}
+                    onWheel={handleStreamWheel}
+                    onKeyDown={handleStreamKeyDown}
+                    onTouchStart={handleStreamTouchStart}
+                    onTouchMove={handleStreamTouchMove}
+                    onPointerDown={handleStreamPointerDown}
+                    onPointerMove={handleStreamPointerMove}
+                    tabIndex={0}
+                    className="h-full min-w-0 overflow-y-auto px-4 py-4 pb-14 text-sm [overflow-anchor:none]"
+                  >
+                    <div ref={streamContent}>
+                      {merged.length === 0 ? (
+                        <p className="text-muted-foreground">No session activity yet.</p>
+                      ) : (
+                        <div className="w-full">
+                          {merged.map((update, index) => (
+                            <div key={streamKey(update, index)} className="pb-3">
+                              <StreamLine
+                                update={update}
+                                thinkingActive={index === streamingThoughtIndex}
+                                taskId={task.id}
+                                resolved={resolvedPerms}
+                                resolveFilePath={resolveSessionFilePath}
+                                onOpenFile={openFileTab}
+                              />
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
+                      {activity && (
+                        <div className="pt-3">
+                          <AgentActivityIndicator activity={activity} />
+                        </div>
+                      )}
                     </div>
-                  )}
-                  {activity && (
-                    <div className="sticky bottom-0 z-10 pt-3">
-                      <AgentActivityIndicator activity={activity} />
-                    </div>
+                  </div>
+                  {!streamFollowing && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="absolute bottom-3 right-4 z-20 size-9 rounded-full bg-background text-muted-foreground shadow-sm hover:text-foreground"
+                          aria-label="Scroll to latest message"
+                          onClick={resumeStreamFollowing}
+                        >
+                          <ArrowDown className="size-4" aria-hidden="true" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="left">Latest message</TooltipContent>
+                    </Tooltip>
                   )}
                 </div>
                 <Composer
@@ -458,6 +630,7 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
                   imageSupported={imageSupported}
                   disabled={task.status === "done"}
                   onSend={async (submission) => {
+                    resumeStreamFollowing();
                     await daemon.request("session.prompt", { task_id: task.id, ...submission });
                   }}
                   toolbar={
@@ -1016,10 +1189,7 @@ function ProjectFilesPanel({
         {rows.length === 0 && !error ? (
           <p className="px-3 py-2 text-xs text-muted-foreground">No files found.</p>
         ) : (
-          <div
-            className="relative w-full"
-            style={{ height: virtualizer.getTotalSize() }}
-          >
+          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((vi) => {
               const row = rows[vi.index];
               const pad = { paddingLeft: `${row.depth * 12 + 10}px` };
@@ -1060,7 +1230,10 @@ function ProjectFilesPanel({
                   className="absolute left-0 top-0 flex h-7 w-full min-w-0 items-center gap-1.5 pr-2 text-left text-xs text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
                 >
                   <ChevronDown
-                    className={cn("size-3.5 shrink-0 transition-transform", !isOpen && "-rotate-90")}
+                    className={cn(
+                      "size-3.5 shrink-0 transition-transform",
+                      !isOpen && "-rotate-90",
+                    )}
                   />
                   <span className="truncate">{row.node.name}</span>
                 </button>
