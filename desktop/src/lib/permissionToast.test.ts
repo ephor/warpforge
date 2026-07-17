@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import type { SessionUpdate } from "../protocol";
-import { permissionToastContext } from "./permissionToast";
+import {
+  PERMISSION_TOAST_CONTEXT_LIMIT,
+  permissionToastApproveOption,
+  permissionToastContext,
+} from "./permissionToast";
 
-const request = (title = "Permission request"): Extract<
-  SessionUpdate,
-  { kind: "permission_request" }
-> => ({ kind: "permission_request", options: ["allow", "deny"], request_id: "request-1", title });
+const request = (
+  title = "Permission request",
+): Extract<SessionUpdate, { kind: "permission_request" }> => ({
+  kind: "permission_request",
+  options: ["allow", "deny"],
+  request_id: "request-1",
+  title,
+});
 
 const tool = (title: string): SessionUpdate => ({
   kind: "tool_call",
@@ -32,7 +40,10 @@ describe("permissionToastContext", () => {
 
   it("does not borrow a tool from an earlier turn", () => {
     expect(
-      permissionToastContext(request(), [tool("old command"), { kind: "turn_ended", stop_reason: "end_turn" }]),
+      permissionToastContext(request(), [
+        tool("old command"),
+        { kind: "turn_ended", stop_reason: "end_turn" },
+      ]),
     ).toBe("Permission request");
   });
 
@@ -40,7 +51,12 @@ describe("permissionToastContext", () => {
     const permission = request();
     const context = permissionToastContext(
       permission,
-      [tool("deploy\n --api-key super-secret TOKEN=also-secret https://me:hunter2@example.com/very/long/path"), permission],
+      [
+        tool(
+          "deploy\n --api-key super-secret TOKEN=also-secret https://me:hunter2@example.com/very/long/path",
+        ),
+        permission,
+      ],
       72,
     );
     expect(context).not.toContain("super-secret");
@@ -54,8 +70,28 @@ describe("permissionToastContext", () => {
     expect(permissionToastContext(request("**Approve** `git status`"), [])).toBe(
       "Approve git status",
     );
-    expect(permissionToastContext(request('{"command":"git push","env":{"TOKEN":"secret"}}'), [])).toBe(
-      "Permission request",
-    );
+    expect(
+      permissionToastContext(request('{"command":"git push","env":{"TOKEN":"secret"}}'), []),
+    ).toBe("Permission request");
+  });
+
+  it("hard-bounds a multi-kilobyte permission title", () => {
+    const hugePrompt = `Please approve this operation. ${"large task context ".repeat(500)}`;
+    const summary = permissionToastContext(request(hugePrompt), []);
+
+    expect(hugePrompt.length).toBeGreaterThan(5_000);
+    expect(Array.from(summary).length).toBeLessThanOrEqual(PERMISSION_TOAST_CONTEXT_LIMIT);
+    expect(summary.endsWith("…")).toBe(true);
+  });
+});
+
+describe("permissionToastApproveOption", () => {
+  it("prefers a one-shot approval without escalating to allow always", () => {
+    expect(permissionToastApproveOption(["allow_always", "deny", "allow"])).toBe("allow");
+    expect(permissionToastApproveOption(["Allow once", "deny"])).toBe("Allow once");
+  });
+
+  it("requires review when only persistent approval is available", () => {
+    expect(permissionToastApproveOption(["allow_always", "deny"])).toBeUndefined();
   });
 });
