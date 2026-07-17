@@ -57,34 +57,20 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
   const onRowMouseEnter = useCallback((name: string) => setHoveredProject(name), []);
   const onRowMouseLeave = useCallback(() => setHoveredProject(null), []);
 
-  if (snapshot.projects.length === 0) {
-    return (
-      <div className="mt-16 flex flex-col items-center gap-4 text-center text-muted-foreground">
-        <p>
-          No projects registered. Run <code className="text-foreground">wf add &lt;path&gt;</code>{" "}
-          or add one below.
-        </p>
-        <Button variant="outline" onClick={() => setShowAddDialog(true)}>
-          <Plus className="mr-1 size-4" />
-          Add Project
-        </Button>
-        <AddProjectDialog open={showAddDialog} onOpenChange={setShowAddDialog} />
-      </div>
-    );
-  }
-
-  const project = snapshot.projects.find((p) => p.name === selected) ?? snapshot.projects[0];
+  const project =
+    snapshot.projects.find((p) => p.name === selected) ?? snapshot.projects[0] ?? null;
+  const projectName = project?.name ?? "";
   const services = useMemo(
-    () => snapshot.services.filter((s) => s.project === project.name),
-    [snapshot.services, project.name],
+    () => snapshot.services.filter((s) => s.project === projectName),
+    [snapshot.services, projectName],
   );
   const pfs = useMemo(
-    () => snapshot.portforwards.filter((pf) => pf.project === project.name),
-    [snapshot.portforwards, project.name],
+    () => snapshot.portforwards.filter((pf) => pf.project === projectName),
+    [snapshot.portforwards, projectName],
   );
   const projectTasks = useMemo(
-    () => snapshot.tasks.filter((t) => t.project === project.name),
-    [snapshot.tasks, project.name],
+    () => snapshot.tasks.filter((t) => t.project === projectName),
+    [snapshot.tasks, projectName],
   );
   const running = useMemo(
     () => services.filter((s) => s.status === "running" && s.allocatedPort > 0),
@@ -100,6 +86,22 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
     }
     return map;
   }, [snapshot.services]);
+
+  if (!project) {
+    return (
+      <div className="mt-16 flex flex-col items-center gap-4 text-center text-muted-foreground">
+        <p>
+          No projects registered. Run <code className="text-foreground">wf add &lt;path&gt;</code>{" "}
+          or add one below.
+        </p>
+        <Button variant="outline" onClick={() => setShowAddDialog(true)}>
+          <Plus className="mr-1 size-4" />
+          Add Project
+        </Button>
+        <AddProjectDialog open={showAddDialog} onOpenChange={setShowAddDialog} />
+      </div>
+    );
+  }
 
   return (
     <div className="grid h-full grid-cols-[220px_1fr] gap-4">
