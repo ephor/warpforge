@@ -1,5 +1,5 @@
 import { Bot, Circle, FolderTree, KanbanSquare, LayoutGrid, PanelLeft, Plus } from "lucide-react";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,8 @@ export default function App() {
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [manualDetected, setManualDetected] = useState<DetectedAgent[] | null>(null);
   const [pushOpen, setPushOpen] = useState(false);
+
+  const handleOpenTask = useCallback((id: string) => setOpenTaskId(id), [setOpenTaskId]);
 
   const openTask = state.snapshot.tasks.find((t) => t.id === openTaskId) ?? null;
 
@@ -314,7 +316,7 @@ export default function App() {
             attentionOpen ? "translate-x-0" : "-translate-x-full pointer-events-none",
           )}
         >
-          <AttentionRail state={state} onOpenTask={setOpenTaskId} />
+          <AttentionRail state={state} onOpenTask={handleOpenTask} />
         </div>
 
         <NewTaskDialog
