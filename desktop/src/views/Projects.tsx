@@ -61,8 +61,8 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
     return (
       <div className="mt-16 flex flex-col items-center gap-4 text-center text-muted-foreground">
         <p>
-          No projects registered. Run <code className="text-foreground">wf add &lt;path&gt;</code> or
-          add one below.
+          No projects registered. Run <code className="text-foreground">wf add &lt;path&gt;</code>{" "}
+          or add one below.
         </p>
         <Button variant="outline" onClick={() => setShowAddDialog(true)}>
           <Plus className="mr-1 size-4" />

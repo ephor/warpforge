@@ -116,14 +116,16 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
     });
   };
 
-  const done = useMemo(() => byStatus("done").sort((a, b) => b.updatedAt - a.updatedAt), [byStatus]);
+  const done = useMemo(
+    () => byStatus("done").sort((a, b) => b.updatedAt - a.updatedAt),
+    [byStatus],
+  );
   const running = useMemo(() => byStatus("running"), [byStatus]);
   // Open conversations: the agent is either working (running) or waiting for
   // Your next message (idle). Both are live, non-review, non-done.
   const review = useMemo(() => byStatus(["needs_review", "blocked", "interrupted"]), [byStatus]);
   const laneTrees = useMemo(
-    () => (lane: ReturnType<typeof treeLane>) =>
-      forest.filter((tree) => treeLane(tree) === lane),
+    () => (lane: ReturnType<typeof treeLane>) => forest.filter((tree) => treeLane(tree) === lane),
     [forest],
   );
   const queueTrees = useMemo(() => laneTrees("queue"), [laneTrees]);
