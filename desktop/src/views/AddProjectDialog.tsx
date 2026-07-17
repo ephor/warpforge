@@ -1,6 +1,6 @@
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, Loader2 } from "lucide-react";
 import { useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -95,8 +95,8 @@ export default function AddProjectDialog({ open, onOpenChange }: Props) {
           <DialogTitle>Add Project</DialogTitle>
           <DialogDescription>
             Register a folder as a Warpforge project. A{" "}
-            <code className="text-foreground">.warpforge.yaml</code> config will be created if
-            none exists.
+            <code className="text-foreground">.warpforge.yaml</code> config will be created if none
+            exists.
           </DialogDescription>
         </DialogHeader>
 
@@ -146,9 +146,7 @@ export default function AddProjectDialog({ open, onOpenChange }: Props) {
             />
           </div>
 
-          {error && (
-            <p className="text-xs text-red-400">{error}</p>
-          )}
+          {error && <p className="text-xs text-red-400">{error}</p>}
         </div>
 
         <DialogFooter>

@@ -1,5 +1,5 @@
-import { ChevronRight, GitCommitVertical, RefreshCw, Undo2 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { ChevronRight, GitCommitVertical, RefreshCw, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -357,10 +357,7 @@ export function ChangesRail({
         {rows.length === 0 ? (
           <p className="px-3 py-2 text-xs text-muted-foreground">No changes.</p>
         ) : (
-          <div
-            className="relative w-full"
-            style={{ height: virtualizer.getTotalSize() }}
-          >
+          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((vi) => {
               const row = rows[vi.index];
               const pad = { paddingLeft: `${row.depth * 12 + 8}px` };
@@ -439,7 +436,10 @@ export function ChangesRail({
                     className="flex min-w-0 flex-1 items-center gap-1 text-left hover:text-foreground"
                   >
                     <ChevronRight
-                      className={cn("size-3.5 shrink-0 transition-transform", isOpen && "rotate-90")}
+                      className={cn(
+                        "size-3.5 shrink-0 transition-transform",
+                        isOpen && "rotate-90",
+                      )}
                     />
                     <span className="truncate">{row.node.name}</span>
                     <span className="ml-1 shrink-0 text-[10px] text-muted-foreground/70">
