@@ -2,7 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import type { TaskInfo, TaskStatus } from "@/protocol";
 
-import { buildTaskForest, flattenTaskTree, treeLane, treeMatches } from "./taskGroups";
+import {
+  buildTaskForest,
+  buildTaskGroupIndex,
+  flattenTaskTree,
+  resolvePinnedTaskGroups,
+  resolveGroupTaskId,
+  taskGroupStatus,
+  treeLane,
+  treeMatches,
+} from "./taskGroups";
 
 function task(id: string, status: TaskStatus, parentTaskId?: string): TaskInfo {
   return {
@@ -131,5 +140,35 @@ describe("task orchestration groups", () => {
     const treeB = forest.find((t) => t.task.id === "b")!;
     expect(treeA.children.map((c) => c.task.id)).toStrictEqual(["child-of-a"]);
     expect(treeB.children.map((c) => c.task.id)).toStrictEqual(["child-of-b"]);
+  });
+
+  it("resolves a direct child pin to its root exactly once", () => {
+    const tasks = [
+      task("root", "running"),
+      task("child", "needs_review", "root"),
+      task("grandchild", "running", "child"),
+    ];
+    const index = buildTaskGroupIndex(tasks);
+
+    expect(resolvePinnedTaskGroups(index, ["child", "root", "grandchild"])).toHaveLength(1);
+    expect(resolvePinnedTaskGroups(index, ["child"])[0].task.id).toBe("root");
+  });
+
+  it("bubbles blocked, permission, review, then running from descendants", () => {
+    const [review] = buildTaskForest([task("root", "idle"), task("child", "needs_review", "root")]);
+    expect(taskGroupStatus(review)).toBe("review");
+    expect(taskGroupStatus(review, new Set(["root"]))).toBe("permission");
+
+    const [blocked] = buildTaskForest([task("root", "running"), task("child", "blocked", "root")]);
+    expect(taskGroupStatus(blocked, new Set(["root"]))).toBe("blocked");
+  });
+
+  it("focuses the exact child attention target without leaking across groups", () => {
+    const [group] = buildTaskForest([
+      task("root", "running"),
+      task("child", "needs_review", "root"),
+    ]);
+    expect(resolveGroupTaskId(group, "root", "child")).toBe("child");
+    expect(resolveGroupTaskId(group, "child", "unrelated")).toBe("child");
   });
 });

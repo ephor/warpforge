@@ -14,6 +14,7 @@ import type { SessionUpdate, TaskInfo } from "../protocol";
 
 export interface SessionRailCardProps {
   task: TaskInfo;
+  parentTask?: TaskInfo;
   updates: SessionUpdate[] | undefined;
   pinned: boolean;
   attention: boolean;
@@ -33,6 +34,7 @@ export interface SessionRailCardProps {
  */
 const SessionRailCard = memo(function SessionRailCard({
   task,
+  parentTask,
   updates,
   pinned,
   attention,
@@ -99,6 +101,16 @@ const SessionRailCard = memo(function SessionRailCard({
       <p className="pointer-events-none relative z-10 mt-2 line-clamp-2 text-sm font-medium leading-snug">
         {task.prompt}
       </p>
+      {parentTask && (
+        <p
+          className="pointer-events-none relative z-10 mt-1 truncate text-[11px] text-muted-foreground"
+          title={`${parentTask.prompt} → ${task.prompt}`}
+        >
+          <span className="font-medium text-foreground/75">{parentTask.prompt}</span>
+          <span aria-hidden="true"> → </span>
+          <span>{task.agent}</span>
+        </p>
+      )}
       {reason && (
         <p className="pointer-events-none relative z-10 mt-1 truncate text-xs text-warn/90">
           {reason}

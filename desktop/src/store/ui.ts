@@ -42,6 +42,7 @@ interface UiState {
   toggleRuntime: () => void;
   setRuntimeOpen: (open: boolean) => void;
   togglePinnedTask: (id: string) => void;
+  setPinnedTaskIds: (ids: string[]) => void;
 }
 
 export const useUi = create<UiState>()(
@@ -80,6 +81,7 @@ export const useUi = create<UiState>()(
       setRightPanel: (rightPanel) => set({ rightPanel }),
       toggleRuntime: () => set((s) => ({ runtimeOpen: !s.runtimeOpen })),
       setRuntimeOpen: (runtimeOpen) => set({ runtimeOpen }),
+      setPinnedTaskIds: (pinnedTaskIds) => set({ pinnedTaskIds }),
       togglePinnedTask: (id) =>
         set((s) => ({
           pinnedTaskIds: s.pinnedTaskIds.includes(id)

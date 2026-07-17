@@ -3,23 +3,39 @@ import {
   Activity,
   ChevronRight,
   Clock3,
+  ChevronDown,
   FilePen,
   FileText,
   ListTodo,
   Maximize2,
   Plus,
   TriangleAlert,
+  Users,
   Wrench,
   X,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { sessionActivity } from "@/lib/sessionActivity";
-import { pendingPermission, resolvedPermissions } from "@/lib/sessionPermissions";
+import {
+  latestPendingPermission,
+  pendingPermission,
+  resolvedPermissions,
+} from "@/lib/sessionPermissions";
 import { activityBadge, elapsed, taskBadge } from "@/lib/status";
+import {
+  buildTaskGroupIndex,
+  flattenTaskTree,
+  resolvePinnedTaskGroups,
+  resolveGroupTaskId,
+  taskGroupCounts,
+  taskGroupStatus,
+  type TaskGroupStatus,
+  type TaskTree,
+} from "@/lib/taskGroups";
 import { cn } from "@/lib/utils";
 
 import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
@@ -50,33 +66,44 @@ const PINNED_PREVIEW_LIMIT = 18;
 
 export default function MissionControl({ state, onOpenTask, onNewTask }: Props) {
   const pinned = useUi((s) => s.pinnedTaskIds);
-  const togglePin = useUi((s) => s.togglePinnedTask);
+  const setPinnedTaskIds = useUi((s) => s.setPinnedTaskIds);
+  const attentionTargetId = useUi((s) => s.attentionTargetId);
+  const attentionTargetNonce = useUi((s) => s.attentionTargetNonce);
   const live = useMemo(
     () => state.snapshot.tasks.filter((t) => t.status !== "done"),
     [state.snapshot.tasks],
   );
-
-  const pinnedTasks = useMemo(
-    () =>
-      pinned.map((id) => live.find((t) => t.id === id)).filter((t): t is TaskInfo => Boolean(t)),
-    [pinned, live],
+  const groupIndex = useMemo(
+    () => buildTaskGroupIndex(state.snapshot.tasks),
+    [state.snapshot.tasks],
+  );
+  const pinnedGroups = useMemo(
+    () => resolvePinnedTaskGroups(groupIndex, pinned),
+    [groupIndex, pinned],
   );
 
-  const handleUnpin = useCallback((taskId: string) => () => togglePin(taskId), [togglePin]);
-  const handleOpen = useCallback((taskId: string) => () => onOpenTask(taskId), [onOpenTask]);
+  const handleUnpin = useCallback(
+    (tree: TaskTree) => {
+      const memberIds = new Set(flattenTaskTree(tree).map((task) => task.id));
+      setPinnedTaskIds(pinned.filter((id) => !memberIds.has(id)));
+    },
+    [pinned, setPinnedTaskIds],
+  );
 
   return (
     <ScrollArea className="h-full min-h-0">
       <div className="flex flex-col gap-4 pr-3">
-        {pinnedTasks.length > 0 ? (
+        {pinnedGroups.length > 0 ? (
           <div className="grid grid-cols-2 gap-3">
-            {pinnedTasks.map((task) => (
-              <FocusPane
-                key={task.id}
-                task={task}
-                updates={state.sessionUpdates[task.id] ?? []}
-                onUnpin={handleUnpin(task.id)}
-                onOpen={handleOpen(task.id)}
+            {pinnedGroups.map((tree) => (
+              <FocusGroupPane
+                key={tree.task.id}
+                tree={tree}
+                updatesByTaskId={state.sessionUpdates}
+                attentionTargetId={attentionTargetId}
+                attentionTargetNonce={attentionTargetNonce}
+                onUnpin={handleUnpin}
+                onOpen={onOpenTask}
               />
             ))}
           </div>
@@ -103,14 +130,245 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
   );
 }
 
+interface FocusGroupPaneProps {
+  tree: TaskTree;
+  updatesByTaskId: DaemonState["sessionUpdates"];
+  attentionTargetId: string | null;
+  attentionTargetNonce: number;
+  onUnpin: (tree: TaskTree) => void;
+  onOpen: (id: string) => void;
+}
+
+const FocusGroupPane = memo(function FocusGroupPane({
+  tree,
+  updatesByTaskId,
+  attentionTargetId,
+  attentionTargetNonce,
+  onUnpin,
+  onOpen,
+}: FocusGroupPaneProps) {
+  const members = useMemo(() => flattenTaskTree(tree), [tree]);
+  const [selectedId, setSelectedId] = useState(() =>
+    resolveGroupTaskId(tree, null, attentionTargetId),
+  );
+  const [showAllAgents, setShowAllAgents] = useState(false);
+
+  useEffect(() => {
+    setSelectedId((current) => resolveGroupTaskId(tree, current, attentionTargetId));
+  }, [attentionTargetId, attentionTargetNonce, tree]);
+
+  const selectedTask = members.find((task) => task.id === selectedId) ?? tree.task;
+  const permissionTaskIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const task of members) {
+      if (latestPendingPermission(task.id, updatesByTaskId[task.id])) ids.add(task.id);
+    }
+    return ids;
+  }, [members, updatesByTaskId]);
+  const status = taskGroupStatus(tree, permissionTaskIds);
+
+  const handleUnpin = useCallback(() => onUnpin(tree), [onUnpin, tree]);
+  const handleOpen = useCallback(() => onOpen(selectedTask.id), [onOpen, selectedTask.id]);
+  const handleSelect = useCallback((id: string) => setSelectedId(id), []);
+
+  return (
+    <FocusPane
+      task={selectedTask}
+      updates={updatesByTaskId[selectedTask.id] ?? []}
+      tree={tree}
+      selectedId={selectedTask.id}
+      showAllAgents={showAllAgents}
+      groupStatus={status}
+      permissionTaskIds={permissionTaskIds}
+      onShowAllAgents={setShowAllAgents}
+      onSelect={handleSelect}
+      onUnpin={handleUnpin}
+      onOpen={handleOpen}
+    />
+  );
+}, focusGroupPaneEqual);
+
+function focusGroupPaneEqual(previous: FocusGroupPaneProps, next: FocusGroupPaneProps) {
+  if (
+    previous.tree !== next.tree ||
+    previous.attentionTargetId !== next.attentionTargetId ||
+    previous.attentionTargetNonce !== next.attentionTargetNonce ||
+    previous.onOpen !== next.onOpen ||
+    previous.onUnpin !== next.onUnpin
+  ) {
+    return false;
+  }
+  return flattenTaskTree(next.tree).every(
+    (task) => previous.updatesByTaskId[task.id] === next.updatesByTaskId[task.id],
+  );
+}
+
+function groupStatusBadge(
+  status: TaskGroupStatus,
+  activity: ReturnType<typeof sessionActivity>,
+): { label: string; variant: ReturnType<typeof taskBadge>["variant"] | "warn" } {
+  if (status === "blocked") return { label: "blocked", variant: "destructive" };
+  if (status === "permission") return { label: "permission", variant: "warn" };
+  if (status === "review") return { label: "needs review", variant: "warn" };
+  if (status === "running" && activity) return activityBadge(activity.tone, activity.label);
+  return taskBadge(status);
+}
+
+const AgentTabs = memo(function AgentTabs({
+  tree,
+  selectedId,
+  permissionTaskIds,
+  showAll,
+  onShowAll,
+  onSelect,
+}: {
+  tree: TaskTree;
+  selectedId: string;
+  permissionTaskIds: ReadonlySet<string>;
+  showAll: boolean;
+  onShowAll: (show: boolean) => void;
+  onSelect: (id: string) => void;
+}) {
+  const descendants = useMemo(() => flattenTaskTree(tree).slice(1), [tree]);
+  const counts = useMemo(() => taskGroupCounts(tree), [tree]);
+  const prominent = descendants.filter(
+    (task) =>
+      !["done", "idle"].includes(task.status) ||
+      task.id === selectedId ||
+      permissionTaskIds.has(task.id),
+  );
+  const visible = showAll ? descendants : prominent.slice(0, 4);
+  const hidden = descendants.filter((task) => !visible.some((shown) => shown.id === task.id));
+  const summary = [
+    counts.blocked > 0 ? `${counts.blocked} blocked` : null,
+    counts.review > 0 ? `${counts.review} review` : null,
+    counts.running > 0 ? `${counts.running} running` : null,
+    counts.done > 0 ? `${counts.done} done` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div className="border-b border-border/70 bg-background/30 px-2.5 py-2">
+      <div className="mb-1.5 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
+        <Users className="size-3 text-primary" />
+        <span className="font-medium text-foreground">Agents {descendants.length}</span>
+        {summary && <span className="ml-auto truncate">{summary}</span>}
+      </div>
+      <div
+        className={cn("flex min-w-0 items-center gap-1", showAll ? "flex-wrap" : "overflow-hidden")}
+        role="tablist"
+        aria-label="Agents in this task"
+      >
+        <AgentTab
+          task={tree.task}
+          lead
+          permission={permissionTaskIds.has(tree.task.id)}
+          selected={selectedId === tree.task.id}
+          onSelect={onSelect}
+        />
+        {visible.map((task) => (
+          <AgentTab
+            key={task.id}
+            task={task}
+            permission={permissionTaskIds.has(task.id)}
+            selected={selectedId === task.id}
+            onSelect={onSelect}
+          />
+        ))}
+        {hidden.length > 0 && (
+          <button
+            type="button"
+            className="ml-auto inline-flex shrink-0 items-center gap-0.5 rounded border border-border/70 bg-secondary/40 px-1.5 py-1 text-[10px] text-muted-foreground hover:text-foreground"
+            aria-expanded={showAll}
+            aria-label={`Show ${hidden.length} more agents`}
+            onClick={() => onShowAll(true)}
+          >
+            +{hidden.length}
+            <ChevronDown className="size-3" />
+          </button>
+        )}
+        {showAll && descendants.length > prominent.slice(0, 4).length && (
+          <button
+            type="button"
+            className="ml-auto shrink-0 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:text-foreground"
+            onClick={() => onShowAll(false)}
+          >
+            Less
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
+
+const AgentTab = memo(function AgentTab({
+  task,
+  selected,
+  permission = false,
+  lead = false,
+  onSelect,
+}: {
+  task: TaskInfo;
+  selected: boolean;
+  permission?: boolean;
+  lead?: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const badge = permission
+    ? { label: "permission", variant: "warn" as const }
+    : taskBadge(task.status);
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      aria-label={`${lead ? "Lead" : task.agent}: ${badge.label}`}
+      title={`${lead ? "Lead" : task.agent} — ${task.prompt}`}
+      className={cn(
+        "flex h-8 min-w-0 max-w-36 shrink items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+        selected
+          ? "border-primary/60 bg-primary/15 text-foreground shadow-sm"
+          : "border-border/60 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+      )}
+      onClick={() => onSelect(task.id)}
+    >
+      <span
+        className={cn(
+          "size-1.5 shrink-0 rounded-full",
+          badge.variant === "destructive" && "bg-destructive",
+          badge.variant === "warn" && "bg-warn",
+          badge.variant === "ok" && "bg-ok",
+          (badge.variant === "default" || badge.variant === "outline") && "bg-muted-foreground",
+        )}
+      />
+      <span className="truncate">{lead ? "Lead" : task.agent}</span>
+    </button>
+  );
+});
+
 function FocusPane({
   task,
   updates,
+  tree,
+  selectedId,
+  showAllAgents,
+  groupStatus,
+  permissionTaskIds,
+  onShowAllAgents,
+  onSelect,
   onUnpin,
   onOpen,
 }: {
   task: TaskInfo;
   updates: SessionUpdate[];
+  tree: TaskTree;
+  selectedId: string;
+  showAllAgents: boolean;
+  groupStatus: TaskGroupStatus;
+  permissionTaskIds: ReadonlySet<string>;
+  onShowAllAgents: (show: boolean) => void;
+  onSelect: (id: string) => void;
   onUnpin: () => void;
   onOpen: () => void;
 }) {
@@ -129,19 +387,26 @@ function FocusPane({
   const capability = [...updates].reverse().find((update) => update.kind === "prompt_capabilities");
   const imageSupported = capability?.kind === "prompt_capabilities" ? capability.image : false;
   const activity = sessionActivity(task, stream);
-  const badge = pending
-    ? { label: "permission", variant: "warn" as const }
-    : activity
-      ? activityBadge(activity.tone, activity.label)
-      : taskBadge(task.status);
+  const badge = groupStatusBadge(groupStatus, activity);
 
   return (
     <Card
       className={cn(
         "group flex max-h-[400px] min-h-[300px] flex-col overflow-hidden border border-border/70 bg-card/95 shadow-[0_12px_28px_rgb(0_0_0/0.18)]",
+        tree.children.length > 0 && "max-h-[580px] min-h-[480px]",
         "transition-colors hover:border-border",
       )}
     >
+      {tree.children.length > 0 && (
+        <AgentTabs
+          tree={tree}
+          selectedId={selectedId}
+          permissionTaskIds={permissionTaskIds}
+          showAll={showAllAgents}
+          onShowAll={onShowAllAgents}
+          onSelect={onSelect}
+        />
+      )}
       <div className="border-b border-border/70 px-3 py-2.5">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
@@ -217,7 +482,7 @@ function FocusPane({
         </div>
       )}
 
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         <div className="flex flex-col gap-2.5 p-3 text-[13px] leading-6">
           {preview.hidden > 0 && (
             <button

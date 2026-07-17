@@ -7,6 +7,18 @@ export interface TaskTree {
   children: TaskTree[];
 }
 
+export interface TaskGroupIndex {
+  forest: TaskTree[];
+  rootByTaskId: Map<string, TaskTree>;
+}
+
+export interface TaskGroupCounts {
+  blocked: number;
+  done: number;
+  review: number;
+  running: number;
+}
+
 const lanePriority: Record<BoardLane, number> = {
   active: 2,
   history: 0,
@@ -51,10 +63,12 @@ export function buildTaskForest(tasks: TaskInfo[]): TaskTree[] {
   const build = (task: TaskInfo, path: Set<string>): TaskTree => {
     visited.add(task.id);
     const nextPath = new Set(path).add(task.id);
+    const taskChildren: TaskTree[] = [];
+    for (const child of children.get(task.id) ?? []) {
+      if (!nextPath.has(child.id)) taskChildren.push(build(child, nextPath));
+    }
     return {
-      children: (children.get(task.id) ?? [])
-        .filter((child) => !nextPath.has(child.id))
-        .map((child) => build(child, nextPath)),
+      children: taskChildren,
       task,
     };
   };
@@ -72,6 +86,75 @@ export function buildTaskForest(tasks: TaskInfo[]): TaskTree[] {
 
 export function flattenTaskTree(tree: TaskTree): TaskInfo[] {
   return [tree.task, ...tree.children.flatMap(flattenTaskTree)];
+}
+
+/** Index every task by its explicit orchestration root. */
+export function buildTaskGroupIndex(tasks: TaskInfo[]): TaskGroupIndex {
+  const forest = buildTaskForest(tasks);
+  const rootByTaskId = new Map<string, TaskTree>();
+  for (const root of forest) {
+    for (const task of flattenTaskTree(root)) rootByTaskId.set(task.id, root);
+  }
+  return { forest, rootByTaskId };
+}
+
+/** Resolve persisted pins to unique roots while preserving pin order. */
+export function resolvePinnedTaskGroups(index: TaskGroupIndex, pinnedIds: string[]): TaskTree[] {
+  const seen = new Set<string>();
+  const groups: TaskTree[] = [];
+  for (const id of pinnedIds) {
+    const root = index.rootByTaskId.get(id);
+    if (!root || seen.has(root.task.id)) continue;
+    seen.add(root.task.id);
+    groups.push(root);
+  }
+  return groups;
+}
+
+/** Keep the current tab unless an explicit attention target belongs to this group. */
+export function resolveGroupTaskId(
+  tree: TaskTree,
+  currentId: string | null,
+  attentionTargetId: string | null,
+): string {
+  const ids = new Set(flattenTaskTree(tree).map((task) => task.id));
+  if (attentionTargetId && ids.has(attentionTargetId)) return attentionTargetId;
+  if (currentId && ids.has(currentId)) return currentId;
+  return tree.task.id;
+}
+
+export function taskGroupCounts(tree: TaskTree): TaskGroupCounts {
+  return flattenTaskTree(tree)
+    .slice(1)
+    .reduce<TaskGroupCounts>(
+      (counts, task) => {
+        if (task.status === "blocked" || task.status === "interrupted") counts.blocked += 1;
+        else if (task.status === "needs_review") counts.review += 1;
+        else if (task.status === "running" || task.status === "queued") counts.running += 1;
+        else if (task.status === "done") counts.done += 1;
+        return counts;
+      },
+      { blocked: 0, done: 0, review: 0, running: 0 },
+    );
+}
+
+export type TaskGroupStatus = "blocked" | "permission" | "review" | "running" | TaskStatus;
+
+/** Human attention bubbles from descendants before ordinary activity. */
+export function taskGroupStatus(
+  tree: TaskTree,
+  permissionTaskIds?: ReadonlySet<string>,
+): TaskGroupStatus {
+  const tasks = flattenTaskTree(tree);
+  if (tasks.some((task) => task.status === "blocked" || task.status === "interrupted")) {
+    return "blocked";
+  }
+  if (permissionTaskIds && tasks.some((task) => permissionTaskIds.has(task.id))) {
+    return "permission";
+  }
+  if (tasks.some((task) => task.status === "needs_review")) return "review";
+  if (tasks.some((task) => task.status === "running" || task.status === "queued")) return "running";
+  return tree.task.status;
 }
 
 /** Place a whole orchestration group in its most urgent lane. */

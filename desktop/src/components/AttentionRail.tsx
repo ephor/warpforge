@@ -11,11 +11,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import type { PermissionUpdate } from "@/lib/sessionPermissions";
+import {
+  latestPendingPermission,
+  prunePermissionCache,
+  type PermissionUpdate,
+} from "@/lib/sessionPermissions";
+import { buildTaskGroupIndex, flattenTaskTree } from "@/lib/taskGroups";
 import { cn } from "@/lib/utils";
 
 import type { DaemonState } from "../daemon";
-import type { SessionUpdate, TaskInfo, TaskStatus } from "../protocol";
+import type { TaskInfo, TaskStatus } from "../protocol";
 import { useUi } from "../store/ui";
 import SessionRailCard from "./SessionRailCard";
 
@@ -32,58 +37,14 @@ export interface AttentionItem {
   permission?: PermissionUpdate;
 }
 
-interface PermissionCacheEntry {
-  updates: SessionUpdate[];
-  pending: Map<string, PermissionUpdate>;
-}
-
-const permissionCache = new Map<string, PermissionCacheEntry>();
-
-function applyPermissionUpdate(pending: Map<string, PermissionUpdate>, update: SessionUpdate) {
-  if (update.kind === "permission_request") {
-    pending.delete(update.request_id);
-    pending.set(update.request_id, update);
-  } else if (update.kind === "permission_resolved") {
-    pending.delete(update.request_id);
-  }
-}
-
-function cachedPendingPermission(taskId: string, updates: SessionUpdate[] | undefined) {
-  if (!updates) {
-    return null;
-  }
-  let cached = permissionCache.get(taskId);
-  if (cached?.updates !== updates) {
-    const extendsCached =
-      cached !== undefined &&
-      cached.updates.length <= updates.length &&
-      (cached.updates.length === 0 ||
-        cached.updates[cached.updates.length - 1] === updates[cached.updates.length - 1]);
-    const pending =
-      extendsCached && cached ? new Map(cached.pending) : new Map<string, PermissionUpdate>();
-    const start = extendsCached && cached ? cached.updates.length : 0;
-    for (let index = start; index < updates.length; index += 1) {
-      applyPermissionUpdate(pending, updates[index]);
-    }
-    cached = { pending, updates };
-    permissionCache.set(taskId, cached);
-  }
-  let latest: PermissionUpdate | null = null;
-  for (const permission of cached.pending.values()) latest = permission;
-  return latest;
-}
-
 function buildAttentionQueue(
   tasks: TaskInfo[],
   sessionUpdates: DaemonState["sessionUpdates"],
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
-  const taskIds = new Set(tasks.map((task) => task.id));
-  for (const taskId of permissionCache.keys()) {
-    if (!taskIds.has(taskId)) permissionCache.delete(taskId);
-  }
+  prunePermissionCache(new Set(tasks.map((task) => task.id)));
   for (const task of tasks) {
-    const permission = cachedPendingPermission(task.id, sessionUpdates[task.id]);
+    const permission = latestPendingPermission(task.id, sessionUpdates[task.id]);
     if (permission) {
       items.push({ permission, priority: 0, reason: permission.title, task });
     } else if (task.status === "needs_review") {
@@ -165,7 +126,7 @@ interface Props {
 
 function AttentionRail({ state, onOpenTask }: Props) {
   const pinned = useUi((store) => store.pinnedTaskIds);
-  const togglePin = useUi((store) => store.togglePinnedTask);
+  const setPinnedTaskIds = useUi((store) => store.setPinnedTaskIds);
   const attentionTargetId = useUi((store) => store.attentionTargetId);
   const attentionTargetNonce = useUi((store) => store.attentionTargetNonce);
   const [sort, setSort] = useState<SortMode>("updated");
@@ -182,7 +143,19 @@ function AttentionRail({ state, onOpenTask }: Props) {
     [state.sessionUpdates, state.snapshot.tasks],
   );
   const attentionById = useMemo(() => new Map(queue.map((item) => [item.task.id, item])), [queue]);
-  const pinnedSet = useMemo(() => new Set(pinned), [pinned]);
+  const taskGroupIndex = useMemo(
+    () => buildTaskGroupIndex(state.snapshot.tasks),
+    [state.snapshot.tasks],
+  );
+  const pinnedSet = useMemo(
+    () =>
+      new Set(
+        pinned
+          .map((id) => taskGroupIndex.rootByTaskId.get(id)?.task.id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    [pinned, taskGroupIndex],
+  );
   const effectiveGroup: GroupMode = sort === "status" || sort === "project" ? sort : group;
 
   const tasks = useMemo(() => {
@@ -300,7 +273,16 @@ function AttentionRail({ state, onOpenTask }: Props) {
   }, [attentionTargetId, attentionTargetNonce, rows, virtualizer]);
 
   const handleOpen = useCallback((taskId: string) => onOpenTask(taskId), [onOpenTask]);
-  const handlePin = useCallback((taskId: string) => togglePin(taskId), [togglePin]);
+  const handlePin = useCallback(
+    (taskId: string) => {
+      const root = taskGroupIndex.rootByTaskId.get(taskId);
+      if (!root) return;
+      const memberIds = new Set(flattenTaskTree(root).map((task) => task.id));
+      const remaining = pinned.filter((id) => !memberIds.has(id));
+      setPinnedTaskIds(pinnedSet.has(root.task.id) ? remaining : [...remaining, root.task.id]);
+    },
+    [pinned, pinnedSet, setPinnedTaskIds, taskGroupIndex],
+  );
   const handleTogglePreview = useCallback((taskId: string) => {
     setExpandedTaskId((current) => (current === taskId ? null : taskId));
   }, []);
@@ -434,8 +416,15 @@ function AttentionRail({ state, onOpenTask }: Props) {
                   ) : (
                     <SessionRailCard
                       task={row.task}
+                      parentTask={
+                        taskGroupIndex.rootByTaskId.get(row.task.id)?.task.id !== row.task.id
+                          ? taskGroupIndex.rootByTaskId.get(row.task.id)?.task
+                          : undefined
+                      }
                       updates={state.sessionUpdates[row.task.id]}
-                      pinned={pinnedSet.has(row.task.id)}
+                      pinned={pinnedSet.has(
+                        taskGroupIndex.rootByTaskId.get(row.task.id)?.task.id ?? row.task.id,
+                      )}
                       attention={attentionById.has(row.task.id)}
                       reason={attentionById.get(row.task.id)?.reason}
                       permission={attentionById.get(row.task.id)?.permission}

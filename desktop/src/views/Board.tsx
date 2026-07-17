@@ -26,7 +26,13 @@ import {
 } from "@/components/ui/select";
 import { elapsed, orchNodeBadge, taskBadge } from "@/lib/status";
 import type { TaskTree } from "@/lib/taskGroups";
-import { buildTaskForest, flattenTaskTree, treeLane, treeMatches } from "@/lib/taskGroups";
+import {
+  buildTaskForest,
+  flattenTaskTree,
+  taskGroupCounts,
+  treeLane,
+  treeMatches,
+} from "@/lib/taskGroups";
 import { cn } from "@/lib/utils";
 
 import type { OrchNodeInfo, Snapshot, TaskInfo, TaskStatus } from "../protocol";
@@ -71,11 +77,11 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
   const byStatus = useMemo(() => {
     const cache = new Map<string, TaskInfo[]>();
     return (s: TaskStatus | TaskStatus[]) => {
-      const key = Array.isArray(s) ? s.sort().join(",") : s;
+      const statuses = new Set(Array.isArray(s) ? s : [s]);
+      const key = [...statuses].sort().join(",");
       let result = cache.get(key);
       if (!result) {
-        const set = Array.isArray(s) ? s : [s];
-        result = tasks.filter((t) => set.includes(t.status));
+        result = tasks.filter((task) => statuses.has(task.status));
         cache.set(key, result);
       }
       return result;
@@ -374,11 +380,7 @@ function TaskGroupCard({
   muted?: boolean;
 }) {
   const descendants = flattenTaskTree(tree).slice(1);
-  const reviewCount = descendants.filter((task) =>
-    ["needs_review", "blocked", "interrupted"].includes(task.status),
-  ).length;
-  const runningCount = descendants.filter((task) => task.status === "running").length;
-  const doneCount = descendants.filter((task) => task.status === "done").length;
+  const counts = taskGroupCounts(tree);
 
   return (
     <div className={cn("relative", muted && "opacity-70")}>
@@ -392,18 +394,22 @@ function TaskGroupCard({
           flattenBottom
         />
         <button
+          type="button"
           className="relative -mt-px flex w-full items-center gap-1.5 rounded-b-md border border-t-0 border-border bg-secondary/60 px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground"
           onClick={onToggle}
           aria-expanded={!collapsed}
         >
           {collapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
           <Workflow className="size-3 text-primary" />
-          <span className="font-medium text-foreground">Orchestration</span>
+          <span className="font-medium text-foreground">Agents</span>
           <span>{descendants.length}</span>
           <span className="ml-auto flex min-w-0 items-center gap-1 text-[10px]">
-            {runningCount > 0 && <span className="text-ok">{runningCount} live</span>}
-            {reviewCount > 0 && <span className="text-warn">{reviewCount} review</span>}
-            {doneCount > 0 && <span>{doneCount} done</span>}
+            {counts.blocked > 0 && (
+              <span className="text-destructive">{counts.blocked} blocked</span>
+            )}
+            {counts.running > 0 && <span className="text-ok">{counts.running} running</span>}
+            {counts.review > 0 && <span className="text-warn">{counts.review} review</span>}
+            {counts.done > 0 && <span>{counts.done} done</span>}
           </span>
         </button>
       </div>
@@ -424,7 +430,11 @@ function ChildTaskRow({ tree, onOpenTask }: { tree: TaskTree; onOpenTask: (id: s
   return (
     <div className="relative border-b border-border/50 py-1.5 last:border-b-0">
       <span className="absolute -left-2.5 top-3.5 h-px w-2 bg-primary/30" />
-      <button className="w-full min-w-0 text-left" onClick={() => onOpenTask(tree.task.id)}>
+      <button
+        type="button"
+        className="w-full min-w-0 text-left"
+        onClick={() => onOpenTask(tree.task.id)}
+      >
         <div className="flex min-w-0 items-center gap-1.5 text-xs">
           <Badge variant={badge.variant} className="shrink-0">
             {badge.label}
@@ -479,7 +489,7 @@ function TaskCard({
         )}
       >
         {/* Clickable row: opens TaskDetail */}
-        <button className="w-full cursor-pointer text-left" onClick={onOpen}>
+        <button type="button" className="w-full cursor-pointer text-left" onClick={onOpen}>
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span className="font-semibold text-foreground">{task.project}</span>
             <span className="flex items-center gap-1">
@@ -502,6 +512,7 @@ function TaskCard({
         {/* Accordion toggle for orchestrator tasks */}
         {hasAccordion && (
           <button
+            type="button"
             className="mt-1.5 flex w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
             onClick={(e) => {
               e.stopPropagation();
@@ -567,6 +578,8 @@ function QueueCard({
       <div className="flex flex-col items-center gap-0.5">
         <span className="tnum text-xs font-semibold text-muted-foreground">{rank}</span>
         <button
+          type="button"
+          aria-label="Move task up"
           className="rounded p-0.5 text-muted-foreground hover:bg-secondary disabled:opacity-30"
           onClick={onUp}
           disabled={first}
@@ -574,6 +587,8 @@ function QueueCard({
           <ArrowUp className="size-3" />
         </button>
         <button
+          type="button"
+          aria-label="Move task down"
           className="rounded p-0.5 text-muted-foreground hover:bg-secondary disabled:opacity-30"
           onClick={onDown}
           disabled={last}
@@ -581,7 +596,7 @@ function QueueCard({
           <ArrowDown className="size-3" />
         </button>
       </div>
-      <button className="min-w-0 flex-1 text-left" onClick={onOpen}>
+      <button type="button" className="min-w-0 flex-1 text-left" onClick={onOpen}>
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span className="font-semibold text-foreground">{task.project}</span>
           <span>{task.agent}</span>
