@@ -105,6 +105,8 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
 
   const composerRef = useRef<ComposerHandle>(null);
   const streamParent = useRef<HTMLDivElement>(null);
+  const diffScrollParent = useRef<HTMLDivElement>(null);
+  const splitScrollParent = useRef<HTMLDivElement>(null);
   const badge = taskBadge(task.status);
   const editable = task.status !== "done";
   const activeFile = activeTab.kind === "file" ? activeTab.path : selectedFile;
@@ -146,10 +148,13 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   // Split review is still an all-changes view. Fetch every changed file here;
   // SelectedFile only tracks the rail highlight/scroll target and must not
   // Determine which diff blocks are mounted.
+  // Only fetch file contents for files near the viewport to avoid 900+ simultaneous queries.
+  const [splitRange, setSplitRange] = useState({ start: 0, end: 20 });
   const splitFileQueries = useQueries({
     queries:
       activeTab.kind === "changes" && diffView === "split"
-        ? (diff?.files ?? []).map((file) => ({
+        ? (diff?.files ?? []).map((file, i) => ({
+            enabled: i >= splitRange.start && i <= splitRange.end,
             placeholderData: keepPreviousData,
             queryFn: daemonQuery<FileDoc>("file.contents", {
               task_id: task.id,
@@ -175,9 +180,17 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     setShowDiff(true);
     setCenterTab("changes");
     requestAnimationFrame(() => {
-      document.getElementById(fileAnchor(path))?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
+      const idx = diff?.files.findIndex((f) => f.path === path);
+      if (idx !== undefined && idx >= 0) {
+        const viz = diffView === "unified" ? diffVirtualizer : splitVirtualizer;
+        viz.scrollToIndex(idx, { align: "start" });
+      }
+      // After virtualizer scrolls, the DOM element should be mounted.
+      requestAnimationFrame(() => {
+        document.getElementById(fileAnchor(path))?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
       });
     });
   };
@@ -250,10 +263,10 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   // (codex re-sends every tool_call frame), so only mount what's on screen.
   const streamVirtualizer = useVirtualizer({
     count: merged.length,
-    estimateSize: () => 72,
+    estimateSize: () => 100,
     getItemKey: (i) => streamKey(merged[i], i),
     getScrollElement: () => streamParent.current,
-    overscan: 12,
+    overscan: 30,
   });
 
   useEffect(() => {
@@ -262,6 +275,34 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [merged.length]);
+
+  // Virtualize the unified diff — large change sets (900+ files) would mount
+  // thousands of DOM nodes if every FileDiffView were rendered at once.
+  const diffVirtualizer = useVirtualizer({
+    count: diff?.files.length ?? 0,
+    estimateSize: () => 200,
+    getScrollElement: () => diffScrollParent.current,
+    overscan: 5,
+  });
+
+  // Virtualize the split diff AND lazy-fetch: only query file contents for
+  // indices in/near the viewport, avoiding 900+ simultaneous daemon reads.
+  const splitFileCount = diff?.files.length ?? 0;
+  const splitVirtualizer = useVirtualizer({
+    count: splitFileCount,
+    estimateSize: () => 384, // min-h-[24rem]
+    getScrollElement: () => splitScrollParent.current,
+    overscan: 3,
+  });
+  // Keep the query enabled-range in sync with the visible range.
+  const splitVisItems = splitVirtualizer.getVirtualItems();
+  if (splitVisItems.length > 0) {
+    const newStart = splitVisItems[0].index;
+    const newEnd = splitVisItems[splitVisItems.length - 1].index;
+    if (splitRange.start !== newStart || splitRange.end !== newEnd) {
+      setSplitRange({ start: newStart, end: newEnd });
+    }
+  }
 
   const resolveHunkMut = useMutation({
     mutationFn: (v: { file: string; hunkIndex: number; resolution: HunkResolution }) =>
@@ -559,69 +600,97 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
                     {activeTab.kind === "changes" ? (
                       <div className="flex h-full min-h-0 min-w-0 flex-col">
                         {diffView === "unified" ? (
-                          <ScrollArea className="flex-1">
-                            <div className="p-3">
-                              {diffError && <p className="text-sm text-destructive">{diffError}</p>}
-                              {!diff && !diffError && (
-                                <p className="text-sm text-muted-foreground">Loading diff…</p>
-                              )}
-                              {diff && diff.files.length === 0 && (
-                                <p className="text-sm text-muted-foreground">No changes yet.</p>
-                              )}
-                              {diff?.files.map((file) => (
-                                <FileDiffView
-                                  key={file.path}
-                                  id={fileAnchor(file.path)}
-                                  file={file}
-                                  localRes={localRes}
-                                  onResolve={resolveHunk}
-                                  onSendToChat={(f) => {
-                                    composerRef.current?.attachDiff(f, formatFileDiffAsMessage(f));
-                                  }}
-                                />
-                              ))}
-                            </div>
-                          </ScrollArea>
+                          <div ref={diffScrollParent} className="min-h-0 flex-1 overflow-auto p-3">
+                            {diffError && <p className="text-sm text-destructive">{diffError}</p>}
+                            {!diff && !diffError && (
+                              <p className="text-sm text-muted-foreground">Loading diff…</p>
+                            )}
+                            {diff && diff.files.length === 0 && (
+                              <p className="text-sm text-muted-foreground">No changes yet.</p>
+                            )}
+                            {diff && diff.files.length > 0 && (
+                              <div
+                                className="relative w-full"
+                                style={{ height: diffVirtualizer.getTotalSize() }}
+                              >
+                                {diffVirtualizer.getVirtualItems().map((vi) => {
+                                  const file = diff.files[vi.index];
+                                  return (
+                                    <div
+                                      key={vi.key}
+                                      data-index={vi.index}
+                                      ref={diffVirtualizer.measureElement}
+                                      className="absolute left-0 top-0 w-full pb-3"
+                                      style={{ transform: `translateY(${vi.start}px)` }}
+                                    >
+                                      <FileDiffView
+                                        id={fileAnchor(file.path)}
+                                        file={file}
+                                        localRes={localRes}
+                                        onResolve={resolveHunk}
+                                        onSendToChat={(f) => {
+                                          composerRef.current?.attachDiff(
+                                            f,
+                                            formatFileDiffAsMessage(f),
+                                          );
+                                        }}
+                                      />
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
                         ) : (
-                          <div className="min-h-0 flex-1 overflow-auto">
+                          <div ref={splitScrollParent} className="min-h-0 flex-1 overflow-auto">
                             {!diff ? (
                               <p className="p-3 text-sm text-muted-foreground">Loading diff…</p>
                             ) : diff.files.length === 0 ? (
                               <p className="p-3 text-sm text-muted-foreground">No changes yet.</p>
                             ) : (
-                              diff.files.map((file, index) => {
-                                const query = splitFileQueries[index];
-                                const doc = query?.data;
-                                return (
-                                  <div
-                                    key={file.path}
-                                    id={fileAnchor(file.path)}
-                                    className="h-full min-h-[24rem] border-b last:border-b-0"
-                                  >
-                                    {doc ? (
-                                      <MergeDiff
-                                        doc={doc}
-                                        editable={editable}
-                                        onSave={(content) =>
-                                          void daemon.request("file.save", {
-                                            content,
-                                            path: doc.path,
-                                            task_id: task.id,
-                                          })
-                                        }
-                                      />
-                                    ) : query?.error ? (
-                                      <p className="p-3 text-sm text-destructive">
-                                        Failed to load {file.path}: {query.error.message}
-                                      </p>
-                                    ) : (
-                                      <p className="p-3 text-sm text-muted-foreground">
-                                        Loading {file.path}…
-                                      </p>
-                                    )}
-                                  </div>
-                                );
-                              })
+                              <div
+                                className="relative w-full"
+                                style={{ height: splitVirtualizer.getTotalSize() }}
+                              >
+                                {splitVirtualizer.getVirtualItems().map((vi) => {
+                                  const file = diff.files[vi.index];
+                                  const query = splitFileQueries[vi.index];
+                                  const doc = query?.data;
+                                  return (
+                                    <div
+                                      key={vi.key}
+                                      id={fileAnchor(file.path)}
+                                      className="absolute left-0 top-0 w-full border-b"
+                                      style={{
+                                        height: vi.size,
+                                        transform: `translateY(${vi.start}px)`,
+                                      }}
+                                    >
+                                      {doc ? (
+                                        <MergeDiff
+                                          doc={doc}
+                                          editable={editable}
+                                          onSave={(content) =>
+                                            void daemon.request("file.save", {
+                                              content,
+                                              path: doc.path,
+                                              task_id: task.id,
+                                            })
+                                          }
+                                        />
+                                      ) : query?.error ? (
+                                        <p className="p-3 text-sm text-destructive">
+                                          Failed to load {file.path}: {query.error.message}
+                                        </p>
+                                      ) : (
+                                        <p className="p-3 text-sm text-muted-foreground">
+                                          Loading {file.path}…
+                                        </p>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             )}
                           </div>
                         )}
@@ -857,77 +926,44 @@ function buildProjectTree(files: ProjectFile[]): ProjectTreeNode {
   return root;
 }
 
-function ProjectFileRow({
-  node,
-  depth,
-  selected,
-  onSelect,
-}: {
+/** Unique key for a folder node in the openFolders set. */
+function projectFolderKey(parentPath: string, name: string): string {
+  return parentPath ? `${parentPath}/${name}` : name;
+}
+
+interface ProjectFlatRow {
+  key: string;
   node: ProjectTreeNode;
   depth: number;
-  selected: string | null;
-  onSelect: (path: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const pad = { paddingLeft: `${depth * 12 + 10}px` };
+  fKey?: string;
+}
 
-  if (node.path) {
-    return (
-      <button
-        type="button"
-        style={pad}
-        onClick={() => onSelect(node.path!)}
-        title={node.path}
-        className={cn(
-          "flex h-7 w-full min-w-0 items-center gap-1.5 pr-2 text-left text-xs",
-          selected === node.path
-            ? "bg-secondary text-foreground"
-            : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
-        )}
-      >
-        <FileText
-          className={cn(
-            "size-3.5 shrink-0",
-            node.changed ? "text-sky-400" : "text-muted-foreground",
-          )}
-        />
-        <span className="truncate">{node.name}</span>
-      </button>
-    );
-  }
-
-  const children = [...node.children.values()].sort((a, b) => {
+function flattenProjectTree(
+  node: ProjectTreeNode,
+  depth: number,
+  parentPath: string,
+  openFolders: Set<string>,
+  out: ProjectFlatRow[],
+): void {
+  const kids = [...node.children.values()].sort((a, b) => {
     const af = a.path ? 1 : 0;
     const bf = b.path ? 1 : 0;
     return af - bf || a.name.localeCompare(b.name);
   });
-
-  return (
-    <>
-      <button
-        type="button"
-        style={pad}
-        onClick={() => setOpen((o) => !o)}
-        className="flex h-7 w-full min-w-0 items-center gap-1.5 pr-2 text-left text-xs text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
-      >
-        <ChevronDown
-          className={cn("size-3.5 shrink-0 transition-transform", !open && "-rotate-90")}
-        />
-        <span className="truncate">{node.name}</span>
-      </button>
-      {open &&
-        children.map((child) => (
-          <ProjectFileRow
-            key={child.path ?? child.name}
-            node={child}
-            depth={depth + 1}
-            selected={selected}
-            onSelect={onSelect}
-          />
-        ))}
-    </>
-  );
+  for (const child of kids) {
+    if (child.path) {
+      out.push({ key: child.path, node: child, depth });
+    } else {
+      const fk = projectFolderKey(parentPath, child.name);
+      out.push({ key: `f:${fk}`, node: child, depth, fKey: fk });
+      if (openFolders.has(fk)) {
+        flattenProjectTree(child, depth + 1, fk, openFolders, out);
+      }
+    }
+  }
 }
+
+const PROJECT_ROW_HEIGHT = 28; // h-7
 
 function ProjectFilesPanel({
   files,
@@ -941,33 +977,93 @@ function ProjectFilesPanel({
   onSelect: (path: string) => void;
 }) {
   const root = useMemo(() => buildProjectTree(files), [files]);
-  const top = useMemo(
-    () =>
-      [...root.children.values()].sort((a, b) => {
-        const af = a.path ? 1 : 0;
-        const bf = b.path ? 1 : 0;
-        return af - bf || a.name.localeCompare(b.name);
-      }),
-    [root],
-  );
+  const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const rows = useMemo(() => {
+    const out: ProjectFlatRow[] = [];
+    flattenProjectTree(root, 0, "", openFolders, out);
+    return out;
+  }, [root, openFolders]);
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    estimateSize: () => PROJECT_ROW_HEIGHT,
+    getScrollElement: () => scrollRef.current,
+    overscan: 20,
+  });
+
+  const toggleFolder = useCallback((fk: string) => {
+    setOpenFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(fk)) {
+        next.delete(fk);
+      } else {
+        next.add(fk);
+      }
+      return next;
+    });
+  }, []);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-11 items-center border-b px-3 text-sm font-semibold">Files</div>
       {error && <p className="border-b px-3 py-2 text-xs text-destructive">{error}</p>}
-      <div className="min-h-0 flex-1 overflow-auto py-1.5">
-        {top.length === 0 && !error ? (
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto py-1.5">
+        {rows.length === 0 && !error ? (
           <p className="px-3 py-2 text-xs text-muted-foreground">No files found.</p>
         ) : (
-          top.map((node) => (
-            <ProjectFileRow
-              key={node.path ?? node.name}
-              node={node}
-              depth={0}
-              selected={selected}
-              onSelect={onSelect}
-            />
-          ))
+          <div
+            className="relative w-full"
+            style={{ height: virtualizer.getTotalSize() }}
+          >
+            {virtualizer.getVirtualItems().map((vi) => {
+              const row = rows[vi.index];
+              const pad = { paddingLeft: `${row.depth * 12 + 10}px` };
+
+              if (row.node.path) {
+                return (
+                  <button
+                    key={vi.key}
+                    type="button"
+                    style={{ ...pad, transform: `translateY(${vi.start}px)` }}
+                    onClick={() => onSelect(row.node.path!)}
+                    title={row.node.path}
+                    className={cn(
+                      "absolute left-0 top-0 flex h-7 w-full min-w-0 items-center gap-1.5 pr-2 text-left text-xs",
+                      selected === row.node.path
+                        ? "bg-secondary text-foreground"
+                        : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+                    )}
+                  >
+                    <FileText
+                      className={cn(
+                        "size-3.5 shrink-0",
+                        row.node.changed ? "text-sky-400" : "text-muted-foreground",
+                      )}
+                    />
+                    <span className="truncate">{row.node.name}</span>
+                  </button>
+                );
+              }
+
+              const isOpen = openFolders.has(row.fKey!);
+              return (
+                <button
+                  key={vi.key}
+                  type="button"
+                  style={{ ...pad, transform: `translateY(${vi.start}px)` }}
+                  onClick={() => toggleFolder(row.fKey!)}
+                  className="absolute left-0 top-0 flex h-7 w-full min-w-0 items-center gap-1.5 pr-2 text-left text-xs text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                >
+                  <ChevronDown
+                    className={cn("size-3.5 shrink-0 transition-transform", !isOpen && "-rotate-90")}
+                  />
+                  <span className="truncate">{row.node.name}</span>
+                </button>
+              );
+            })}
+          </div>
         )}
       </div>
     </div>
