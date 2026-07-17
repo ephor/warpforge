@@ -1,3 +1,4 @@
+import { memo, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -93,3 +94,52 @@ export function Markdown({
     </div>
   );
 }
+
+const STREAM_MARKDOWN_INTERVAL_MS = 80;
+
+/**
+ * Markdown for actively-streaming assistant text. ACP emits sub-word deltas;
+ * re-parsing GFM on every one starves the main thread (composer input, scroll).
+ * This renders the first value immediately, then coalesces later changes to at
+ * most one re-parse per interval, always converging on the latest text — the
+ * final delta of a turn flushes within one interval.
+ */
+export const BufferedMarkdown = memo(function BufferedMarkdown({
+  children,
+  intervalMs = STREAM_MARKDOWN_INTERVAL_MS,
+  ...rest
+}: {
+  children: string;
+  className?: string;
+  resolveFilePath?: FileLinkResolver;
+  onOpenFile?: (path: string) => void;
+  intervalMs?: number;
+}) {
+  const [display, setDisplay] = useState(children);
+  const latest = useRef(children);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    latest.current = children;
+    // Already showing the latest, or a flush is already scheduled that will
+    // pick it up: nothing to schedule.
+    if (children === display || timer.current) {
+      return;
+    }
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      setDisplay(latest.current);
+    }, intervalMs);
+  }, [children, display, intervalMs]);
+
+  useEffect(
+    () => () => {
+      if (timer.current) {
+        clearTimeout(timer.current);
+      }
+    },
+    [],
+  );
+
+  return <Markdown {...rest}>{display}</Markdown>;
+});

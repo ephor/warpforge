@@ -26,7 +26,7 @@ import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
 import { AgentConfigBar } from "../components/AgentConfigBar";
 import { Composer } from "../components/Composer";
 import type { FileLinkResolver } from "../components/Markdown";
-import { Markdown } from "../components/Markdown";
+import { BufferedMarkdown, Markdown } from "../components/Markdown";
 import { ThinkingBlock } from "../components/ThinkingBlock";
 import type { DaemonState } from "../daemon";
 import { daemon } from "../daemon";
@@ -453,32 +453,48 @@ export function streamKey(u: SessionUpdate, i: number): string {
   return `i:${i}`;
 }
 
+/**
+ * Fold one raw update into an in-progress coalesced list. `toolAt` maps a
+ * tool_call_id to its index in `out` so repeated frames update in place. Only
+ * the block being mutated (the trailing text/thought run, or a tool card
+ * receiving a new frame) gets a fresh object; every other block keeps its
+ * identity, which lets an append-only stream be coalesced incrementally and
+ * memoized row-by-row instead of rebuilt from scratch on every delta.
+ */
+export function appendCoalesced(
+  out: SessionUpdate[],
+  toolAt: Map<string, number>,
+  u: SessionUpdate,
+): void {
+  const prev = out[out.length - 1];
+  if ((u.kind === "agent_text" || u.kind === "agent_thought") && prev?.kind === u.kind) {
+    out[out.length - 1] = { ...prev, text: prev.text + u.text };
+  } else if (u.kind === "tool_call") {
+    const at = toolAt.get(u.tool_call_id);
+    const existing = at !== undefined ? out[at] : undefined;
+    if (existing?.kind === "tool_call") {
+      out[at!] = {
+        ...existing,
+        content: u.content ?? existing.content,
+        status: u.status,
+        started_at: existing.started_at ?? u.started_at,
+        title: u.title || existing.title,
+        tool_kind: u.tool_kind || existing.tool_kind,
+      };
+    } else {
+      toolAt.set(u.tool_call_id, out.length);
+      out.push(u);
+    }
+  } else {
+    out.push(u);
+  }
+}
+
 export function coalesceUpdates(updates: SessionUpdate[]): SessionUpdate[] {
   const out: SessionUpdate[] = [];
   const toolAt = new Map<string, number>();
   for (const u of updates) {
-    const prev = out[out.length - 1];
-    if ((u.kind === "agent_text" || u.kind === "agent_thought") && prev?.kind === u.kind) {
-      out[out.length - 1] = { ...prev, text: prev.text + u.text };
-    } else if (u.kind === "tool_call") {
-      const at = toolAt.get(u.tool_call_id);
-      const existing = at !== undefined ? out[at] : undefined;
-      if (existing?.kind === "tool_call") {
-        out[at!] = {
-          ...existing,
-          content: u.content ?? existing.content,
-          status: u.status,
-          started_at: existing.started_at ?? u.started_at,
-          title: u.title || existing.title,
-          tool_kind: u.tool_kind || existing.tool_kind,
-        };
-      } else {
-        toolAt.set(u.tool_call_id, out.length);
-        out.push(u);
-      }
-    } else {
-      out.push(u);
-    }
+    appendCoalesced(out, toolAt, u);
   }
   return out;
 }
@@ -656,9 +672,9 @@ export function StreamLine({
           {update.text}
         </Markdown>
       ) : (
-        <Markdown resolveFilePath={resolveFilePath} onOpenFile={onOpenFile}>
+        <BufferedMarkdown resolveFilePath={resolveFilePath} onOpenFile={onOpenFile}>
           {update.text}
-        </Markdown>
+        </BufferedMarkdown>
       );
     case "agent_thought":
       return compact ? (

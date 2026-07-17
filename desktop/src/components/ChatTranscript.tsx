@@ -1,18 +1,120 @@
 import { ArrowDown } from "lucide-react";
-import { memo, useMemo } from "react";
+import { memo, useMemo, useRef } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChatFollow } from "@/hooks/useChatFollow";
 import type { SessionActivity } from "@/lib/sessionActivity";
+import type { FileLinkResolver } from "@/components/Markdown";
 import { resolvedPermissions } from "@/lib/sessionPermissions";
 import { activeThinkingIndex } from "@/lib/sessionThinking";
 
 import type { CommandInfo, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
-import { StreamLine, coalesceUpdates, streamKey } from "../views/MissionControl";
+import { StreamLine, appendCoalesced, coalesceUpdates, streamKey } from "../views/MissionControl";
 import { AgentActivityIndicator } from "./AgentActivityIndicator";
 import { ChatComposer } from "./ChatComposer";
 import type { ComposerHandle } from "./Composer";
+
+/**
+ * Coalesce an append-only update stream incrementally. The daemon only ever
+ * appends to a task's history, so on a subword delta we fold just the new tail
+ * onto the previous merged result instead of rebuilding (and re-concatenating
+ * every historical message) from scratch — O(new deltas) instead of O(history)
+ * per token. Unchanged blocks keep their object identity so their memoized rows
+ * skip re-rendering.
+ */
+function useCoalesced(updates: SessionUpdate[]): SessionUpdate[] {
+  const cache = useRef<{
+    src: SessionUpdate[];
+    merged: SessionUpdate[];
+    toolAt: Map<string, number>;
+  } | null>(null);
+
+  return useMemo(() => {
+    const prev = cache.current;
+    const isAppend =
+      prev !== null &&
+      updates.length >= prev.src.length &&
+      (prev.src.length === 0 || updates[prev.src.length - 1] === prev.src[prev.src.length - 1]);
+
+    if (isAppend && prev) {
+      if (updates.length === prev.src.length) {
+        return prev.merged;
+      }
+      const merged = prev.merged.slice();
+      const toolAt = new Map(prev.toolAt);
+      for (let i = prev.src.length; i < updates.length; i += 1) {
+        appendCoalesced(merged, toolAt, updates[i]);
+      }
+      cache.current = { merged, src: updates, toolAt };
+      return merged;
+    }
+
+    const merged = coalesceUpdates(updates);
+    const toolAt = new Map<string, number>();
+    for (let i = 0; i < merged.length; i += 1) {
+      const u = merged[i];
+      if (u.kind === "tool_call") toolAt.set(u.tool_call_id, i);
+    }
+    cache.current = { merged, src: updates, toolAt };
+    return merged;
+  }, [updates]);
+}
+
+/**
+ * Keep a stable `resolved` map reference while its contents are unchanged, so
+ * memoized rows don't re-render on every streaming delta (which produces a new
+ * `updates` array but no new permission outcomes).
+ */
+function useStableResolved(updates: SessionUpdate[]): Record<string, string> {
+  const ref = useRef<Record<string, string>>({});
+  return useMemo(() => {
+    const next = resolvedPermissions(updates);
+    const prev = ref.current;
+    const prevKeys = Object.keys(prev);
+    const same =
+      prevKeys.length === Object.keys(next).length &&
+      prevKeys.every((key) => prev[key] === next[key]);
+    if (same) {
+      return prev;
+    }
+    ref.current = next;
+    return next;
+  }, [updates]);
+}
+
+/**
+ * One transcript row. Memoized so that during streaming only the block whose
+ * object identity changed (the growing text/thought run, or a tool card taking
+ * a new frame) re-renders — historical rows keep their identity and skip the
+ * expensive Markdown re-parse entirely.
+ */
+const TranscriptRow = memo(function TranscriptRow({
+  update,
+  thinkingActive,
+  taskId,
+  resolved,
+  resolveFilePath,
+  onOpenFile,
+}: {
+  update: SessionUpdate;
+  thinkingActive: boolean;
+  taskId: string;
+  resolved: Record<string, string>;
+  resolveFilePath: FileLinkResolver;
+  onOpenFile: (path: string) => void;
+}) {
+  return (
+    <StreamLine
+      update={update}
+      thinkingActive={thinkingActive}
+      taskId={taskId}
+      resolved={resolved}
+      resolveFilePath={resolveFilePath}
+      onOpenFile={onOpenFile}
+    />
+  );
+});
 
 interface Props {
   activity: SessionActivity | null;
@@ -42,7 +144,7 @@ export const ChatTranscript = memo(function ChatTranscript({
   task,
   updates,
 }: Props) {
-  const merged = useMemo(() => coalesceUpdates(updates), [updates]);
+  const merged = useCoalesced(updates);
   const thinkingIndex = useMemo(() => {
     if (activeThinkingIndex(updates, task.status) === null) return null;
     for (let index = merged.length - 1; index >= 0; index--) {
@@ -50,7 +152,7 @@ export const ChatTranscript = memo(function ChatTranscript({
     }
     return null;
   }, [merged, task.status, updates]);
-  const resolved = useMemo(() => resolvedPermissions(updates), [updates]);
+  const resolved = useStableResolved(updates);
   const { contentRef, following, resume, scrollHandlers, scrollRef } = useChatFollow(
     active,
     task.id,
@@ -72,7 +174,7 @@ export const ChatTranscript = memo(function ChatTranscript({
               <div className="w-full">
                 {merged.map((update, index) => (
                   <div key={streamKey(update, index)} className="pb-3">
-                    <StreamLine
+                    <TranscriptRow
                       update={update}
                       thinkingActive={index === thinkingIndex}
                       taskId={task.id}

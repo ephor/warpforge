@@ -1,6 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Activity, ChevronRight, Search } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Card } from "@/components/ui/card";
 import {
@@ -163,7 +163,7 @@ interface Props {
   onOpenTask: (id: string) => void;
 }
 
-export default function AttentionRail({ state, onOpenTask }: Props) {
+function AttentionRail({ state, onOpenTask }: Props) {
   const pinned = useUi((store) => store.pinnedTaskIds);
   const togglePin = useUi((store) => store.togglePinnedTask);
   const attentionTargetId = useUi((store) => store.attentionTargetId);
@@ -456,3 +456,5 @@ export default function AttentionRail({ state, onOpenTask }: Props) {
     </Card>
   );
 }
+
+export default memo(AttentionRail);

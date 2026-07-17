@@ -55,6 +55,7 @@ export default function App() {
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [manualDetected, setManualDetected] = useState<DetectedAgent[] | null>(null);
   const [pushOpen, setPushOpen] = useState(false);
+  const [railMounted, setRailMounted] = useState(attentionOpen);
 
   const handleOpenTask = useCallback(
     (id: string) => {
@@ -65,6 +66,17 @@ export default function App() {
   );
 
   const openTask = state.snapshot.tasks.find((t) => t.id === openTaskId) ?? null;
+
+  // Keep the rail alive just long enough to slide out, then remove its
+  // subscription-heavy tree entirely while hidden.
+  useEffect(() => {
+    if (attentionOpen) {
+      setRailMounted(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setRailMounted(false), 300);
+    return () => window.clearTimeout(timer);
+  }, [attentionOpen]);
 
   const startNewTask = (project?: string, prompt?: string) => {
     setNewTaskProject(project ?? null);
@@ -489,7 +501,7 @@ export default function App() {
               attentionOpen ? "translate-x-0" : "-translate-x-full",
             )}
           >
-            <AttentionRail state={state} onOpenTask={handleOpenTask} />
+            {railMounted && <AttentionRail state={state} onOpenTask={handleOpenTask} />}
           </div>
         </div>
 
