@@ -7,10 +7,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import AttentionRail from "./components/AttentionRail";
+import AttentionToast from "./components/AttentionToast";
 import ErrorBoundary from "./components/ErrorBoundary";
 import PermissionToast from "./components/PermissionToast";
 import UpdateControl from "./components/UpdateControl";
 import { daemon } from "./daemon";
+import { attentionToastSummary } from "./lib/attentionToast";
 import { permissionToastApproveOption, permissionToastContext } from "./lib/permissionToast";
 import type { DaemonEvent, DetectedAgent, GitOpResult, TaskInfo, TaskStatus } from "./protocol";
 import { useUi } from "./store/ui";
@@ -35,10 +37,6 @@ function attentionToastTitle(status: TaskStatus): string {
   if (status === "needs_review") return "Ready for review";
   if (status === "blocked") return "Task blocked";
   return "Session interrupted";
-}
-
-function attentionDescription(task: TaskInfo): string {
-  return `${task.project} · ${task.agent} — ${task.prompt}`;
 }
 
 export default function App() {
@@ -92,12 +90,31 @@ export default function App() {
       ui.setAttentionOpen(false);
     };
     const notifyTask = (task: TaskInfo) => {
-      toast.warning(attentionToastTitle(task.status), {
-        id: `attention:${task.id}:${task.status}`,
-        description: attentionDescription(task),
-        action: { label: "Open sessions", onClick: () => openInRail(task.id) },
-        duration: 10_000,
-      });
+      const toastId = `attention:${task.id}:${task.status}`;
+      toast.custom(
+        (sonnerId) => (
+          <AttentionToast
+            title={attentionToastTitle(task.status)}
+            identity={`${task.project} · ${task.agent}`}
+            summary={attentionToastSummary(task.prompt)}
+            onDismiss={() => toast.dismiss(sonnerId)}
+            onOpen={() => {
+              openInRail(task.id);
+              toast.dismiss(sonnerId);
+            }}
+          />
+        ),
+        {
+          action: null,
+          cancel: null,
+          description: null,
+          duration: 10_000,
+          icon: null,
+          id: toastId,
+          richColors: false,
+          unstyled: true,
+        },
+      );
     };
 
     return daemon.subscribeEvents((event: DaemonEvent) => {
@@ -154,8 +171,14 @@ export default function App() {
               />
             ),
             {
+              action: null,
+              cancel: null,
+              description: null,
               id: toastId,
               duration: Number.POSITIVE_INFINITY,
+              icon: null,
+              richColors: false,
+              unstyled: true,
             },
           );
         } else if (update.kind === "permission_resolved") {
