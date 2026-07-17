@@ -7,23 +7,16 @@ import {
 } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
-  Archive,
-  ArrowDown,
   ArrowLeft,
   Check,
   ChevronDown,
-  Diff,
   FileText,
-  Folder,
   GitBranch,
   GitCommitVertical,
   ListTodo,
   Loader2,
-  MessageSquare,
   RefreshCw,
   Send,
-  SquareTerminal,
-  Trash2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -34,22 +27,17 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { createChatFollowGate, shouldFollowAfterScroll } from "@/lib/chatScroll";
 import { sessionActivity } from "@/lib/sessionActivity";
-import { resolvedPermissions } from "@/lib/sessionPermissions";
-import { activeThinkingIndex } from "@/lib/sessionThinking";
 import { activityBadge, orchNodeBadge, taskBadge } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
-import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
-import { AgentConfigBar } from "../components/AgentConfigBar";
 import { ChangesRail } from "../components/ChangesRail";
+import { ChatTranscript } from "../components/ChatTranscript";
 import { CodeEditor } from "../components/CodeEditor";
 import type { ComposerHandle } from "../components/Composer";
-import { Composer } from "../components/Composer";
 import { MergeDiff } from "../components/MergeDiff";
 import { RuntimePanel } from "../components/RuntimePanel";
+import { TaskDetailActions } from "../components/TaskDetailActions";
 import type { DaemonState } from "../daemon";
 import { daemon } from "../daemon";
 import type {
@@ -67,7 +55,6 @@ import type {
 } from "../protocol";
 import { daemonQuery } from "../query";
 import { useUi } from "../store/ui";
-import { StreamLine, coalesceUpdates, streamKey } from "./MissionControl";
 
 interface Props {
   task: TaskInfo;
@@ -92,31 +79,18 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   const diffView = useUi((s) => s.diffView);
   const setDiffView = useUi((s) => s.setDiffView);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const showChat = useUi((s) => s.showChat);
   const showDiff = useUi((s) => s.showDiff);
   const rightPanel = useUi((s) => s.rightPanel);
-  const toggleChat = useUi((s) => s.toggleChat);
-  const toggleDiff = useUi((s) => s.toggleDiff);
   const setShowDiff = useUi((s) => s.setShowDiff);
   const setCenterTab = useUi((s) => s.setCenterTab);
   const setRightPanel = useUi((s) => s.setRightPanel);
   const runtimeOpen = useUi((s) => s.runtimeOpen);
-  const setRuntimeOpen = useUi((s) => s.setRuntimeOpen);
   const services = state.snapshot.services.filter((s) => s.project === task.project);
   const portforwards = state.snapshot.portforwards.filter((p) => p.project === task.project);
   const queryClient = useQueryClient();
 
   const composerRef = useRef<ComposerHandle>(null);
-  const streamParent = useRef<HTMLDivElement>(null);
-  const streamContent = useRef<HTMLDivElement>(null);
-  const followingStream = useRef(true);
-  const previousStreamScrollTop = useRef(0);
-  const streamScrollFrame = useRef<number | null>(null);
-  const streamFollowGate = useMemo(() => createChatFollowGate(), []);
-  const streamTouchY = useRef<number | null>(null);
-  const streamPointerY = useRef<number | null>(null);
-  const [streamFollowing, setStreamFollowing] = useState(true);
   const diffScrollParent = useRef<HTMLDivElement>(null);
   const splitScrollParent = useRef<HTMLDivElement>(null);
   const badge = taskBadge(task.status);
@@ -219,21 +193,20 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     setCenterTab("changes");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const closeFileTab = (path: string) => {
-    setOpenFileTabs((tabs) => {
-      const idx = tabs.indexOf(path);
-      const next = tabs.filter((p) => p !== path);
-      if (activeTab.kind === "file" && activeTab.path === path) {
-        const fallback = next[Math.min(idx, next.length - 1)];
-        setActiveTab(fallback ? { kind: "file", path: fallback } : { kind: "changes" });
-        setSelectedFile(fallback ?? null);
-        if (!fallback) {
-          setCenterTab("changes");
-        }
-      }
-      return next;
-    });
-  };
+  const closeFileTab = useCallback(
+    (path: string) => {
+      const index = openFileTabs.indexOf(path);
+      const next = openFileTabs.filter((candidate) => candidate !== path);
+      setOpenFileTabs(next);
+      if (activeTab.kind !== "file" || activeTab.path !== path) return;
+
+      const fallback = next[Math.min(index, next.length - 1)];
+      setActiveTab(fallback ? { kind: "file", path: fallback } : { kind: "changes" });
+      setSelectedFile(fallback ?? null);
+      if (!fallback) setCenterTab("changes");
+    },
+    [activeTab, openFileTabs, setCenterTab],
+  );
 
   // Default the split-view selection to the first changed file.
   useEffect(() => {
@@ -249,29 +222,10 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     });
   }, [diff]);
 
-  const merged = useMemo(() => coalesceUpdates(updates), [updates]);
-  // Phase chronology must come from raw updates: coalescing replaces repeated
-  // tool frames in place, which can make a later completion appear before the
-  // thought it actually ended.
-  const streamingThoughtIndex = useMemo(() => {
-    if (activeThinkingIndex(updates, task.status) === null) {
-      return null;
-    }
-    for (let index = merged.length - 1; index >= 0; index--) {
-      if (merged[index].kind === "agent_thought") {
-        return index;
-      }
-    }
-    return null;
-  }, [merged, task.status, updates]);
   const activity = useMemo(() => sessionActivity(task, updates), [task, updates]);
   // While the agent is actively working a turn, the header chip reflects the
   // Live activity (thinking/working/writing) instead of the coarse status.
   const headerBadge = activity ? activityBadge(activity.tone, activity.label) : badge;
-
-  // Persisted permission answers (request_id → outcome) so resolved prompts
-  // Don't re-show live buttons after a reopen.
-  const resolvedPerms = useMemo(() => resolvedPermissions(updates), [updates]);
 
   // Slash-menu commands = the agent's most recent available_commands update.
   const commands = useMemo<CommandInfo[]>(() => {
@@ -292,143 +246,6 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
     }
     return false;
   }, [updates]);
-
-  const setFollowingStream = useCallback((following: boolean) => {
-    followingStream.current = following;
-    setStreamFollowing((current) => (current === following ? current : following));
-  }, []);
-
-  const cancelPendingStreamScroll = useCallback(() => {
-    streamFollowGate.cancel();
-    if (streamScrollFrame.current !== null) {
-      cancelAnimationFrame(streamScrollFrame.current);
-      streamScrollFrame.current = null;
-    }
-  }, [streamFollowGate]);
-
-  const pauseFollowingStream = useCallback(() => {
-    cancelPendingStreamScroll();
-    setFollowingStream(false);
-  }, [cancelPendingStreamScroll, setFollowingStream]);
-
-  const queueStreamToBottom = useCallback(() => {
-    const token = streamFollowGate.issue();
-    if (streamScrollFrame.current !== null) cancelAnimationFrame(streamScrollFrame.current);
-    streamScrollFrame.current = requestAnimationFrame(() => {
-      streamScrollFrame.current = null;
-      if (!streamFollowGate.isCurrent(token) || !followingStream.current) return;
-      const element = streamParent.current;
-      if (!element) return;
-      element.scrollTo({ behavior: "auto", top: element.scrollHeight });
-      previousStreamScrollTop.current = element.scrollTop;
-    });
-  }, [streamFollowGate]);
-
-  const resumeStreamFollowing = useCallback(() => {
-    cancelPendingStreamScroll();
-    setFollowingStream(true);
-    const element = streamParent.current;
-    if (!element) return;
-    // Explicit resume and send are immediate so a smooth/programmatic scroll
-    // cannot race the next streaming resize.
-    element.scrollTo({ behavior: "auto", top: element.scrollHeight });
-    previousStreamScrollTop.current = element.scrollTop;
-  }, [cancelPendingStreamScroll, setFollowingStream]);
-
-  const handleStreamScroll = useCallback(() => {
-    const element = streamParent.current;
-    if (!element) return;
-    // Once detached, only the explicit resume affordance re-enables following.
-    // Virtualizer measurement can itself change scrollTop, so treating every
-    // scroll event near the bottom as user intent causes surprise reattachment.
-    if (!followingStream.current) {
-      previousStreamScrollTop.current = element.scrollTop;
-      return;
-    }
-    const nextFollowing = shouldFollowAfterScroll(previousStreamScrollTop.current, element);
-    if (!nextFollowing) cancelPendingStreamScroll();
-    setFollowingStream(nextFollowing);
-    previousStreamScrollTop.current = element.scrollTop;
-  }, [cancelPendingStreamScroll, setFollowingStream]);
-
-  const handleStreamWheel = useCallback(
-    (event: React.WheelEvent) => {
-      if (event.deltaY < 0) pauseFollowingStream();
-    },
-    [pauseFollowingStream],
-  );
-
-  const handleStreamKeyDown = useCallback(
-    (event: React.KeyboardEvent) => {
-      if (["ArrowUp", "Home", "PageUp"].includes(event.key)) pauseFollowingStream();
-    },
-    [pauseFollowingStream],
-  );
-
-  const handleStreamTouchStart = useCallback((event: React.TouchEvent) => {
-    streamTouchY.current = event.touches[0]?.clientY ?? null;
-  }, []);
-
-  const handleStreamTouchMove = useCallback(
-    (event: React.TouchEvent) => {
-      const nextY = event.touches[0]?.clientY;
-      if (nextY === undefined) return;
-      if (streamTouchY.current !== null && nextY > streamTouchY.current + 1) {
-        pauseFollowingStream();
-      }
-      streamTouchY.current = nextY;
-    },
-    [pauseFollowingStream],
-  );
-
-  const handleStreamPointerDown = useCallback((event: React.PointerEvent) => {
-    streamPointerY.current = event.pointerType === "mouse" ? event.clientY : null;
-  }, []);
-
-  const handleStreamPointerMove = useCallback(
-    (event: React.PointerEvent) => {
-      if (event.pointerType !== "mouse" || event.buttons !== 1) return;
-      if (streamPointerY.current !== null && event.clientY < streamPointerY.current - 1) {
-        pauseFollowingStream();
-      }
-      streamPointerY.current = event.clientY;
-    },
-    [pauseFollowingStream],
-  );
-
-  // Content can grow without adding a merged item (streamed text), and measured
-  // virtual rows can resize when Thinking is toggled. Follow those changes only
-  // while the user has chosen to stay at the latest message.
-  useEffect(() => {
-    if (!showChat) return;
-    const content = streamContent.current;
-    if (!content) return;
-    const observer = new ResizeObserver(() => {
-      if (followingStream.current) {
-        queueStreamToBottom();
-      }
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, [queueStreamToBottom, showChat]);
-
-  useEffect(() => {
-    if (!showChat) {
-      cancelPendingStreamScroll();
-      return;
-    }
-    setFollowingStream(true);
-    previousStreamScrollTop.current = 0;
-    resumeStreamFollowing();
-    return cancelPendingStreamScroll;
-  }, [cancelPendingStreamScroll, resumeStreamFollowing, setFollowingStream, showChat, task.id]);
-
-  useEffect(
-    () => () => {
-      cancelPendingStreamScroll();
-    },
-    [cancelPendingStreamScroll],
-  );
 
   // Virtualize the unified diff — large change sets (900+ files) would mount
   // thousands of DOM nodes if every FileDiffView were rendered at once.
@@ -565,79 +382,18 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
                     </div>
                   </div>
                 </div>
-                <div className="relative min-h-0 flex-1">
-                  <div
-                    ref={streamParent}
-                    onScroll={handleStreamScroll}
-                    onWheel={handleStreamWheel}
-                    onKeyDown={handleStreamKeyDown}
-                    onTouchStart={handleStreamTouchStart}
-                    onTouchMove={handleStreamTouchMove}
-                    onPointerDown={handleStreamPointerDown}
-                    onPointerMove={handleStreamPointerMove}
-                    tabIndex={0}
-                    className="h-full min-w-0 overflow-y-auto px-4 py-4 pb-14 text-sm [overflow-anchor:none]"
-                  >
-                    <div ref={streamContent}>
-                      {merged.length === 0 ? (
-                        <p className="text-muted-foreground">No session activity yet.</p>
-                      ) : (
-                        <div className="w-full">
-                          {merged.map((update, index) => (
-                            <div key={streamKey(update, index)} className="pb-3">
-                              <StreamLine
-                                update={update}
-                                thinkingActive={index === streamingThoughtIndex}
-                                taskId={task.id}
-                                resolved={resolvedPerms}
-                                resolveFilePath={resolveSessionFilePath}
-                                onOpenFile={openFileTab}
-                              />
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {activity && (
-                        <div className="pt-3">
-                          <AgentActivityIndicator activity={activity} />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  {!streamFollowing && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="absolute bottom-3 right-4 z-20 size-9 rounded-full bg-background text-muted-foreground shadow-sm hover:text-foreground"
-                          aria-label="Scroll to latest message"
-                          onClick={resumeStreamFollowing}
-                        >
-                          <ArrowDown className="size-4" aria-hidden="true" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="left">Latest message</TooltipContent>
-                    </Tooltip>
-                  )}
-                </div>
-                <Composer
-                  ref={composerRef}
+                <ChatTranscript
+                  active={showChat}
+                  activity={activity}
                   commands={commands}
                   files={projectFiles}
                   filesLoading={fileListQuery.isLoading}
                   imageSupported={imageSupported}
-                  disabled={task.status === "done"}
-                  onSend={async (submission) => {
-                    resumeStreamFollowing();
-                    await daemon.request("session.prompt", { task_id: task.id, ...submission });
-                  }}
-                  toolbar={
-                    task.configOptions && task.configOptions.length > 0 ? (
-                      <AgentConfigBar taskId={task.id} options={task.configOptions} />
-                    ) : undefined
-                  }
+                  composerRef={composerRef}
+                  onOpenFile={openFileTab}
+                  resolveFilePath={resolveSessionFilePath}
+                  task={task}
+                  updates={updates}
                 />
               </Card>
             </ResizablePanel>
@@ -950,125 +706,7 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
             </>
           )}
         </ResizablePanelGroup>
-        <div className="flex w-9 shrink-0 flex-col items-center gap-2 rounded-lg border bg-card/95 py-2 text-muted-foreground">
-          <button
-            type="button"
-            aria-label="Toggle chat"
-            title="Toggle chat"
-            onClick={toggleChat}
-            className={cn(
-              "rounded-md p-1.5 hover:bg-secondary hover:text-foreground",
-              showChat && "bg-secondary text-foreground",
-            )}
-          >
-            <MessageSquare className="size-4" />
-          </button>
-          <button
-            type="button"
-            aria-label="Toggle diff"
-            title="Toggle diff"
-            onClick={toggleDiff}
-            className={cn(
-              "rounded-md p-1.5 hover:bg-secondary hover:text-foreground",
-              showDiff && "bg-secondary text-foreground",
-            )}
-          >
-            <Diff className="size-4" />
-          </button>
-          <div className="my-1 h-px w-5 bg-border" />
-          <button
-            type="button"
-            aria-label="Files"
-            title="Files"
-            onClick={() => {
-              setShowDiff(true);
-              setRightPanel(rightPanel === "files" ? null : "files");
-            }}
-            className={cn(
-              "rounded-md p-1.5 hover:bg-secondary hover:text-foreground",
-              rightPanel === "files" && "bg-secondary text-foreground",
-            )}
-          >
-            <Folder className="size-4" />
-          </button>
-          <button
-            type="button"
-            aria-label="Changes"
-            title="Changes"
-            onClick={() => {
-              setShowDiff(true);
-              setRightPanel(rightPanel === "changes" ? null : "changes");
-            }}
-            className={cn(
-              "rounded-md p-1.5 hover:bg-secondary hover:text-foreground",
-              rightPanel === "changes" && "bg-secondary text-foreground",
-            )}
-          >
-            <GitCommitVertical className="size-4" />
-          </button>
-          {task.orchestrationGraph && task.orchestrationGraph.nodes.length > 0 && (
-            <button
-              type="button"
-              aria-label="Subtasks"
-              title="Subtasks"
-              onClick={() => {
-                setShowDiff(true);
-                setRightPanel(rightPanel === "subtasks" ? null : "subtasks");
-              }}
-              className={cn(
-                "rounded-md p-1.5 hover:bg-secondary hover:text-foreground",
-                rightPanel === "subtasks" && "bg-secondary text-foreground",
-              )}
-            >
-              <ListTodo className="size-4" />
-            </button>
-          )}
-          <button
-            type="button"
-            aria-label="Runtime"
-            title="Runtime"
-            onClick={() => setRuntimeOpen(!runtimeOpen)}
-            className={cn(
-              "rounded-md p-1.5 hover:bg-secondary hover:text-foreground",
-              runtimeOpen && "bg-secondary text-foreground",
-            )}
-          >
-            <SquareTerminal className="size-4" />
-          </button>
-          <div className="mt-auto flex flex-col items-center gap-2">
-            <button
-              type="button"
-              aria-label="Archive task"
-              title="Archive task"
-              onClick={() => {
-                void daemon.archiveTask(task.id);
-                onClose();
-              }}
-              className="rounded-md p-1.5 hover:bg-secondary hover:text-foreground"
-            >
-              <Archive className="size-4" />
-            </button>
-            <button
-              type="button"
-              aria-label="Delete task"
-              title="Delete task"
-              onClick={() => {
-                if (!confirmDelete) {
-                  setConfirmDelete(true);
-                  return;
-                }
-                void daemon.deleteTask(task.id);
-                onClose();
-              }}
-              className={cn(
-                "rounded-md p-1.5 hover:bg-destructive/20 hover:text-destructive",
-                confirmDelete && "bg-destructive/20 text-destructive",
-              )}
-            >
-              <Trash2 className="size-4" />
-            </button>
-          </div>
-        </div>
+        <TaskDetailActions task={task} onClose={onClose} />
       </div>
     </div>
   );
