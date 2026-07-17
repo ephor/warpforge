@@ -1,10 +1,28 @@
-# Warpforge
+<h1 align="center">Warpforge</h1>
 
-**One desktop command center for your projects, dev services, and coding agents.**
+<h2 align="center">Run parallel coding agents without losing the workspace.</h2>
 
-Warpforge is a local-first workspace orchestrator for developers who use more than one coding agent. It brings five built-in agent integrations—including Claude Code, Codex, and OpenCode—into the same desktop workflow as your repositories, services, logs, ports, diffs, and git branches. Projects can also define custom ACP commands.
+<p align="center">
+  A local-first desktop command center for Claude Code, Codex, OpenCode, and other coding agents—across projects, worktrees, dev services, logs, ports, diffs, permissions, and review.
+</p>
 
-Instead of replacing the tools you already use, Warpforge is a **hybrid meta-harness** around them: your agent CLIs still do the work, while Warpforge supplies the shared workspace context, parallel execution, isolation, review surface, and an optional lead agent that can delegate to sub-agents.
+<p align="center">
+  <a href="https://github.com/ephor/warpforge/actions/workflows/ci.yml"><img src="https://github.com/ephor/warpforge/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/status-early_preview-7c9cff" alt="Early preview">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-8bcf6a" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <a href="#getting-started-from-source">Build from source</a> ·
+  <a href="#why-warpforge">Why Warpforge?</a> ·
+  <a href="#bring-your-own-agents">Supported agents</a> ·
+  <a href="#architecture">Architecture</a>
+</p>
+
+Warpforge keeps parallel agent work and the development environment around it in one operating layer. Run tasks across repositories, see what needs human attention, and review the commands, files, and diffs before changes move forward.
+
+> [!TIP]
+> **Agents plus their working environment.** Many tools stop at orchestrating agent sessions. Warpforge also orchestrates the runtime those agents need: `.warpforge.yaml` can declare app and dev-service commands, service dependencies, readiness signals, environment variables, and Kubernetes port-forwards. Warpforge starts configured services in dependency order, launches the declared application commands, then starts the project's port-forwards. Managed port-forwards are watched and retried with backoff if they drop, while running service URLs and resolved ports can be supplied to each new agent in its initial project context.
 
 > [!IMPORTANT]
 > Warpforge is currently an early desktop preview. The app works from source, while signed installers, automatic updates, and polished release packaging are still in progress. The Rust TUI remains available as a companion/legacy interface.
@@ -23,6 +41,8 @@ Warpforge gives that work a shared operating layer:
 - See the full trail—conversation, tool calls, commands, files, and diff—before trusting the result.
 - Take work from diff to branch in one place: accept or reject hunks, edit files, commit, update, preview, and push.
 - Hand a larger objective to a lead agent that can delegate bounded work to visible sub-agents.
+
+Warpforge does not replace the coding tools you already use. It is a **hybrid meta-harness** around them: the agent CLIs still do the coding, while Warpforge supplies shared workspace context, parallel execution, isolation, runtime visibility, review, and an optional lead agent that can delegate to sub-agents.
 
 ## Bring your own agents
 
