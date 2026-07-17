@@ -1,5 +1,5 @@
 import { Maximize2, Pin } from "lucide-react";
-import { useMemo } from "react";
+import { memo, useCallback, useMemo } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -72,18 +72,6 @@ export default function AttentionRail({ state, onOpenTask }: Props) {
   );
   const reasons = useMemo(() => new Map(queue.map((item) => [item.task.id, item.reason])), [queue]);
 
-  // Pre-compute coalesced + filtered preview for every task once.
-  const previewCache = useMemo(() => {
-    const map = new Map<string, SessionUpdate[]>();
-    for (const task of state.snapshot.tasks) {
-      const updates = state.sessionUpdates[task.id];
-      if (updates) {
-        map.set(task.id, coalesceUpdates(updates).filter(previewableUpdate).slice(-4));
-      }
-    }
-    return map;
-  }, [state.snapshot.tasks, state.sessionUpdates]);
-
   const live = useMemo(() => {
     const tasks = state.snapshot.tasks.filter((t) => t.status !== "done");
     return tasks.sort((a, b) => {
@@ -92,6 +80,16 @@ export default function AttentionRail({ state, onOpenTask }: Props) {
       return ap - bp || b.updatedAt - a.updatedAt;
     });
   }, [state.snapshot.tasks, attentionIds]);
+
+  // Stable callbacks — avoid inline arrows that create new refs per task per render.
+  const handlePin = useCallback(
+    (taskId: string) => () => togglePin(taskId),
+    [togglePin],
+  );
+  const handleOpen = useCallback(
+    (taskId: string) => () => onOpenTask(taskId),
+    [onOpenTask],
+  );
 
   return (
     <Card className="flex h-full min-h-0 flex-col overflow-hidden bg-card/90">
@@ -118,13 +116,13 @@ export default function AttentionRail({ state, onOpenTask }: Props) {
               <SessionRailCard
                 key={task.id}
                 task={task}
-                recent={previewCache.get(task.id) ?? []}
+                updates={state.sessionUpdates[task.id]}
                 pinned={pinnedSet.has(task.id)}
                 attention={attentionIds.has(task.id)}
                 reason={reasons.get(task.id)}
                 permission={permissions.get(task.id)}
-                onPin={() => togglePin(task.id)}
-                onOpen={() => onOpenTask(task.id)}
+                onPin={handlePin(task.id)}
+                onOpen={handleOpen(task.id)}
               />
             ))
           )}
@@ -134,9 +132,14 @@ export default function AttentionRail({ state, onOpenTask }: Props) {
   );
 }
 
-function SessionRailCard({
+/**
+ * Memoized card — only re-renders when its specific task data changes.
+ * Coalesces its own updates internally so the parent doesn't have to
+ * pre-compute for every task on every render.
+ */
+const SessionRailCard = memo(function SessionRailCard({
   task,
-  recent,
+  updates,
   pinned,
   attention,
   reason,
@@ -145,7 +148,7 @@ function SessionRailCard({
   onOpen,
 }: {
   task: TaskInfo;
-  recent: SessionUpdate[];
+  updates: SessionUpdate[] | undefined;
   pinned: boolean;
   attention: boolean;
   reason?: string;
@@ -154,6 +157,10 @@ function SessionRailCard({
   onOpen: () => void;
 }) {
   const badge = taskBadge(task.status);
+  const recent = useMemo(
+    () => (updates ? coalesceUpdates(updates).filter(previewableUpdate).slice(-4) : []),
+    [updates],
+  );
 
   return (
     <Card
@@ -239,4 +246,4 @@ function SessionRailCard({
       )}
     </Card>
   );
-}
+});
