@@ -56,19 +56,31 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
     [snapshot.tasks],
   );
 
-  const match = (t: TaskInfo) =>
-    (project === "all" || t.project === project) && (agent === "all" || t.agent === agent);
-  const tasks = snapshot.tasks.filter(match);
+  const match = useMemo(
+    () => (t: TaskInfo) =>
+      (project === "all" || t.project === project) && (agent === "all" || t.agent === agent),
+    [project, agent],
+  );
+  const tasks = useMemo(() => snapshot.tasks.filter(match), [snapshot.tasks, match]);
   const forest = useMemo(
     () => buildTaskForest(snapshot.tasks).filter((tree) => treeMatches(tree, match)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [snapshot.tasks, project, agent],
   );
 
-  const byStatus = (s: TaskStatus | TaskStatus[]) => {
-    const set = Array.isArray(s) ? s : [s];
-    return tasks.filter((t) => set.includes(t.status));
-  };
+  const byStatus = useMemo(() => {
+    const cache = new Map<string, TaskInfo[]>();
+    return (s: TaskStatus | TaskStatus[]) => {
+      const key = Array.isArray(s) ? s.sort().join(",") : s;
+      let result = cache.get(key);
+      if (!result) {
+        const set = Array.isArray(s) ? s : [s];
+        result = tasks.filter((t) => set.includes(t.status));
+        cache.set(key, result);
+      }
+      return result;
+    };
+  }, [tasks]);
 
   // Queue ordered by local priority, unknown ids appended.
   const queued = useMemo(() => {
@@ -104,17 +116,23 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
     });
   };
 
-  const done = byStatus("done").sort((a, b) => b.updatedAt - a.updatedAt);
-  const running = byStatus("running");
+  const done = useMemo(() => byStatus("done").sort((a, b) => b.updatedAt - a.updatedAt), [byStatus]);
+  const running = useMemo(() => byStatus("running"), [byStatus]);
   // Open conversations: the agent is either working (running) or waiting for
   // Your next message (idle). Both are live, non-review, non-done.
-  const review = byStatus(["needs_review", "blocked", "interrupted"]);
-  const laneTrees = (lane: ReturnType<typeof treeLane>) =>
-    forest.filter((tree) => treeLane(tree) === lane);
-  const queueTrees = laneTrees("queue");
-  const activeTrees = laneTrees("active");
-  const reviewTrees = laneTrees("review");
-  const historyTrees = laneTrees("history").sort((a, b) => b.task.updatedAt - a.task.updatedAt);
+  const review = useMemo(() => byStatus(["needs_review", "blocked", "interrupted"]), [byStatus]);
+  const laneTrees = useMemo(
+    () => (lane: ReturnType<typeof treeLane>) =>
+      forest.filter((tree) => treeLane(tree) === lane),
+    [forest],
+  );
+  const queueTrees = useMemo(() => laneTrees("queue"), [laneTrees]);
+  const activeTrees = useMemo(() => laneTrees("active"), [laneTrees]);
+  const reviewTrees = useMemo(() => laneTrees("review"), [laneTrees]);
+  const historyTrees = useMemo(
+    () => laneTrees("history").sort((a, b) => b.task.updatedAt - a.task.updatedAt),
+    [laneTrees],
+  );
 
   const toggleGroup = (id: string) => {
     setCollapsedGroups((prev) => {

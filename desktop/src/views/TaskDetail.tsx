@@ -167,14 +167,15 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   });
 
   const setView = (v: "unified" | "split") => setDiffView(v);
-  const openFileTab = (path: string) => {
+  const openFileTab = useCallback((path: string) => {
     setOpenFileTabs((tabs) => (tabs.includes(path) ? tabs : [...tabs, path]));
     setSelectedFile(path);
     setActiveTab({ kind: "file", path });
     setShowDiff(true);
     setCenterTab("editor");
-  };
-  const openDiffFile = (path: string) => {
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const openDiffFile = useCallback((path: string) => {
     setSelectedFile(path);
     setActiveTab({ kind: "changes" });
     setShowDiff(true);
@@ -193,12 +194,14 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
         });
       });
     });
-  };
-  const openChangesTab = () => {
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diff?.files, diffView]);
+  const openChangesTab = useCallback(() => {
     setActiveTab({ kind: "changes" });
     setShowDiff(true);
     setCenterTab("changes");
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const closeFileTab = (path: string) => {
     setOpenFileTabs((tabs) => {
       const idx = tabs.indexOf(path);

@@ -237,7 +237,7 @@ export function ChangesRail({
     });
   }, []);
 
-  const toggle = (paths: string[], on: boolean) =>
+  const toggle = useCallback((paths: string[], on: boolean) => {
     setStaged((prev) => {
       const next = new Set(prev);
       for (const p of paths) {
@@ -249,6 +249,7 @@ export function ChangesRail({
       }
       return next;
     });
+  }, []);
 
   const canCommit = !busy && staged.size > 0 && (message.trim().length > 0 || amend);
   const canRollback = !rollbackBusy && staged.size > 0;

@@ -12,7 +12,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -50,11 +50,27 @@ const PINNED_PREVIEW_LIMIT = 18;
 export default function MissionControl({ state, onOpenTask, onNewTask }: Props) {
   const pinned = useUi((s) => s.pinnedTaskIds);
   const togglePin = useUi((s) => s.togglePinnedTask);
-  const live = state.snapshot.tasks.filter((t) => t.status !== "done");
+  const live = useMemo(
+    () => state.snapshot.tasks.filter((t) => t.status !== "done"),
+    [state.snapshot.tasks],
+  );
 
-  const pinnedTasks = pinned
-    .map((id) => live.find((t) => t.id === id))
-    .filter((t): t is TaskInfo => Boolean(t));
+  const pinnedTasks = useMemo(
+    () =>
+      pinned
+        .map((id) => live.find((t) => t.id === id))
+        .filter((t): t is TaskInfo => Boolean(t)),
+    [pinned, live],
+  );
+
+  const handleUnpin = useCallback(
+    (taskId: string) => () => togglePin(taskId),
+    [togglePin],
+  );
+  const handleOpen = useCallback(
+    (taskId: string) => () => onOpenTask(taskId),
+    [onOpenTask],
+  );
 
   return (
     <ScrollArea className="h-full min-h-0">
@@ -66,8 +82,8 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
                 key={task.id}
                 task={task}
                 updates={state.sessionUpdates[task.id] ?? []}
-                onUnpin={() => togglePin(task.id)}
-                onOpen={() => onOpenTask(task.id)}
+                onUnpin={handleUnpin(task.id)}
+                onOpen={handleOpen(task.id)}
               />
             ))}
           </div>
@@ -105,13 +121,13 @@ function FocusPane({
   onUnpin: () => void;
   onOpen: () => void;
 }) {
-  const stream = coalesceUpdates(updates);
-  const resolved = resolvedPermissions(stream);
-  const pending = pendingPermission(stream, resolved);
-  const preview = pinnedPreview(stream, PINNED_PREVIEW_LIMIT);
-  const tools = summarizeTools(stream);
-  const files = summarizeFiles(stream);
-  const commands = latestCommands(updates);
+  const stream = useMemo(() => coalesceUpdates(updates), [updates]);
+  const resolved = useMemo(() => resolvedPermissions(stream), [stream]);
+  const pending = useMemo(() => pendingPermission(stream, resolved), [stream, resolved]);
+  const preview = useMemo(() => pinnedPreview(stream, PINNED_PREVIEW_LIMIT), [stream]);
+  const tools = useMemo(() => summarizeTools(stream), [stream]);
+  const files = useMemo(() => summarizeFiles(stream), [stream]);
+  const commands = useMemo(() => latestCommands(updates), [updates]);
   const fileListQuery = useQuery({
     queryFn: daemonQuery<ProjectFile[]>("file.list", { task_id: task.id }),
     queryKey: ["fileList", task.id, task.updatedAt],
