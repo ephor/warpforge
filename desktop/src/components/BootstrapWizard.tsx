@@ -1,6 +1,6 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, Loader2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -14,17 +14,18 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 
 import { daemon } from "../daemon";
+import type { AgentConfig } from "../protocol";
 
 interface Props {
   /** Registered project name. */
   project: string;
+  agents: AgentConfig[];
   open: boolean;
   onOpenChange: (v: boolean) => void;
   /** Called after the bootstrap task is successfully started. */
   onStarted?: (taskId: string) => void;
 }
 
-const AGENTS = ["claude", "codex", "opencode", "qwen", "goose"];
 const RUNTIME_KINDS = ["local", "docker-compose", "kubernetes", "mixed"] as const;
 type RuntimeKind = (typeof RUNTIME_KINDS)[number];
 
@@ -41,7 +42,7 @@ interface Answers {
 }
 
 const EMPTY_ANSWERS: Answers = {
-  agent: "claude",
+  agent: "",
   runtimeKind: "local",
   composePath: "",
   k8sManifestsPath: "",
@@ -62,30 +63,30 @@ function RadioRow({
   onChange,
 }: {
   label: string;
-  options: readonly string[];
+  options: readonly { label: string; value: string }[];
   value: string;
   onChange: (v: string) => void;
 }) {
   return (
-    <div>
-      <label className="mb-1 block text-xs font-medium text-muted-foreground">{label}</label>
+    <fieldset>
+      <legend className="mb-1 block text-xs font-medium text-muted-foreground">{label}</legend>
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => (
           <button
-            key={opt}
+            key={opt.value}
             type="button"
-            onClick={() => onChange(opt)}
+            onClick={() => onChange(opt.value)}
             className={`rounded-md border px-3 py-1.5 text-sm ${
-              value === opt
+              value === opt.value
                 ? "border-primary bg-primary/10 text-foreground"
                 : "text-muted-foreground hover:bg-accent"
             }`}
           >
-            {opt}
+            {opt.label}
           </button>
         ))}
       </div>
-    </div>
+    </fieldset>
   );
 }
 
@@ -102,6 +103,7 @@ function PathRow({
   directory?: boolean;
   placeholder?: string;
 }) {
+  const inputId = useId();
   const browse = async () => {
     const selected = await openDialog({
       directory: !!directory,
@@ -112,9 +114,12 @@ function PathRow({
   };
   return (
     <div>
-      <label className="mb-1 block text-xs font-medium text-muted-foreground">{label}</label>
+      <label htmlFor={inputId} className="mb-1 block text-xs font-medium text-muted-foreground">
+        {label}
+      </label>
       <div className="flex gap-2">
         <input
+          id={inputId}
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -130,23 +135,42 @@ function PathRow({
   );
 }
 
-export default function BootstrapWizard({ project, open, onOpenChange, onStarted }: Props) {
-  const [answers, setAnswers] = useState<Answers>(EMPTY_ANSWERS);
+export default function BootstrapWizard({ project, agents, open, onOpenChange, onStarted }: Props) {
+  const enabledAgents = useMemo(() => agents.filter((agent) => agent.enabled), [agents]);
+  const agentOptions = useMemo(
+    () => enabledAgents.map((agent) => ({ label: agent.displayName, value: agent.id })),
+    [enabledAgents],
+  );
+  const runtimeOptions = useMemo(
+    () => RUNTIME_KINDS.map((kind) => ({ label: kind, value: kind })),
+    [],
+  );
+  const [answers, setAnswers] = useState<Answers>(() => ({
+    ...EMPTY_ANSWERS,
+    agent: enabledAgents[0]?.id ?? "",
+  }));
   const [stepIndex, setStepIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const patch = (p: Partial<Answers>) => setAnswers((a) => ({ ...a, ...p }));
 
+  useEffect(() => {
+    setAnswers((current) => {
+      if (enabledAgents.some((agent) => agent.id === current.agent)) return current;
+      return { ...current, agent: enabledAgents[0]?.id ?? "" };
+    });
+  }, [enabledAgents]);
+
   const steps = useMemo(() => {
-    const base = ["agent", "runtime"];
+    const base = enabledAgents.length === 1 ? ["runtime"] : ["agent", "runtime"];
     if (answers.runtimeKind !== "local") base.push("conditional");
     return [...base, "commands", "notes"];
-  }, [answers.runtimeKind]);
+  }, [answers.runtimeKind, enabledAgents.length]);
   const currentStep = steps[Math.min(stepIndex, steps.length - 1)];
 
   const reset = () => {
-    setAnswers(EMPTY_ANSWERS);
+    setAnswers({ ...EMPTY_ANSWERS, agent: enabledAgents[0]?.id ?? "" });
     setStepIndex(0);
     setError(null);
     setBusy(false);
@@ -182,7 +206,7 @@ export default function BootstrapWizard({ project, open, onOpenChange, onStarted
         return (
           <RadioRow
             label="Coding agent"
-            options={AGENTS}
+            options={agentOptions}
             value={answers.agent}
             onChange={(v) => patch({ agent: v })}
           />
@@ -191,85 +215,110 @@ export default function BootstrapWizard({ project, open, onOpenChange, onStarted
         return (
           <RadioRow
             label="How do services run?"
-            options={RUNTIME_KINDS}
+            options={runtimeOptions}
             value={answers.runtimeKind}
             onChange={(v) => patch({ runtimeKind: v as RuntimeKind })}
           />
         );
       case "conditional":
-        return answers.runtimeKind === "docker-compose" ? (
-          <PathRow
-            label="Docker Compose file"
-            value={answers.composePath}
-            onChange={(v) => patch({ composePath: v })}
-            placeholder="docker-compose.yml"
-          />
-        ) : (
+        return (
           <div className="flex flex-col gap-3">
-            <PathRow
-              label="Manifests directory"
-              value={answers.k8sManifestsPath}
-              onChange={(v) => patch({ k8sManifestsPath: v })}
-              directory
-              placeholder="k8s/"
-            />
-            <PathRow
-              label="Helm chart / values file (optional)"
-              value={answers.k8sHelmFile}
-              onChange={(v) => patch({ k8sHelmFile: v })}
-              placeholder="values.yaml"
-            />
-            <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                Release / service names (optional, comma-separated)
-              </label>
-              <input
-                type="text"
-                value={answers.k8sReleaseNames}
-                onChange={(e) => patch({ k8sReleaseNames: e.target.value })}
-                placeholder="api, worker"
-                className={inputClass}
+            {(answers.runtimeKind === "docker-compose" || answers.runtimeKind === "mixed") && (
+              <PathRow
+                label="Docker Compose file"
+                value={answers.composePath}
+                onChange={(v) => patch({ composePath: v })}
+                placeholder="docker-compose.yml"
               />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">
-                Namespace (optional)
-              </label>
-              <input
-                type="text"
-                value={answers.k8sNamespace}
-                onChange={(e) => patch({ k8sNamespace: e.target.value })}
-                placeholder="default"
-                className={inputClass}
-              />
-            </div>
+            )}
+            {(answers.runtimeKind === "kubernetes" || answers.runtimeKind === "mixed") && (
+              <>
+                <PathRow
+                  label="Manifests directory"
+                  value={answers.k8sManifestsPath}
+                  onChange={(v) => patch({ k8sManifestsPath: v })}
+                  directory
+                  placeholder="k8s/"
+                />
+                <PathRow
+                  label="Helm chart / values file (optional)"
+                  value={answers.k8sHelmFile}
+                  onChange={(v) => patch({ k8sHelmFile: v })}
+                  placeholder="values.yaml"
+                />
+                <div>
+                  <label
+                    htmlFor="bootstrap-k8s-releases"
+                    className="mb-1 block text-xs font-medium text-muted-foreground"
+                  >
+                    Release / service names (optional, comma-separated)
+                  </label>
+                  <input
+                    id="bootstrap-k8s-releases"
+                    type="text"
+                    value={answers.k8sReleaseNames}
+                    onChange={(e) => patch({ k8sReleaseNames: e.target.value })}
+                    placeholder="api, worker"
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="bootstrap-k8s-namespace"
+                    className="mb-1 block text-xs font-medium text-muted-foreground"
+                  >
+                    Namespace (optional)
+                  </label>
+                  <input
+                    id="bootstrap-k8s-namespace"
+                    type="text"
+                    value={answers.k8sNamespace}
+                    onChange={(e) => patch({ k8sNamespace: e.target.value })}
+                    placeholder="default"
+                    className={inputClass}
+                  />
+                </div>
+              </>
+            )}
           </div>
         );
       case "commands":
         return (
           <div>
-            <label className="mb-1 block text-xs font-medium text-muted-foreground">
-              Dev commands (comma-separated)
+            <label
+              htmlFor="bootstrap-service-details"
+              className="mb-1 block text-xs font-medium text-muted-foreground"
+            >
+              Known services, commands, and ports (optional)
             </label>
-            <input
-              type="text"
+            <Textarea
+              id="bootstrap-service-details"
               value={answers.devCommands}
               onChange={(e) => patch({ devCommands: e.target.value })}
-              placeholder="npm run dev, npm run api"
-              className={inputClass}
+              placeholder={
+                "api: pnpm --filter api dev — PORT default 4000, logs ‘API listening’\nworker: pnpm --filter worker dev — Kafka consumer, no HTTP port"
+              }
+              rows={5}
             />
+            <p className="mt-1 text-xs text-muted-foreground">
+              The repository is scanned automatically; add facts that are hard to infer.
+            </p>
           </div>
         );
       case "notes":
         return (
           <div>
-            <label className="mb-1 block text-xs font-medium text-muted-foreground">
-              Notes for the agent (optional)
+            <label
+              htmlFor="bootstrap-notes"
+              className="mb-1 block text-xs font-medium text-muted-foreground"
+            >
+              Variants and dependency notes (optional)
             </label>
             <Textarea
+              id="bootstrap-notes"
               value={answers.notes}
               onChange={(e) => patch({ notes: e.target.value })}
-              placeholder="Anything special about ports, dependencies, env vars…"
+              placeholder="Which variants are mutually exclusive? Which workers use Kafka or Redis? Note any unusual startup behavior."
               rows={4}
             />
           </div>

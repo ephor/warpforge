@@ -8,7 +8,6 @@ import { cn } from "@/lib/utils";
 
 import AttentionRail from "./components/AttentionRail";
 import AttentionToast from "./components/AttentionToast";
-import BootstrapReviewDialog from "./components/BootstrapReviewDialog";
 import BootstrapWizard from "./components/BootstrapWizard";
 import ErrorBoundary from "./components/ErrorBoundary";
 import PermissionToast from "./components/PermissionToast";
@@ -59,10 +58,6 @@ export default function App() {
   const [pushOpen, setPushOpen] = useState(false);
   const [railMounted, setRailMounted] = useState(attentionOpen);
   const [wizardProject, setWizardProject] = useState<string | null>(null);
-  const [reviewTask, setReviewTask] = useState<{
-    project: string;
-    agentText: string;
-  } | null>(null);
 
   const handleOpenTask = useCallback(
     (id: string) => {
@@ -217,25 +212,6 @@ export default function App() {
           notifyTask(event.data);
         } else if (!ATTENTION_STATUS.has(event.data.status) && previous) {
           toast.dismiss(`attention:${event.data.id}:${previous}`);
-        }
-
-        // Bootstrap task finished → show review dialog
-        const isBootstrap =
-          event.data.tags?.includes("bootstrap") || event.data.tags?.includes("config-gen");
-        const isDone =
-          event.data.status === "idle" || event.data.status === "needs_review";
-        if (isBootstrap && isDone && previous === "running") {
-          const updates = daemon.getState().sessionUpdates[event.data.id] ?? [];
-          const agentText = updates
-            .filter((u): u is Extract<typeof u, { kind: "agent_text" }> => u.kind === "agent_text")
-            .map((u) => u.text)
-            .join("");
-          if (agentText.trim()) {
-            setReviewTask({
-              project: event.data.project,
-              agentText,
-            });
-          }
         }
       } else if (event.event === "task.created" && ATTENTION_STATUS.has(event.data.status)) {
         notifyTask(event.data);
@@ -502,10 +478,11 @@ export default function App() {
                   onOpenTask={setOpenTaskId}
                   onNewTask={startNewTask}
                   onProjectAdded={(name) => {
-                    toast.info("Project added", {
-                      description: `Agent can configure ${name}`,
+                    toast("Project added", {
+                      description: `Run the setup wizard for ${name}`,
+                      duration: Number.POSITIVE_INFINITY,
                       action: {
-                        label: "Configure",
+                        label: "Open wizard",
                         onClick: () => setWizardProject(name),
                       },
                     });
@@ -561,33 +538,39 @@ export default function App() {
         {wizardProject && (
           <BootstrapWizard
             project={wizardProject}
+            agents={state.snapshot.agents ?? []}
             open={!!wizardProject}
             onOpenChange={(v) => {
               if (!v) setWizardProject(null);
             }}
             onStarted={(taskId) => {
+              const projectName = wizardProject;
               setWizardProject(null);
-              toast.info("Agent is generating config", {
-                description: `Task ${taskId.slice(0, 8)}… running in background`,
-                action: {
-                  label: "Open session",
-                  onClick: () => {
-                    setOpenTaskId(taskId);
-                    setView("control");
-                  },
+              const toastId = `bootstrap:${taskId}`;
+              toast.custom(
+                (sonnerId) => (
+                  <AttentionToast
+                    title="Config generation started"
+                    identity={projectName ?? "project"}
+                    summary="Agent is writing .warpforge.yaml in background"
+                    onDismiss={() => toast.dismiss(sonnerId)}
+                    onOpen={() => {
+                      useUi.getState().focusAttentionTask(taskId);
+                      toast.dismiss(sonnerId);
+                    }}
+                  />
+                ),
+                {
+                  action: null,
+                  cancel: null,
+                  description: null,
+                  duration: 10_000,
+                  icon: null,
+                  id: toastId,
+                  richColors: false,
+                  unstyled: true,
                 },
-                duration: 10000,
-              });
-            }}
-          />
-        )}
-        {reviewTask && (
-          <BootstrapReviewDialog
-            project={reviewTask.project}
-            agentText={reviewTask.agentText}
-            open={!!reviewTask}
-            onOpenChange={(v) => {
-              if (!v) setReviewTask(null);
+              );
             }}
           />
         )}
