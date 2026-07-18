@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+import BootstrapWizard from "../components/BootstrapWizard";
 import { daemon } from "../daemon";
 
 interface Props {
@@ -31,6 +32,8 @@ export default function AddProjectDialog({ open, onOpenChange }: Props) {
   const [nameEdited, setNameEdited] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  /** Registered project name once added — drives the follow-on bootstrap wizard. */
+  const [wizardProject, setWizardProject] = useState<string | null>(null);
 
   const handleBrowse = async () => {
     const selected = await openDialog({
@@ -62,14 +65,17 @@ export default function AddProjectDialog({ open, onOpenChange }: Props) {
     setLoading(true);
     setError(null);
     try {
-      await daemon.request("project.add", {
+      const added = (await daemon.request("project.add", {
         path: path.trim(),
         name: name.trim() || undefined,
-      });
+      })) as { name?: string };
+      const projectName = added?.name ?? name.trim();
       setPath("");
       setName("");
       setNameEdited(false);
       onOpenChange(false);
+      // Flow straight into the bootstrap wizard for the new project.
+      if (projectName) setWizardProject(projectName);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -78,6 +84,7 @@ export default function AddProjectDialog({ open, onOpenChange }: Props) {
   };
 
   return (
+    <>
     <Dialog
       open={open}
       onOpenChange={(v) => {
@@ -160,5 +167,15 @@ export default function AddProjectDialog({ open, onOpenChange }: Props) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    {wizardProject && (
+      <BootstrapWizard
+        project={wizardProject}
+        open={!!wizardProject}
+        onOpenChange={(v) => {
+          if (!v) setWizardProject(null);
+        }}
+      />
+    )}
+    </>
   );
 }
