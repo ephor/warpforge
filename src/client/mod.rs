@@ -91,6 +91,7 @@ pub struct ClientState {
     pub portforwards: PfProjection,
     pub agents: AgentProjection,
     pub tasks: Vec<wire::TaskInfo>,
+    pub bootstrap_results: HashMap<String, String>,
 }
 
 // ── Client ──────────────────────────────────────────────────────────────────
@@ -268,6 +269,23 @@ impl Client {
             .await?;
         resp.get("result")?.get("name")?.as_str().map(String::from)
     }
+
+    /// Ask the daemon to scan the project, build the bootstrap prompt from the
+    /// wizard `answers`, and create a config-gen task. Returns the task id.
+    pub async fn bootstrap_start(&self, project: &str, answers: Value) -> Option<String> {
+        let resp = self
+            .request(
+                "bootstrap.start",
+                json!({ "project": project, "answers": answers }),
+            )
+            .await?;
+        resp.get("result")?.get("taskId")?.as_str().map(String::from)
+    }
+
+    /// Cancel a running task.
+    pub fn cancel_task(&self, task_id: &str) {
+        self.notify("task.cancel", json!({ "taskId": task_id }));
+    }
 }
 
 // ── Event application ──
@@ -370,6 +388,19 @@ fn apply_event(state: &Arc<Mutex<ClientState>>, ev: wire::Event) {
                 None => s.tasks.push(t),
             }
         }
+        wire::Event::SessionUpdate {
+            task_id,
+            update: wire::SessionUpdate::AgentText { text },
+        } => {
+            // Accumulate agent text for bootstrap tasks
+            if let Some(task) = s.tasks.iter().find(|t| t.id == task_id) {
+                if task.tags.iter().any(|t| t == "bootstrap" || t == "config-gen") {
+                    let entry = s.bootstrap_results.entry(task_id).or_default();
+                    entry.push_str(&text);
+                }
+            }
+        }
+        wire::Event::SessionUpdate { .. } => {}
         wire::Event::ProjectAdded(info) => {
             if !s.projects.iter().any(|p| p.name == info.name) {
                 s.projects.push(ProjectEntry {
@@ -440,6 +471,7 @@ fn from_snapshot(snap: wire::Snapshot) -> ClientState {
                 .collect(),
         },
         tasks: snap.tasks,
+        bootstrap_results: HashMap::new(),
     }
 }
 

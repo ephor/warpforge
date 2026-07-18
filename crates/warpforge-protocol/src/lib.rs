@@ -336,6 +336,52 @@ pub enum Method {
     /// Save the orchestrator configuration.
     #[serde(rename = "orchestrate.saveConfig")]
     OrchestrateSaveConfig { config: OrchestratorConfigDto },
+
+    // ── Bootstrap wizard (desktop) ──
+    /// Scan the repo, build the bootstrap prompt from the user's answers, and
+    /// create a config-gen task. Returns `{ taskId }`.
+    #[serde(rename = "bootstrap.start")]
+    BootstrapStart {
+        project: String,
+        answers: BootstrapAnswers,
+    },
+    /// Extract the YAML from an agent response and validate it. Returns
+    /// `{ yaml, issues: [{ severity, message }] }`.
+    #[serde(rename = "bootstrap.finalize")]
+    BootstrapFinalize { response: String },
+    /// Read the project's current config file and validate it. Used after a
+    /// bootstrap task to review what the agent wrote. Returns
+    /// `{ yaml, issues: [{ severity, message }] }`.
+    #[serde(rename = "bootstrap.readConfig")]
+    BootstrapReadConfig { project: String },
+    /// Write the accepted YAML to the project's config file. Returns
+    /// `{ ok, path }`.
+    #[serde(rename = "bootstrap.writeConfig")]
+    BootstrapWriteConfig { project: String, yaml: String },
+}
+
+/// Answers collected by the desktop bootstrap wizard. Mirrors the daemon's
+/// `bootstrap::UserRuntimeAnswers`; `runtime_kind` is one of `local`,
+/// `docker-compose`, `kubernetes`, `mixed`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BootstrapAnswers {
+    pub agent: String,
+    pub runtime_kind: String,
+    #[serde(default)]
+    pub compose_path: String,
+    #[serde(default)]
+    pub k8s_manifests_path: String,
+    #[serde(default)]
+    pub k8s_helm_file: String,
+    #[serde(default)]
+    pub k8s_release_names: String,
+    #[serde(default)]
+    pub k8s_namespace: String,
+    #[serde(default)]
+    pub dev_commands: String,
+    #[serde(default)]
+    pub notes: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

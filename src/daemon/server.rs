@@ -730,6 +730,113 @@ async fn dispatch(
                 })?;
             Ok(json!(null))
         }
+        BootstrapStart { project, answers } => {
+            let path = project_path(handle, &project).await?;
+            let ctx = bootstrap_context(&path, answers);
+            let system_prompt = crate::bootstrap::build_system_prompt(&ctx);
+            let user_prompt = crate::bootstrap::build_user_prompt(&ctx);
+            let prompt =
+                format!("## System Context\n\n{system_prompt}\n\n---\n\n## Task\n\n{user_prompt}");
+            let id = handle
+                .create_task(
+                    &project,
+                    &prompt,
+                    &ctx.user_answers.agent,
+                    vec!["bootstrap".into(), "config-gen".into()],
+                    false,
+                    false,
+                    None,
+                    Vec::new(),
+                )
+                .await;
+            Ok(json!({ "taskId": id }))
+        }
+        BootstrapFinalize { response } => {
+            let yaml = crate::bootstrap::extract_yaml_from_response(&response);
+            let issues = validate_issues(&yaml);
+            Ok(json!({ "yaml": yaml, "issues": issues }))
+        }
+        BootstrapReadConfig { project } => {
+            let path = project_path(handle, &project).await?;
+            let target = crate::config::find_config_file(std::path::Path::new(&path));
+            let yaml = std::fs::read_to_string(&target).unwrap_or_default();
+            let issues = validate_issues(&yaml);
+            Ok(json!({ "yaml": yaml, "issues": issues }))
+        }
+        BootstrapWriteConfig { project, yaml } => {
+            let path = project_path(handle, &project).await?;
+            let target = crate::config::find_config_file(std::path::Path::new(&path));
+            std::fs::write(&target, yaml).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: format!("write {}: {e}", target.display()),
+            })?;
+            Ok(json!({ "ok": true, "path": target.to_string_lossy() }))
+        }
+    }
+}
+
+/// Validate a config YAML into a JSON list of `{ severity, message }` issues.
+/// A parse error is reported as a single error-severity issue.
+fn validate_issues(yaml: &str) -> Vec<serde_json::Value> {
+    match crate::bootstrap::validate_config_yaml(yaml) {
+        Ok((_, issues)) => issues
+            .into_iter()
+            .map(|i| {
+                let severity = match i.severity {
+                    crate::bootstrap::IssueSeverity::Error => "error",
+                    crate::bootstrap::IssueSeverity::Warning => "warning",
+                };
+                json!({ "severity": severity, "message": i.message })
+            })
+            .collect(),
+        Err(e) => vec![json!({ "severity": "error", "message": e })],
+    }
+}
+
+/// Resolve a registered project's directory, or an `InvalidRequest` error.
+async fn project_path(handle: &DaemonHandle, project: &str) -> Result<String, wire::RpcError> {
+    handle
+        .projects()
+        .await
+        .into_iter()
+        .find(|p| p.name == project)
+        .map(|p| p.path)
+        .ok_or_else(|| wire::RpcError {
+            code: wire::ErrorCode::NotFound,
+            message: format!("unknown project '{project}'"),
+        })
+}
+
+/// Build a [`BootstrapContext`] by scanning the repo and reading its current
+/// config, combined with the wizard answers.
+fn bootstrap_context(
+    project_path: &str,
+    answers: wire::BootstrapAnswers,
+) -> crate::bootstrap::BootstrapContext {
+    use crate::bootstrap::{BootstrapContext, ServiceRuntimeKind, UserRuntimeAnswers};
+    let existing = crate::config::find_config_file(std::path::Path::new(project_path));
+    let existing_config_yaml = std::fs::read_to_string(&existing).unwrap_or_default();
+    let runtime_kind = match answers.runtime_kind.as_str() {
+        "docker-compose" => ServiceRuntimeKind::DockerCompose,
+        "kubernetes" => ServiceRuntimeKind::Kubernetes,
+        "mixed" => ServiceRuntimeKind::Mixed,
+        _ => ServiceRuntimeKind::Local,
+    };
+    BootstrapContext {
+        repo_summary: crate::bootstrap::build_repo_summary(project_path),
+        existing_config_yaml,
+        project_path: project_path.to_string(),
+        user_answers: UserRuntimeAnswers {
+            agent: answers.agent,
+            runtime_kind,
+            compose_path: answers.compose_path,
+            k8s_manifests_path: answers.k8s_manifests_path,
+            k8s_helm_file: answers.k8s_helm_file,
+            k8s_release_names: answers.k8s_release_names,
+            k8s_namespace: answers.k8s_namespace,
+            dev_commands: answers.dev_commands,
+            notes: answers.notes,
+        },
     }
 }
 
@@ -750,6 +857,8 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | GitPushInfo { .. }
             | OrchestrateList {}
             | OrchestrateGetConfig {}
+            | BootstrapFinalize { .. }
+            | BootstrapReadConfig { .. }
     )
 }
 
