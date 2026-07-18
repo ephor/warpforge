@@ -147,7 +147,6 @@ async fn event_loop(
             if let Some(path) = folder {
                 let path_str = path.to_string_lossy().to_string();
                 if let Some(name) = client.add_project(&path_str, None).await {
-                    // Select the newly added project.
                     state.projects = client.state().projects.clone();
                     if let Some(idx) = state.projects.iter().position(|p| p.name == name) {
                         state.selected_project = idx;
