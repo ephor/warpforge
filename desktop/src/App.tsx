@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 
 import AttentionRail from "./components/AttentionRail";
 import AttentionToast from "./components/AttentionToast";
+import BootstrapReviewDialog from "./components/BootstrapReviewDialog";
 import BootstrapWizard from "./components/BootstrapWizard";
 import ErrorBoundary from "./components/ErrorBoundary";
 import PermissionToast from "./components/PermissionToast";
@@ -58,6 +59,10 @@ export default function App() {
   const [pushOpen, setPushOpen] = useState(false);
   const [railMounted, setRailMounted] = useState(attentionOpen);
   const [wizardProject, setWizardProject] = useState<string | null>(null);
+  const [reviewTask, setReviewTask] = useState<{
+    project: string;
+    agentText: string;
+  } | null>(null);
 
   const handleOpenTask = useCallback(
     (id: string) => {
@@ -212,6 +217,25 @@ export default function App() {
           notifyTask(event.data);
         } else if (!ATTENTION_STATUS.has(event.data.status) && previous) {
           toast.dismiss(`attention:${event.data.id}:${previous}`);
+        }
+
+        // Bootstrap task finished → show review dialog
+        const isBootstrap =
+          event.data.tags?.includes("bootstrap") || event.data.tags?.includes("config-gen");
+        const isDone =
+          event.data.status === "idle" || event.data.status === "needs_review";
+        if (isBootstrap && isDone && previous === "running") {
+          const updates = daemon.getState().sessionUpdates[event.data.id] ?? [];
+          const agentText = updates
+            .filter((u): u is Extract<typeof u, { kind: "agent_text" }> => u.kind === "agent_text")
+            .map((u) => u.text)
+            .join("");
+          if (agentText.trim()) {
+            setReviewTask({
+              project: event.data.project,
+              agentText,
+            });
+          }
         }
       } else if (event.event === "task.created" && ATTENTION_STATUS.has(event.data.status)) {
         notifyTask(event.data);
@@ -554,6 +578,16 @@ export default function App() {
                 },
                 duration: 10000,
               });
+            }}
+          />
+        )}
+        {reviewTask && (
+          <BootstrapReviewDialog
+            project={reviewTask.project}
+            agentText={reviewTask.agentText}
+            open={!!reviewTask}
+            onOpenChange={(v) => {
+              if (!v) setReviewTask(null);
             }}
           />
         )}
