@@ -40,6 +40,7 @@ interface Props {
   snapshot: Snapshot;
   onOpenTask: (id: string) => void;
   onNewTask: (project?: string, prompt?: string) => void;
+  onProjectAdded?: (projectName: string) => void;
 }
 
 /**
@@ -48,7 +49,7 @@ interface Props {
  * this project inherits, so the agent knows the app is already up on real
  * ports and can hit endpoints / run tests.
  */
-export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
+export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdded }: Props) {
   const [selected, setSelected] = useState(snapshot.projects[0]?.name ?? "");
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [hoveredProject, setHoveredProject] = useState<string | null>(null);
@@ -98,7 +99,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
           <Plus className="mr-1 size-4" />
           Add Project
         </Button>
-        <AddProjectDialog open={showAddDialog} onOpenChange={setShowAddDialog} />
+        <AddProjectDialog open={showAddDialog} onOpenChange={setShowAddDialog} onAdded={onProjectAdded} />
       </div>
     );
   }
@@ -371,7 +372,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask }: Props) {
         </div>
       </ScrollArea>
 
-      <AddProjectDialog open={showAddDialog} onOpenChange={setShowAddDialog} />
+      <AddProjectDialog open={showAddDialog} onOpenChange={setShowAddDialog} onAdded={onProjectAdded} />
     </div>
   );
 }

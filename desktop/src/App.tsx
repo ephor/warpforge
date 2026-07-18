@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 
 import AttentionRail from "./components/AttentionRail";
 import AttentionToast from "./components/AttentionToast";
+import BootstrapWizard from "./components/BootstrapWizard";
 import ErrorBoundary from "./components/ErrorBoundary";
 import PermissionToast from "./components/PermissionToast";
 import UpdateControl from "./components/UpdateControl";
@@ -56,6 +57,7 @@ export default function App() {
   const [manualDetected, setManualDetected] = useState<DetectedAgent[] | null>(null);
   const [pushOpen, setPushOpen] = useState(false);
   const [railMounted, setRailMounted] = useState(attentionOpen);
+  const [wizardProject, setWizardProject] = useState<string | null>(null);
 
   const handleOpenTask = useCallback(
     (id: string) => {
@@ -475,6 +477,15 @@ export default function App() {
                   snapshot={state.snapshot}
                   onOpenTask={setOpenTaskId}
                   onNewTask={startNewTask}
+                  onProjectAdded={(name) => {
+                    toast.info("Project added", {
+                      description: `Agent can configure ${name}`,
+                      action: {
+                        label: "Configure",
+                        onClick: () => setWizardProject(name),
+                      },
+                    });
+                  }}
                 />
               )}
             </ErrorBoundary>
@@ -520,6 +531,29 @@ export default function App() {
             onClose={() => {
               daemon.dismissAgentSetup();
               setManualDetected(null);
+            }}
+          />
+        )}
+        {wizardProject && (
+          <BootstrapWizard
+            project={wizardProject}
+            open={!!wizardProject}
+            onOpenChange={(v) => {
+              if (!v) setWizardProject(null);
+            }}
+            onStarted={(taskId) => {
+              setWizardProject(null);
+              toast.info("Agent is generating config", {
+                description: `Task ${taskId.slice(0, 8)}… running in background`,
+                action: {
+                  label: "Open session",
+                  onClick: () => {
+                    setOpenTaskId(taskId);
+                    setView("control");
+                  },
+                },
+                duration: 10000,
+              });
             }}
           />
         )}

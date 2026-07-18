@@ -12,12 +12,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-import BootstrapWizard from "../components/BootstrapWizard";
 import { daemon } from "../daemon";
 
 interface Props {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  onAdded?: (projectName: string) => void;
 }
 
 /** Extract the last path segment as a project name. */
@@ -26,14 +26,12 @@ function folderNameFromPath(p: string): string {
   return segments[segments.length - 1] ?? "";
 }
 
-export default function AddProjectDialog({ open, onOpenChange }: Props) {
+export default function AddProjectDialog({ open, onOpenChange, onAdded }: Props) {
   const [path, setPath] = useState("");
   const [name, setName] = useState("");
   const [nameEdited, setNameEdited] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  /** Registered project name once added — drives the follow-on bootstrap wizard. */
-  const [wizardProject, setWizardProject] = useState<string | null>(null);
 
   const handleBrowse = async () => {
     const selected = await openDialog({
@@ -43,7 +41,6 @@ export default function AddProjectDialog({ open, onOpenChange }: Props) {
     });
     if (selected) {
       setPath(selected);
-      // Auto-fill name from folder name, but only if user hasn't edited it.
       if (!nameEdited) {
         setName(folderNameFromPath(selected));
       }
@@ -74,8 +71,7 @@ export default function AddProjectDialog({ open, onOpenChange }: Props) {
       setName("");
       setNameEdited(false);
       onOpenChange(false);
-      // Flow straight into the bootstrap wizard for the new project.
-      if (projectName) setWizardProject(projectName);
+      if (projectName) onAdded?.(projectName);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -84,7 +80,6 @@ export default function AddProjectDialog({ open, onOpenChange }: Props) {
   };
 
   return (
-    <>
     <Dialog
       open={open}
       onOpenChange={(v) => {
@@ -167,15 +162,5 @@ export default function AddProjectDialog({ open, onOpenChange }: Props) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
-    {wizardProject && (
-      <BootstrapWizard
-        project={wizardProject}
-        open={!!wizardProject}
-        onOpenChange={(v) => {
-          if (!v) setWizardProject(null);
-        }}
-      />
-    )}
-    </>
   );
 }
