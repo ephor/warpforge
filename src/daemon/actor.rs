@@ -1769,11 +1769,31 @@ impl Daemon {
                 }
             }
             Command::ArchiveTask { id } => {
+                // Collect children that reference this task as parent so we
+                // can archive them together with the leader.
+                let child_ids: Vec<String> = self
+                    .tasks
+                    .values()
+                    .filter(|t| t.parent_task_id.as_deref() == Some(&id))
+                    .map(|t| t.id.clone())
+                    .collect();
+
+                // Archive the leader itself.
                 if let Some(task) = self.tasks.get_mut(&id) {
                     task.set_status(TaskStatus::Done);
                     let updated = task.clone();
                     self.persist(&updated);
                     self.emit(Event::TaskUpdated(updated));
+                }
+
+                // Archive every direct child so the whole group moves to history.
+                for cid in child_ids {
+                    if let Some(child) = self.tasks.get_mut(&cid) {
+                        child.set_status(TaskStatus::Done);
+                        let updated = child.clone();
+                        self.persist(&updated);
+                        self.emit(Event::TaskUpdated(updated));
+                    }
                 }
             }
             Command::DeleteTask { id } => {

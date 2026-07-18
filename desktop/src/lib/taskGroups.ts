@@ -186,8 +186,21 @@ export function taskGroupStatus(
   return tree.task.status;
 }
 
-/** Place a whole orchestration group in its most urgent lane. */
+/**
+ * Place a whole orchestration group in its most urgent lane.
+ *
+ * The root (leader) task's own lane is respected first: a running orchestrator
+ * stays in "active" even when its children finished in "needs_review" — the
+ * leader is still alive and awaiting input.  Only when the root is "done" or
+ * "queued" do descendant statuses override the group placement.
+ */
 export function treeLane(tree: TaskTree): BoardLane {
+  const rootLane = statusLane(tree.task.status);
+  // Root is still alive — honour its own lane, not the children's.
+  if (rootLane === "active" || rootLane === "review" || rootLane === "queue") {
+    return rootLane;
+  }
+  // Root is done/queued — let the most urgent descendant determine the lane.
   return flattenTaskTree(tree).reduce<BoardLane>((lane, task) => {
     const candidate = statusLane(task.status);
     return lanePriority[candidate] > lanePriority[lane] ? candidate : lane;
