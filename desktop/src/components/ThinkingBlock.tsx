@@ -13,7 +13,6 @@ interface ThinkingBlockProps {
   onOpenFile?: (path: string) => void;
 }
 
-const STREAM_MARKDOWN_INTERVAL_MS = 75;
 const MemoizedMarkdown = memo(Markdown);
 
 /**
@@ -32,7 +31,6 @@ export const ThinkingBlock = memo(function ThinkingBlock({
   const [displayText, setDisplayText] = useState(text);
   const wasStreaming = useRef(streaming);
   const latestText = useRef(text);
-  const renderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Only stream state transitions control the disclosure. Text deltas do not,
   // so a manual choice is not overwritten on every token. Completion closes
@@ -47,35 +45,17 @@ export const ThinkingBlock = memo(function ThinkingBlock({
     wasStreaming.current = streaming;
   }, [streaming, text]);
 
-  // ACP emits sub-word thought chunks. Rendering GFM for every event is costly
-  // and competes with composer input, so cap active Markdown work while keeping
-  // the exact final text synchronous at the turn boundary.
+  // ACP emits sub-word thought chunks. Stream them immediately so the user
+  // sees reasoning build up in real time. The final text is set synchronously
+  // at the turn boundary when streaming flips to false.
   useEffect(() => {
     latestText.current = text;
     if (!streaming) {
-      if (renderTimer.current) {
-        clearTimeout(renderTimer.current);
-        renderTimer.current = null;
-      }
       setDisplayText(text);
       return;
     }
-    if (!renderTimer.current) {
-      renderTimer.current = setTimeout(() => {
-        renderTimer.current = null;
-        setDisplayText(latestText.current);
-      }, STREAM_MARKDOWN_INTERVAL_MS);
-    }
+    setDisplayText(text);
   }, [streaming, text]);
-
-  useEffect(
-    () => () => {
-      if (renderTimer.current) {
-        clearTimeout(renderTimer.current);
-      }
-    },
-    [],
-  );
 
   return (
     <section

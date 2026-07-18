@@ -2,8 +2,9 @@ import type { SessionUpdate, TaskStatus } from "../protocol";
 
 /**
  * Return the thought block receiving the current reasoning stream. Thinking
- * is a phase, not a whole turn: a tool, answer, permission request, or turn
- * boundary completes it. Transport metadata does not.
+ * remains active as long as no final answer (`agent_text`) or new user turn
+ * (`user_message`) has appeared after the latest thought — tool calls and
+ * other metadata arriving between thought chunks do not end the phase.
  */
 export function activeThinkingIndex(
   updates: SessionUpdate[],
@@ -15,17 +16,25 @@ export function activeThinkingIndex(
     return null;
   }
 
+  let lastThought: number | null = null;
   for (let index = updates.length - 1; index >= 0; index--) {
-    const update = updates[index];
-    if (
-      update.kind === "available_commands" ||
-      update.kind === "prompt_capabilities" ||
-      update.kind === "permission_resolved"
-    ) {
-      continue;
+    if (updates[index].kind === "agent_thought") {
+      lastThought = index;
+      break;
     }
-    return update.kind === "agent_thought" ? index : null;
   }
 
-  return null;
+  if (lastThought === null) {
+    return null;
+  }
+
+  // A final answer or a new user turn after the last thought ends reasoning.
+  for (let index = lastThought + 1; index < updates.length; index++) {
+    const kind = updates[index].kind;
+    if (kind === "agent_text" || kind === "user_message") {
+      return null;
+    }
+  }
+
+  return lastThought;
 }
