@@ -6,8 +6,10 @@ import {
   buildTaskForest,
   buildTaskGroupIndex,
   flattenTaskTree,
+  isTaskGroupPinned,
   resolvePinnedTaskGroups,
   resolveGroupTaskId,
+  setTaskGroupPinned,
   taskGroupStatus,
   treeLane,
   treeMatches,
@@ -117,6 +119,23 @@ describe("task orchestration groups", () => {
     expect(forest[0].children).toHaveLength(0);
   });
 
+  it("keeps a multi-task cycle and its descendants in one navigable group", () => {
+    const index = buildTaskGroupIndex([
+      task("cycle-a", "running", "cycle-b"),
+      task("cycle-b", "idle", "cycle-a"),
+      task("descendant", "needs_review", "cycle-a"),
+    ]);
+    const root = index.rootByTaskId.get("descendant");
+
+    expect(root).toBeDefined();
+    expect(flattenTaskTree(root!).map((item) => item.id)).toStrictEqual([
+      "cycle-a",
+      "cycle-b",
+      "descendant",
+    ]);
+    expect(index.rootByTaskId.get("cycle-b")).toBe(root);
+  });
+
   it("treeMatches filters trees where no member matches", () => {
     const forest = buildTaskForest([task("root", "running"), task("child", "done", "root")]);
     const matchRunning = (t: TaskInfo) => t.status === "running";
@@ -152,6 +171,40 @@ describe("task orchestration groups", () => {
 
     expect(resolvePinnedTaskGroups(index, ["child", "root", "grandchild"])).toHaveLength(1);
     expect(resolvePinnedTaskGroups(index, ["child"])[0].task.id).toBe("root");
+  });
+
+  it("root-normalizes a child pin and preserves unrelated pins", () => {
+    const index = buildTaskGroupIndex([
+      task("root", "running"),
+      task("child", "running", "root"),
+      task("grandchild", "idle", "child"),
+      task("other", "running"),
+    ]);
+
+    expect(setTaskGroupPinned(index, ["other"], "grandchild", true)).toStrictEqual([
+      "other",
+      "root",
+    ]);
+    expect(isTaskGroupPinned(index, ["child"], "grandchild")).toBe(true);
+  });
+
+  it("unpins every persisted member id in the group", () => {
+    const index = buildTaskGroupIndex([
+      task("root", "running"),
+      task("child", "running", "root"),
+      task("grandchild", "idle", "child"),
+      task("other", "running"),
+    ]);
+
+    expect(
+      setTaskGroupPinned(index, ["root", "child", "other", "grandchild"], "child", false),
+    ).toStrictEqual(["other"]);
+  });
+
+  it("normalizes duplicate legacy member pins when pinning an already known group", () => {
+    const index = buildTaskGroupIndex([task("root", "running"), task("child", "running", "root")]);
+
+    expect(setTaskGroupPinned(index, ["child", "root"], "child", true)).toStrictEqual(["root"]);
   });
 
   it("bubbles blocked, permission, review, then running from descendants", () => {

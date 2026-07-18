@@ -111,6 +111,35 @@ export function resolvePinnedTaskGroups(index: TaskGroupIndex, pinnedIds: string
   return groups;
 }
 
+/** Whether any persisted pin resolves to the orchestration group containing taskId. */
+export function isTaskGroupPinned(
+  index: TaskGroupIndex,
+  pinnedIds: readonly string[],
+  taskId: string,
+): boolean {
+  const root = index.rootByTaskId.get(taskId);
+  if (!root) return false;
+  return pinnedIds.some((id) => index.rootByTaskId.get(id)?.task.id === root.task.id);
+}
+
+/**
+ * Pin or unpin a whole orchestration group. New pins are root-normalized;
+ * unpinning also clears legacy child/descendant pins for that group.
+ */
+export function setTaskGroupPinned(
+  index: TaskGroupIndex,
+  pinnedIds: readonly string[],
+  taskId: string,
+  pinned: boolean,
+): string[] {
+  const root = index.rootByTaskId.get(taskId);
+  if (!root) return [...pinnedIds];
+
+  const memberIds = new Set(flattenTaskTree(root).map((task) => task.id));
+  const remaining = pinnedIds.filter((id) => !memberIds.has(id));
+  return pinned ? [...remaining, root.task.id] : remaining;
+}
+
 /** Keep the current tab unless an explicit attention target belongs to this group. */
 export function resolveGroupTaskId(
   tree: TaskTree,

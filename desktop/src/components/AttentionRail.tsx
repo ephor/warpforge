@@ -16,7 +16,7 @@ import {
   prunePermissionCache,
   type PermissionUpdate,
 } from "@/lib/sessionPermissions";
-import { buildTaskGroupIndex, flattenTaskTree } from "@/lib/taskGroups";
+import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/lib/taskGroups";
 import { cn } from "@/lib/utils";
 
 import type { DaemonState } from "../daemon";
@@ -275,13 +275,16 @@ function AttentionRail({ state, onOpenTask }: Props) {
   const handleOpen = useCallback((taskId: string) => onOpenTask(taskId), [onOpenTask]);
   const handlePin = useCallback(
     (taskId: string) => {
-      const root = taskGroupIndex.rootByTaskId.get(taskId);
-      if (!root) return;
-      const memberIds = new Set(flattenTaskTree(root).map((task) => task.id));
-      const remaining = pinned.filter((id) => !memberIds.has(id));
-      setPinnedTaskIds(pinnedSet.has(root.task.id) ? remaining : [...remaining, root.task.id]);
+      setPinnedTaskIds(
+        setTaskGroupPinned(
+          taskGroupIndex,
+          pinned,
+          taskId,
+          !isTaskGroupPinned(taskGroupIndex, pinned, taskId),
+        ),
+      );
     },
-    [pinned, pinnedSet, setPinnedTaskIds, taskGroupIndex],
+    [pinned, setPinnedTaskIds, taskGroupIndex],
   );
   const handleTogglePreview = useCallback((taskId: string) => {
     setExpandedTaskId((current) => (current === taskId ? null : taskId));

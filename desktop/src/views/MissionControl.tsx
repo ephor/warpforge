@@ -31,6 +31,7 @@ import {
   flattenTaskTree,
   resolvePinnedTaskGroups,
   resolveGroupTaskId,
+  setTaskGroupPinned,
   taskGroupCounts,
   taskGroupStatus,
   type TaskGroupStatus,
@@ -40,6 +41,7 @@ import { cn } from "@/lib/utils";
 
 import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
 import { AgentConfigBar } from "../components/AgentConfigBar";
+import { AgentTabButton } from "../components/AgentTabButton";
 import { Composer } from "../components/Composer";
 import type { FileLinkResolver } from "../components/Markdown";
 import { BufferedMarkdown, Markdown } from "../components/Markdown";
@@ -84,10 +86,9 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
 
   const handleUnpin = useCallback(
     (tree: TaskTree) => {
-      const memberIds = new Set(flattenTaskTree(tree).map((task) => task.id));
-      setPinnedTaskIds(pinned.filter((id) => !memberIds.has(id)));
+      setPinnedTaskIds(setTaskGroupPinned(groupIndex, pinned, tree.task.id, false));
     },
-    [pinned, setPinnedTaskIds],
+    [groupIndex, pinned, setPinnedTaskIds],
   );
 
   return (
@@ -260,7 +261,7 @@ const AgentTabs = memo(function AgentTabs({
         role="tablist"
         aria-label="Agents in this task"
       >
-        <AgentTab
+        <AgentTabButton
           task={tree.task}
           lead
           permission={permissionTaskIds.has(tree.task.id)}
@@ -268,7 +269,7 @@ const AgentTabs = memo(function AgentTabs({
           onSelect={onSelect}
         />
         {visible.map((task) => (
-          <AgentTab
+          <AgentTabButton
             key={task.id}
             task={task}
             permission={permissionTaskIds.has(task.id)}
@@ -299,51 +300,6 @@ const AgentTabs = memo(function AgentTabs({
         )}
       </div>
     </div>
-  );
-});
-
-const AgentTab = memo(function AgentTab({
-  task,
-  selected,
-  permission = false,
-  lead = false,
-  onSelect,
-}: {
-  task: TaskInfo;
-  selected: boolean;
-  permission?: boolean;
-  lead?: boolean;
-  onSelect: (id: string) => void;
-}) {
-  const badge = permission
-    ? { label: "permission", variant: "warn" as const }
-    : taskBadge(task.status);
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={selected}
-      aria-label={`${lead ? "Lead" : task.agent}: ${badge.label}`}
-      title={`${lead ? "Lead" : task.agent} — ${task.prompt}`}
-      className={cn(
-        "flex h-8 min-w-0 max-w-36 shrink items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-        selected
-          ? "border-primary/60 bg-primary/15 text-foreground shadow-sm"
-          : "border-border/60 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
-      )}
-      onClick={() => onSelect(task.id)}
-    >
-      <span
-        className={cn(
-          "size-1.5 shrink-0 rounded-full",
-          badge.variant === "destructive" && "bg-destructive",
-          badge.variant === "warn" && "bg-warn",
-          badge.variant === "ok" && "bg-ok",
-          (badge.variant === "default" || badge.variant === "outline") && "bg-muted-foreground",
-        )}
-      />
-      <span className="truncate">{lead ? "Lead" : task.agent}</span>
-    </button>
   );
 });
 
