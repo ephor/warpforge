@@ -460,6 +460,7 @@ export default function App() {
                   updates={state.sessionUpdates[openTask.id] ?? []}
                   state={state}
                   onClose={() => setOpenTaskId(null)}
+                  onOpenTask={setOpenTaskId}
                 />
               ) : view === "control" ? (
                 <MissionControl state={state} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />

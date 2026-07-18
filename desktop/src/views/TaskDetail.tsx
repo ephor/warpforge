@@ -29,6 +29,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { activityBadge, orchNodeBadge, taskBadge } from "@/lib/status";
+import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/lib/taskGroups";
 import { cn } from "@/lib/utils";
 
 import { ChangesRail } from "../components/ChangesRail";
@@ -37,6 +38,7 @@ import { CodeEditor } from "../components/CodeEditor";
 import type { ComposerHandle } from "../components/Composer";
 import { MergeDiff } from "../components/MergeDiff";
 import { RuntimePanel } from "../components/RuntimePanel";
+import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { TaskDetailActions } from "../components/TaskDetailActions";
 import type { DaemonState } from "../daemon";
 import { daemon } from "../daemon";
@@ -61,6 +63,7 @@ interface Props {
   updates: SessionUpdate[];
   state: DaemonState;
   onClose: () => void;
+  onOpenTask: (id: string) => void;
 }
 
 const EMPTY_PROJECT_FILES: ProjectFile[] = [];
@@ -72,7 +75,7 @@ type ActiveTab = { kind: "changes" } | { kind: "file"; path: string };
  * left, multi-file diff with per-hunk accept/reject on the right — Zed's
  * agent-panel review is the bar.
  */
-export default function TaskDetail({ task, updates, state, onClose }: Props) {
+export default function TaskDetail({ task, updates, state, onClose, onOpenTask }: Props) {
   const [localRes, setLocalRes] = useState<Record<string, HunkResolution>>({});
   const [activeTab, setActiveTab] = useState<ActiveTab>({ kind: "changes" });
   const [openFileTabs, setOpenFileTabs] = useState<string[]>([]);
@@ -86,6 +89,17 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
   const setCenterTab = useUi((s) => s.setCenterTab);
   const setRightPanel = useUi((s) => s.setRightPanel);
   const runtimeOpen = useUi((s) => s.runtimeOpen);
+  const pinnedTaskIds = useUi((s) => s.pinnedTaskIds);
+  const setPinnedTaskIds = useUi((s) => s.setPinnedTaskIds);
+  const taskGroupIndex = useMemo(
+    () => buildTaskGroupIndex(state.snapshot.tasks),
+    [state.snapshot.tasks],
+  );
+  const taskGroup = taskGroupIndex.rootByTaskId.get(task.id);
+  const taskGroupPinned = isTaskGroupPinned(taskGroupIndex, pinnedTaskIds, task.id);
+  const toggleTaskGroupPin = useCallback(() => {
+    setPinnedTaskIds(setTaskGroupPinned(taskGroupIndex, pinnedTaskIds, task.id, !taskGroupPinned));
+  }, [pinnedTaskIds, setPinnedTaskIds, task.id, taskGroupIndex, taskGroupPinned]);
   const services = state.snapshot.services.filter((s) => s.project === task.project);
   const portforwards = state.snapshot.portforwards.filter((p) => p.project === task.project);
   const queryClient = useQueryClient();
@@ -367,6 +381,10 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
           </Button>
         )}
       </div>
+
+      {taskGroup && (
+        <TaskAgentSwitcher tree={taskGroup} currentTaskId={task.id} onOpenTask={onOpenTask} />
+      )}
 
       <div className="flex min-h-0 flex-1 gap-2">
         <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1 gap-0">
@@ -706,7 +724,12 @@ export default function TaskDetail({ task, updates, state, onClose }: Props) {
             </>
           )}
         </ResizablePanelGroup>
-        <TaskDetailActions task={task} onClose={onClose} />
+        <TaskDetailActions
+          task={task}
+          pinned={taskGroupPinned}
+          onTogglePin={toggleTaskGroupPin}
+          onClose={onClose}
+        />
       </div>
     </div>
   );
