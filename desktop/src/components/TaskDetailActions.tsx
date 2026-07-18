@@ -5,6 +5,8 @@ import {
   GitCommitVertical,
   ListTodo,
   MessageSquare,
+  Pin,
+  PinOff,
   SquareTerminal,
   Trash2,
 } from "lucide-react";
@@ -18,9 +20,13 @@ import { useUi } from "../store/ui";
 
 export const TaskDetailActions = memo(function TaskDetailActions({
   onClose,
+  onTogglePin,
+  pinned,
   task,
 }: {
   onClose: () => void;
+  onTogglePin: () => void;
+  pinned: boolean;
   task: TaskInfo;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -81,6 +87,13 @@ export const TaskDetailActions = memo(function TaskDetailActions({
         icon={<SquareTerminal className="size-4" />}
       />
       <div className="mt-auto flex flex-col items-center gap-2">
+        <ActionButton
+          label={pinned ? "Unpin task group" : "Pin task group"}
+          active={pinned}
+          onClick={onTogglePin}
+          icon={pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+        />
+        <div className="h-px w-5 bg-border" />
         <ActionButton
           label="Archive task"
           onClick={() => {
