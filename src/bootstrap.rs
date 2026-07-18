@@ -233,13 +233,59 @@ Warpforge has a local Rust daemon that:
 - Starts services as OS processes based on a YAML config (.warpforge.yaml).
 - Tracks dependencies: a service will only start after all "dependsOn" are ready.
 - Detects readiness via:
-  - "readyPattern": a regex matched against captured logs, OR
+  - "readyPattern": a regex matched against captured stdout, OR
   - process exit status for one-shot commands.
-- Manages port isolation: each project gets a dedicated port range starting at 4000.
-  - If a service declares "port", Warpforge picks a free port in that range.
-  - The resolved port is available as ${{service.port}} in env variables.
-- Manages "portforwards" (usually for Kubernetes) as long-running processes
-  (e.g., using "kubectl port-forward"), restarts them with backoff if they drop.
+- Manages portforwards as long-running `kubectl port-forward` processes,
+  restarts them with backoff if they drop.
+
+## CRITICAL: Port allocation
+
+There are TWO kinds of ports in play:
+
+1. **Service port** (`services.<name>.port`): The port your LOCAL app listens on.
+   You MUST set this to the port your code actually uses (from package.json,
+   config files, or env vars like PORT). Warpforge does NOT pick ports for you.
+   The daemon starts the process and expects it to bind to THIS port.
+   If two services declare the same port, they WILL conflict at runtime.
+
+2. **Port-forward localPort** (`portforwards[].localPort`): The port `kubectl
+   port-forward` binds on localhost to reach a Kubernetes pod. This ALSO occupies
+   a local port. If a portforward uses localPort 4001, no service can listen
+   on 4001 — they'll conflict.
+
+Rule: ALL localPort values across portforwards AND all port values across
+services must be unique. If you have portforwards on 4001, 4002, 4003,
+then no service can use those ports.
+
+If two things would need the same port, either:
+- Change the service's port (if the code reads PORT from env, use that)
+- Change the portforward's localPort (if the remote service doesn't care)
+- Drop the service/portforward if it's not needed locally
+
+## CRITICAL: Variant-specific services
+
+Some projects have mutually exclusive service groups (e.g., "portal variant"
+vs "ehealth variant" — you run one or the other, never both). These share
+ports and infrastructure.
+
+Approach: Include ALL services in the YAML but document which variant they
+belong to. Users will manually start only the services they need. The
+`dependsOn` chains ensure correct startup order within each variant.
+
+Do NOT try to make variants conditional in the YAML — the format doesn't
+support that. Just list everything and let the user pick.
+
+## CRITICAL: Consumer/worker services
+
+Long-running background workers (Kafka consumers, queue processors, cron
+workers) are services. They run as persistent OS processes, not one-shot.
+They typically:
+- Have NO exposed HTTP port (or a health-check-only port on a unique port)
+- Read from a message broker (Kafka, RabbitMQ, etc.)
+- Should start AFTER the broker is available
+
+For portforwards: If a consumer needs Kafka on localhost, add a portforward
+for Kafka. The consumer service dependsOn that portforward.
 
 ## Runtime kind
 {runtime_desc}
@@ -263,67 +309,129 @@ Here is the current .warpforge.yaml (may be a minimal default):
 
 ## .warpforge.yaml schema — follow it EXACTLY
 
+```yaml
 name: <project-name>              # required, string
 
-services:                         # a MAP keyed by service name (NOT a list)
+services:                         # MAP keyed by service name (NOT a list)
   <service-name>:
-    command: <shell command>      # required; started from the project root by the daemon
-    port: <number>                # optional; local port the service should listen on
-    readyPattern: <regex>         # optional; matched against the service's stdout to detect "ready"
-    dependsOn: [<name>, ...]      # optional; service/portforward names that must be ready first
-    env:                          # optional
+    command: <shell command>      # required; started from project root by daemon
+    port: <number>                # optional; port this service LISTENS on (you must know this)
+    readyPattern: <regex>         # optional; regex matched against stdout to detect "ready"
+    dependsOn: [<name>, ...]      # optional; service or portforward names that must be ready first
+    env:                          # optional; extra env vars for this process
       KEY: value
 
-portforwards:                     # a LIST; each is a kubectl port-forward the daemon runs for you
+portforwards:                     # LIST; each is a kubectl port-forward
   - name: <label>                 # optional label (referenced by services' dependsOn)
     namespace: <k8s namespace>    # required
-    pod: <pod name or prefix>     # required; the daemon finds the first pod matching this prefix
-    localPort: <number>           # required; port exposed on localhost
+    pod: <pod name or prefix>     # required; daemon finds first pod matching this prefix
+    localPort: <number>           # required; port bound on LOCALHOST
     remotePort: <number>          # required; port on the pod
+```
 
-Hard rules:
-- A portforward has ONLY these fields: name, namespace, pod, localPort, remotePort.
-  It NEVER has `command`, `port`, or `dependsOn`. Do NOT write `kubectl ...`
-  anywhere — the daemon builds the kubectl invocation from those fields.
-- `services` is a map keyed by name, not a list.
-- Put local app processes (bun/npm/pnpm dev, servers, workers, `docker compose`
-  commands) under `services`. Put remote/Kubernetes dependencies reachable via
-  `kubectl port-forward` under `portforwards`.
+## Field semantics
 
-Example of a valid file:
+**service.port**: The port your code listens on. You MUST set this to the
+actual port from your codebase (package.json scripts, config files, PORT env
+default). Example: if `src/main.ts` does `app.listen(process.env.PORT || 4000)`
+then port is 4000. Warpforge does NOT auto-assign ports.
 
-name: my-app
+**service.dependsOn**: Names of OTHER services or portforwards that must be
+"ready" before this service starts. A portforward is "ready" when
+`kubectl port-forward` successfully binds. A service is "ready" when its
+readyPattern matches stdout.
+
+**service.readyPattern**: A regex tested against each line of stdout. Pick a
+string that appears exactly once when the app is ready to accept connections.
+Common patterns: "Listening on", "started on port", "ready", "compiled
+successfully", "Local:". For workers with no HTTP server, omit this field —
+the daemon considers them ready immediately.
+
+**portforwards[].localPort**: This occupies a real port on localhost. If you
+have a portforward on localPort 4001, NO service can declare port: 4001.
+All localPort values across all portforwards + all service ports must be
+globally unique within the project.
+
+## Hard rules
+
+1. A portforward has ONLY: name, namespace, pod, localPort, remotePort.
+   NEVER write `kubectl ...` anywhere — the daemon builds the invocation.
+2. `services` is a MAP keyed by name, not a list.
+3. Every localPort and every service port must be unique across the whole file.
+4. Put LOCAL app processes under `services`. Put K8s dependencies under
+   `portforwards`. Never mix them.
+5. For long-running workers (Kafka consumers, queue processors), add them as
+   services with NO port or a unique health-check port. They dependOn the
+   broker's portforward.
+
+## Real-world example (monorepo with K8s deps)
+
+```yaml
+name: my-platform
 services:
   api:
-    command: cd apps/api && bun run dev
+    command: pnpm --filter @myorg/api dev
     port: 4000
     readyPattern: "Listening on"
-    dependsOn: [postgres]
+    dependsOn: [postgres, redis, kafka]
+
   web:
-    command: cd apps/web && bun run dev
+    command: pnpm --filter @myorg/web dev
     port: 3000
     readyPattern: "Local:"
     dependsOn: [api]
+
+  worker:
+    command: pnpm --filter @myorg/worker dev
+    dependsOn: [kafka, redis]
+    # No port — this is a Kafka consumer, no HTTP server
+
 portforwards:
   - name: postgres
     namespace: postgres
-    pod: postgres-cluster-pooler
+    pod: postgres-cluster
     localPort: 5432
     remotePort: 5432
 
-Task:
-Write .warpforge.yaml for THIS repository following the schema above:
-- Model every real service (frontend, backend, workers, etc.) under `services`
-  with its actual dev command, a `port`, and a `readyPattern` taken from its
-  real startup log line.
-- Use `dependsOn` for correct startup order.
-- Add `portforwards` for the Kubernetes/remote dependencies this project needs,
-  using namespace/pod/localPort/remotePort — never a command.
+  - name: redis
+    namespace: redis
+    pod: redis-master
+    localPort: 6379
+    remotePort: 6379
 
-Deliverable:
-- Create or update `.warpforge.yaml` in the project root with your file-editing
-  tools. It must exist on disk when you finish.
-- Keep it valid YAML matching the schema, then summarize what you configured.
+  - name: kafka
+    namespace: kafka
+    pod: kafka-broker
+    localPort: 9092
+    remotePort: 9092
+```
+
+Note: worker has no `port` (Kafka consumer, no HTTP). It dependsOn kafka
+portforward so Kafka is port-forwarded before the worker starts.
+
+## Your task
+
+Write `.warpforge.yaml` for THIS repository:
+
+1. Identify ALL local dev processes (frontends, backends, workers, consumers).
+   Each becomes a service with its real dev command, the port it listens on
+   (from code/config, NOT guessed), and a readyPattern from its startup log.
+
+2. Identify ALL Kubernetes/remote dependencies. Each becomes a portforward
+   with namespace/pod/localPort/remotePort. The localPort must NOT conflict
+   with any service port.
+
+3. Set dependsOn correctly: services depend on portforwards for infra
+   (databases, brokers) and on other services for app-level deps.
+
+4. For variant-specific services (e.g., "portal" vs "ehealth" — mutually
+   exclusive), include both variants in the YAML. Document which services
+   belong to which variant in a comment. Users start only what they need.
+
+5. ALL ports (service ports + portforward localPorts) must be unique.
+
+Create or update `.warpforge.yaml` in the project root. It must exist on
+disk when you finish. Keep it valid YAML matching the schema above.
 "#,
         repo_summary = ctx.repo_summary,
         existing_config = ctx.existing_config_yaml,
