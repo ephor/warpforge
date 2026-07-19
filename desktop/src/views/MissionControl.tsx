@@ -593,11 +593,7 @@ function PinnedStreamLine({
     );
   }
   if (update.kind === "user_message") {
-    return (
-      <div className="rounded-md border border-primary/20 bg-primary/[0.07]">
-        <StreamLine update={update} compact={compact} taskId={taskId} resolved={resolved} />
-      </div>
-    );
+    return <StreamLine update={update} compact={compact} taskId={taskId} resolved={resolved} />;
   }
   return <StreamLine update={update} compact={compact} taskId={taskId} resolved={resolved} />;
 }
@@ -741,7 +737,7 @@ export function StreamLine({
       return (
         <div
           className={cn(
-            "rounded-md bg-primary/10 px-2.5 py-1.5 text-primary",
+            "rounded-md border border-primary/15 bg-primary/[0.07] px-2.5 py-1.5 text-foreground",
             compact && "text-xs",
           )}
         >

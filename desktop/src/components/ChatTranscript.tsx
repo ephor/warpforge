@@ -212,7 +212,7 @@ export const ChatTranscript = memo(function ChatTranscript({
           ref={scrollRef}
           {...scrollHandlers}
           tabIndex={0}
-          className="h-full min-w-0 overflow-y-auto px-4 py-4 pb-14 text-sm [overflow-anchor:none]"
+          className="h-full min-w-0 overflow-y-auto px-2 py-4 pb-14 text-sm [overflow-anchor:none]"
         >
           <div ref={contentRef}>
             {merged.length === 0 ? (
@@ -247,7 +247,7 @@ export const ChatTranscript = memo(function ChatTranscript({
                 type="button"
                 variant="outline"
                 size="icon"
-                className="absolute bottom-3 right-4 z-20 size-9 rounded-full bg-background text-muted-foreground shadow-sm hover:text-foreground"
+                className="absolute bottom-3 right-2 z-20 size-9 rounded-full bg-background text-muted-foreground shadow-sm hover:text-foreground"
                 aria-label="Scroll to latest message"
                 onClick={resume}
               >
@@ -259,7 +259,7 @@ export const ChatTranscript = memo(function ChatTranscript({
         )}
       </div>
       {activity && (
-        <div className="shrink-0 px-4 py-1.5">
+        <div className="shrink-0 px-2 py-1.5">
           <AgentActivityIndicator activity={activity} compact />
         </div>
       )}
