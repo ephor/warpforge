@@ -33,12 +33,15 @@ export function MergeDiff({
   const viewRef = useRef<MergeView | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onSaveRef = useRef(onSave);
-  onSaveRef.current = onSave;
   // Text we last wrote to disk — lets the sync effect tell our own save-echo
   // (harmless, skip) from a real external/agent edit (apply to the pane).
   const lastSaved = useRef<string | null>(null);
   const original = doc.newText; // The agent's version, for "discard edits"
   const [status, setStatus] = useState<SaveStatus>("clean");
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
 
   const flushSave = () => {
     const view = viewRef.current;
@@ -172,7 +175,10 @@ export function MergeDiff({
           <span className="text-[10px]">⌘S save · ↩ revert hunk</span>
         </div>
       )}
-      <div ref={host} className="min-h-0 flex-1 overflow-auto text-[13px]" />
+      <div
+        ref={host}
+        className="warpforge-merge-diff min-h-0 flex-1 overflow-auto bg-card text-[13px]"
+      />
     </div>
   );
 }

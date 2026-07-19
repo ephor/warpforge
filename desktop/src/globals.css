@@ -83,6 +83,11 @@ textarea {
  * (.cm-changedText). Scoped to .cm-merge-a/b so nothing leaks elsewhere;
  * !important beats the extension's wrapper-scoped rule.
  */
+.warpforge-merge-diff .cm-editor,
+.warpforge-merge-diff .cm-gutters {
+  background-color: hsl(var(--card)) !important;
+}
+
 .cm-merge-a .cm-changedLine {
   background-color: hsl(var(--destructive) / 0.08) !important;
 }
