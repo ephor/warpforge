@@ -262,7 +262,10 @@ async fn run_bootstrap(path: &str) -> Result<()> {
         Err(e) => println!("  error: {e}"),
     }
 
-    if ask("\nWrite this config? (y/N)", "N").to_lowercase().starts_with('y') {
+    if ask("\nWrite this config? (y/N)", "N")
+        .to_lowercase()
+        .starts_with('y')
+    {
         let target = config::find_config_file(std::path::Path::new(path));
         std::fs::write(&target, &yaml).with_context(|| format!("writing {}", target.display()))?;
         println!("Wrote {}", target.display());

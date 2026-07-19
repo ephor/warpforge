@@ -1165,17 +1165,13 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
                     return Some(AcpUpdate::FileEdit { path });
                 }
             }
-            let title = update
-                .get("title")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-                .unwrap_or_else(|| id.clone());
+            let title = tool_title(update, &id, &kind);
             Some(AcpUpdate::ToolCall {
                 id,
                 title,
                 status,
                 kind,
-                content: tool_content(update),
+                content: tool_details(update),
             })
         }
         "plan" => {
@@ -1269,12 +1265,94 @@ fn parse_config_options(v: Option<&Value>) -> Vec<wire::ConfigOption> {
         .collect()
 }
 
-/// Concatenate any text output attached to a tool call (ACP ToolCallContent
-/// `{ type: "content", content: { text } }` blocks).
-fn tool_content(update: &Value) -> Option<String> {
-    let arr = update.get("content")?.as_array()?;
+/// Produce a useful title even when an agent omits ACP's optional `title`.
+/// Codex and Claude adapters commonly leave the command/path in `rawInput`
+/// while OpenCode already sends a display-ready title.
+fn tool_title(update: &Value, id: &str, kind: &str) -> String {
+    if let Some(title) = update
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty() && *title != id)
+    {
+        return title.to_string();
+    }
+
+    let raw_input = update.get("rawInput");
+    if kind == "execute" {
+        if let Some(command) = raw_input.and_then(|input| input_value(input, &["command", "cmd"])) {
+            return command;
+        }
+    }
+
+    let path = first_location_path(update).or_else(|| {
+        raw_input.and_then(|input| input_value(input, &["path", "filePath", "filepath"]))
+    });
+    if let Some(path) = path {
+        let action = match kind {
+            "read" => "Read",
+            "edit" => "Edit",
+            "delete" => "Delete",
+            "move" => "Move",
+            _ => "Open",
+        };
+        return format!("{action} {path}");
+    }
+
+    if let Some(query) = raw_input.and_then(|input| input_value(input, &["query", "pattern"])) {
+        return format!("Search for {query}");
+    }
+    if let Some(url) = raw_input.and_then(|input| input_value(input, &["url"])) {
+        return format!("Fetch {url}");
+    }
+
+    match kind {
+        "execute" => "Run command",
+        "read" => "Read file",
+        "edit" => "Edit file",
+        "delete" => "Delete file",
+        "move" => "Move file",
+        "search" => "Search workspace",
+        "fetch" => "Fetch resource",
+        "think" => "Think",
+        _ => "Use tool",
+    }
+    .to_string()
+}
+
+fn input_value(input: &Value, keys: &[&str]) -> Option<String> {
+    let value = keys.iter().find_map(|key| input.get(*key))?;
+    if let Some(text) = value
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        return Some(text.to_string());
+    }
+    let parts = value
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+fn first_location_path(update: &Value) -> Option<String> {
+    update
+        .get("locations")
+        .and_then(Value::as_array)
+        .and_then(|locations| locations.first())
+        .and_then(|location| location.get("path"))
+        .and_then(Value::as_str)
+        .map(String::from)
+}
+
+/// Prefer rendered ACP content, then fall back to raw output/input so tool
+/// cards remain expandable across agents with different payload fidelity.
+fn tool_details(update: &Value) -> Option<String> {
     let mut out = String::new();
-    for item in arr {
+    let arr = update.get("content").and_then(Value::as_array);
+    for item in arr.into_iter().flatten() {
         if let Some(block) = item.get("content") {
             if let Some(t) = content_text(block) {
                 if !out.is_empty() {
@@ -1284,7 +1362,24 @@ fn tool_content(update: &Value) -> Option<String> {
             }
         }
     }
-    (!out.is_empty()).then_some(out)
+    if !out.is_empty() {
+        return Some(out);
+    }
+
+    update
+        .get("rawOutput")
+        .and_then(display_json_value)
+        .or_else(|| update.get("rawInput").and_then(display_json_value))
+}
+
+fn display_json_value(value: &Value) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    if let Some(text) = value.as_str() {
+        return (!text.trim().is_empty()).then(|| text.to_string());
+    }
+    serde_json::to_string_pretty(value).ok()
 }
 
 /// Extract display text from an ACP content value, tolerating the shapes real
@@ -1387,6 +1482,47 @@ mod tests {
             summaries: Vec::new(),
             has_images: false,
         }
+    }
+
+    #[test]
+    fn tool_call_uses_raw_command_instead_of_technical_id() {
+        let params = json!({
+            "update": {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "exec-7a8abe42-803f-447f-8a24-245cb383d4f9",
+                "kind": "execute",
+                "status": "in_progress",
+                "rawInput": { "command": "git diff --stat" }
+            }
+        });
+
+        let Some(AcpUpdate::ToolCall { title, content, .. }) = parse_update(&params) else {
+            panic!("expected tool call");
+        };
+        assert_eq!(title, "git diff --stat");
+        assert_eq!(
+            content.as_deref(),
+            Some("{\n  \"command\": \"git diff --stat\"\n}")
+        );
+    }
+
+    #[test]
+    fn tool_call_exposes_raw_output_and_never_falls_back_to_id() {
+        let params = json!({
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "exec-0fd95cb1-b51a-4037-8300-bbf6c6597b5d",
+                "kind": "execute",
+                "status": "completed",
+                "rawOutput": "3 files changed"
+            }
+        });
+
+        let Some(AcpUpdate::ToolCall { title, content, .. }) = parse_update(&params) else {
+            panic!("expected tool call");
+        };
+        assert_eq!(title, "Run command");
+        assert_eq!(content.as_deref(), Some("3 files changed"));
     }
 
     #[test]

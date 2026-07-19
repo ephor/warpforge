@@ -279,7 +279,10 @@ impl Client {
                 json!({ "project": project, "answers": answers }),
             )
             .await?;
-        resp.get("result")?.get("taskId")?.as_str().map(String::from)
+        resp.get("result")?
+            .get("taskId")?
+            .as_str()
+            .map(String::from)
     }
 
     /// Cancel a running task.
@@ -394,7 +397,11 @@ fn apply_event(state: &Arc<Mutex<ClientState>>, ev: wire::Event) {
         } => {
             // Accumulate agent text for bootstrap tasks
             if let Some(task) = s.tasks.iter().find(|t| t.id == task_id) {
-                if task.tags.iter().any(|t| t == "bootstrap" || t == "config-gen") {
+                if task
+                    .tags
+                    .iter()
+                    .any(|t| t == "bootstrap" || t == "config-gen")
+                {
                     let entry = s.bootstrap_results.entry(task_id).or_default();
                     entry.push_str(&text);
                 }

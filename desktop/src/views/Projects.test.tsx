@@ -25,9 +25,9 @@ describe("Projects", () => {
     render(
       <Projects
         snapshot={snapshot}
-        onOpenTask={vi.fn()}
-        onNewTask={vi.fn()}
-        onProjectAdded={vi.fn()}
+        onOpenTask={vi.fn<(id: string) => void>()}
+        onNewTask={vi.fn<(project?: string) => void>()}
+        onProjectAdded={vi.fn<(project: string) => void>()}
       />,
     );
 

@@ -6,13 +6,19 @@ import { MessageActions } from "./MessageActions";
 
 describe("MessageActions", () => {
   it("copies the exact message text", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
     });
 
-    render(<MessageActions agents={[]} text="Copy this exactly" onContinue={vi.fn()} />);
+    render(
+      <MessageActions
+        agents={[]}
+        text="Copy this exactly"
+        onContinue={vi.fn<(agent: string) => Promise<void>>().mockResolvedValue(undefined)}
+      />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("Copy this exactly"));
@@ -20,7 +26,7 @@ describe("MessageActions", () => {
 
   it("lists every enabled harness supplied by the transcript", async () => {
     const user = userEvent.setup();
-    const onContinue = vi.fn().mockResolvedValue(undefined);
+    const onContinue = vi.fn<(agent: string) => Promise<void>>().mockResolvedValue(undefined);
     render(
       <MessageActions
         agents={[

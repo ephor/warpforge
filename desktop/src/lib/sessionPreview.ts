@@ -1,4 +1,5 @@
 import type { SessionUpdate } from "../protocol";
+import { toolDisplayTitle } from "./toolDisplay";
 
 export interface SessionPreview {
   kind: "message" | "thought" | "tool" | "file" | "plan";
@@ -143,7 +144,7 @@ export function latestSessionPreview(
       return {
         kind: "tool",
         label: "Latest tool",
-        text: `${update.title} · ${update.status.replaceAll("_", " ")}`,
+        text: `${toolDisplayTitle(update)} · ${update.status.replaceAll("_", " ")}`,
         truncated: false,
       };
     }
