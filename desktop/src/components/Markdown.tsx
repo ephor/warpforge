@@ -1,11 +1,102 @@
-import { memo, useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { isExternalLink, openExternalLink } from "@/lib/externalLinks";
 import { cn } from "@/lib/utils";
 
 export type FileLinkResolver = (text: string) => string | null;
+
+interface MarkdownContextValue {
+  resolveFilePath?: FileLinkResolver;
+  onOpenFile?: (path: string) => void;
+}
+
+const MarkdownContext = createContext<MarkdownContextValue>({});
+
+const MarkdownAnchor: NonNullable<Components["a"]> = ({ children: content, href }) => {
+  const external = Boolean(href && isExternalLink(href));
+  return (
+    <a
+      href={href}
+      target={external ? "_blank" : undefined}
+      rel={external ? "noreferrer" : undefined}
+      className="text-primary underline"
+      onClick={(event) => {
+        if (!href || !external) return;
+        event.preventDefault();
+        void openExternalLink(href);
+      }}
+    >
+      {content}
+    </a>
+  );
+};
+
+const MarkdownCode: NonNullable<Components["code"]> = ({
+  className: codeClassName,
+  children: content,
+  ...rest
+}) => {
+  const { resolveFilePath, onOpenFile } = useContext(MarkdownContext);
+  const inline = !codeClassName;
+  const text = String(content ?? "");
+  const filePath = inline ? resolveFilePath?.(text) : null;
+  if (filePath && onOpenFile) {
+    return (
+      <button
+        type="button"
+        className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-primary underline decoration-primary/40 underline-offset-2 hover:bg-secondary hover:decoration-primary"
+        title={`Open ${filePath}`}
+        onClick={() => onOpenFile(filePath)}
+      >
+        {content}
+      </button>
+    );
+  }
+  return inline ? (
+    <code
+      className="break-words rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] [overflow-wrap:anywhere]"
+      {...rest}
+    >
+      {content}
+    </code>
+  ) : (
+    <code className={cn("font-mono", codeClassName)} {...rest}>
+      {content}
+    </code>
+  );
+};
+
+const MARKDOWN_COMPONENTS: Components = {
+  a: MarkdownAnchor,
+  blockquote: ({ children: content }) => (
+    <blockquote className="my-1 border-l-2 border-border pl-3 text-muted-foreground">
+      {content}
+    </blockquote>
+  ),
+  code: MarkdownCode,
+  h1: ({ children: content }) => <h1 className="mb-1 mt-2 text-base font-semibold">{content}</h1>,
+  h2: ({ children: content }) => <h2 className="mb-1 mt-2 text-sm font-semibold">{content}</h2>,
+  h3: ({ children: content }) => <h3 className="mb-1 mt-2 text-sm font-semibold">{content}</h3>,
+  ol: ({ children: content }) => <ol className="my-1 list-decimal space-y-0.5 pl-5">{content}</ol>,
+  p: ({ children: content }) => <p className="my-1">{content}</p>,
+  pre: ({ children: content }) => (
+    <pre className="my-2 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/50 p-2.5 font-mono text-xs leading-relaxed [overflow-wrap:anywhere]">
+      {content}
+    </pre>
+  ),
+  table: ({ children: content }) => (
+    <div className="my-2 overflow-x-auto">
+      <table className="w-full border-collapse text-xs">{content}</table>
+    </div>
+  ),
+  td: ({ children: content }) => <td className="border border-border px-2 py-1">{content}</td>,
+  th: ({ children: content }) => (
+    <th className="border border-border px-2 py-1 text-left">{content}</th>
+  ),
+  ul: ({ children: content }) => <ul className="my-1 list-disc space-y-0.5 pl-5">{content}</ul>,
+};
 
 /** Agent/user messages rendered as GitHub-flavored markdown, tailwind-styled. */
 export function Markdown({
@@ -19,6 +110,8 @@ export function Markdown({
   resolveFilePath?: FileLinkResolver;
   onOpenFile?: (path: string) => void;
 }) {
+  const context = useMemo(() => ({ onOpenFile, resolveFilePath }), [onOpenFile, resolveFilePath]);
+
   return (
     <div
       className={cn(
@@ -26,85 +119,11 @@ export function Markdown({
         className,
       )}
     >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ children, href }) => {
-            const external = Boolean(href && isExternalLink(href));
-            return (
-              <a
-                href={href}
-                target={external ? "_blank" : undefined}
-                rel={external ? "noreferrer" : undefined}
-                className="text-primary underline"
-                onClick={(event) => {
-                  if (!href || !external) return;
-                  event.preventDefault();
-                  void openExternalLink(href);
-                }}
-              >
-                {children}
-              </a>
-            );
-          },
-          blockquote: ({ children }) => (
-            <blockquote className="my-1 border-l-2 border-border pl-3 text-muted-foreground">
-              {children}
-            </blockquote>
-          ),
-          code: ({ className, children, ...rest }) => {
-            const inline = !className;
-            const text = String(children ?? "");
-            const filePath = inline ? resolveFilePath?.(text) : null;
-            if (filePath && onOpenFile) {
-              return (
-                <button
-                  type="button"
-                  className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] text-primary underline decoration-primary/40 underline-offset-2 hover:bg-secondary hover:decoration-primary"
-                  title={`Open ${filePath}`}
-                  onClick={() => onOpenFile(filePath)}
-                >
-                  {children}
-                </button>
-              );
-            }
-            return inline ? (
-              <code
-                className="break-words rounded bg-muted px-1 py-0.5 font-mono text-[0.85em] [overflow-wrap:anywhere]"
-                {...rest}
-              >
-                {children}
-              </code>
-            ) : (
-              <code className={cn("font-mono", className)} {...rest}>
-                {children}
-              </code>
-            );
-          },
-          h1: ({ children }) => <h1 className="mb-1 mt-2 text-base font-semibold">{children}</h1>,
-          h2: ({ children }) => <h2 className="mb-1 mt-2 text-sm font-semibold">{children}</h2>,
-          h3: ({ children }) => <h3 className="mb-1 mt-2 text-sm font-semibold">{children}</h3>,
-          ol: ({ children }) => <ol className="my-1 list-decimal space-y-0.5 pl-5">{children}</ol>,
-          p: ({ children }) => <p className="my-1">{children}</p>,
-          pre: ({ children }) => (
-            <pre className="my-2 max-w-full overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/50 p-2.5 font-mono text-xs leading-relaxed [overflow-wrap:anywhere]">
-              {children}
-            </pre>
-          ),
-          table: ({ children }) => (
-            <div className="my-2 overflow-x-auto">
-              <table className="w-full border-collapse text-xs">{children}</table>
-            </div>
-          ),
-          td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
-          th: ({ children }) => (
-            <th className="border border-border px-2 py-1 text-left">{children}</th>
-          ),
-          ul: ({ children }) => <ul className="my-1 list-disc space-y-0.5 pl-5">{children}</ul>,
-        }}
-      >
-        {children}
-      </ReactMarkdown>
+      <MarkdownContext.Provider value={context}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
+          {children}
+        </ReactMarkdown>
+      </MarkdownContext.Provider>
     </div>
   );
 }

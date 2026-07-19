@@ -1,3 +1,5 @@
+// Registers jest-dom matchers globally for every Vitest environment.
+// eslint-disable-next-line import/no-unassigned-import
 import "@testing-library/jest-dom/vitest";
 import { vi } from "vitest";
 

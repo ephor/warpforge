@@ -32,6 +32,7 @@ import { Card } from "@/components/ui/card";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { withOccurrenceKeys } from "@/lib/renderKeys";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { activityBadge, orchNodeBadge, taskBadge } from "@/lib/status";
 import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/lib/taskGroups";
@@ -1151,9 +1152,9 @@ function FileDiffView({
                 </div>
               </div>
               <pre className="overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed">
-                {hunk.lines.map((line, j) => (
+                {withOccurrenceKeys(hunk.lines, (line) => line).map(({ item: line, key }) => (
                   <div
-                    key={`${hunk.oldStart}:${hunk.newStart}:${j}:${line}`}
+                    key={`${hunk.oldStart}:${hunk.newStart}:${key}`}
                     className={cn(
                       "px-1",
                       line.startsWith("+") && "bg-ok/10 text-ok",
