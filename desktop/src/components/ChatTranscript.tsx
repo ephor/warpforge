@@ -9,6 +9,7 @@ import { buildConversationBranchPrompts } from "@/lib/conversationBranch";
 import type { SessionActivity } from "@/lib/sessionActivity";
 import { resolvedPermissions } from "@/lib/sessionPermissions";
 import { activeThinkingIndex } from "@/lib/sessionThinking";
+import { latestContextUsage } from "@/lib/sessionUsage";
 
 import { daemon } from "../daemon";
 import type { AgentConfig, CommandInfo, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
@@ -191,6 +192,7 @@ export const ChatTranscript = memo(function ChatTranscript({
   onOpenTask,
 }: Props) {
   const merged = useCoalesced(updates);
+  const contextUsage = useMemo(() => latestContextUsage(updates), [updates]);
   const thinkingIndex = useMemo(() => {
     if (activeThinkingIndex(updates, task.status) === null) return null;
     for (let index = merged.length - 1; index >= 0; index--) {
@@ -219,23 +221,25 @@ export const ChatTranscript = memo(function ChatTranscript({
               <p className="text-muted-foreground">No session activity yet.</p>
             ) : (
               <div className="w-full">
-                {merged.map((update, index) => (
-                  <div key={streamKey(update, index)} className="pb-3">
-                    <TranscriptRow
-                      update={update}
-                      thinkingActive={index === thinkingIndex}
-                      taskId={task.id}
-                      resolved={resolved}
-                      resolveFilePath={resolveFilePath}
-                      onOpenFile={onOpenFile}
-                      agents={agents}
-                      branchPrompt={branchPrompts[index]}
-                      onOpenTask={onOpenTask}
-                      project={task.project}
-                      sourceTaskId={task.id}
-                    />
-                  </div>
-                ))}
+                {merged.map((update, index) =>
+                  update.kind === "usage" ? null : (
+                    <div key={streamKey(update, index)} className="pb-3">
+                      <TranscriptRow
+                        update={update}
+                        thinkingActive={index === thinkingIndex}
+                        taskId={task.id}
+                        resolved={resolved}
+                        resolveFilePath={resolveFilePath}
+                        onOpenFile={onOpenFile}
+                        agents={agents}
+                        branchPrompt={branchPrompts[index]}
+                        onOpenTask={onOpenTask}
+                        project={task.project}
+                        sourceTaskId={task.id}
+                      />
+                    </div>
+                  ),
+                )}
               </div>
             )}
           </div>
@@ -266,6 +270,7 @@ export const ChatTranscript = memo(function ChatTranscript({
       <ChatComposer
         ref={composerRef}
         commands={commands}
+        contextUsage={contextUsage}
         files={files}
         filesLoading={filesLoading}
         imageSupported={imageSupported}

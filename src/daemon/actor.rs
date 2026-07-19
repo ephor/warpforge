@@ -60,6 +60,7 @@ fn is_acp_replay_update(update: &wire::SessionUpdate) -> bool {
         | wire::SessionUpdate::Plan { .. }
         | wire::SessionUpdate::AvailableCommands { .. }
         | wire::SessionUpdate::TurnEnded { .. } => true,
+        wire::SessionUpdate::Usage { .. } => false,
     }
 }
 
@@ -2471,6 +2472,10 @@ impl Daemon {
                     self.emit(Event::TaskUpdated(updated));
                 }
             }
+            AcpUpdate::Usage { used, size, cost } => self.emit_session_unless_last_duplicate(
+                &task_id,
+                wire::SessionUpdate::Usage { used, size, cost },
+            ),
             AcpUpdate::PromptCapabilities {
                 image,
                 embedded_context,

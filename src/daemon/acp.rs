@@ -65,6 +65,11 @@ pub enum AcpUpdate {
     ConfigOptions {
         options: Vec<wire::ConfigOption>,
     },
+    Usage {
+        used: u64,
+        size: u64,
+        cost: Option<wire::SessionUsageCost>,
+    },
     PromptCapabilities {
         image: bool,
         embedded_context: bool,
@@ -520,14 +525,16 @@ pub fn spawn_acp_session(
 
                 match method {
                     "session/update" => {
-                        // Drop transcript replayed during `session/load` — it is
-                        // already in history; re-streaming it looks like a live
-                        // flood and re-flips task status ("traffic light").
-                        if replaying.load(Ordering::Acquire) {
-                            continue;
-                        }
                         match parse_update(&params) {
                             Some(update) => {
+                                // Drop transcript replayed during `session/load`
+                                // but retain current session metadata, which the
+                                // agent is expected to refresh while resuming.
+                                if replaying.load(Ordering::Acquire)
+                                    && !matches!(&update, AcpUpdate::Usage { .. })
+                                {
+                                    continue;
+                                }
                                 let _ = updates.send((task_id.clone(), update));
                             }
                             None if debug => {
@@ -1218,6 +1225,17 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
         "config_option_update" => Some(AcpUpdate::ConfigOptions {
             options: parse_config_options(update.get("configOptions")),
         }),
+        "usage_update" => {
+            let used = update.get("used")?.as_u64()?;
+            let size = update.get("size")?.as_u64()?;
+            let cost = update.get("cost").and_then(|value| {
+                Some(wire::SessionUsageCost {
+                    amount: value.get("amount")?.as_f64()?,
+                    currency: value.get("currency")?.as_str()?.to_string(),
+                })
+            });
+            Some(AcpUpdate::Usage { used, size, cost })
+        }
         _ => None, // user_message_chunk (our own echo), current_mode_update, etc.
     }
 }
@@ -1523,6 +1541,25 @@ mod tests {
         };
         assert_eq!(title, "Run command");
         assert_eq!(content.as_deref(), Some("3 files changed"));
+    }
+
+    #[test]
+    fn parses_context_usage_and_optional_cost() {
+        let params = json!({
+            "update": {
+                "sessionUpdate": "usage_update",
+                "used": 53_000,
+                "size": 200_000,
+                "cost": { "amount": 0.045, "currency": "USD" }
+            }
+        });
+
+        let Some(AcpUpdate::Usage { used, size, cost }) = parse_update(&params) else {
+            panic!("expected usage update");
+        };
+        assert_eq!(used, 53_000);
+        assert_eq!(size, 200_000);
+        assert_eq!(cost.unwrap().currency, "USD");
     }
 
     #[test]

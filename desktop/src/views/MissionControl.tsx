@@ -32,6 +32,7 @@ import {
   pendingPermission,
   resolvedPermissions,
 } from "@/lib/sessionPermissions";
+import { latestContextUsage } from "@/lib/sessionUsage";
 import { activityBadge, elapsed, taskBadge } from "@/lib/status";
 import {
   buildTaskGroupIndex,
@@ -278,6 +279,7 @@ function FocusPane({
   const tools = useMemo(() => summarizeTools(stream), [stream]);
   const files = useMemo(() => summarizeFiles(stream), [stream]);
   const commands = useMemo(() => latestCommands(updates), [updates]);
+  const contextUsage = useMemo(() => latestContextUsage(updates), [updates]);
   const fileListQuery = useQuery({
     queryFn: daemonQuery<ProjectFile[]>("file.list", { task_id: task.id }),
     queryKey: ["fileList", task.id, task.updatedAt],
@@ -429,6 +431,7 @@ function FocusPane({
         <Composer
           compact
           commands={commands}
+          contextUsage={contextUsage}
           files={projectFiles}
           filesLoading={fileListQuery.isLoading}
           imageSupported={imageSupported}
@@ -466,7 +469,11 @@ function pinnedPreview(
   hidden: number;
 } {
   const items = updates.filter((update) => {
-    if (update.kind === "available_commands" || update.kind === "permission_resolved") {
+    if (
+      update.kind === "available_commands" ||
+      update.kind === "permission_resolved" ||
+      update.kind === "usage"
+    ) {
       return false;
     }
     if (update.kind === "permission_request") {
@@ -893,6 +900,7 @@ export function StreamLine({
       );
     case "available_commands":
     case "prompt_capabilities":
+    case "usage":
       // Metadata for the composer's slash menu — not shown inline.
       return null;
     case "turn_ended":

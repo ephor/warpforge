@@ -259,6 +259,11 @@ export type PromptAttachmentSummary =
   | { type: "file"; path: string }
   | { type: "image"; name: string };
 
+export interface SessionUsageCost {
+  amount: number;
+  currency: string;
+}
+
 export type SessionUpdate =
   | { kind: "user_message"; text: string; attachments?: PromptAttachmentSummary[] }
   | { kind: "prompt_capabilities"; image: boolean; embedded_context: boolean }
@@ -284,6 +289,7 @@ export type SessionUpdate =
   | { kind: "permission_resolved"; request_id: string; outcome: string }
   | { kind: "plan"; entries: PlanEntry[] }
   | { kind: "available_commands"; commands: CommandInfo[] }
+  | { kind: "usage"; used: number; size: number; cost?: SessionUsageCost }
   | { kind: "turn_ended"; stop_reason: string };
 
 // ── Diff ────────────────────────────────────────────────────────────────────

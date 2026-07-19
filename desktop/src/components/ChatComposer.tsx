@@ -1,6 +1,7 @@
 import { forwardRef, memo, useCallback } from "react";
 
 import { daemon } from "../daemon";
+import type { ContextUsage } from "../lib/sessionUsage";
 import type { CommandInfo, ProjectFile, PromptSubmission, TaskInfo } from "../protocol";
 import { AgentConfigBar } from "./AgentConfigBar";
 import type { ComposerHandle } from "./Composer";
@@ -11,13 +12,14 @@ interface Props {
   files: ProjectFile[];
   filesLoading: boolean;
   imageSupported: boolean;
+  contextUsage?: ContextUsage;
   onBeforeSend: () => void;
   task: TaskInfo;
 }
 
 export const ChatComposer = memo(
   forwardRef<ComposerHandle, Props>(function ChatComposer(
-    { commands, files, filesLoading, imageSupported, onBeforeSend, task },
+    { commands, contextUsage, files, filesLoading, imageSupported, onBeforeSend, task },
     ref,
   ) {
     const onSend = useCallback(
@@ -32,6 +34,7 @@ export const ChatComposer = memo(
       <Composer
         ref={ref}
         commands={commands}
+        contextUsage={contextUsage}
         files={files}
         filesLoading={filesLoading}
         imageSupported={imageSupported}

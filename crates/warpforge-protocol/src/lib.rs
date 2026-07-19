@@ -644,6 +644,13 @@ pub enum TaskStatus {
 /// Structured agent-session update, a deliberately small projection of ACP's
 /// `session/update` notification. Extend as views need more.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUsageCost {
+    pub amount: f64,
+    pub currency: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionUpdate {
     /// The developer's own prompt, echoed by the daemon into the stream so
@@ -699,6 +706,13 @@ pub enum SessionUpdate {
     /// Slash-commands the agent exposes (ACP `available_commands_update`).
     AvailableCommands {
         commands: Vec<CommandInfo>,
+    },
+    /// Current ACP context-window utilization and optional cumulative cost.
+    Usage {
+        used: u64,
+        size: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost: Option<SessionUsageCost>,
     },
     TurnEnded {
         stop_reason: String,

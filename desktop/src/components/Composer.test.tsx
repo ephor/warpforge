@@ -24,6 +24,27 @@ describe("Composer", () => {
     expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument();
   });
 
+  it("replaces the newline hint with an expandable context meter", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<Composer onSend={vi.fn<OnSend>()} />);
+    expect(screen.getByText("⇧↵ newline")).toBeInTheDocument();
+
+    rerender(
+      <Composer
+        contextUsage={{ kind: "usage", used: 53_000, size: 200_000 }}
+        onSend={vi.fn<OnSend>()}
+      />,
+    );
+
+    expect(screen.queryByText("⇧↵ newline")).not.toBeInTheDocument();
+    const meter = screen.getByRole("button", {
+      name: /53K used · 147K remaining · 200K total/,
+    });
+    await user.click(meter);
+    expect(screen.getByText("Context Window")).toBeInTheDocument();
+    expect(screen.getByText("27% · 53K/200K")).toBeInTheDocument();
+  });
+
   it("opens the @ menu, navigates, inserts paths, and sends a structured file ref", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn<OnSend>();
