@@ -10,17 +10,6 @@ pub enum ServiceRuntimeKind {
     Mixed,
 }
 
-impl ServiceRuntimeKind {
-    pub fn label(&self) -> &str {
-        match self {
-            Self::Local => "local",
-            Self::DockerCompose => "docker-compose",
-            Self::Kubernetes => "kubernetes",
-            Self::Mixed => "mixed",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct UserRuntimeAnswers {
     pub agent: String,
