@@ -84,7 +84,9 @@ textarea {
  * !important beats the extension's wrapper-scoped rule.
  */
 .warpforge-merge-diff .cm-editor,
-.warpforge-merge-diff .cm-gutters {
+.warpforge-merge-diff .cm-gutters,
+.warpforge-code-editor .cm-editor,
+.warpforge-code-editor .cm-gutters {
   background-color: hsl(var(--card)) !important;
 }
 

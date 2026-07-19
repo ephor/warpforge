@@ -166,7 +166,10 @@ export function CodeEditor({
       <div className="relative min-h-0 flex-1">
         <div
           ref={host}
-          className={cn("h-full overflow-auto text-[13px]", showPreview && "hidden")}
+          className={cn(
+            "warpforge-code-editor h-full overflow-auto bg-card text-[13px]",
+            showPreview && "hidden",
+          )}
         />
         {showPreview && (
           <div className="h-full overflow-auto px-4 py-3">
