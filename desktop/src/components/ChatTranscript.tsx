@@ -12,7 +12,8 @@ import { activeThinkingIndex } from "@/lib/sessionThinking";
 
 import { daemon } from "../daemon";
 import type { AgentConfig, CommandInfo, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
-import { StreamLine, appendCoalesced, coalesceUpdates, streamKey } from "../views/MissionControl";
+import { StreamLine } from "../views/MissionControl";
+import { appendCoalesced, coalesceUpdates, streamKey } from "../views/missionControlStream";
 import { AgentActivityIndicator } from "./AgentActivityIndicator";
 import { ChatComposer } from "./ChatComposer";
 import type { ComposerHandle } from "./Composer";

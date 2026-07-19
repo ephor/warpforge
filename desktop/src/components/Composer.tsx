@@ -75,6 +75,7 @@ export const Composer = forwardRef<
     initialValue?: string;
     onDraftChange?: (text: string) => void;
     hideSendButton?: boolean;
+    compact?: boolean;
   }
 >(
   (
@@ -90,6 +91,7 @@ export const Composer = forwardRef<
       initialValue = "",
       onDraftChange,
       hideSendButton = false,
+      compact = false,
     },
     ref,
   ) => {
@@ -142,8 +144,8 @@ export const Composer = forwardRef<
       const el = textRef.current;
       if (!el) return;
       el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
-    }, [value]);
+      el.style.height = `${Math.min(el.scrollHeight, compact ? 180 : 220)}px`;
+    }, [compact, value]);
 
     const mention = findMentionAtCaret(value, caret);
     const mentionMatches = mention ? rankFiles(files, mention.query).slice(0, 30) : [];
@@ -267,7 +269,7 @@ export const Composer = forwardRef<
     const canSend = !!(value.trim() || diffs.length || images.length) && !disabled && !sending;
     return (
       <div
-        className="relative p-2"
+        className={cn("relative", compact ? "p-1.5" : "p-2")}
         onDragEnter={(e) => {
           e.preventDefault();
           if (imageSupported) setDragging(true);
@@ -315,7 +317,7 @@ export const Composer = forwardRef<
             ))}
           </div>
         )}
-        <div className="relative flex flex-col rounded-lg border border-input bg-background focus-within:ring-2 focus-within:ring-ring">
+        <div className="bg-deep-surface relative flex flex-col rounded-lg border border-input focus-within:ring-2 focus-within:ring-ring">
           {dragging && (
             <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-background/90 text-sm font-medium">
               Drop PNG or JPEG images
@@ -357,7 +359,7 @@ export const Composer = forwardRef<
           )}
           <textarea
             ref={textRef}
-            rows={2}
+            rows={compact ? 1 : 2}
             value={value}
             disabled={disabled || sending}
             onChange={(e) => {
@@ -371,8 +373,11 @@ export const Composer = forwardRef<
             onClick={(e) => setCaret(e.currentTarget.selectionStart)}
             onKeyUp={(e) => setCaret(e.currentTarget.selectionStart)}
             onKeyDown={onKeyDown}
-            placeholder={diffs.length || images.length ? "Add a message (optional)…" : placeholder}
-            className="max-h-[220px] min-h-[76px] resize-none bg-transparent px-3 py-2.5 text-sm placeholder:text-muted-foreground focus-visible:outline-none disabled:opacity-50"
+            placeholder={diffs.length || images.length ? "Add a message…" : placeholder}
+            className={cn(
+              "resize-none bg-transparent px-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none disabled:opacity-50",
+              compact ? "max-h-[180px] min-h-[52px] py-2" : "max-h-[220px] min-h-[76px] py-2.5",
+            )}
           />
           {error && (
             <div role="alert" className="px-3 pb-1 text-xs text-destructive">

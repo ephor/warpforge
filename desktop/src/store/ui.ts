@@ -7,7 +7,6 @@ import { persist } from "zustand/middleware";
  */
 
 export type View = "control" | "board" | "projects";
-export type CenterTab = "changes" | "editor";
 export type DiffView = "unified" | "split";
 export type RightPanel = "changes" | "files" | "subtasks" | null;
 
@@ -22,7 +21,6 @@ interface UiState {
   // TaskDetail zones
   showChat: boolean;
   showDiff: boolean;
-  centerTab: CenterTab;
   diffView: DiffView;
   rightPanel: RightPanel;
   runtimeOpen: boolean;
@@ -36,7 +34,6 @@ interface UiState {
   toggleChat: () => void;
   toggleDiff: () => void;
   setShowDiff: (open: boolean) => void;
-  setCenterTab: (t: CenterTab) => void;
   setDiffView: (v: DiffView) => void;
   setRightPanel: (panel: RightPanel) => void;
   toggleRuntime: () => void;
@@ -55,14 +52,15 @@ export const useUi = create<UiState>()(
       attentionTargetNonce: 0,
       showChat: true,
       showDiff: true,
-      centerTab: "changes",
       diffView: "split",
-      rightPanel: "changes",
+      rightPanel: null,
       runtimeOpen: false,
       pinnedTaskIds: [],
 
       setView: (view) => set({ openTaskId: null, view }),
-      openTask: (openTaskId) => set({ openTaskId }),
+      // Contextual task tools must not leak from one task into the next.
+      // Layout preferences (chat/workspace visibility and diff style) remain persisted.
+      openTask: (openTaskId) => set({ openTaskId, rightPanel: null, runtimeOpen: false }),
       toggleAttention: () => set((s) => ({ attentionOpen: !s.attentionOpen })),
       setAttentionOpen: (attentionOpen) => set({ attentionOpen }),
       focusAttentionTask: (attentionTargetId) =>
@@ -76,7 +74,6 @@ export const useUi = create<UiState>()(
       toggleChat: () => set((s) => (!s.showChat || s.showDiff ? { showChat: !s.showChat } : s)),
       toggleDiff: () => set((s) => (!s.showDiff || s.showChat ? { showDiff: !s.showDiff } : s)),
       setShowDiff: (showDiff) => set((s) => (!showDiff && !s.showChat ? s : { showDiff })),
-      setCenterTab: (centerTab) => set({ centerTab }),
       setDiffView: (diffView) => set({ diffView }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
       toggleRuntime: () => set((s) => ({ runtimeOpen: !s.runtimeOpen })),
@@ -96,6 +93,8 @@ export const useUi = create<UiState>()(
         openTaskId: _openTaskId,
         attentionTargetId: _attentionTargetId,
         attentionTargetNonce: _attentionTargetNonce,
+        rightPanel: _rightPanel,
+        runtimeOpen: _runtimeOpen,
         ...rest
       }) => rest,
     },

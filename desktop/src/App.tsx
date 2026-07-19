@@ -353,7 +353,7 @@ export default function App() {
   return (
     <TooltipProvider delayDuration={300}>
       <div className="relative flex h-screen flex-col bg-background">
-        <header className="flex h-11 items-center gap-3 border-b border-border/70 bg-card/80 px-2.5">
+        <header className="flex h-10 items-center gap-3 border-b border-border/70 bg-card/80 px-2.5">
           <div className="px-1 text-xs font-semibold uppercase tracking-[0.18em] text-foreground">
             WARP<span className="text-primary">FORGE</span>
           </div>
@@ -452,7 +452,7 @@ export default function App() {
           </div>
         </header>
 
-        <div className="flex min-h-0 flex-1 gap-3 overflow-hidden p-3">
+        <div className="flex min-h-0 flex-1 gap-2 overflow-hidden p-2">
           <main className="min-h-0 flex-1 overflow-hidden">
             <ErrorBoundary>
               {openTask ? (
@@ -463,6 +463,7 @@ export default function App() {
                   state={state}
                   onClose={() => setOpenTaskId(null)}
                   onOpenTask={setOpenTaskId}
+                  onOpenPush={() => setPushOpen(true)}
                 />
               ) : view === "control" ? (
                 <MissionControl state={state} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
@@ -510,7 +511,7 @@ export default function App() {
             aria-hidden={!attentionOpen}
             {...(!attentionOpen ? { inert: "" } : {})}
             className={cn(
-              "absolute bottom-0 left-0 top-0 w-[340px] p-3 pb-0 transition-transform duration-300 ease-in-out",
+              "absolute bottom-0 left-0 top-0 w-[340px] transition-transform duration-300 ease-in-out",
               attentionOpen ? "translate-x-0" : "-translate-x-full",
             )}
           >

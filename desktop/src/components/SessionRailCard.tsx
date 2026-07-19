@@ -61,10 +61,10 @@ const SessionRailCard = memo(function SessionRailCard({
   return (
     <Card
       className={cn(
-        "group relative flex cursor-pointer flex-col rounded-md border-l-2 bg-card/75 p-3 shadow-sm transition-colors hover:border-primary/60 hover:bg-secondary/25 hover:shadow-md",
+        "group relative flex cursor-pointer flex-col rounded-md border-l-2 bg-card/60 p-2.5 shadow-none transition-colors hover:bg-secondary/20",
         taskEdge(task.status),
-        attention && "border-warn/50 bg-card ring-1 ring-warn/10",
-        focused && "ring-2 ring-primary/60",
+        attention && "bg-card",
+        focused && "ring-1 ring-primary/70",
       )}
     >
       <button
@@ -98,7 +98,7 @@ const SessionRailCard = memo(function SessionRailCard({
           <Pin className="size-3.5" />
         </button>
       </div>
-      <p className="pointer-events-none relative z-10 mt-2 line-clamp-2 text-sm font-medium leading-snug">
+      <p className="pointer-events-none relative z-10 mt-1.5 line-clamp-2 text-sm font-medium leading-snug">
         {task.prompt}
       </p>
       {parentTask && (
@@ -112,13 +112,13 @@ const SessionRailCard = memo(function SessionRailCard({
         </p>
       )}
       {reason && (
-        <p className="pointer-events-none relative z-10 mt-1 truncate text-xs text-warn/90">
+        <p className="pointer-events-none relative z-10 mt-1 truncate text-xs text-muted-foreground">
           {reason}
         </p>
       )}
 
       {preview && !permission && (
-        <div className="pointer-events-none relative z-10 mt-2 min-w-0 rounded-md border border-border/50 bg-background/35 px-2.5 py-2">
+        <div className="pointer-events-none relative z-10 mt-2 min-w-0 border-t border-border/60 pt-2">
           <div className="mb-1 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80">
             {preview.kind === "tool" && <Wrench className="size-3" />}
             {preview.kind === "file" && <FilePen className="size-3" />}

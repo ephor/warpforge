@@ -8,22 +8,23 @@
  * now — this is a developer tool that lives next to a terminal.
  */
 :root {
-  --background: 220 10% 5%;
+  /* WebStorm-like depth: the chrome/canvas sits above darker work islands. */
+  --background: 220 9% 11%;
   --foreground: 220 12% 86%;
 
-  --card: 220 10% 10%;
+  --card: 220 11% 7%;
   --card-foreground: 220 14% 85%;
 
-  --popover: 220 10% 9%;
+  --popover: 220 11% 8%;
   --popover-foreground: 220 14% 85%;
 
   --primary: 222 89% 73%;
   --primary-foreground: 222 47% 11%;
 
-  --secondary: 220 9% 17%;
+  --secondary: 220 9% 15%;
   --secondary-foreground: 220 14% 85%;
 
-  --muted: 220 9% 15%;
+  --muted: 220 9% 13%;
   --muted-foreground: 220 9% 60%;
 
   --accent: 220 9% 19%;
@@ -39,7 +40,7 @@
   --ok: 92 45% 60%;
   --warn: 37 62% 62%;
 
-  --radius: 0.5rem;
+  --radius: 0.375rem;
 }
 
 * {
@@ -68,6 +69,11 @@ textarea {
 /* Tabular numerals wherever digits line up (ports, counts, timers). */
 .tnum {
   font-variant-numeric: tabular-nums;
+}
+
+/* Nested input surfaces stay deeper than both the island and app canvas. */
+.bg-deep-surface {
+  background-color: hsl(220 11% 4%);
 }
 
 /*

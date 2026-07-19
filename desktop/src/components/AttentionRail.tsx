@@ -10,7 +10,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import {
   latestPendingPermission,
   prunePermissionCache,
@@ -30,7 +29,7 @@ import SessionRailCard from "./SessionRailCard";
  * virtualizer, keeping the mounted tree bounded during busy sessions.
  */
 
-export interface AttentionItem {
+interface AttentionItem {
   task: TaskInfo;
   reason: string;
   priority: number;
@@ -56,10 +55,6 @@ function buildAttentionQueue(
     }
   }
   return items.sort((a, b) => a.priority - b.priority || b.task.updatedAt - a.task.updatedAt);
-}
-
-export function attentionQueue(state: DaemonState): AttentionItem[] {
-  return buildAttentionQueue(state.snapshot.tasks, state.sessionUpdates);
 }
 
 type SortMode = "updated" | "created" | "status" | "project";
@@ -311,25 +306,23 @@ function AttentionRail({ state, onOpenTask }: Props) {
   );
 
   return (
-    <Card className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border-border/80 bg-card/95 shadow-2xl backdrop-blur">
-      <div className="flex h-14 shrink-0 items-center gap-2.5 px-3.5">
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-secondary/55 text-primary">
-          <Activity className="size-3.5" />
-        </span>
+    <Card className="flex h-full min-h-0 flex-col overflow-hidden rounded-none border-y-0 border-l-0 border-border/80 bg-background shadow-none">
+      <div className="flex h-11 shrink-0 items-center gap-2 px-3">
+        <Activity className="size-3.5 shrink-0 text-primary" />
         <div className="min-w-0">
           <p className="text-xs font-semibold text-foreground">Sessions</p>
           <p className="truncate text-[10px] text-muted-foreground">Live workspace activity</p>
         </div>
         {queue.length > 0 && (
-          <span className="tnum ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive/90 px-1.5 text-xs font-semibold text-destructive-foreground shadow-sm">
-            {queue.length}
+          <span className="tnum ml-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span className="size-1.5 rounded-full bg-warn" />
+            {queue.length} need you
           </span>
         )}
       </div>
-      <Separator />
 
-      <div className="space-y-2 border-b bg-secondary/15 p-2.5">
-        <label className="flex h-8 items-center gap-2 rounded-md border border-border/80 bg-background/70 px-2 text-muted-foreground shadow-sm focus-within:ring-1 focus-within:ring-ring">
+      <div className="space-y-1.5 border-y border-border/80 bg-secondary/10 p-2">
+        <label className="flex h-7 items-center gap-2 rounded border border-border/80 bg-deep-surface px-2 text-muted-foreground focus-within:ring-1 focus-within:ring-ring">
           <Search className="size-3.5 shrink-0" />
           <input
             aria-label="Search sessions"
@@ -341,9 +334,9 @@ function AttentionRail({ state, onOpenTask }: Props) {
           />
         </label>
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-1.5">
           <Select value={sort} onValueChange={(value) => setSort(value as SortMode)}>
-            <SelectTrigger aria-label="Sort sessions" className="h-8 px-2 text-xs">
+            <SelectTrigger aria-label="Sort sessions" className="h-7 rounded px-2 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -354,7 +347,7 @@ function AttentionRail({ state, onOpenTask }: Props) {
             </SelectContent>
           </Select>
           <Select value={effectiveGroup} onValueChange={handleGroupChange}>
-            <SelectTrigger aria-label="Group sessions" className="h-8 px-2 text-xs">
+            <SelectTrigger aria-label="Group sessions" className="h-7 rounded px-2 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -366,14 +359,14 @@ function AttentionRail({ state, onOpenTask }: Props) {
           </Select>
         </div>
 
-        <div className="grid grid-cols-3 rounded-md border border-border/50 bg-secondary/45 p-0.5">
+        <div className="grid grid-cols-3 rounded border border-border/50 bg-deep-surface p-0.5">
           {(["attention", "running", "all"] as const).map((value) => (
             <button
               key={value}
               type="button"
               className={cn(
                 "rounded px-1.5 py-1 text-[11px] capitalize text-muted-foreground transition-colors",
-                filter === value && "bg-background text-foreground shadow-sm",
+                filter === value && "bg-secondary text-foreground",
               )}
               onClick={() => setFilter(value)}
             >
@@ -383,7 +376,7 @@ function AttentionRail({ state, onOpenTask }: Props) {
         </div>
       </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-background/15">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-background">
         {rows.length === 0 ? (
           <div className="mt-10 px-4 text-center text-sm leading-relaxed text-muted-foreground">
             <p className="mb-1 text-foreground">All quiet.</p>
@@ -398,7 +391,7 @@ function AttentionRail({ state, onOpenTask }: Props) {
                   key={row.key}
                   ref={virtualizer.measureElement}
                   data-index={virtualRow.index}
-                  className="absolute left-0 top-0 w-full px-2.5 py-1"
+                  className="absolute left-0 top-0 w-full px-2 py-0.5"
                   style={{ transform: `translateY(${virtualRow.start}px)` }}
                 >
                   {row.kind === "group" ? (

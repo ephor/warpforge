@@ -15,6 +15,15 @@ const files = [
 ];
 
 describe("Composer", () => {
+  it("uses a shorter but fully functional textarea in compact mode", () => {
+    render(<Composer compact onSend={vi.fn<OnSend>()} />);
+
+    const input = screen.getByRole("textbox");
+    expect(input).toHaveAttribute("rows", "1");
+    expect(input).toHaveClass("min-h-[52px]", "max-h-[180px]");
+    expect(screen.getByRole("button", { name: /send/i })).toBeInTheDocument();
+  });
+
   it("opens the @ menu, navigates, inserts paths, and sends a structured file ref", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn<OnSend>();
