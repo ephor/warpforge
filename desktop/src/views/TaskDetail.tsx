@@ -617,18 +617,13 @@ export default function TaskDetail({
                   />
                 </div>
 
-                <div className="flex h-9 items-center gap-2 border-b bg-background/25 px-3">
-                  {diff && activeTab.kind === "changes" && (
-                    <span className="tnum text-xs text-muted-foreground">
-                      {diff.files.length} files
-                    </span>
-                  )}
-                  {activeTab.kind === "file" && (
-                    <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
-                      {activeTab.path}
-                    </span>
-                  )}
-                  {activeTab.kind === "changes" && (
+                {activeTab.kind === "changes" && (
+                  <div className="flex h-9 items-center gap-2 border-b bg-background/25 px-3">
+                    {diff && (
+                      <span className="tnum text-xs text-muted-foreground">
+                        {diff.files.length} files
+                      </span>
+                    )}
                     <div className="ml-auto flex items-center gap-2">
                       <div className="flex rounded-md border border-border/80 bg-background/30 p-0.5">
                         {(["unified", "split"] as const).map((v) => (
@@ -648,8 +643,8 @@ export default function TaskDetail({
                         ))}
                       </div>
                     </div>
-                  )}
-                </div>
+                  </div>
+                )}
 
                 <ResizablePanelGroup direction="vertical" className="min-h-0 flex-1">
                   <ResizablePanel
