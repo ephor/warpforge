@@ -95,6 +95,10 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
     () => buildTaskGroupIndex(state.snapshot.tasks),
     [state.snapshot.tasks],
   );
+  const enabledAgents = useMemo(
+    () => (state.snapshot.agents ?? []).filter((agent) => agent.enabled),
+    [state.snapshot.agents],
+  );
   const taskGroup = taskGroupIndex.rootByTaskId.get(task.id);
   const taskGroupPinned = isTaskGroupPinned(taskGroupIndex, pinnedTaskIds, task.id);
   const toggleTaskGroupPin = useCallback(() => {
@@ -402,6 +406,7 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
                 </div>
                 <ChatTranscript
                   active={showChat}
+                  agents={enabledAgents}
                   activity={activity}
                   commands={commands}
                   files={projectFiles}
@@ -409,6 +414,7 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
                   imageSupported={imageSupported}
                   composerRef={composerRef}
                   onOpenFile={openFileTab}
+                  onOpenTask={onOpenTask}
                   resolveFilePath={resolveSessionFilePath}
                   task={task}
                   updates={updates}

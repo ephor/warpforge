@@ -1,19 +1,22 @@
 import { ArrowDown } from "lucide-react";
-import { memo, useMemo, useRef } from "react";
+import { memo, useCallback, useMemo, useRef } from "react";
 
+import type { FileLinkResolver } from "@/components/Markdown";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useChatFollow } from "@/hooks/useChatFollow";
+import { buildConversationBranchPrompts } from "@/lib/conversationBranch";
 import type { SessionActivity } from "@/lib/sessionActivity";
-import type { FileLinkResolver } from "@/components/Markdown";
 import { resolvedPermissions } from "@/lib/sessionPermissions";
 import { activeThinkingIndex } from "@/lib/sessionThinking";
 
-import type { CommandInfo, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
+import { daemon } from "../daemon";
+import type { AgentConfig, CommandInfo, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
 import { StreamLine, appendCoalesced, coalesceUpdates, streamKey } from "../views/MissionControl";
 import { AgentActivityIndicator } from "./AgentActivityIndicator";
 import { ChatComposer } from "./ChatComposer";
 import type { ComposerHandle } from "./Composer";
+import { MessageActions } from "./MessageActions";
 
 /**
  * Coalesce an append-only update stream incrementally. The daemon only ever
@@ -96,6 +99,11 @@ const TranscriptRow = memo(function TranscriptRow({
   resolved,
   resolveFilePath,
   onOpenFile,
+  agents,
+  branchPrompt,
+  onOpenTask,
+  project,
+  sourceTaskId,
 }: {
   update: SessionUpdate;
   thinkingActive: boolean;
@@ -103,16 +111,49 @@ const TranscriptRow = memo(function TranscriptRow({
   resolved: Record<string, string>;
   resolveFilePath: FileLinkResolver;
   onOpenFile: (path: string) => void;
+  agents: AgentConfig[];
+  branchPrompt?: string;
+  onOpenTask: (id: string) => void;
+  project: string;
+  sourceTaskId: string;
 }) {
+  const continueConversation = useCallback(
+    async (agent: string) => {
+      if (!branchPrompt) return;
+      const result = await daemon.request("task.create", {
+        agent,
+        attachments: [],
+        include_runtime_context: true,
+        project,
+        prompt: branchPrompt,
+        tags: ["conversation-branch", `branched-from:${sourceTaskId}`],
+        worktree: true,
+      });
+      const taskId = (result as { taskId?: string })?.taskId;
+      if (!taskId) throw new Error("Warpforge did not return the new task id");
+      onOpenTask(taskId);
+    },
+    [branchPrompt, onOpenTask, project, sourceTaskId],
+  );
+  const messageText =
+    update.kind === "user_message" || update.kind === "agent_text" ? update.text : null;
+
   return (
-    <StreamLine
-      update={update}
-      thinkingActive={thinkingActive}
-      taskId={taskId}
-      resolved={resolved}
-      resolveFilePath={resolveFilePath}
-      onOpenFile={onOpenFile}
-    />
+    <div className="group/message relative">
+      <StreamLine
+        update={update}
+        thinkingActive={thinkingActive}
+        taskId={taskId}
+        resolved={resolved}
+        resolveFilePath={resolveFilePath}
+        onOpenFile={onOpenFile}
+      />
+      {messageText && (
+        <div className="absolute right-0 bottom-0 z-10">
+          <MessageActions agents={agents} text={messageText} onContinue={continueConversation} />
+        </div>
+      )}
+    </div>
   );
 });
 
@@ -128,6 +169,8 @@ interface Props {
   resolveFilePath: (value: string) => string | null;
   task: TaskInfo;
   updates: SessionUpdate[];
+  agents: AgentConfig[];
+  onOpenTask: (id: string) => void;
 }
 
 /** Native-flow transcript boundary; future virtualization belongs here at turn granularity. */
@@ -143,6 +186,8 @@ export const ChatTranscript = memo(function ChatTranscript({
   resolveFilePath,
   task,
   updates,
+  agents,
+  onOpenTask,
 }: Props) {
   const merged = useCoalesced(updates);
   const thinkingIndex = useMemo(() => {
@@ -153,6 +198,7 @@ export const ChatTranscript = memo(function ChatTranscript({
     return null;
   }, [merged, task.status, updates]);
   const resolved = useStableResolved(updates);
+  const branchPrompts = useMemo(() => buildConversationBranchPrompts(task, merged), [merged, task]);
   const { contentRef, following, resume, scrollHandlers, scrollRef } = useChatFollow(
     active,
     task.id,
@@ -181,6 +227,11 @@ export const ChatTranscript = memo(function ChatTranscript({
                       resolved={resolved}
                       resolveFilePath={resolveFilePath}
                       onOpenFile={onOpenFile}
+                      agents={agents}
+                      branchPrompt={branchPrompts[index]}
+                      onOpenTask={onOpenTask}
+                      project={task.project}
+                      sourceTaskId={task.id}
                     />
                   </div>
                 ))}
