@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { isExternalLink, openExternalLink } from "@/lib/externalLinks";
 import { cn } from "@/lib/utils";
 
 export type FileLinkResolver = (text: string) => string | null;
@@ -28,11 +29,24 @@ export function Markdown({
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          a: ({ children, href }) => (
-            <a href={href} target="_blank" rel="noreferrer" className="text-primary underline">
-              {children}
-            </a>
-          ),
+          a: ({ children, href }) => {
+            const external = Boolean(href && isExternalLink(href));
+            return (
+              <a
+                href={href}
+                target={external ? "_blank" : undefined}
+                rel={external ? "noreferrer" : undefined}
+                className="text-primary underline"
+                onClick={(event) => {
+                  if (!href || !external) return;
+                  event.preventDefault();
+                  void openExternalLink(href);
+                }}
+              >
+                {children}
+              </a>
+            );
+          },
           blockquote: ({ children }) => (
             <blockquote className="my-1 border-l-2 border-border pl-3 text-muted-foreground">
               {children}
