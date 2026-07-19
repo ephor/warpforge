@@ -32,6 +32,7 @@ import { Card } from "@/components/ui/card";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
+import { getFileIconUrl } from "@/lib/fileIcon";
 import { withOccurrenceKeys } from "@/lib/renderKeys";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { activityBadge, orchNodeBadge, taskBadge } from "@/lib/status";
@@ -982,6 +983,7 @@ function ProjectFilesPanel({
               const pad = { paddingLeft: `${row.depth * 12 + 10}px` };
 
               if (row.node.path) {
+                const iconUrl = getFileIconUrl(row.node.name);
                 return (
                   <button
                     key={vi.key}
@@ -996,12 +998,16 @@ function ProjectFilesPanel({
                         : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
                     )}
                   >
-                    <FileText
-                      className={cn(
-                        "size-3.5 shrink-0",
-                        row.node.changed ? "text-sky-400" : "text-muted-foreground",
-                      )}
-                    />
+                    {iconUrl ? (
+                      <img src={iconUrl} alt="" aria-hidden className="size-3.5 shrink-0" />
+                    ) : (
+                      <FileText
+                        className={cn(
+                          "size-3.5 shrink-0",
+                          row.node.changed ? "text-sky-400" : "text-muted-foreground",
+                        )}
+                      />
+                    )}
                     <span className="truncate">{row.node.name}</span>
                   </button>
                 );

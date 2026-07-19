@@ -1,6 +1,7 @@
 import { ChevronRight, File } from "lucide-react";
 import { useState } from "react";
 
+import { getFileIconUrl } from "@/lib/fileIcon";
 import { cn } from "@/lib/utils";
 
 import type { FileDiff } from "../protocol";
@@ -75,6 +76,7 @@ function Row({
   const pad = { paddingLeft: `${depth * 12 + 8}px` };
 
   if (node.path) {
+    const iconUrl = getFileIconUrl(node.name);
     return (
       <button
         style={pad}
@@ -85,7 +87,11 @@ function Row({
           selected === node.path ? "bg-secondary text-foreground" : "hover:bg-secondary/50",
         )}
       >
-        <File className={cn("size-3.5 shrink-0", STATUS_COLOR[node.status ?? "modified"])} />
+        {iconUrl ? (
+          <img src={iconUrl} alt="" aria-hidden className="size-3.5 shrink-0" />
+        ) : (
+          <File className={cn("size-3.5 shrink-0", STATUS_COLOR[node.status ?? "modified"])} />
+        )}
         <span className="truncate">{node.name}</span>
       </button>
     );
