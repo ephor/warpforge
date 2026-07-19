@@ -1,15 +1,18 @@
 import { EditorState } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
-import { Check, Save } from "lucide-react";
+import { Check, Code, Eye, Save } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { codemirrorLanguageForPath } from "@/lib/codemirrorLanguages";
 import { cn } from "@/lib/utils";
 
 import type { FileDoc } from "../protocol";
+import { Markdown } from "./Markdown";
 
 type SaveStatus = "clean" | "unsaved" | "saved";
+
+const isMarkdownPath = (path: string) => /\.(md|markdown|mdx)$/i.test(path);
 
 export function CodeEditor({
   doc,
@@ -27,6 +30,10 @@ export function CodeEditor({
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
   const [status, setStatus] = useState<SaveStatus>("clean");
+  const [preview, setPreview] = useState(false);
+  const [text, setText] = useState(doc.newText);
+  const markdown = isMarkdownPath(doc.path);
+  const showPreview = markdown && preview;
 
   const flushSave = () => {
     const view = viewRef.current;
@@ -36,9 +43,9 @@ export function CodeEditor({
     if (saveTimer.current) {
       clearTimeout(saveTimer.current);
     }
-    const text = view.state.doc.toString();
-    lastSaved.current = text;
-    onSaveRef.current(text);
+    const current = view.state.doc.toString();
+    lastSaved.current = current;
+    onSaveRef.current(current);
     setStatus("saved");
     return true;
   };
@@ -48,6 +55,8 @@ export function CodeEditor({
       return;
     }
     setStatus("clean");
+    setText(doc.newText);
+    setPreview(false);
     lastSaved.current = null;
     const view = new EditorView({
       parent: host.current,
@@ -68,10 +77,11 @@ export function CodeEditor({
             if (saveTimer.current) {
               clearTimeout(saveTimer.current);
             }
-            const text = u.state.doc.toString();
+            const next = u.state.doc.toString();
+            setText(next);
             saveTimer.current = setTimeout(() => {
-              lastSaved.current = text;
-              onSaveRef.current(text);
+              lastSaved.current = next;
+              onSaveRef.current(next);
               setStatus("saved");
             }, 600);
           }),
@@ -102,6 +112,7 @@ export function CodeEditor({
       return;
     }
     view.dispatch({ changes: { from: 0, insert: doc.newText, to: view.state.doc.length } });
+    setText(doc.newText);
     setStatus("clean");
     lastSaved.current = null;
   }, [doc.newText]);
@@ -125,6 +136,23 @@ export function CodeEditor({
             </>
           ) : null}
         </span>
+        {markdown && (
+          <button
+            type="button"
+            onClick={() => setPreview((p) => !p)}
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground"
+          >
+            {preview ? (
+              <>
+                <Code className="size-3" /> source
+              </>
+            ) : (
+              <>
+                <Eye className="size-3" /> preview
+              </>
+            )}
+          </button>
+        )}
         <button
           type="button"
           onClick={flushSave}
@@ -135,7 +163,17 @@ export function CodeEditor({
           save
         </button>
       </div>
-      <div ref={host} className="min-h-0 flex-1 overflow-auto text-[13px]" />
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={host}
+          className={cn("h-full overflow-auto text-[13px]", showPreview && "hidden")}
+        />
+        {showPreview && (
+          <div className="h-full overflow-auto px-4 py-3">
+            <Markdown>{text}</Markdown>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
