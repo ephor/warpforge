@@ -1,3 +1,4 @@
+import { preferToolTitle } from "../lib/toolDisplay";
 import type { SessionUpdate } from "../protocol";
 
 /** Stable keys preserve row-local state while streamed blocks are coalesced. */
@@ -29,7 +30,7 @@ export function appendCoalesced(
         content: update.content ?? existing.content,
         status: update.status,
         started_at: existing.started_at ?? update.started_at,
-        title: update.title || existing.title,
+        title: preferToolTitle(existing, update),
         tool_kind: update.tool_kind || existing.tool_kind,
       };
     } else {

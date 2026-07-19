@@ -42,6 +42,7 @@ import {
   type TaskGroupStatus,
   type TaskTree,
 } from "@/lib/taskGroups";
+import { toolDisplayTitle } from "@/lib/toolDisplay";
 import { cn } from "@/lib/utils";
 
 import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
@@ -613,6 +614,7 @@ function ToolCallLine({
 }) {
   const [open, setOpen] = useState(false);
   const hasContent = Boolean(update.content);
+  const title = toolDisplayTitle(update);
   return (
     <div className="min-w-0 overflow-hidden rounded-md border bg-secondary/30">
       <button
@@ -631,8 +633,8 @@ function ToolCallLine({
         ) : (
           <Wrench className={cn("size-3.5 shrink-0", dot)} />
         )}
-        <span className="min-w-0 flex-1 truncate font-medium" title={update.title}>
-          {update.title}
+        <span className="min-w-0 flex-1 truncate font-medium" title={title}>
+          {title}
         </span>
         {update.tool_kind && update.tool_kind !== "other" && (
           <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
@@ -796,6 +798,7 @@ export function StreamLine({
         />
       );
     case "tool_call": {
+      const title = toolDisplayTitle(update);
       const dot =
         update.status === "completed"
           ? "text-ok"
@@ -806,8 +809,8 @@ export function StreamLine({
         return (
           <p className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
             <Wrench className={cn("size-3.5 shrink-0", dot)} />
-            <span className="min-w-0 truncate text-foreground" title={update.title}>
-              {update.title}
+            <span className="min-w-0 truncate text-foreground" title={title}>
+              {title}
             </span>
           </p>
         );

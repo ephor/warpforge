@@ -238,11 +238,6 @@ export const ChatTranscript = memo(function ChatTranscript({
                 ))}
               </div>
             )}
-            {activity && (
-              <div className="pt-3">
-                <AgentActivityIndicator activity={activity} />
-              </div>
-            )}
           </div>
         </div>
         {!following && (
@@ -263,6 +258,11 @@ export const ChatTranscript = memo(function ChatTranscript({
           </Tooltip>
         )}
       </div>
+      {activity && (
+        <div className="shrink-0 px-4 py-1.5">
+          <AgentActivityIndicator activity={activity} compact />
+        </div>
+      )}
       <ChatComposer
         ref={composerRef}
         commands={commands}

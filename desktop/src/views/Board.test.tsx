@@ -6,7 +6,13 @@ import Board from "./Board";
 
 describe("Board layout", () => {
   it("renders four user-resizable lanes", () => {
-    render(<Board snapshot={EMPTY_SNAPSHOT} onOpenTask={vi.fn()} onNewTask={vi.fn()} />);
+    render(
+      <Board
+        snapshot={EMPTY_SNAPSHOT}
+        onOpenTask={vi.fn<(id: string) => void>()}
+        onNewTask={vi.fn<(project?: string) => void>()}
+      />,
+    );
 
     expect(screen.getByRole("region", { name: "Queue lane" })).toHaveClass("h-full", "min-h-0");
     expect(screen.getByRole("region", { name: "Active lane" })).toBeInTheDocument();

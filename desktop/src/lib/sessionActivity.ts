@@ -1,5 +1,6 @@
 import type { SessionUpdate, TaskInfo } from "../protocol";
 import { pendingPermission } from "./sessionPermissions";
+import { toolDisplayTitle } from "./toolDisplay";
 
 export interface SessionActivity {
   label: string;
@@ -36,7 +37,7 @@ export function sessionActivity(
       : null;
   if (activeTool) {
     return {
-      detail: activeTool.title,
+      detail: toolDisplayTitle(activeTool),
       label: activeTool.tool_kind === "execute" ? "forging" : "working",
       startedAt: activeTool.started_at,
       tone: "working",

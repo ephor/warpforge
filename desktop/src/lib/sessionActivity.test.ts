@@ -7,11 +7,12 @@ const tool = (
   id: string,
   status: "pending" | "in_progress" | "completed" | "failed",
   started_at?: number,
+  title = id,
 ): SessionUpdate => ({
   kind: "tool_call",
   started_at,
   status,
-  title: id,
+  title,
   tool_call_id: id,
   tool_kind: "execute",
 });
@@ -32,10 +33,17 @@ describe("sessionActivity", () => {
       tool("same", "in_progress", 1_000),
     ]);
     expect(activity).toMatchObject({
-      detail: "same",
+      detail: "Run command",
       startedAt: 1_000,
       toolCallId: "same",
     });
+  });
+
+  it("uses a semantic tool title in the live activity indicator", () => {
+    const activity = sessionActivity({ status: "running" }, [
+      tool("exec-id", "in_progress", 1_000, "git diff --stat"),
+    ]);
+    expect(activity?.detail).toBe("git diff --stat");
   });
 
   it("ends repeated tool activity when the latest frame completes", () => {
