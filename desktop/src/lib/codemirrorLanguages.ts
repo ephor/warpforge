@@ -2,11 +2,12 @@ import { css } from "@codemirror/lang-css";
 import { go } from "@codemirror/lang-go";
 import { html } from "@codemirror/lang-html";
 import { javascript } from "@codemirror/lang-javascript";
-import { json } from "@codemirror/lang-json";
+import { json, jsonParseLinter } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { python } from "@codemirror/lang-python";
 import { rust } from "@codemirror/lang-rust";
 import { yaml } from "@codemirror/lang-yaml";
+import { linter } from "@codemirror/lint";
 import type { Extension } from "@codemirror/state";
 
 export function codemirrorLanguageForPath(path: string): Extension[] {
@@ -27,7 +28,7 @@ export function codemirrorLanguageForPath(path: string): Extension[] {
     case "go":
       return [go()];
     case "json":
-      return [json()];
+      return [json(), linter(jsonParseLinter())];
     case "py":
     case "pyi":
     case "pyw":

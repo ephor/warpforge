@@ -1,6 +1,8 @@
+import { lintGutter } from "@codemirror/lint";
 import { EditorState } from "@codemirror/state";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { EditorView, keymap, lineNumbers } from "@codemirror/view";
+import { EditorView, keymap } from "@codemirror/view";
+import { basicSetup } from "codemirror";
 import { Check, Code, Eye, Save } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -63,7 +65,8 @@ export function CodeEditor({
       state: EditorState.create({
         doc: doc.newText,
         extensions: [
-          lineNumbers(),
+          basicSetup,
+          lintGutter(),
           oneDark,
           EditorView.lineWrapping,
           ...codemirrorLanguageForPath(doc.path),
