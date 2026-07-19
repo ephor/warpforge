@@ -8,6 +8,7 @@
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-ask",
+    "opener:default",
     "updater:default",
     "process:allow-restart"
   ]

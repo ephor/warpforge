@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default capabilities for Warpforge desktop","local":true,"windows":["main"],"permissions":["core:default","dialog:default","dialog:allow-open","dialog:allow-ask","updater:default","process:allow-restart"]}}
+{"default":{"identifier":"default","description":"Default capabilities for Warpforge desktop","local":true,"windows":["main"],"permissions":["core:default","dialog:default","dialog:allow-open","dialog:allow-ask","opener:default","updater:default","process:allow-restart"]}}
