@@ -141,6 +141,9 @@ export default function TaskDetail({
   const compactLayout = useMediaQuery("(max-width: 1199px)");
   const pinnedTaskIds = useUi((s) => s.pinnedTaskIds);
   const setPinnedTaskIds = useUi((s) => s.setPinnedTaskIds);
+  const repositoryOperation = useUi((s) =>
+    s.repositoryOperation?.taskId === task.id ? s.repositoryOperation : null,
+  );
   const taskGroupIndex = useMemo(
     () => buildTaskGroupIndex(state.snapshot.tasks),
     [state.snapshot.tasks],
@@ -510,12 +513,7 @@ export default function TaskDetail({
                     showDiff ? "border-b border-border/80" : "rounded-md border border-border/80",
                   )}
                 >
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold">Conversation</div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      Steer the agent or respond to requests
-                    </div>
-                  </div>
+                  <div className="min-w-0 flex-1 truncate text-sm font-semibold">Conversation</div>
                   {taskGroup && (
                     <TaskAgentSwitcher
                       tree={taskGroup}
@@ -826,7 +824,13 @@ export default function TaskDetail({
           <Folder className="size-3 shrink-0" />
           <span>{task.worktree ? "Git Worktree" : "Local Workspace"}</span>
         </span>
-        <span className="ml-auto flex items-center gap-2">
+        {repositoryOperation && (
+          <span className="ml-auto mr-2 flex shrink-0 items-center gap-1 text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" />
+            {repositoryOperation.kind === "pull" ? "Pulling from remote…" : "Pushing to remote…"}
+          </span>
+        )}
+        <span className={cn("flex items-center gap-2", !repositoryOperation && "ml-auto")}>
           <TaskDetailActions task={task} />
           <GitWorkspaceControls
             taskId={task.id}
@@ -1188,6 +1192,8 @@ function GitWorkspaceControls({
   const [search, setSearch] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
+  const repositoryOperation = useUi((s) => s.repositoryOperation);
+  const setRepositoryOperation = useUi((s) => s.setRepositoryOperation);
 
   // Branch list is only needed while the dropdown is open.
   const branchesQuery = useQuery({
@@ -1247,7 +1253,14 @@ function GitWorkspaceControls({
 
   const updateMut = useMutation({
     mutationFn: () => daemon.request("git.update", { task_id: taskId }) as Promise<GitOpResult>,
+    onMutate: () => setRepositoryOperation({ kind: "pull", taskId }),
     onError: (e: Error) => onErr(e),
+    onSettled: () => {
+      const operation = useUi.getState().repositoryOperation;
+      if (operation?.taskId === taskId && operation.kind === "pull") {
+        setRepositoryOperation(null);
+      }
+    },
     onSuccess: (r) => {
       onOk(r);
       invalidate();
@@ -1266,9 +1279,11 @@ function GitWorkspaceControls({
     },
   });
 
-  const updating = updateMut.isPending;
+  const updating =
+    updateMut.isPending ||
+    (repositoryOperation?.taskId === taskId && repositoryOperation.kind === "pull");
   const switching = switchMut.isPending ? switchMut.variables : null;
-  const busy = updating || switchMut.isPending;
+  const busy = Boolean(repositoryOperation) || updating || switchMut.isPending;
 
   const switchTo = (target: string) => {
     setOpen(false);

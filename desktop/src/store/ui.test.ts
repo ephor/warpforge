@@ -6,6 +6,7 @@ describe("task-detail UI state", () => {
   beforeEach(() => {
     useUi.setState({
       openTaskId: null,
+      repositoryOperation: null,
       rightPanel: "changes",
       runtimeOpen: true,
       showChat: true,
@@ -21,5 +22,14 @@ describe("task-detail UI state", () => {
     expect(useUi.getState().runtimeOpen).toBe(false);
     expect(useUi.getState().showChat).toBe(true);
     expect(useUi.getState().showDiff).toBe(true);
+  });
+
+  it("tracks transient repository activity for the task footer", () => {
+    useUi.getState().setRepositoryOperation({ kind: "pull", taskId: "task-1" });
+
+    expect(useUi.getState().repositoryOperation).toEqual({ kind: "pull", taskId: "task-1" });
+
+    useUi.getState().setRepositoryOperation(null);
+    expect(useUi.getState().repositoryOperation).toBeNull();
   });
 });

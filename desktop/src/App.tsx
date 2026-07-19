@@ -305,6 +305,10 @@ export default function App() {
       if (!task) {
         return;
       }
+      if (useUi.getState().repositoryOperation) {
+        return;
+      }
+      useUi.getState().setRepositoryOperation({ kind: "pull", taskId: id });
       daemon
         .request("git.update", { task_id: id })
         .then((r) => {
@@ -326,7 +330,13 @@ export default function App() {
               break;
           }
         })
-        .catch((error: Error) => toast.error(error.message));
+        .catch((error: Error) => toast.error(error.message))
+        .finally(() => {
+          const operation = useUi.getState().repositoryOperation;
+          if (operation?.taskId === id && operation.kind === "pull") {
+            useUi.getState().setRepositoryOperation(null);
+          }
+        });
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);

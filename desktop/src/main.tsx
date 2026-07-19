@@ -20,12 +20,22 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <App />
       <Toaster
+        theme="dark"
         position="bottom-right"
-        richColors
         closeButton
         duration={4000}
         toastOptions={{
-          className: "text-xs",
+          classNames: {
+            toast:
+              "!rounded-xl !border-border !bg-popover !p-4 !text-xs !text-popover-foreground !shadow-2xl data-[styled=false]:!border-0 data-[styled=false]:!bg-transparent data-[styled=false]:!p-0 data-[styled=false]:!shadow-none",
+            description: "!text-muted-foreground",
+            closeButton:
+              "!border-border !bg-secondary !text-secondary-foreground hover:!bg-accent hover:!text-accent-foreground",
+            info: "[&_[data-icon]]:!text-primary",
+            success: "[&_[data-icon]]:!text-ok",
+            warning: "[&_[data-icon]]:!text-warn",
+            error: "[&_[data-icon]]:!text-destructive",
+          },
         }}
       />
     </QueryClientProvider>

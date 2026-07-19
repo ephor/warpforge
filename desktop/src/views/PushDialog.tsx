@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
+import { useUi } from "@/store/ui";
 
 import { daemon } from "../daemon";
 import type { GitOpResult, GitPushCommit, GitPushInfo, TaskInfo } from "../protocol";
@@ -40,6 +41,8 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
   const [pushing, setPushing] = useState<"push" | "force" | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const repositoryOperation = useUi((state) => state.repositoryOperation);
+  const setRepositoryOperation = useUi((state) => state.setRepositoryOperation);
 
   const taskId = task?.id;
   const load = useCallback(async () => {
@@ -80,11 +83,12 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
   );
 
   const push = async (force: boolean) => {
-    if (!task || pushing) {
+    if (!task || pushing || repositoryOperation) {
       return;
     }
     setMenuOpen(false);
     setPushing(force ? "force" : "push");
+    setRepositoryOperation({ kind: "push", taskId: task.id });
     try {
       const result = (await daemon.request("git.push", {
         force,
@@ -103,6 +107,10 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
       toast.error(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setPushing(null);
+      const operation = useUi.getState().repositoryOperation;
+      if (operation?.taskId === task.id && operation.kind === "push") {
+        setRepositoryOperation(null);
+      }
     }
   };
 
@@ -235,7 +243,12 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
               <Button
                 type="button"
                 className="rounded-r-none px-4"
-                disabled={!info?.commits.length || loading || Boolean(pushing)}
+                disabled={
+                  !info?.commits.length ||
+                  loading ||
+                  Boolean(pushing) ||
+                  Boolean(repositoryOperation)
+                }
                 onClick={() => void push(false)}
               >
                 {pushing === "push" ? (
@@ -249,7 +262,12 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
                 type="button"
                 size="icon"
                 className="rounded-l-none border-l border-primary-foreground/20"
-                disabled={!info?.commits.length || loading || Boolean(pushing)}
+                disabled={
+                  !info?.commits.length ||
+                  loading ||
+                  Boolean(pushing) ||
+                  Boolean(repositoryOperation)
+                }
                 aria-label="Push options"
                 aria-expanded={menuOpen}
                 onClick={() => setMenuOpen((value) => !value)}

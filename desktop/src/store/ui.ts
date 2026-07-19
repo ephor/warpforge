@@ -9,6 +9,7 @@ import { persist } from "zustand/middleware";
 export type View = "control" | "board" | "projects";
 export type DiffView = "unified" | "split";
 export type RightPanel = "changes" | "files" | "subtasks" | null;
+export type RepositoryOperation = { taskId: string; kind: "pull" | "push" };
 
 interface UiState {
   // Navigation
@@ -18,6 +19,7 @@ interface UiState {
   attentionOpen: boolean;
   attentionTargetId: string | null;
   attentionTargetNonce: number;
+  repositoryOperation: RepositoryOperation | null;
   // TaskDetail zones
   showChat: boolean;
   showDiff: boolean;
@@ -31,6 +33,7 @@ interface UiState {
   toggleAttention: () => void;
   setAttentionOpen: (open: boolean) => void;
   focusAttentionTask: (id: string) => void;
+  setRepositoryOperation: (operation: RepositoryOperation | null) => void;
   toggleChat: () => void;
   toggleDiff: () => void;
   setShowDiff: (open: boolean) => void;
@@ -50,6 +53,7 @@ export const useUi = create<UiState>()(
       attentionOpen: true,
       attentionTargetId: null,
       attentionTargetNonce: 0,
+      repositoryOperation: null,
       showChat: true,
       showDiff: true,
       diffView: "split",
@@ -69,6 +73,7 @@ export const useUi = create<UiState>()(
           attentionTargetId,
           attentionTargetNonce: s.attentionTargetNonce + 1,
         })),
+      setRepositoryOperation: (repositoryOperation) => set({ repositoryOperation }),
       // Chat + Center are the mutual pair — never let both close. Tree is a
       // Sub-panel of Center, so it toggles freely.
       toggleChat: () => set((s) => (!s.showChat || s.showDiff ? { showChat: !s.showChat } : s)),
@@ -93,6 +98,7 @@ export const useUi = create<UiState>()(
         openTaskId: _openTaskId,
         attentionTargetId: _attentionTargetId,
         attentionTargetNonce: _attentionTargetNonce,
+        repositoryOperation: _repositoryOperation,
         rightPanel: _rightPanel,
         runtimeOpen: _runtimeOpen,
         ...rest
