@@ -6,7 +6,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { Markdown } from "./Markdown";
 
-vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: vi.fn<(url: string) => Promise<void>>(),
+}));
 
 describe("Markdown links", () => {
   beforeEach(() => {
