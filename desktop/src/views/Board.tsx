@@ -1,13 +1,9 @@
 import {
-  Activity,
   ArrowDown,
   ArrowUp,
-  CheckCheck,
   ChevronDown,
   ChevronRight,
-  Clock,
   GitBranch,
-  GitPullRequestArrow,
   Plus,
   Workflow,
 } from "lucide-react";
@@ -16,6 +12,7 @@ import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -122,14 +119,6 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
     });
   };
 
-  const done = useMemo(
-    () => byStatus("done").sort((a, b) => b.updatedAt - a.updatedAt),
-    [byStatus],
-  );
-  const running = useMemo(() => byStatus("running"), [byStatus]);
-  // Open conversations: the agent is either working (running) or waiting for
-  // Your next message (idle). Both are live, non-review, non-done.
-  const review = useMemo(() => byStatus(["needs_review", "blocked", "interrupted"]), [byStatus]);
   const laneTrees = useMemo(
     () => (lane: ReturnType<typeof treeLane>) => forest.filter((tree) => treeLane(tree) === lane),
     [forest],
@@ -154,27 +143,11 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
     });
   };
 
-  const doneToday = done.filter((t) => Date.now() / 1000 - t.updatedAt < 86400).length;
-
   return (
-    <div className="flex h-full flex-col gap-4">
-      {/* Throughput */}
-      <div className="grid grid-cols-4 gap-3">
-        <Stat icon={Activity} label="Running now" value={running.length} tone="ok" />
-        <Stat icon={Clock} label="In queue" value={queued.length} />
-        <Stat
-          icon={GitPullRequestArrow}
-          label="Awaiting review"
-          value={review.length}
-          tone="warn"
-        />
-        <Stat icon={CheckCheck} label="Done · 24h" value={doneToday} />
-      </div>
-
-      {/* Filters */}
-      <div className="flex items-center gap-2">
+    <div className="flex h-full flex-col gap-2">
+      <div className="flex h-8 shrink-0 items-center gap-2">
         <Select value={project} onValueChange={setProject}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger className="h-7 w-44 bg-card/80 text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -187,7 +160,7 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
           </SelectContent>
         </Select>
         <Select value={agent} onValueChange={setAgent}>
-          <SelectTrigger className="w-36">
+          <SelectTrigger className="h-7 w-36 bg-card/80 text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -199,143 +172,132 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
             ))}
           </SelectContent>
         </Select>
-        <Button size="sm" className="ml-auto" onClick={() => onNewTask()}>
-          <Plus className="size-4" />
+        <Button size="sm" className="ml-auto h-7" onClick={() => onNewTask()}>
+          <Plus className="size-3.5" />
           New task
         </Button>
       </div>
 
-      {/* Columns */}
-      <div className="grid min-h-0 flex-1 grid-cols-4 gap-3">
-        <Column title="Queue" hint="arrows set standalone priority" count={queueTrees.length}>
-          {queueTrees.map((tree) => {
-            if (tree.children.length > 0) {
-              return (
-                <TaskGroupCard
-                  key={tree.task.id}
-                  tree={tree}
-                  onOpenTask={onOpenTask}
-                  collapsed={collapsedGroups.has(tree.task.id)}
-                  onToggle={() => toggleGroup(tree.task.id)}
-                />
-              );
-            }
-            const i = queued.findIndex((task) => task.id === tree.task.id);
-            return (
-              <QueueCard
-                key={tree.task.id}
-                task={tree.task}
-                rank={i + 1}
-                first={i <= 0}
-                last={i === queued.length - 1}
-                onOpen={() => onOpenTask(tree.task.id)}
-                onUp={() => move(tree.task.id, -1)}
-                onDown={() => move(tree.task.id, 1)}
-              />
-            );
-          })}
-          {queueTrees.length === 0 && <Empty />}
-        </Column>
+      <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden rounded-md border border-border/80">
+        <ResizablePanelGroup
+          autoSaveId="warpforge-board-lanes-v1"
+          direction="horizontal"
+          className="min-w-[880px]"
+        >
+          <ResizablePanel id="queue" order={1} defaultSize={25} minSize={10}>
+            <Column title="Queue" hint="Local ordering for this view" count={queueTrees.length}>
+              {queueTrees.map((tree) => {
+                if (tree.children.length > 0) {
+                  return (
+                    <TaskGroupCard
+                      key={tree.task.id}
+                      tree={tree}
+                      onOpenTask={onOpenTask}
+                      collapsed={collapsedGroups.has(tree.task.id)}
+                      onToggle={() => toggleGroup(tree.task.id)}
+                    />
+                  );
+                }
+                const i = queued.findIndex((task) => task.id === tree.task.id);
+                return (
+                  <QueueCard
+                    key={tree.task.id}
+                    task={tree.task}
+                    rank={i + 1}
+                    first={i <= 0}
+                    last={i === queued.length - 1}
+                    onOpen={() => onOpenTask(tree.task.id)}
+                    onUp={() => move(tree.task.id, -1)}
+                    onDown={() => move(tree.task.id, 1)}
+                  />
+                );
+              })}
+              {queueTrees.length === 0 && <Empty />}
+            </Column>
+          </ResizablePanel>
+          <ResizableHandle />
 
-        <Column title="Active" count={activeTrees.length}>
-          {activeTrees.map((tree) =>
-            tree.children.length > 0 ? (
-              <TaskGroupCard
-                key={tree.task.id}
-                tree={tree}
-                onOpenTask={onOpenTask}
-                collapsed={collapsedGroups.has(tree.task.id)}
-                onToggle={() => toggleGroup(tree.task.id)}
-              />
-            ) : (
-              <TaskCard
-                key={tree.task.id}
-                task={tree.task}
-                onOpen={() => onOpenTask(tree.task.id)}
-                expanded={expanded.has(tree.task.id)}
-                onToggleExpand={() => toggleExpanded(tree.task.id)}
-              />
-            ),
-          )}
-          {activeTrees.length === 0 && <Empty />}
-        </Column>
+          <ResizablePanel id="active" order={2} defaultSize={25} minSize={10}>
+            <Column title="Active" count={activeTrees.length}>
+              {activeTrees.map((tree) =>
+                tree.children.length > 0 ? (
+                  <TaskGroupCard
+                    key={tree.task.id}
+                    tree={tree}
+                    onOpenTask={onOpenTask}
+                    collapsed={collapsedGroups.has(tree.task.id)}
+                    onToggle={() => toggleGroup(tree.task.id)}
+                  />
+                ) : (
+                  <TaskCard
+                    key={tree.task.id}
+                    task={tree.task}
+                    onOpen={() => onOpenTask(tree.task.id)}
+                    expanded={expanded.has(tree.task.id)}
+                    onToggleExpand={() => toggleExpanded(tree.task.id)}
+                  />
+                ),
+              )}
+              {activeTrees.length === 0 && <Empty />}
+            </Column>
+          </ResizablePanel>
+          <ResizableHandle />
 
-        <Column title="Review / blocked" count={reviewTrees.length}>
-          {reviewTrees.map((tree) =>
-            tree.children.length > 0 ? (
-              <TaskGroupCard
-                key={tree.task.id}
-                tree={tree}
-                onOpenTask={onOpenTask}
-                collapsed={collapsedGroups.has(tree.task.id)}
-                onToggle={() => toggleGroup(tree.task.id)}
-              />
-            ) : (
-              <TaskCard
-                key={tree.task.id}
-                task={tree.task}
-                onOpen={() => onOpenTask(tree.task.id)}
-                expanded={expanded.has(tree.task.id)}
-                onToggleExpand={() => toggleExpanded(tree.task.id)}
-              />
-            ),
-          )}
-          {reviewTrees.length === 0 && <Empty />}
-        </Column>
+          <ResizablePanel id="review" order={3} defaultSize={25} minSize={10}>
+            <Column title="Review / blocked" count={reviewTrees.length} tone="warn">
+              {reviewTrees.map((tree) =>
+                tree.children.length > 0 ? (
+                  <TaskGroupCard
+                    key={tree.task.id}
+                    tree={tree}
+                    onOpenTask={onOpenTask}
+                    collapsed={collapsedGroups.has(tree.task.id)}
+                    onToggle={() => toggleGroup(tree.task.id)}
+                  />
+                ) : (
+                  <TaskCard
+                    key={tree.task.id}
+                    task={tree.task}
+                    onOpen={() => onOpenTask(tree.task.id)}
+                    expanded={expanded.has(tree.task.id)}
+                    onToggleExpand={() => toggleExpanded(tree.task.id)}
+                  />
+                ),
+              )}
+              {reviewTrees.length === 0 && <Empty />}
+            </Column>
+          </ResizablePanel>
+          <ResizableHandle />
 
-        <Column title="History" count={historyTrees.length}>
-          {historyTrees.map((tree) =>
-            tree.children.length > 0 ? (
-              <TaskGroupCard
-                key={tree.task.id}
-                tree={tree}
-                onOpenTask={onOpenTask}
-                collapsed={collapsedGroups.has(tree.task.id)}
-                onToggle={() => toggleGroup(tree.task.id)}
-                muted
-              />
-            ) : (
-              <TaskCard
-                key={tree.task.id}
-                task={tree.task}
-                onOpen={() => onOpenTask(tree.task.id)}
-                muted
-                expanded={expanded.has(tree.task.id)}
-                onToggleExpand={() => toggleExpanded(tree.task.id)}
-              />
-            ),
-          )}
-          {historyTrees.length === 0 && <Empty />}
-        </Column>
+          <ResizablePanel id="history" order={4} defaultSize={25} minSize={10}>
+            <Column title="History" count={historyTrees.length} muted>
+              {historyTrees.map((tree) =>
+                tree.children.length > 0 ? (
+                  <TaskGroupCard
+                    key={tree.task.id}
+                    tree={tree}
+                    onOpenTask={onOpenTask}
+                    collapsed={collapsedGroups.has(tree.task.id)}
+                    onToggle={() => toggleGroup(tree.task.id)}
+                    muted
+                  />
+                ) : (
+                  <TaskCard
+                    key={tree.task.id}
+                    task={tree.task}
+                    onOpen={() => onOpenTask(tree.task.id)}
+                    muted
+                    expanded={expanded.has(tree.task.id)}
+                    onToggleExpand={() => toggleExpanded(tree.task.id)}
+                  />
+                ),
+              )}
+              {historyTrees.length === 0 && <Empty />}
+            </Column>
+          </ResizablePanel>
+        </ResizablePanelGroup>
       </div>
     </div>
-  );
-}
-
-function Stat({
-  icon: Icon,
-  label,
-  value,
-  tone,
-}: {
-  icon: typeof Activity;
-  label: string;
-  value: number;
-  tone?: "ok" | "warn";
-}) {
-  return (
-    <Card className="flex items-center gap-3 p-3">
-      <Icon
-        className={cn(
-          "size-5",
-          tone === "ok" ? "text-ok" : tone === "warn" ? "text-warn" : "text-muted-foreground",
-        )}
-      />
-      <div>
-        <div className="tnum text-xl font-semibold">{value}</div>
-        <div className="text-xs text-muted-foreground">{label}</div>
-      </div>
-    </Card>
   );
 }
 
@@ -344,25 +306,35 @@ function Column({
   hint,
   count,
   children,
+  muted,
+  tone,
 }: {
   title: string;
   hint?: string;
   count: number;
   children: React.ReactNode;
+  muted?: boolean;
+  tone?: "warn";
 }) {
   return (
-    <Card className="flex min-h-0 flex-col">
-      <div className="flex items-baseline justify-between px-3 py-2">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+    <section
+      aria-label={`${title} lane`}
+      className={cn("flex h-full min-h-0 min-w-0 flex-col bg-card", muted && "opacity-75")}
+    >
+      <div
+        className="flex h-10 shrink-0 items-center gap-2 border-b border-border/80 px-3"
+        title={hint}
+      >
+        {tone === "warn" && <span className="size-1.5 rounded-full bg-warn" />}
+        <span className="truncate text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
         </span>
-        <span className="tnum text-xs text-muted-foreground">{count}</span>
+        <span className="tnum ml-auto text-xs text-muted-foreground">{count}</span>
       </div>
-      {hint && <div className="px-3 pb-1 text-[10px] text-muted-foreground/70">{hint}</div>}
       <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-2 p-2">{children}</div>
+        <div className="flex flex-col gap-1.5 p-1.5">{children}</div>
       </ScrollArea>
-    </Card>
+    </section>
   );
 }
 
@@ -383,10 +355,8 @@ function TaskGroupCard({
   const counts = taskGroupCounts(tree);
 
   return (
-    <div className={cn("relative", muted && "opacity-70")}>
-      {/* A restrained card stack signals ownership even while collapsed. */}
-      <div className="pointer-events-none absolute inset-x-1 top-1 h-full rounded-md border border-border/60 bg-secondary/20" />
-      <div className="relative pb-1">
+    <div className={cn(muted && "opacity-70")}>
+      <div>
         <TaskCard
           task={tree.task}
           onOpen={() => onOpenTask(tree.task.id)}
@@ -415,7 +385,7 @@ function TaskGroupCard({
       </div>
 
       {!collapsed && (
-        <div className="ml-3 flex flex-col border-l-2 border-primary/30 pl-2 pt-1">
+        <div className="ml-3 mr-2 flex flex-col border-l-2 border-primary/30 pl-2 pt-1.5">
           {tree.children.map((child) => (
             <ChildTaskRow key={child.task.id} tree={child} onOpenTask={onOpenTask} />
           ))}
@@ -483,7 +453,7 @@ function TaskCard({
     <div>
       <Card
         className={cn(
-          "bg-secondary/40 p-2.5 transition-colors hover:border-primary/60",
+          "bg-background/35 p-2 transition-colors hover:border-primary/50",
           muted && "opacity-70",
           flattenBottom && "rounded-b-none",
         )}
@@ -574,7 +544,7 @@ function QueueCard({
   onDown: () => void;
 }) {
   return (
-    <Card className="flex gap-2 bg-secondary/40 p-2.5">
+    <Card className="flex gap-2 bg-background/35 p-2">
       <div className="flex flex-col items-center gap-0.5">
         <span className="tnum text-xs font-semibold text-muted-foreground">{rank}</span>
         <button
@@ -615,5 +585,5 @@ function QueueCard({
 }
 
 function Empty() {
-  return <div className="px-2 py-6 text-center text-xs text-muted-foreground/60">—</div>;
+  return <div className="px-2 py-8 text-center text-xs text-muted-foreground/50">No tasks</div>;
 }

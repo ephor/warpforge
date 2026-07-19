@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import type { TaskInfo } from "@/protocol";
+import { useUi } from "@/store/ui";
 
 import { TaskDetailActions } from "./TaskDetailActions";
 
@@ -19,18 +20,29 @@ const task: TaskInfo = {
   updatedAt: 1,
 };
 
-describe("TaskDetailActions task-group pin", () => {
-  it("exposes pinned state and delegates pin toggling independently of panels", () => {
-    const onTogglePin = vi.fn<() => void>();
-    const onClose = vi.fn<() => void>();
-    const { rerender } = render(
-      <TaskDetailActions task={task} pinned={false} onTogglePin={onTogglePin} onClose={onClose} />,
-    );
+describe("TaskDetailActions", () => {
+  beforeEach(() => {
+    useUi.setState({ rightPanel: null, runtimeOpen: false, showChat: true, showDiff: true });
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "Pin task group" }));
-    expect(onTogglePin).toHaveBeenCalledOnce();
+  it("contains tool-window controls without task lifecycle actions", () => {
+    render(<TaskDetailActions task={task} />);
 
-    rerender(<TaskDetailActions task={task} pinned onTogglePin={onTogglePin} onClose={onClose} />);
-    expect(screen.getByRole("button", { name: "Unpin task group" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Changes" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Terminal" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /delete task/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /archive task/i })).not.toBeInTheDocument();
+  });
+
+  it("opens the matching contextual panel", () => {
+    render(<TaskDetailActions task={task} />);
+    fireEvent.click(screen.getByRole("button", { name: "Files" }));
+    expect(useUi.getState().rightPanel).toBe("files");
+  });
+
+  it("keeps Terminal available when the project has no runtime targets yet", () => {
+    render(<TaskDetailActions task={task} />);
+    expect(screen.getByRole("button", { name: "Terminal" })).toBeInTheDocument();
   });
 });

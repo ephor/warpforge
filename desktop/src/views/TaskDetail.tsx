@@ -10,16 +10,20 @@ import {
   ArrowLeft,
   Check,
   ChevronDown,
+  Download,
   FileText,
+  Folder,
   GitBranch,
   GitCommitVertical,
   ListTodo,
   Loader2,
-  RefreshCw,
+  Maximize2,
+  Minimize2,
+  Search,
   Send,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { activityBadge, orchNodeBadge, taskBadge } from "@/lib/status";
 import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/lib/taskGroups";
@@ -34,12 +39,11 @@ import { cn } from "@/lib/utils";
 
 import { ChangesRail } from "../components/ChangesRail";
 import { ChatTranscript } from "../components/ChatTranscript";
-import { CodeEditor } from "../components/CodeEditor";
 import type { ComposerHandle } from "../components/Composer";
-import { MergeDiff } from "../components/MergeDiff";
 import { RuntimePanel } from "../components/RuntimePanel";
 import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { TaskDetailActions } from "../components/TaskDetailActions";
+import { TaskMenu } from "../components/TaskMenu";
 import type { DaemonState } from "../daemon";
 import { daemon } from "../daemon";
 import type {
@@ -64,9 +68,45 @@ interface Props {
   state: DaemonState;
   onClose: () => void;
   onOpenTask: (id: string) => void;
+  onOpenPush: () => void;
 }
 
 const EMPTY_PROJECT_FILES: ProjectFile[] = [];
+
+const CodeEditor = lazy(async () => ({
+  default: (await import("../components/CodeEditor")).CodeEditor,
+}));
+const MergeDiff = lazy(async () => ({
+  default: (await import("../components/MergeDiff")).MergeDiff,
+}));
+
+function EditorLoading() {
+  return (
+    <div className="flex h-full items-center px-4 text-sm text-muted-foreground">
+      Loading editor…
+    </div>
+  );
+}
+
+function EmptyChangesState({ onOpenFiles }: { onOpenFiles: () => void }) {
+  return (
+    <div className="flex h-full min-h-56 flex-col items-center justify-center gap-3 px-6 text-center">
+      <div className="rounded-full border border-border/70 bg-secondary/40 p-3 text-muted-foreground">
+        <GitCommitVertical className="size-5" />
+      </div>
+      <div>
+        <p className="text-sm font-medium text-foreground">No file changes yet</p>
+        <p className="mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">
+          Continue the conversation, or open a project file while the agent is working.
+        </p>
+      </div>
+      <Button type="button" size="sm" variant="outline" onClick={onOpenFiles}>
+        <FileText className="size-3.5" />
+        Open files
+      </Button>
+    </div>
+  );
+}
 
 type ActiveTab = { kind: "changes" } | { kind: "file"; path: string };
 
@@ -75,10 +115,18 @@ type ActiveTab = { kind: "changes" } | { kind: "file"; path: string };
  * left, multi-file diff with per-hunk accept/reject on the right — Zed's
  * agent-panel review is the bar.
  */
-export default function TaskDetail({ task, updates, state, onClose, onOpenTask }: Props) {
+export default function TaskDetail({
+  task,
+  updates,
+  state,
+  onClose,
+  onOpenTask,
+  onOpenPush,
+}: Props) {
   const [localRes, setLocalRes] = useState<Record<string, HunkResolution>>({});
   const [activeTab, setActiveTab] = useState<ActiveTab>({ kind: "changes" });
   const [openFileTabs, setOpenFileTabs] = useState<string[]>([]);
+  const [commitExpanded, setCommitExpanded] = useState(false);
   const diffView = useUi((s) => s.diffView);
   const setDiffView = useUi((s) => s.setDiffView);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -86,9 +134,10 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
   const showDiff = useUi((s) => s.showDiff);
   const rightPanel = useUi((s) => s.rightPanel);
   const setShowDiff = useUi((s) => s.setShowDiff);
-  const setCenterTab = useUi((s) => s.setCenterTab);
+  const toggleChat = useUi((s) => s.toggleChat);
   const setRightPanel = useUi((s) => s.setRightPanel);
   const runtimeOpen = useUi((s) => s.runtimeOpen);
+  const compactLayout = useMediaQuery("(max-width: 1199px)");
   const pinnedTaskIds = useUi((s) => s.pinnedTaskIds);
   const setPinnedTaskIds = useUi((s) => s.setPinnedTaskIds);
   const taskGroupIndex = useMemo(
@@ -107,6 +156,24 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
   const services = state.snapshot.services.filter((s) => s.project === task.project);
   const portforwards = state.snapshot.portforwards.filter((p) => p.project === task.project);
   const queryClient = useQueryClient();
+
+  const openCommit = useCallback(() => {
+    setShowDiff(true);
+    setRightPanel("changes");
+    setCommitExpanded(true);
+  }, [setRightPanel, setShowDiff]);
+
+  useEffect(() => {
+    const openCommitFromShortcut = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.key.toLowerCase() !== "k") {
+        return;
+      }
+      event.preventDefault();
+      openCommit();
+    };
+    window.addEventListener("keydown", openCommitFromShortcut);
+    return () => window.removeEventListener("keydown", openCommitFromShortcut);
+  }, [openCommit]);
 
   const composerRef = useRef<ComposerHandle>(null);
   const diffScrollParent = useRef<HTMLDivElement>(null);
@@ -170,22 +237,47 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
         : [],
   });
 
+  // Keep large review surfaces virtualized. These live above the navigation
+  // callbacks so the callbacks can safely depend on the current instances.
+  const diffVirtualizer = useVirtualizer({
+    count: diff?.files.length ?? 0,
+    estimateSize: () => 200,
+    getScrollElement: () => diffScrollParent.current,
+    overscan: 5,
+  });
+  const splitFileCount = diff?.files.length ?? 0;
+  const splitVirtualizer = useVirtualizer({
+    count: splitFileCount,
+    estimateSize: () => 384,
+    getScrollElement: () => splitScrollParent.current,
+    overscan: 3,
+  });
+  const splitVisItems = splitVirtualizer.getVirtualItems();
+  if (splitVisItems.length > 0) {
+    const newStart = splitVisItems[0].index;
+    const newEnd = splitVisItems[splitVisItems.length - 1].index;
+    if (splitRange.start !== newStart || splitRange.end !== newEnd) {
+      setSplitRange({ start: newStart, end: newEnd });
+    }
+  }
+
   const setView = (v: "unified" | "split") => setDiffView(v);
-  const openFileTab = useCallback((path: string) => {
-    setOpenFileTabs((tabs) => (tabs.includes(path) ? tabs : [...tabs, path]));
-    setSelectedFile(path);
-    setActiveTab({ kind: "file", path });
-    setShowDiff(true);
-    setCenterTab("editor");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  /* oxlint-disable react-hooks/exhaustive-deps -- virtualizers are initialized below; callbacks run after render */
+  const openFileTab = useCallback(
+    (path: string) => {
+      setOpenFileTabs((tabs) => (tabs.includes(path) ? tabs : [...tabs, path]));
+      setSelectedFile(path);
+      setActiveTab({ kind: "file", path });
+      setShowDiff(true);
+      setRightPanel("files");
+    },
+    [setRightPanel, setShowDiff],
+  );
   const openDiffFile = useCallback(
     (path: string) => {
       setSelectedFile(path);
       setActiveTab({ kind: "changes" });
       setShowDiff(true);
-      setCenterTab("changes");
+      setRightPanel("changes");
       requestAnimationFrame(() => {
         const idx = diff?.files.findIndex((f) => f.path === path);
         if (idx !== undefined && idx >= 0) {
@@ -200,17 +292,14 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
           });
         });
       });
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     },
-    [diff?.files, diffView],
+    [diff?.files, diffView, diffVirtualizer, setRightPanel, setShowDiff, splitVirtualizer],
   );
-  /* oxlint-enable react-hooks/exhaustive-deps */
   const openChangesTab = useCallback(() => {
     setActiveTab({ kind: "changes" });
     setShowDiff(true);
-    setCenterTab("changes");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    setRightPanel(diff && diff.files.length > 0 ? "changes" : null);
+  }, [diff, setRightPanel, setShowDiff]);
   const closeFileTab = useCallback(
     (path: string) => {
       const index = openFileTabs.indexOf(path);
@@ -221,9 +310,9 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
       const fallback = next[Math.min(index, next.length - 1)];
       setActiveTab(fallback ? { kind: "file", path: fallback } : { kind: "changes" });
       setSelectedFile(fallback ?? null);
-      if (!fallback) setCenterTab("changes");
+      setRightPanel(fallback ? "files" : diff && diff.files.length > 0 ? "changes" : null);
     },
-    [activeTab, openFileTabs, setCenterTab],
+    [activeTab, diff, openFileTabs, setRightPanel],
   );
 
   // Default the split-view selection to the first changed file.
@@ -264,34 +353,6 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
     }
     return false;
   }, [updates]);
-
-  // Virtualize the unified diff — large change sets (900+ files) would mount
-  // thousands of DOM nodes if every FileDiffView were rendered at once.
-  const diffVirtualizer = useVirtualizer({
-    count: diff?.files.length ?? 0,
-    estimateSize: () => 200,
-    getScrollElement: () => diffScrollParent.current,
-    overscan: 5,
-  });
-
-  // Virtualize the split diff AND lazy-fetch: only query file contents for
-  // indices in/near the viewport, avoiding 900+ simultaneous daemon reads.
-  const splitFileCount = diff?.files.length ?? 0;
-  const splitVirtualizer = useVirtualizer({
-    count: splitFileCount,
-    estimateSize: () => 384, // min-h-[24rem]
-    getScrollElement: () => splitScrollParent.current,
-    overscan: 3,
-  });
-  // Keep the query enabled-range in sync with the visible range.
-  const splitVisItems = splitVirtualizer.getVirtualItems();
-  if (splitVisItems.length > 0) {
-    const newStart = splitVisItems[0].index;
-    const newEnd = splitVisItems[splitVisItems.length - 1].index;
-    if (splitRange.start !== newStart || splitRange.end !== newEnd) {
-      setSplitRange({ start: newStart, end: newEnd });
-    }
-  }
 
   const resolveHunkMut = useMutation({
     mutationFn: (v: { file: string; hunkIndex: number; resolution: HunkResolution }) =>
@@ -352,9 +413,42 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
     [knownFilePaths, projectRoot],
   );
   const rightRailOpen = showDiff && rightPanel !== null;
+  const rightPanelContent =
+    rightPanel === "changes" ? (
+      diff ? (
+        <ChangesRail
+          project={task.project}
+          files={diff.files}
+          selected={selectedFile}
+          taskId={task.id}
+          commitExpanded={commitExpanded}
+          onCommitExpandedChange={setCommitExpanded}
+          onCommitted={() => {
+            void queryClient.invalidateQueries({ queryKey: ["diff", task.id] });
+            void queryClient.invalidateQueries({ queryKey: ["fileList", task.id] });
+          }}
+          onRefresh={() => {
+            void queryClient.invalidateQueries({ queryKey: ["diff", task.id] });
+            void queryClient.invalidateQueries({ queryKey: ["fileList", task.id] });
+          }}
+          onSelect={openDiffFile}
+        />
+      ) : (
+        <p className="p-3 text-sm text-muted-foreground">Loading changes…</p>
+      )
+    ) : rightPanel === "subtasks" ? (
+      <SubtasksRail task={task} />
+    ) : (
+      <ProjectFilesPanel
+        files={projectFiles}
+        error={fileListError}
+        selected={activeFile}
+        onSelect={openFileTab}
+      />
+    );
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex h-9 shrink-0 items-center gap-3">
         <Button
           type="button"
@@ -365,12 +459,12 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
         >
           <ArrowLeft className="size-4" />
         </Button>
-        <h1 className="min-w-0 flex-1 truncate text-base font-semibold">{task.prompt}</h1>
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold" title={task.prompt}>
+          {task.prompt}
+        </h1>
         <Badge variant={headerBadge.variant}>{headerBadge.label}</Badge>
         <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <span className="max-w-36 truncate">{task.project}</span>
-          <span>·</span>
-          <GitControls taskId={task.id} branch={diff?.branch ?? null} />
           <span>·</span>
           <span className="max-w-32 truncate">{task.agent}</span>
         </span>
@@ -384,25 +478,55 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
             cancel
           </Button>
         )}
+        <TaskMenu
+          task={task}
+          pinned={taskGroupPinned}
+          onTogglePin={toggleTaskGroupPin}
+          onClose={onClose}
+        />
       </div>
 
-      {taskGroup && (
-        <TaskAgentSwitcher tree={taskGroup} currentTaskId={task.id} onOpenTask={onOpenTask} />
-      )}
-
-      <div className="flex min-h-0 flex-1 gap-2">
-        <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1 gap-0">
+      <div className="relative flex min-h-0 flex-1 gap-2">
+        <ResizablePanelGroup
+          direction="horizontal"
+          className={cn(
+            "min-h-0 flex-1 gap-0",
+            showChat && showDiff && "overflow-hidden rounded-md border border-border/80",
+          )}
+        >
           {/* ── Conversation ── */}
           {showChat && (
             <ResizablePanel id="chat" order={1} defaultSize={showDiff ? 42 : 100} minSize={28}>
-              <Card className="flex h-full min-h-0 flex-col overflow-hidden border-border/80 bg-card/95 shadow-[0_0_0_1px_rgba(255,255,255,0.01)]">
-                <div className="flex h-11 items-center gap-2 border-b px-4">
+              <Card
+                className={cn(
+                  "flex h-full min-h-0 w-full flex-col overflow-hidden border-transparent bg-transparent shadow-none",
+                  !showDiff && "mx-auto max-w-[1100px]",
+                )}
+              >
+                <div
+                  className={cn(
+                    "flex h-10 items-center gap-2 bg-card/95 px-4",
+                    showDiff ? "border-b border-border/80" : "rounded-md border border-border/80",
+                  )}
+                >
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-semibold">Conversation</div>
                     <div className="truncate text-xs text-muted-foreground">
                       Steer the agent or respond to requests
                     </div>
                   </div>
+                  {taskGroup && (
+                    <TaskAgentSwitcher
+                      tree={taskGroup}
+                      currentTaskId={task.id}
+                      onOpenTask={onOpenTask}
+                    />
+                  )}
+                  <FocusButton
+                    focused={!showDiff}
+                    label={showDiff ? "Focus conversation" : "Restore split view"}
+                    onClick={() => setShowDiff(!showDiff)}
+                  />
                 </div>
                 <ChatTranscript
                   active={showChat}
@@ -423,12 +547,17 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
             </ResizablePanel>
           )}
 
-          {showChat && showDiff && <ResizableHandle withHandle className="mx-2" />}
+          {showChat && showDiff && <ResizableHandle />}
 
           {/* ── Center: Changes / Editor ── */}
           {showDiff && (
             <ResizablePanel id="center" order={2} defaultSize={showChat ? 58 : 100} minSize={30}>
-              <Card className="flex h-full min-h-0 flex-col overflow-hidden border-border/80 bg-card/95 shadow-[0_0_0_1px_rgba(255,255,255,0.01)]">
+              <Card
+                className={cn(
+                  "flex h-full min-h-0 flex-col overflow-hidden border-border/80 bg-card/95 shadow-[0_0_0_1px_rgba(255,255,255,0.01)]",
+                  showChat && "rounded-none border-0 shadow-none",
+                )}
+              >
                 <div className="flex h-10 min-w-0 items-center gap-1 border-b px-2">
                   <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
                     <button
@@ -482,28 +611,14 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
                       );
                     })}
                   </div>
-                  <div className="ml-auto flex shrink-0 items-center gap-1">
-                    <button
-                      type="button"
-                      aria-label="Toggle changed files tree"
-                      onClick={() => setRightPanel(rightPanel === "changes" ? null : "changes")}
-                      title="Toggle changes panel"
-                      className={cn(
-                        "rounded-md p-1.5 transition-colors",
-                        rightPanel === "changes"
-                          ? "bg-secondary text-foreground"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      <GitCommitVertical className="size-3.5" />
-                    </button>
-                  </div>
+                  <FocusButton
+                    focused={!showChat}
+                    label={showChat ? "Focus workspace" : "Restore split view"}
+                    onClick={toggleChat}
+                  />
                 </div>
 
                 <div className="flex h-9 items-center gap-2 border-b bg-background/25 px-3">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    {activeTab.kind === "changes" ? "Changes" : "Editor"}
-                  </span>
                   {diff && activeTab.kind === "changes" && (
                     <span className="tnum text-xs text-muted-foreground">
                       {diff.files.length} files
@@ -512,15 +627,6 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
                   {activeTab.kind === "file" && (
                     <span className="min-w-0 truncate font-mono text-xs text-muted-foreground">
                       {activeTab.path}
-                    </span>
-                  )}
-                  {diff?.branch && (
-                    <span
-                      className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
-                      title={diff.branch}
-                    >
-                      <GitBranch className="size-3 shrink-0" />
-                      <span className="truncate font-mono">{diff.branch}</span>
                     </span>
                   )}
                   {activeTab.kind === "changes" && (
@@ -562,7 +668,7 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
                               <p className="text-sm text-muted-foreground">Loading diff…</p>
                             )}
                             {diff && diff.files.length === 0 && (
-                              <p className="text-sm text-muted-foreground">No changes yet.</p>
+                              <EmptyChangesState onOpenFiles={() => setRightPanel("files")} />
                             )}
                             {diff && diff.files.length > 0 && (
                               <div
@@ -602,7 +708,7 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
                             {!diff ? (
                               <p className="p-3 text-sm text-muted-foreground">Loading diff…</p>
                             ) : diff.files.length === 0 ? (
-                              <p className="p-3 text-sm text-muted-foreground">No changes yet.</p>
+                              <EmptyChangesState onOpenFiles={() => setRightPanel("files")} />
                             ) : (
                               <div
                                 className="relative w-full"
@@ -623,17 +729,19 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
                                       }}
                                     >
                                       {doc ? (
-                                        <MergeDiff
-                                          doc={doc}
-                                          editable={editable}
-                                          onSave={(content) =>
-                                            void daemon.request("file.save", {
-                                              content,
-                                              path: doc.path,
-                                              task_id: task.id,
-                                            })
-                                          }
-                                        />
+                                        <Suspense fallback={<EditorLoading />}>
+                                          <MergeDiff
+                                            doc={doc}
+                                            editable={editable}
+                                            onSave={(content) =>
+                                              void daemon.request("file.save", {
+                                                content,
+                                                path: doc.path,
+                                                task_id: task.id,
+                                              })
+                                            }
+                                          />
+                                        </Suspense>
                                       ) : query?.error ? (
                                         <p className="p-3 text-sm text-destructive">
                                           Failed to load {file.path}: {query.error.message}
@@ -652,17 +760,19 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
                         )}
                       </div>
                     ) : fileDoc ? (
-                      <CodeEditor
-                        doc={fileDoc}
-                        editable={editable}
-                        onSave={(content) =>
-                          void daemon.request("file.save", {
-                            content,
-                            path: fileDoc.path,
-                            task_id: task.id,
-                          })
-                        }
-                      />
+                      <Suspense fallback={<EditorLoading />}>
+                        <CodeEditor
+                          doc={fileDoc}
+                          editable={editable}
+                          onSave={(content) =>
+                            void daemon.request("file.save", {
+                              content,
+                              path: fileDoc.path,
+                              task_id: task.id,
+                            })
+                          }
+                        />
+                      </Suspense>
                     ) : (
                       <p className="p-3 text-sm text-muted-foreground">Loading file…</p>
                     )}
@@ -690,54 +800,64 @@ export default function TaskDetail({ task, updates, state, onClose, onOpenTask }
             </ResizablePanel>
           )}
 
-          {rightRailOpen && (
+          {rightRailOpen && !compactLayout && (
             <>
-              {(showChat || showDiff) && <ResizableHandle withHandle className="mx-2" />}
+              {(showChat || showDiff) && <ResizableHandle />}
               <ResizablePanel id="right-panel" order={3} defaultSize={26} minSize={16} maxSize={44}>
                 <Card className="flex h-full min-h-0 flex-col overflow-hidden border-border/80 bg-card/95 shadow-[0_0_0_1px_rgba(255,255,255,0.01)]">
-                  {rightPanel === "changes" ? (
-                    diff ? (
-                      <ChangesRail
-                        project={task.project}
-                        files={diff.files}
-                        selected={selectedFile}
-                        taskId={task.id}
-                        onCommitted={() => {
-                          void queryClient.invalidateQueries({ queryKey: ["diff", task.id] });
-                          void queryClient.invalidateQueries({ queryKey: ["fileList", task.id] });
-                        }}
-                        onRefresh={() => {
-                          void queryClient.invalidateQueries({ queryKey: ["diff", task.id] });
-                          void queryClient.invalidateQueries({ queryKey: ["fileList", task.id] });
-                        }}
-                        onSelect={openDiffFile}
-                      />
-                    ) : (
-                      <p className="p-3 text-sm text-muted-foreground">Loading changes…</p>
-                    )
-                  ) : rightPanel === "subtasks" ? (
-                    <SubtasksRail task={task} />
-                  ) : (
-                    <ProjectFilesPanel
-                      files={projectFiles}
-                      error={fileListError}
-                      selected={activeFile}
-                      onSelect={openFileTab}
-                    />
-                  )}
+                  {rightPanelContent}
                 </Card>
               </ResizablePanel>
             </>
           )}
         </ResizablePanelGroup>
-        <TaskDetailActions
-          task={task}
-          pinned={taskGroupPinned}
-          onTogglePin={toggleTaskGroupPin}
-          onClose={onClose}
-        />
+        {rightRailOpen && compactLayout && (
+          <Card className="absolute inset-y-0 right-0 z-30 w-[min(340px,calc(100%-0.5rem))] overflow-hidden border-border/80 bg-card/95 shadow-2xl">
+            {rightPanelContent}
+          </Card>
+        )}
+      </div>
+      <div className="flex h-4 shrink-0 items-center px-1 text-[10px] text-muted-foreground">
+        <span
+          className="flex min-w-0 items-center gap-1"
+          title={task.worktree ?? "Runs in the local project workspace"}
+        >
+          <Folder className="size-3 shrink-0" />
+          <span>{task.worktree ? "Git Worktree" : "Local Workspace"}</span>
+        </span>
+        <span className="ml-auto flex items-center gap-2">
+          <TaskDetailActions task={task} />
+          <GitWorkspaceControls
+            taskId={task.id}
+            branch={diff?.branch ?? null}
+            onOpenCommit={openCommit}
+            onOpenPush={onOpenPush}
+          />
+        </span>
       </div>
     </div>
+  );
+}
+
+function FocusButton({
+  focused,
+  label,
+  onClick,
+}: {
+  focused: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className="shrink-0 rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+    >
+      {focused ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+    </button>
   );
 }
 
@@ -1051,13 +1171,21 @@ function FileDiffView({
   );
 }
 
-/// Header git controls: an "Update" button (rebase-on-upstream + autostash) and
-/// a branch chip that doubles as a switcher. Both operate on the task's project
-/// repo via the daemon, which handles the stash/rollback; this just reflects the
-/// result. Since a project's tasks share one working tree, switching here moves
-/// the whole project's checkout.
-function GitControls({ taskId, branch }: { taskId: string; branch: string | null }) {
+/// Compact repository status and a searchable, viewport-bound branch/action menu.
+function GitWorkspaceControls({
+  taskId,
+  branch,
+  onOpenCommit,
+  onOpenPush,
+}: {
+  taskId: string;
+  branch: string | null;
+  onOpenCommit: () => void;
+  onOpenPush: () => void;
+}) {
   const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const menuRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
 
   // Branch list is only needed while the dropdown is open.
@@ -1067,6 +1195,26 @@ function GitControls({ taskId, branch }: { taskId: string; branch: string | null
     queryKey: ["branches", taskId],
   });
   const branches = branchesQuery.data?.branches ?? [];
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredBranches = normalizedSearch
+    ? branches.filter((item) => item.toLowerCase().includes(normalizedSearch))
+    : branches;
+  const showSync =
+    !normalizedSearch || "sync with remote update project".includes(normalizedSearch);
+  const showCommit = !normalizedSearch || "commit changes".includes(normalizedSearch);
+  const showPush = !normalizedSearch || "push changes".includes(normalizedSearch);
+
+  useEffect(() => {
+    if (!open) {
+      setSearch("");
+      return;
+    }
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [open]);
 
   // After a clean op the tree changed — refetch the task's reads. (The daemon's
   // Task.updated event also refetches via the updatedAt-keyed queries; this just
@@ -1130,73 +1278,148 @@ function GitControls({ taskId, branch }: { taskId: string; branch: string | null
   };
 
   return (
-    <span className="flex items-center gap-1">
-      <div className="relative">
+    <span className="flex min-w-0 items-center">
+      <div ref={menuRef} className="relative min-w-0">
         <button
           type="button"
           disabled={!branch}
           onClick={() => setOpen((o) => !o)}
-          onBlur={() => setTimeout(() => setOpen(false), 120)}
-          title="Switch branch"
-          className="flex items-center gap-1 rounded px-1 py-0.5 font-mono hover:bg-secondary hover:text-foreground disabled:opacity-60"
+          title="Branches and Git actions"
+          className="flex items-center gap-1 rounded px-1 font-mono hover:bg-secondary hover:text-foreground disabled:opacity-60"
         >
-          <GitBranch className="size-3.5 shrink-0" />
+          <GitBranch className="size-3 shrink-0" />
           <span className="max-w-40 truncate">{branch ?? "no-branch"}</span>
           {switching ? (
-            <Loader2 className="size-3 animate-spin opacity-60" />
+            <Loader2 className="size-2.5 animate-spin opacity-60" />
           ) : (
-            branch && <ChevronDown className="size-3 opacity-60" />
+            branch && <ChevronDown className="size-2.5 opacity-60" />
           )}
         </button>
         {open && branch && (
-          <div className="absolute left-0 top-full z-30 mt-1 max-h-[50vh] min-w-[200px] overflow-y-auto rounded-md border bg-popover shadow-md">
-            <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-              Switch branch
-            </div>
-            {branchesQuery.isLoading && (
-              <div className="px-2 py-1.5 text-xs text-muted-foreground">loading…</div>
-            )}
-            {!branchesQuery.isLoading && branches.length === 0 && (
-              <div className="px-2 py-1.5 text-xs text-muted-foreground">no branches</div>
-            )}
-            {branches.map((b) => (
-              <button
-                type="button"
-                key={b}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  switchTo(b);
-                }}
-                className={cn(
-                  "flex w-full items-center gap-2 px-2 py-1 text-left font-mono text-xs",
-                  b === branch ? "bg-accent" : "hover:bg-accent/50",
-                )}
-              >
-                <Check
-                  className={cn("size-3 shrink-0", b === branch ? "opacity-100" : "opacity-0")}
+          <div className="absolute bottom-full right-0 z-50 mb-1 flex max-h-[min(520px,calc(100vh-4rem))] w-[min(420px,calc(100vw-1rem))] flex-col overflow-hidden rounded-md border border-border bg-popover shadow-xl">
+            <div className="shrink-0 border-b p-2">
+              <label className="flex h-8 items-center gap-2 rounded-md border border-input bg-background/60 px-2 focus-within:ring-1 focus-within:ring-ring">
+                <Search className="size-4 shrink-0 text-muted-foreground" />
+                <input
+                  autoFocus
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") setOpen(false);
+                  }}
+                  placeholder="Search branches and actions"
+                  className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
                 />
-                <span className="truncate">{b}</span>
-              </button>
-            ))}
+              </label>
+            </div>
+            <div className="min-h-0 overflow-y-auto p-1.5">
+              {(showSync || showCommit || showPush) && (
+                <div className="space-y-0.5 pb-1.5">
+                  {showSync && (
+                    <GitMenuAction
+                      icon={
+                        updating ? (
+                          <Loader2 className="size-4 animate-spin" />
+                        ) : (
+                          <Download className="size-4" />
+                        )
+                      }
+                      label="Sync with remote"
+                      shortcut="⌘T"
+                      disabled={busy || !branch}
+                      onClick={() => updateMut.mutate()}
+                    />
+                  )}
+                  {showCommit && (
+                    <GitMenuAction
+                      icon={<GitCommitVertical className="size-4" />}
+                      label="Commit…"
+                      shortcut="⌘K"
+                      onClick={() => {
+                        setOpen(false);
+                        onOpenCommit();
+                      }}
+                    />
+                  )}
+                  {showPush && (
+                    <GitMenuAction
+                      icon={<Send className="size-4" />}
+                      label="Push…"
+                      shortcut="⇧⌘K"
+                      onClick={() => {
+                        setOpen(false);
+                        onOpenPush();
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+
+              {(showSync || showCommit || showPush) && filteredBranches.length > 0 && (
+                <div className="mx-1 border-t" />
+              )}
+              <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+                Branches
+              </div>
+              {branchesQuery.isLoading && (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">Loading…</div>
+              )}
+              {!branchesQuery.isLoading && filteredBranches.length === 0 && (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                  {branches.length === 0 ? "No branches" : "No matching branches or actions"}
+                </div>
+              )}
+              {filteredBranches.map((item) => (
+                <button
+                  type="button"
+                  key={item}
+                  onClick={() => switchTo(item)}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left font-mono text-xs",
+                    item === branch ? "bg-accent text-foreground" : "hover:bg-accent/50",
+                  )}
+                >
+                  <Check
+                    className={cn(
+                      "size-3.5 shrink-0",
+                      item === branch ? "opacity-100" : "opacity-0",
+                    )}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{item}</span>
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>
-
-      <button
-        type="button"
-        onClick={() => !busy && updateMut.mutate()}
-        disabled={busy || !branch}
-        title="Update project — rebase on upstream, autostashing your changes (⌘T)"
-        className="flex items-center gap-1 rounded px-1 py-0.5 hover:bg-secondary hover:text-foreground disabled:opacity-60"
-      >
-        {updating ? (
-          <Loader2 className="size-3.5 animate-spin" />
-        ) : (
-          <RefreshCw className="size-3.5" />
-        )}
-        <span>Update</span>
-      </button>
     </span>
+  );
+}
+
+function GitMenuAction({
+  disabled,
+  icon,
+  label,
+  onClick,
+  shortcut,
+}: {
+  disabled?: boolean;
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  shortcut: string;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent/50 disabled:opacity-50"
+    >
+      <span className="text-muted-foreground">{icon}</span>
+      <span className="flex-1">{label}</span>
+      <kbd className="font-sans text-[11px] text-muted-foreground">{shortcut}</kbd>
+    </button>
   );
 }
 

@@ -30,11 +30,11 @@ export const AgentTabButton = memo(function AgentTabButton({
       aria-label={`${lead ? "Lead" : task.agent}: ${badge.label}`}
       title={`${lead ? "Lead" : task.agent} — ${task.prompt}`}
       className={cn(
-        "flex h-8 min-w-0 max-w-36 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+        "flex h-7 min-w-0 max-w-36 items-center gap-1.5 rounded border px-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         shrinkable ? "shrink" : "shrink-0",
         selected
-          ? "border-primary/60 bg-primary/15 text-foreground shadow-sm"
-          : "border-border/60 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+          ? "border-primary/50 bg-primary/10 text-foreground"
+          : "border-transparent bg-transparent text-muted-foreground hover:bg-secondary hover:text-foreground",
       )}
       onClick={() => onSelect(task.id)}
     >

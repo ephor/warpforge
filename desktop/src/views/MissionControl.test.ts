@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SessionUpdate } from "../protocol";
-import { appendCoalesced, coalesceUpdates } from "./MissionControl";
+import { appendCoalesced, coalesceUpdates } from "./missionControlStream";
 
 /** Reference incremental fold, mirroring ChatTranscript.useCoalesced. */
 function incrementalCoalesce(prefix: SessionUpdate[], tail: SessionUpdate[]) {

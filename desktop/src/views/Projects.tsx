@@ -99,21 +99,25 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
           <Plus className="mr-1 size-4" />
           Add Project
         </Button>
-        <AddProjectDialog open={showAddDialog} onOpenChange={setShowAddDialog} onAdded={onProjectAdded} />
+        <AddProjectDialog
+          open={showAddDialog}
+          onOpenChange={setShowAddDialog}
+          onAdded={onProjectAdded}
+        />
       </div>
     );
   }
 
   return (
-    <div className="grid h-full grid-cols-[220px_1fr] gap-4">
+    <div className="grid h-full grid-cols-[200px_minmax(0,1fr)] gap-2">
       {/* Project list */}
-      <Card className="flex min-h-0 flex-col">
-        <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+      <Card className="flex min-h-0 flex-col rounded-md border-border/80 bg-card shadow-none">
+        <div className="flex h-10 items-center px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Projects
         </div>
         <Separator />
         <ScrollArea className="flex-1">
-          <div className="flex flex-col gap-1 p-2">
+          <div className="flex flex-col gap-0.5 p-1.5">
             {snapshot.projects.map((p) => {
               const active = p.name === project.name;
               const up = runningByProject.get(p.name) ?? 0;
@@ -123,8 +127,8 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                   onMouseEnter={() => onRowMouseEnter(p.name)}
                   onMouseLeave={onRowMouseLeave}
                   className={cn(
-                    "relative flex items-center rounded-md px-2.5 py-2 text-sm transition-colors",
-                    active ? "bg-secondary" : "hover:bg-secondary/50",
+                    "relative flex h-8 items-center rounded px-2 text-sm transition-colors",
+                    active ? "bg-secondary text-foreground" : "hover:bg-secondary/60",
                   )}
                 >
                   <button
@@ -149,7 +153,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                       <DropdownMenuTrigger asChild>
                         <button
                           type="button"
-                          className="ml-1 shrink-0 rounded p-0.5 text-muted-foreground/60 hover:text-foreground"
+                          className="ml-1 flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-background/60 hover:text-foreground"
                           onClick={(e) => e.stopPropagation()}
                         >
                           <EllipsisVertical className="size-3.5" />
@@ -182,7 +186,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
         <Button
           variant="ghost"
           size="sm"
-          className="m-2 gap-1.5 text-muted-foreground"
+          className="m-1.5 h-7 gap-1.5 text-muted-foreground"
           onClick={() => setShowAddDialog(true)}
         >
           <Plus className="size-4" />
@@ -192,8 +196,8 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
 
       {/* Detail */}
       <ScrollArea className="min-h-0">
-        <div className="flex flex-col gap-4 pr-3">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-2 pr-2">
+          <div className="flex min-h-10 items-center gap-3 px-1">
             <div>
               <h1 className="text-lg font-semibold">{project.name}</h1>
               <p className="text-xs text-muted-foreground">
@@ -203,63 +207,68 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                 </span>
               </p>
             </div>
-            <div className="ml-auto flex gap-2">
+            <div className="ml-auto flex gap-1.5">
               <Button
                 variant="outline"
                 size="sm"
+                className="h-7"
                 onClick={() =>
                   void daemon.request("portforward.startAll", { project: project.name })
                 }
               >
                 <PlugZap className="size-4" />
-                start pfs
+                Start forwards
               </Button>
               <Button
                 variant="outline"
                 size="sm"
+                className="h-7"
                 onClick={() => void daemon.request("service.startAll", { project: project.name })}
               >
                 <Play className="size-4" />
-                start services
+                Start services
               </Button>
               <Button
                 variant="destructive"
                 size="sm"
+                className="h-7"
                 disabled={running.length === 0}
                 onClick={() => void daemon.request("service.stopAll", { project: project.name })}
               >
                 <Square className="size-4" />
-                stop all
+                Stop all
               </Button>
             </div>
           </div>
 
           {/* Agent context — the integration that ties infra to tasks */}
-          <Card className="border-primary/30 bg-primary/5 p-3">
-            <div className="mb-2 flex items-center gap-2 text-xs font-medium text-primary">
-              <Share2 className="size-4" />
-              Shared with new agent sessions
+          <Card className="overflow-hidden rounded-md border-border/80 bg-card shadow-none">
+            <div className="flex h-9 items-center gap-2 border-b border-border/80 px-3 text-xs font-medium text-muted-foreground">
+              <Share2 className="size-3.5 text-primary" />
+              Agent context
             </div>
-            {running.length === 0 ? (
-              <p className="text-xs text-muted-foreground">
-                Nothing running yet. Start services and new tasks will know the app is up, on which
-                ports, and can run tests against it.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-1 font-mono text-xs">
-                {running.map((s) => (
-                  <div key={s.name} className="flex gap-2">
-                    <span className="text-muted-foreground">{s.name}</span>
-                    <span className="tnum text-primary">http://localhost:{s.allocatedPort}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+            <div className="p-3">
+              {running.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Nothing running yet. Start services and new tasks will know the app is up, on
+                  which ports, and can run tests against it.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-1 font-mono text-xs">
+                  {running.map((s) => (
+                    <div key={s.name} className="flex gap-2">
+                      <span className="text-muted-foreground">{s.name}</span>
+                      <span className="tnum text-primary">http://localhost:{s.allocatedPort}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </Card>
 
           {/* Services */}
-          <Card>
-            <div className="border-b px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <Card className="overflow-hidden rounded-md border-border/80 bg-card shadow-none">
+            <div className="flex h-9 items-center border-b border-border/80 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Services
             </div>
             <div className="divide-y">
@@ -285,8 +294,8 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
 
           {/* Port-forwards */}
           {pfs.length > 0 && (
-            <Card>
-              <div className="border-b px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <Card className="overflow-hidden rounded-md border-border/80 bg-card shadow-none">
+              <div className="flex h-9 items-center border-b border-border/80 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Port Forwards
               </div>
               <div className="divide-y">
@@ -294,7 +303,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                   const badge = pfBadge(pf.status);
                   const active = pf.status === "active";
                   return (
-                    <div key={pf.name} className="flex items-center gap-3 px-3 py-2">
+                    <div key={pf.name} className="flex min-h-9 items-center gap-3 px-3 py-1.5">
                       <PlugZap className="size-4 text-muted-foreground" />
                       <span className="w-40 truncate text-sm font-medium">{pf.name}</span>
                       <Badge variant={badge.variant}>{badge.label}</Badge>
@@ -342,8 +351,8 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
           )}
 
           {/* Tasks in this project */}
-          <Card>
-            <div className="border-b px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <Card className="overflow-hidden rounded-md border-border/80 bg-card shadow-none">
+            <div className="flex h-9 items-center border-b border-border/80 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Tasks
             </div>
             <div className="divide-y">
@@ -356,7 +365,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                   <button
                     key={t.id}
                     onClick={() => onOpenTask(t.id)}
-                    className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-secondary/40"
+                    className="flex min-h-9 w-full items-center gap-3 px-3 py-1.5 text-left hover:bg-secondary/40"
                   >
                     <Badge variant={badge.variant}>{badge.label}</Badge>
                     <span className="flex-1 truncate text-sm">{t.prompt}</span>
@@ -372,7 +381,11 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
         </div>
       </ScrollArea>
 
-      <AddProjectDialog open={showAddDialog} onOpenChange={setShowAddDialog} onAdded={onProjectAdded} />
+      <AddProjectDialog
+        open={showAddDialog}
+        onOpenChange={setShowAddDialog}
+        onAdded={onProjectAdded}
+      />
     </div>
   );
 }
@@ -422,7 +435,7 @@ function ServiceRow({
   return (
     <div>
       <div
-        className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-secondary/30"
+        className="flex min-h-9 cursor-pointer items-center gap-3 px-3 py-1.5 hover:bg-secondary/30"
         onClick={() => setOpen((v) => !v)}
       >
         {open ? (
@@ -464,7 +477,7 @@ function ServiceRow({
       </div>
 
       {open && (
-        <div className="border-t bg-black/40 px-3 pb-3 pt-2">
+        <div className="bg-deep-surface border-t px-3 pb-3 pt-2">
           <div className="mb-2 flex items-center gap-2">
             <span className="text-xs text-muted-foreground">{logs.length} lines</span>
             <button

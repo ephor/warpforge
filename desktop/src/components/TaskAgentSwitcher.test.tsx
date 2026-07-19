@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildTaskForest } from "@/lib/taskGroups";
@@ -23,7 +24,8 @@ function task(id: string, agent: string, status: TaskStatus, parentTaskId?: stri
 }
 
 describe("TaskAgentSwitcher", () => {
-  it("opens the selected leader or descendant through the navigation callback", () => {
+  it("opens the selected leader or descendant through the navigation callback", async () => {
+    const user = userEvent.setup();
     const [tree] = buildTaskForest([
       task("root", "root-agent", "running"),
       task("child", "child-agent", "running", "root"),
@@ -33,18 +35,18 @@ describe("TaskAgentSwitcher", () => {
 
     render(<TaskAgentSwitcher tree={tree} currentTaskId="child" onOpenTask={onOpenTask} />);
 
-    expect(screen.getByRole("tab", { name: "child-agent: running" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-    fireEvent.click(screen.getByRole("tab", { name: "Lead: running" }));
-    fireEvent.click(screen.getByRole("tab", { name: "review-agent: needs review" }));
+    await user.click(screen.getByRole("button", { name: /current: child-agent/i }));
+    await user.click(await screen.findByRole("menuitem", { name: "Lead: running" }));
+
+    await user.click(screen.getByRole("button", { name: /current: child-agent/i }));
+    await user.click(await screen.findByRole("menuitem", { name: "review-agent: needs review" }));
 
     expect(onOpenTask).toHaveBeenNthCalledWith(1, "root");
     expect(onOpenTask).toHaveBeenNthCalledWith(2, "grandchild");
   });
 
-  it("does not navigate when the current task tab is selected", () => {
+  it("does not navigate when the current task tab is selected", async () => {
+    const user = userEvent.setup();
     const [tree] = buildTaskForest([
       task("root", "root-agent", "idle"),
       task("child", "child-agent", "running", "root"),
@@ -52,7 +54,8 @@ describe("TaskAgentSwitcher", () => {
     const onOpenTask = vi.fn<(id: string) => void>();
 
     render(<TaskAgentSwitcher tree={tree} currentTaskId="root" onOpenTask={onOpenTask} />);
-    fireEvent.click(screen.getByRole("tab", { name: "Lead: idle" }));
+    await user.click(screen.getByRole("button", { name: /current: lead/i }));
+    await user.click(await screen.findByRole("menuitem", { name: "Lead: idle" }));
 
     expect(onOpenTask).not.toHaveBeenCalled();
   });

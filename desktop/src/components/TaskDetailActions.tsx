@@ -1,35 +1,19 @@
 import {
-  Archive,
   Diff,
   Folder,
   GitCommitVertical,
   ListTodo,
   MessageSquare,
-  Pin,
-  PinOff,
   SquareTerminal,
-  Trash2,
 } from "lucide-react";
-import { memo, useState } from "react";
+import { memo } from "react";
 
 import { cn } from "@/lib/utils";
 
-import { daemon } from "../daemon";
 import type { TaskInfo } from "../protocol";
 import { useUi } from "../store/ui";
 
-export const TaskDetailActions = memo(function TaskDetailActions({
-  onClose,
-  onTogglePin,
-  pinned,
-  task,
-}: {
-  onClose: () => void;
-  onTogglePin: () => void;
-  pinned: boolean;
-  task: TaskInfo;
-}) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
+export const TaskDetailActions = memo(function TaskDetailActions({ task }: { task: TaskInfo }) {
   const showChat = useUi((state) => state.showChat);
   const showDiff = useUi((state) => state.showDiff);
   const rightPanel = useUi((state) => state.rightPanel);
@@ -46,79 +30,45 @@ export const TaskDetailActions = memo(function TaskDetailActions({
   };
 
   return (
-    <div className="flex w-9 shrink-0 flex-col items-center gap-2 rounded-lg border bg-card/95 py-2 text-muted-foreground">
+    <div className="flex shrink-0 items-center gap-1 text-muted-foreground">
       <ActionButton
         label="Toggle chat"
         active={showChat}
         onClick={toggleChat}
-        icon={<MessageSquare className="size-4" />}
+        icon={<MessageSquare className="size-3.5" />}
       />
       <ActionButton
         label="Toggle diff"
         active={showDiff}
         onClick={toggleDiff}
-        icon={<Diff className="size-4" />}
+        icon={<Diff className="size-3.5" />}
       />
-      <div className="my-1 h-px w-5 bg-border" />
       <ActionButton
         label="Files"
         active={rightPanel === "files"}
         onClick={() => togglePanel("files")}
-        icon={<Folder className="size-4" />}
+        icon={<Folder className="size-3.5" />}
       />
       <ActionButton
         label="Changes"
         active={rightPanel === "changes"}
         onClick={() => togglePanel("changes")}
-        icon={<GitCommitVertical className="size-4" />}
+        icon={<GitCommitVertical className="size-3.5" />}
       />
       {task.orchestrationGraph && task.orchestrationGraph.nodes.length > 0 && (
         <ActionButton
           label="Subtasks"
           active={rightPanel === "subtasks"}
           onClick={() => togglePanel("subtasks")}
-          icon={<ListTodo className="size-4" />}
+          icon={<ListTodo className="size-3.5" />}
         />
       )}
       <ActionButton
-        label="Runtime"
+        label="Terminal"
         active={runtimeOpen}
         onClick={() => setRuntimeOpen(!runtimeOpen)}
-        icon={<SquareTerminal className="size-4" />}
+        icon={<SquareTerminal className="size-3.5" />}
       />
-      <div className="mt-auto flex flex-col items-center gap-2">
-        <ActionButton
-          label={pinned ? "Unpin task group" : "Pin task group"}
-          active={pinned}
-          onClick={onTogglePin}
-          icon={pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
-        />
-        <div className="h-px w-5 bg-border" />
-        <ActionButton
-          label="Archive task"
-          onClick={() => {
-            void daemon.archiveTask(task.id);
-            onClose();
-          }}
-          icon={<Archive className="size-4" />}
-        />
-        <button
-          type="button"
-          aria-label="Delete task"
-          title="Delete task"
-          onClick={() => {
-            if (!confirmDelete) return setConfirmDelete(true);
-            void daemon.deleteTask(task.id);
-            onClose();
-          }}
-          className={cn(
-            "rounded-md p-1.5 hover:bg-destructive/20 hover:text-destructive",
-            confirmDelete && "bg-destructive/20 text-destructive",
-          )}
-        >
-          <Trash2 className="size-4" />
-        </button>
-      </div>
     </div>
   );
 });
@@ -138,11 +88,12 @@ function ActionButton({
     <button
       type="button"
       aria-label={label}
+      aria-pressed={active}
       title={label}
       onClick={onClick}
       className={cn(
-        "rounded-md p-1.5 hover:bg-secondary hover:text-foreground",
-        active && "bg-secondary text-foreground",
+        "flex size-4 items-center justify-center rounded-sm hover:bg-secondary hover:text-foreground",
+        active ? "text-foreground" : "text-muted-foreground",
       )}
     >
       {icon}

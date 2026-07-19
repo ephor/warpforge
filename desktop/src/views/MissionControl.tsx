@@ -3,21 +3,27 @@ import {
   Activity,
   ChevronRight,
   Clock3,
-  ChevronDown,
+  ExternalLink,
   FilePen,
   FileText,
   ListTodo,
   Maximize2,
+  Minimize2,
+  MoreHorizontal,
+  PinOff,
   Plus,
   TriangleAlert,
-  Users,
   Wrench,
-  X,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { sessionActivity } from "@/lib/sessionActivity";
 import {
@@ -32,7 +38,6 @@ import {
   resolvePinnedTaskGroups,
   resolveGroupTaskId,
   setTaskGroupPinned,
-  taskGroupCounts,
   taskGroupStatus,
   type TaskGroupStatus,
   type TaskTree,
@@ -41,16 +46,17 @@ import { cn } from "@/lib/utils";
 
 import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
 import { AgentConfigBar } from "../components/AgentConfigBar";
-import { AgentTabButton } from "../components/AgentTabButton";
 import { Composer } from "../components/Composer";
 import type { FileLinkResolver } from "../components/Markdown";
 import { BufferedMarkdown, Markdown } from "../components/Markdown";
+import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { ThinkingBlock } from "../components/ThinkingBlock";
 import type { DaemonState } from "../daemon";
 import { daemon } from "../daemon";
 import type { CommandInfo, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
 import { daemonQuery } from "../query";
 import { useUi } from "../store/ui";
+import { coalesceUpdates, streamKey } from "./missionControlStream";
 
 /**
  * Mission Control — the default, attention-driven operating view.
@@ -65,12 +71,14 @@ interface Props {
 }
 
 const PINNED_PREVIEW_LIMIT = 18;
+const FOCUSED_PREVIEW_LIMIT = 24;
 
 export default function MissionControl({ state, onOpenTask, onNewTask }: Props) {
   const pinned = useUi((s) => s.pinnedTaskIds);
   const setPinnedTaskIds = useUi((s) => s.setPinnedTaskIds);
   const attentionTargetId = useUi((s) => s.attentionTargetId);
   const attentionTargetNonce = useUi((s) => s.attentionTargetNonce);
+  const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
   const live = useMemo(
     () => state.snapshot.tasks.filter((t) => t.status !== "done"),
     [state.snapshot.tasks],
@@ -87,16 +95,26 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
   const handleUnpin = useCallback(
     (tree: TaskTree) => {
       setPinnedTaskIds(setTaskGroupPinned(groupIndex, pinned, tree.task.id, false));
+      setFocusedGroupId((current) => (current === tree.task.id ? null : current));
     },
     [groupIndex, pinned, setPinnedTaskIds],
   );
+  const handleFocus = useCallback((id: string | null) => setFocusedGroupId(id), []);
+  const resolvedFocusedGroupId = pinnedGroups.some((tree) => tree.task.id === focusedGroupId)
+    ? focusedGroupId
+    : null;
+  const visibleGroups = resolvedFocusedGroupId
+    ? pinnedGroups.filter((tree) => tree.task.id === resolvedFocusedGroupId)
+    : pinnedGroups;
 
   return (
     <ScrollArea className="h-full min-h-0">
-      <div className="flex flex-col gap-4 pr-3">
+      <div className="flex flex-col gap-2 pr-2">
         {pinnedGroups.length > 0 ? (
-          <div className="grid grid-cols-2 gap-3">
-            {pinnedGroups.map((tree) => (
+          <div
+            className={cn("grid grid-cols-1 gap-2", !resolvedFocusedGroupId && "xl:grid-cols-2")}
+          >
+            {visibleGroups.map((tree) => (
               <FocusGroupPane
                 key={tree.task.id}
                 tree={tree}
@@ -105,6 +123,8 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
                 attentionTargetNonce={attentionTargetNonce}
                 onUnpin={handleUnpin}
                 onOpen={onOpenTask}
+                focused={resolvedFocusedGroupId === tree.task.id}
+                onFocus={handleFocus}
               />
             ))}
           </div>
@@ -138,6 +158,8 @@ interface FocusGroupPaneProps {
   attentionTargetNonce: number;
   onUnpin: (tree: TaskTree) => void;
   onOpen: (id: string) => void;
+  focused: boolean;
+  onFocus: (id: string | null) => void;
 }
 
 const FocusGroupPane = memo(function FocusGroupPane({
@@ -147,12 +169,13 @@ const FocusGroupPane = memo(function FocusGroupPane({
   attentionTargetNonce,
   onUnpin,
   onOpen,
+  focused,
+  onFocus,
 }: FocusGroupPaneProps) {
   const members = useMemo(() => flattenTaskTree(tree), [tree]);
   const [selectedId, setSelectedId] = useState(() =>
     resolveGroupTaskId(tree, null, attentionTargetId),
   );
-  const [showAllAgents, setShowAllAgents] = useState(false);
 
   useEffect(() => {
     setSelectedId((current) => resolveGroupTaskId(tree, current, attentionTargetId));
@@ -171,6 +194,10 @@ const FocusGroupPane = memo(function FocusGroupPane({
   const handleUnpin = useCallback(() => onUnpin(tree), [onUnpin, tree]);
   const handleOpen = useCallback(() => onOpen(selectedTask.id), [onOpen, selectedTask.id]);
   const handleSelect = useCallback((id: string) => setSelectedId(id), []);
+  const handleFocus = useCallback(
+    () => onFocus(focused ? null : tree.task.id),
+    [focused, onFocus, tree.task.id],
+  );
 
   return (
     <FocusPane
@@ -178,13 +205,12 @@ const FocusGroupPane = memo(function FocusGroupPane({
       updates={updatesByTaskId[selectedTask.id] ?? []}
       tree={tree}
       selectedId={selectedTask.id}
-      showAllAgents={showAllAgents}
       groupStatus={status}
-      permissionTaskIds={permissionTaskIds}
-      onShowAllAgents={setShowAllAgents}
       onSelect={handleSelect}
       onUnpin={handleUnpin}
       onOpen={handleOpen}
+      focused={focused}
+      onFocus={handleFocus}
     />
   );
 }, focusGroupPaneEqual);
@@ -195,7 +221,9 @@ function focusGroupPaneEqual(previous: FocusGroupPaneProps, next: FocusGroupPane
     previous.attentionTargetId !== next.attentionTargetId ||
     previous.attentionTargetNonce !== next.attentionTargetNonce ||
     previous.onOpen !== next.onOpen ||
-    previous.onUnpin !== next.onUnpin
+    previous.onUnpin !== next.onUnpin ||
+    previous.focused !== next.focused ||
+    previous.onFocus !== next.onFocus
   ) {
     return false;
   }
@@ -215,123 +243,36 @@ function groupStatusBadge(
   return taskBadge(status);
 }
 
-const AgentTabs = memo(function AgentTabs({
-  tree,
-  selectedId,
-  permissionTaskIds,
-  showAll,
-  onShowAll,
-  onSelect,
-}: {
-  tree: TaskTree;
-  selectedId: string;
-  permissionTaskIds: ReadonlySet<string>;
-  showAll: boolean;
-  onShowAll: (show: boolean) => void;
-  onSelect: (id: string) => void;
-}) {
-  const descendants = useMemo(() => flattenTaskTree(tree).slice(1), [tree]);
-  const counts = useMemo(() => taskGroupCounts(tree), [tree]);
-  const prominent = descendants.filter(
-    (task) =>
-      !["done", "idle"].includes(task.status) ||
-      task.id === selectedId ||
-      permissionTaskIds.has(task.id),
-  );
-  const visible = showAll ? descendants : prominent.slice(0, 4);
-  const hidden = descendants.filter((task) => !visible.some((shown) => shown.id === task.id));
-  const summary = [
-    counts.blocked > 0 ? `${counts.blocked} blocked` : null,
-    counts.review > 0 ? `${counts.review} review` : null,
-    counts.running > 0 ? `${counts.running} running` : null,
-    counts.done > 0 ? `${counts.done} done` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  return (
-    <div className="border-b border-border/70 bg-background/30 px-2.5 py-2">
-      <div className="mb-1.5 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground">
-        <Users className="size-3 text-primary" />
-        <span className="font-medium text-foreground">Agents {descendants.length}</span>
-        {summary && <span className="ml-auto truncate">{summary}</span>}
-      </div>
-      <div
-        className={cn("flex min-w-0 items-center gap-1", showAll ? "flex-wrap" : "overflow-hidden")}
-        role="tablist"
-        aria-label="Agents in this task"
-      >
-        <AgentTabButton
-          task={tree.task}
-          lead
-          permission={permissionTaskIds.has(tree.task.id)}
-          selected={selectedId === tree.task.id}
-          onSelect={onSelect}
-        />
-        {visible.map((task) => (
-          <AgentTabButton
-            key={task.id}
-            task={task}
-            permission={permissionTaskIds.has(task.id)}
-            selected={selectedId === task.id}
-            onSelect={onSelect}
-          />
-        ))}
-        {hidden.length > 0 && (
-          <button
-            type="button"
-            className="ml-auto inline-flex shrink-0 items-center gap-0.5 rounded border border-border/70 bg-secondary/40 px-1.5 py-1 text-[10px] text-muted-foreground hover:text-foreground"
-            aria-expanded={showAll}
-            aria-label={`Show ${hidden.length} more agents`}
-            onClick={() => onShowAll(true)}
-          >
-            +{hidden.length}
-            <ChevronDown className="size-3" />
-          </button>
-        )}
-        {showAll && descendants.length > prominent.slice(0, 4).length && (
-          <button
-            type="button"
-            className="ml-auto shrink-0 rounded px-1.5 py-1 text-[10px] text-muted-foreground hover:text-foreground"
-            onClick={() => onShowAll(false)}
-          >
-            Less
-          </button>
-        )}
-      </div>
-    </div>
-  );
-});
-
 function FocusPane({
   task,
   updates,
   tree,
   selectedId,
-  showAllAgents,
   groupStatus,
-  permissionTaskIds,
-  onShowAllAgents,
   onSelect,
   onUnpin,
   onOpen,
+  focused,
+  onFocus,
 }: {
   task: TaskInfo;
   updates: SessionUpdate[];
   tree: TaskTree;
   selectedId: string;
-  showAllAgents: boolean;
   groupStatus: TaskGroupStatus;
-  permissionTaskIds: ReadonlySet<string>;
-  onShowAllAgents: (show: boolean) => void;
   onSelect: (id: string) => void;
   onUnpin: () => void;
   onOpen: () => void;
+  focused: boolean;
+  onFocus: () => void;
 }) {
   const stream = useMemo(() => coalesceUpdates(updates), [updates]);
   const resolved = useMemo(() => resolvedPermissions(stream), [stream]);
   const pending = useMemo(() => pendingPermission(stream, resolved), [stream, resolved]);
-  const preview = useMemo(() => pinnedPreview(stream, PINNED_PREVIEW_LIMIT), [stream]);
+  const preview = useMemo(
+    () => pinnedPreview(stream, focused ? FOCUSED_PREVIEW_LIMIT : PINNED_PREVIEW_LIMIT),
+    [focused, stream],
+  );
   const tools = useMemo(() => summarizeTools(stream), [stream]);
   const files = useMemo(() => summarizeFiles(stream), [stream]);
   const commands = useMemo(() => latestCommands(updates), [updates]);
@@ -348,22 +289,11 @@ function FocusPane({
   return (
     <Card
       className={cn(
-        "group flex max-h-[400px] min-h-[300px] flex-col overflow-hidden border border-border/70 bg-card/95 shadow-[0_12px_28px_rgb(0_0_0/0.18)]",
-        tree.children.length > 0 && "max-h-[580px] min-h-[480px]",
-        "transition-colors hover:border-border",
+        "group flex h-[520px] min-h-[420px] flex-col overflow-hidden rounded-md border border-border/80 bg-card shadow-none",
+        focused && "h-[calc(100vh-3rem)]",
       )}
     >
-      {tree.children.length > 0 && (
-        <AgentTabs
-          tree={tree}
-          selectedId={selectedId}
-          permissionTaskIds={permissionTaskIds}
-          showAll={showAllAgents}
-          onShowAll={onShowAllAgents}
-          onSelect={onSelect}
-        />
-      )}
-      <div className="border-b border-border/70 px-3 py-2.5">
+      <div className="border-b border-border/80 px-3 py-1.5">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">
             <div className="mb-1 flex min-w-0 items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
@@ -386,45 +316,69 @@ function FocusPane({
           <button
             type="button"
             aria-label="Open task details"
-            className="rounded p-1 text-muted-foreground opacity-80 hover:bg-secondary hover:text-foreground"
+            className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
             onClick={onOpen}
-            title="Full detail"
+            title="Open task details"
           >
-            <Maximize2 className="size-4" />
+            <ExternalLink className="size-3.5" />
           </button>
           <button
             type="button"
-            aria-label="Unpin task"
-            className="rounded p-1 text-muted-foreground opacity-80 hover:bg-secondary hover:text-foreground"
-            onClick={onUnpin}
-            title="Unpin"
+            aria-label={focused ? "Exit focus mode" : "Focus this conversation"}
+            className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+            onClick={onFocus}
+            title={focused ? "Exit focus mode" : "Focus"}
           >
-            <X className="size-4" />
+            {focused ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+          </button>
+          <button
+            type="button"
+            aria-label="Unpin from Mission Control"
+            className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+            onClick={onUnpin}
+            title="Unpin from Mission Control"
+          >
+            <PinOff className="size-3.5" />
           </button>
         </div>
+      </div>
 
-        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
-          <ActivityChip icon={<Activity />} label={`${stream.length} events`} />
-          {tools.total > 0 && (
-            <ActivityChip
-              icon={<Wrench />}
-              label={`${tools.total} tools`}
-              tone={tools.active > 0 ? "warn" : "muted"}
-              detail={[
-                tools.active > 0 ? `${tools.active} active` : null,
-                tools.failed > 0 ? `${tools.failed} failed` : null,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            />
-          )}
-          {files.length > 0 && (
-            <ActivityChip
-              icon={<FileText />}
-              label={`${files.length} files`}
-              detail={files.slice(0, 2).join(", ")}
-            />
-          )}
+      <div className="flex h-9 shrink-0 items-center border-b border-border/80 px-3">
+        <span className="text-xs font-semibold text-foreground">Conversation</span>
+        <div className="ml-auto flex items-center gap-1">
+          <TaskAgentSwitcher currentTaskId={selectedId} tree={tree} onOpenTask={onSelect} />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Conversation activity"
+                className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+                title="Activity"
+              >
+                <MoreHorizontal className="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64 p-2">
+              <div className="flex flex-wrap gap-1">
+                <ActivityChip icon={<Activity />} label={`${stream.length} events`} />
+                {tools.total > 0 && (
+                  <ActivityChip
+                    icon={<Wrench />}
+                    label={`${tools.total} tools`}
+                    tone={tools.active > 0 ? "warn" : "muted"}
+                    detail={tools.failed > 0 ? `${tools.failed} failed` : undefined}
+                  />
+                )}
+                {files.length > 0 && (
+                  <ActivityChip
+                    icon={<FileText />}
+                    label={`${files.length} files`}
+                    detail={files.slice(0, 2).join(", ")}
+                  />
+                )}
+              </div>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -439,12 +393,12 @@ function FocusPane({
       )}
 
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-2.5 p-3 text-[13px] leading-6">
+        <div className="flex flex-col gap-2 p-2.5 text-[13px] leading-6">
           {preview.hidden > 0 && (
             <button
               type="button"
               onClick={onOpen}
-              className="flex items-center justify-between rounded-md border border-border/70 bg-background/35 px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+              className="flex items-center justify-between rounded border border-border/60 bg-background/20 px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
             >
               <span>{preview.hidden} earlier updates hidden here</span>
               <span className="text-primary">more in details</span>
@@ -469,8 +423,9 @@ function FocusPane({
         </div>
       </ScrollArea>
 
-      <div className="border-t border-border/70 bg-background/35">
+      <div className="border-t border-border/80">
         <Composer
+          compact
           commands={commands}
           files={projectFiles}
           filesLoading={fileListQuery.isLoading}
@@ -564,7 +519,7 @@ function StatusPill({
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium",
+        "inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs font-medium",
         variant === "ok" && "border-ok/35 bg-ok/10 text-ok",
         variant === "warn" && "border-warn/40 bg-warn/10 text-warn",
         variant === "destructive" && "border-destructive/40 bg-destructive/10 text-destructive",
@@ -600,9 +555,9 @@ function ActivityChip({
   return (
     <span
       className={cn(
-        "flex min-w-0 max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-xs [&_svg]:size-3.5 [&_svg]:shrink-0",
-        tone === "muted" && "border-border/70 bg-background/35 text-muted-foreground",
-        tone === "warn" && "border-warn/30 bg-warn/10 text-warn",
+        "flex min-w-0 max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-xs [&_svg]:size-3 [&_svg]:shrink-0",
+        tone === "muted" && "bg-background/25 text-muted-foreground",
+        tone === "warn" && "bg-warn/10 text-warn",
       )}
       title={detail || label}
     >
@@ -644,80 +599,6 @@ function PinnedStreamLine({
     );
   }
   return <StreamLine update={update} compact={compact} taskId={taskId} resolved={resolved} />;
-}
-
-/**
- * Fold a raw session stream into what should actually be shown:
- *  - consecutive `agent_text` / `agent_thought` chunks merge into one block
- *    (codex-acp streams sub-word deltas; otherwise each renders on its own line);
- *  - repeated `tool_call` frames for the same `tool_call_id` collapse to a
- *    single row updated in place (agents re-send a call many times as its status
- *    moves in_progress → completed).
- */
-/**
- * A React key that stays stable across streaming/coalescing for updates that
- * hold local UI state (permission buttons, expandable tool cards). Coalescing
- * changes element counts, so an index key would remount these and reset their
- * state; keying by the update's own id avoids that. Stateless blocks fall back
- * to the index.
- */
-export function streamKey(u: SessionUpdate, i: number): string {
-  if (u.kind === "tool_call") {
-    return `tool:${u.tool_call_id}`;
-  }
-  if (u.kind === "permission_request") {
-    return `perm:${u.request_id}`;
-  }
-  if (u.kind === "permission_resolved") {
-    return `res:${u.request_id}`;
-  }
-  return `i:${i}`;
-}
-
-/**
- * Fold one raw update into an in-progress coalesced list. `toolAt` maps a
- * tool_call_id to its index in `out` so repeated frames update in place. Only
- * the block being mutated (the trailing text/thought run, or a tool card
- * receiving a new frame) gets a fresh object; every other block keeps its
- * identity, which lets an append-only stream be coalesced incrementally and
- * memoized row-by-row instead of rebuilt from scratch on every delta.
- */
-export function appendCoalesced(
-  out: SessionUpdate[],
-  toolAt: Map<string, number>,
-  u: SessionUpdate,
-): void {
-  const prev = out[out.length - 1];
-  if ((u.kind === "agent_text" || u.kind === "agent_thought") && prev?.kind === u.kind) {
-    out[out.length - 1] = { ...prev, text: prev.text + u.text };
-  } else if (u.kind === "tool_call") {
-    const at = toolAt.get(u.tool_call_id);
-    const existing = at !== undefined ? out[at] : undefined;
-    if (existing?.kind === "tool_call") {
-      out[at!] = {
-        ...existing,
-        content: u.content ?? existing.content,
-        status: u.status,
-        started_at: existing.started_at ?? u.started_at,
-        title: u.title || existing.title,
-        tool_kind: u.tool_kind || existing.tool_kind,
-      };
-    } else {
-      toolAt.set(u.tool_call_id, out.length);
-      out.push(u);
-    }
-  } else {
-    out.push(u);
-  }
-}
-
-export function coalesceUpdates(updates: SessionUpdate[]): SessionUpdate[] {
-  const out: SessionUpdate[] = [];
-  const toolAt = new Map<string, number>();
-  for (const u of updates) {
-    appendCoalesced(out, toolAt, u);
-  }
-  return out;
 }
 
 /** Shared renderer for one session-stream update. `compact` = focus pane

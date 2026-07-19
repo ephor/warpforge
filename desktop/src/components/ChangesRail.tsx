@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronRight, GitCommitVertical, RefreshCw, Undo2 } from "lucide-react";
+import { ChevronDown, ChevronRight, GitCommitVertical, RefreshCw, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -157,6 +157,8 @@ export function ChangesRail({
   selected,
   onSelect,
   taskId,
+  commitExpanded: controlledCommitExpanded,
+  onCommitExpandedChange,
   onCommitted,
   onRefresh,
 }: {
@@ -165,6 +167,8 @@ export function ChangesRail({
   selected: string | null;
   onSelect: (path: string) => void;
   taskId: string;
+  commitExpanded?: boolean;
+  onCommitExpandedChange?: (expanded: boolean) => void;
   onCommitted: () => void;
   onRefresh: () => void;
 }) {
@@ -173,6 +177,12 @@ export function ChangesRail({
   const [staged, setStaged] = useState<Set<string>>(() => new Set(allPaths));
   const [message, setMessage] = useState("");
   const [amend, setAmend] = useState(false);
+  const [localCommitExpanded, setLocalCommitExpanded] = useState(false);
+  const commitExpanded = controlledCommitExpanded ?? localCommitExpanded;
+  const setCommitExpanded = (expanded: boolean) => {
+    setLocalCommitExpanded(expanded);
+    onCommitExpandedChange?.(expanded);
+  };
   const [busy, setBusy] = useState(false);
   const [rollbackBusy, setRollbackBusy] = useState(false);
   const [rollbackConfirm, setRollbackConfirm] = useState(false);
@@ -267,6 +277,7 @@ export function ChangesRail({
       });
       setMessage("");
       setAmend(false);
+      setCommitExpanded(false);
       onCommitted();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -344,6 +355,7 @@ export function ChangesRail({
           aria-label="Stage all files"
           type="checkbox"
           checked={staged.size === allPaths.length && allPaths.length > 0}
+          disabled={allPaths.length === 0}
           ref={(el) => el && (el.indeterminate = staged.size > 0 && staged.size < allPaths.length)}
           onChange={(e) => setStaged(e.target.checked ? new Set(allPaths) : new Set())}
           className="size-3 accent-primary"
@@ -453,37 +465,70 @@ export function ChangesRail({
         )}
       </div>
 
-      <div className="flex flex-col gap-2 border-t bg-background/30 p-2.5">
-        <textarea
-          value={message}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder="Commit message"
-          rows={3}
-          className="min-h-20 w-full resize-none rounded-md border bg-background/70 px-2 py-1.5 text-xs outline-none placeholder:text-muted-foreground/80 focus:ring-1 focus:ring-ring"
-        />
-        {error && <p className="text-xs text-destructive">{error}</p>}
-        <div className="flex items-center gap-2">
-          <label className="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={amend}
-              onChange={(e) => setAmend(e.target.checked)}
-              className="size-3 accent-primary"
-            />
-            amend
-          </label>
-          <Button
-            type="button"
-            size="sm"
-            className="ml-auto h-7"
-            disabled={!canCommit}
-            onClick={commit}
-          >
-            <GitCommitVertical className="size-3.5" />
-            {busy ? "…" : amend ? "Amend" : "Commit"}
-          </Button>
+      {files.length > 0 && (
+        <div className="flex flex-col gap-2 border-t bg-background/30 p-2.5">
+          {commitExpanded ? (
+            <>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="tnum">{staged.size} selected</span>
+                <button
+                  type="button"
+                  className="ml-auto rounded p-1 hover:bg-secondary hover:text-foreground"
+                  aria-label="Collapse commit form"
+                  onClick={() => setCommitExpanded(false)}
+                >
+                  <ChevronDown className="size-3.5" />
+                </button>
+              </div>
+              <textarea
+                autoFocus
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="Commit message"
+                rows={3}
+                className="bg-deep-surface min-h-20 w-full resize-none rounded-md border px-2 py-1.5 text-xs outline-none placeholder:text-muted-foreground/80 focus:ring-1 focus:ring-ring"
+              />
+              {error && <p className="text-xs text-destructive">{error}</p>}
+              <div className="flex items-center gap-2">
+                <label className="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={amend}
+                    onChange={(e) => setAmend(e.target.checked)}
+                    className="size-3 accent-primary"
+                  />
+                  amend
+                </label>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="ml-auto h-7"
+                  disabled={!canCommit}
+                  onClick={commit}
+                >
+                  <GitCommitVertical className="size-3.5" />
+                  {busy ? "…" : amend ? "Amend" : "Commit"}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="w-full justify-between"
+              disabled={staged.size === 0}
+              onClick={() => setCommitExpanded(true)}
+            >
+              <span className="flex items-center gap-1.5">
+                <GitCommitVertical className="size-3.5" />
+                Commit…
+              </span>
+              <span className="tnum text-[10px] text-muted-foreground">{staged.size} selected</span>
+            </Button>
+          )}
         </div>
-      </div>
+      )}
     </div>
   );
 }
