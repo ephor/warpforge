@@ -130,9 +130,9 @@ const TranscriptRow = memo(function TranscriptRow({
         tags: ["conversation-branch", `branched-from:${sourceTaskId}`],
         worktree: true,
       });
-      const taskId = (result as { taskId?: string })?.taskId;
-      if (!taskId) throw new Error("Warpforge did not return the new task id");
-      onOpenTask(taskId);
+      const createdTaskId = (result as { taskId?: string })?.taskId;
+      if (!createdTaskId) throw new Error("Warpforge did not return the new task id");
+      onOpenTask(createdTaskId);
     },
     [branchPrompt, onOpenTask, project, sourceTaskId],
   );

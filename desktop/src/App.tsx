@@ -326,7 +326,7 @@ export default function App() {
               break;
           }
         })
-        .catch((e: Error) => toast.error(e.message));
+        .catch((error: Error) => toast.error(error.message));
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);

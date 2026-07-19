@@ -25,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { withOccurrenceKeys } from "@/lib/renderKeys";
 import { sessionActivity } from "@/lib/sessionActivity";
 import {
   latestPendingPermission,
@@ -750,9 +751,11 @@ export function StreamLine({
           </Markdown>
           {!!update.attachments?.length && (
             <div className="mt-1.5 flex flex-wrap gap-1">
-              {update.attachments.map((attachment, index) => (
+              {withOccurrenceKeys(update.attachments, (attachment) =>
+                attachment.type === "file" ? `file:${attachment.path}` : `image:${attachment.name}`,
+              ).map(({ item: attachment, key }) => (
                 <span
-                  key={`${attachment.type}-${index}`}
+                  key={key}
                   className="rounded border border-primary/20 bg-background/40 px-1.5 py-0.5 font-mono text-[10px]"
                 >
                   {attachment.type === "file" ? `@${attachment.path}` : `image: ${attachment.name}`}

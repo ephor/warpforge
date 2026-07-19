@@ -544,9 +544,9 @@ export class DaemonClient {
     const snap = this.state.snapshot;
     switch (ev.event) {
       case "state.snapshot": {
-        const { sessionHistory, ...snap } = ev.data;
+        const { sessionHistory, ...snapshotData } = ev.data;
         this.setState({
-          snapshot: snap as Snapshot,
+          snapshot: snapshotData as Snapshot,
           ...(sessionHistory ? { sessionUpdates: this.stampSessionHistories(sessionHistory) } : {}),
         });
         break;

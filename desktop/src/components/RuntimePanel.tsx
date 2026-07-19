@@ -1,6 +1,7 @@
 import { Play, PlugZap, RefreshCw, RotateCw, Server, Square, TerminalSquare } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
+import { withOccurrenceKeys } from "@/lib/renderKeys";
 import { pfBadge, serviceBadge } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
@@ -156,8 +157,8 @@ export function RuntimePanel({
           ) : displayLogs.length === 0 ? (
             <pre className="text-muted-foreground">[{activeService.name}] no logs yet</pre>
           ) : (
-            displayLogs.map((line, i) => (
-              <pre key={`${i}:${line}`} className="whitespace-pre-wrap break-words">
+            withOccurrenceKeys(displayLogs, (line) => line).map(({ item: line, key }) => (
+              <pre key={key} className="whitespace-pre-wrap break-words">
                 <span className="select-none text-muted-foreground">$ </span>
                 {line}
               </pre>

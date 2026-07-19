@@ -304,6 +304,8 @@ export function ChangesRail({
         }
         const indices = file.status === "added" ? [0] : file.hunks.map((_, i) => i).reverse();
         for (const hunkIndex of indices) {
+          // Hunk indices shift after each rejection, so these requests must stay sequential.
+          // eslint-disable-next-line no-await-in-loop
           await daemon.request("diff.resolveHunk", {
             file: path,
             hunk_index: hunkIndex,
