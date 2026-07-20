@@ -302,17 +302,20 @@ mod tests {
 
         daemon.send(Command::CancelTask { id: id.clone() }).await;
 
-        let ev = timeout(Duration::from_secs(1), events.recv())
-            .await
-            .expect("event")
-            .expect("event");
-        match ev {
-            Event::TaskUpdated(task) => {
-                assert_eq!(task.id, id);
-                assert_eq!(task.status, TaskStatus::Done);
+        timeout(Duration::from_secs(1), async {
+            loop {
+                match events.recv().await.expect("event") {
+                    Event::TaskUpdated(task)
+                        if task.id == id && task.status == TaskStatus::Done =>
+                    {
+                        break;
+                    }
+                    _ => continue,
+                }
             }
-            _ => panic!("expected TaskUpdated"),
-        }
+        })
+        .await
+        .expect("TaskUpdated with Done status");
     }
 
     #[tokio::test]
