@@ -50,6 +50,9 @@ pub enum AcpUpdate {
     },
     FileEdit {
         path: String,
+        tool_call_id: String,
+        additions: Option<u32>,
+        deletions: Option<u32>,
     },
     PermissionRequest {
         request_id: String,
@@ -1168,8 +1171,13 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
                 .to_string();
             // A file edit still emits a dedicated FileEdit for the diff badge…
             if kind == "edit" {
-                if let Some(path) = edit_path(update) {
-                    return Some(AcpUpdate::FileEdit { path });
+                if let Some(edit) = edit_info(update) {
+                    return Some(AcpUpdate::FileEdit {
+                        path: edit.path,
+                        tool_call_id: id,
+                        additions: edit.additions,
+                        deletions: edit.deletions,
+                    });
                 }
             }
             let title = tool_title(update, &id, &kind);
@@ -1421,26 +1429,109 @@ fn content_text(content: &Value) -> Option<String> {
     None
 }
 
-/// Pull the first edited file path out of a tool_call update, from `locations`
-/// or a diff in `content`.
-fn edit_path(update: &Value) -> Option<String> {
-    if let Some(loc) = update.get("locations").and_then(|l| l.as_array()) {
-        if let Some(p) = loc
-            .first()
-            .and_then(|e| e.get("path"))
-            .and_then(|p| p.as_str())
-        {
-            return Some(p.to_string());
-        }
-    }
+struct EditInfo {
+    path: String,
+    additions: Option<u32>,
+    deletions: Option<u32>,
+}
+
+/// Pull edit details from ACP diff content, falling back to `locations` when
+/// the agent only reports which file it touched.
+fn edit_info(update: &Value) -> Option<EditInfo> {
     if let Some(content) = update.get("content").and_then(|c| c.as_array()) {
         for item in content {
-            if let Some(p) = item.get("path").and_then(|p| p.as_str()) {
-                return Some(p.to_string());
+            let Some(path) = item.get("path").and_then(|p| p.as_str()) else {
+                continue;
+            };
+            if item.get("type").and_then(|v| v.as_str()) == Some("diff") {
+                let new_text = item.get("newText").and_then(|v| v.as_str());
+                if let Some(new_text) = new_text {
+                    let old_text = item.get("oldText").and_then(|v| v.as_str());
+                    let (additions, deletions) = line_change_counts(old_text, new_text);
+                    return Some(EditInfo {
+                        path: path.to_string(),
+                        additions: Some(additions),
+                        deletions: Some(deletions),
+                    });
+                }
             }
+            return Some(EditInfo {
+                path: path.to_string(),
+                additions: None,
+                deletions: None,
+            });
         }
     }
+    if let Some(path) = update
+        .get("locations")
+        .and_then(|l| l.as_array())
+        .and_then(|locations| locations.first())
+        .and_then(|location| location.get("path"))
+        .and_then(|path| path.as_str())
+    {
+        return Some(EditInfo {
+            path: path.to_string(),
+            additions: None,
+            deletions: None,
+        });
+    }
     None
+}
+
+/// Count the shortest line-level edit script using Myers' algorithm. The ACP
+/// diff contains whole old/new texts, so this yields the familiar git-style
+/// additions/deletions without shelling out or reading a moving worktree.
+fn line_change_counts(old_text: Option<&str>, new_text: &str) -> (u32, u32) {
+    let new_lines = new_text.lines().collect::<Vec<_>>();
+    let Some(old_text) = old_text else {
+        return (new_lines.len().try_into().unwrap_or(u32::MAX), 0);
+    };
+    let old_lines = old_text.lines().collect::<Vec<_>>();
+    let n = old_lines.len();
+    let m = new_lines.len();
+    if n == 0 {
+        return (m.try_into().unwrap_or(u32::MAX), 0);
+    }
+    if m == 0 {
+        return (0, n.try_into().unwrap_or(u32::MAX));
+    }
+
+    let max = n + m;
+    let offset = max as isize + 1;
+    let mut furthest = vec![0isize; max * 2 + 3];
+    for distance in 0..=max {
+        let d = distance as isize;
+        let mut diagonal = -d;
+        while diagonal <= d {
+            let index = (offset + diagonal) as usize;
+            let mut x =
+                if diagonal == -d || (diagonal != d && furthest[index - 1] < furthest[index + 1]) {
+                    furthest[index + 1]
+                } else {
+                    furthest[index - 1] + 1
+                };
+            let mut y = x - diagonal;
+            while x < n as isize && y < m as isize && old_lines[x as usize] == new_lines[y as usize]
+            {
+                x += 1;
+                y += 1;
+            }
+            furthest[index] = x;
+            if x >= n as isize && y >= m as isize {
+                let additions = (distance + m - n) / 2;
+                let deletions = distance - additions;
+                return (
+                    additions.try_into().unwrap_or(u32::MAX),
+                    deletions.try_into().unwrap_or(u32::MAX),
+                );
+            }
+            diagonal += 2;
+        }
+    }
+    (
+        m.try_into().unwrap_or(u32::MAX),
+        n.try_into().unwrap_or(u32::MAX),
+    )
 }
 
 /// Turn ACP permission options into the client-facing outcome labels plus a
@@ -1541,6 +1632,50 @@ mod tests {
         };
         assert_eq!(title, "Run command");
         assert_eq!(content.as_deref(), Some("3 files changed"));
+    }
+
+    #[test]
+    fn file_edit_reports_line_counts_from_acp_diff() {
+        let params = json!({
+            "update": {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "edit-1",
+                "kind": "edit",
+                "status": "completed",
+                "content": [{
+                    "type": "diff",
+                    "path": "src/main.rs",
+                    "oldText": "use std::io;\n\nfn main() {\n    old();\n}\n",
+                    "newText": "use std::fs;\nuse std::io;\n\nfn main() {\n    new();\n}\n"
+                }]
+            }
+        });
+
+        let Some(AcpUpdate::FileEdit {
+            path,
+            tool_call_id,
+            additions,
+            deletions,
+        }) = parse_update(&params)
+        else {
+            panic!("expected file edit");
+        };
+        assert_eq!(path, "src/main.rs");
+        assert_eq!(tool_call_id, "edit-1");
+        assert_eq!(additions, Some(2));
+        assert_eq!(deletions, Some(1));
+    }
+
+    #[test]
+    fn line_counts_handle_new_files_and_disjoint_edits() {
+        assert_eq!(line_change_counts(None, "one\ntwo\n"), (2, 0));
+        assert_eq!(
+            line_change_counts(
+                Some("keep\nold one\nmiddle\nold two\ntail\n"),
+                "keep\nnew one\nmiddle\nnew two\nextra\ntail\n",
+            ),
+            (3, 2),
+        );
     }
 
     #[test]

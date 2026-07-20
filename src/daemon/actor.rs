@@ -2486,8 +2486,18 @@ impl Daemon {
                     embedded_context,
                 },
             ),
-            AcpUpdate::FileEdit { path } => {
-                let update = wire::SessionUpdate::FileEdit { path };
+            AcpUpdate::FileEdit {
+                path,
+                tool_call_id,
+                additions,
+                deletions,
+            } => {
+                let update = wire::SessionUpdate::FileEdit {
+                    path,
+                    tool_call_id: Some(tool_call_id),
+                    additions,
+                    deletions,
+                };
                 if self.should_skip_resume_replay(&task_id, &update) {
                     return;
                 }

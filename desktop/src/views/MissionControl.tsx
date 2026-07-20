@@ -727,6 +727,7 @@ export function StreamLine({
   resolved,
   resolveFilePath,
   onOpenFile,
+  project,
   thinkingActive,
 }: {
   update: SessionUpdate;
@@ -737,6 +738,8 @@ export function StreamLine({
   resolved?: Record<string, string>;
   resolveFilePath?: FileLinkResolver;
   onOpenFile?: (path: string) => void;
+  /** Project root label retained after stripping the machine-specific prefix. */
+  project?: string;
   /** True only for the thought block currently receiving streamed deltas. */
   thinkingActive?: boolean;
 }) {
@@ -825,6 +828,12 @@ export function StreamLine({
     }
     case "file_edit":
       const filePath = resolveFilePath?.(update.path) ?? null;
+      const displayPath = filePath
+        ? project && filePath !== project && !filePath.startsWith(`${project}/`)
+          ? `${project}/${filePath}`
+          : filePath
+        : update.path;
+      const hasLineCounts = update.additions !== undefined || update.deletions !== undefined;
       return (
         <p className="flex min-w-0 items-center gap-1.5 font-mono text-xs">
           <FilePen className="size-3.5 shrink-0 text-primary" />
@@ -832,14 +841,23 @@ export function StreamLine({
             <button
               type="button"
               onClick={() => onOpenFile(filePath)}
-              className="min-w-0 truncate text-left text-primary hover:underline"
+              className="min-w-0 flex-1 truncate text-left text-primary hover:underline"
               title={`Open ${filePath}`}
             >
-              {update.path}
+              {displayPath}
             </button>
           ) : (
-            <span className="min-w-0 truncate" title={update.path}>
-              {update.path}
+            <span className="min-w-0 flex-1 truncate" title={displayPath}>
+              {displayPath}
+            </span>
+          )}
+          {hasLineCounts && (
+            <span
+              className="ml-auto inline-flex shrink-0 items-center gap-1 tabular-nums"
+              aria-label={`${update.additions ?? 0} lines added, ${update.deletions ?? 0} lines deleted`}
+            >
+              <span className="text-ok">+{update.additions ?? 0}</span>
+              <span className="text-destructive">−{update.deletions ?? 0}</span>
             </span>
           )}
         </p>

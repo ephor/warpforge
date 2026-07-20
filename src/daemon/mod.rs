@@ -183,7 +183,7 @@ mod tests {
                     update,
                 } if tid == task_id => match update {
                     wire::SessionUpdate::AgentText { .. } => saw_agent_text = true,
-                    wire::SessionUpdate::FileEdit { path } => {
+                    wire::SessionUpdate::FileEdit { path, .. } => {
                         assert_eq!(path, "src/main.rs");
                         saw_file_edit = true;
                     }

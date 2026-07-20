@@ -1,6 +1,9 @@
+import { render, screen } from "@testing-library/react";
+import { createElement } from "react";
 import { describe, expect, it } from "vitest";
 
 import type { SessionUpdate } from "../protocol";
+import { StreamLine } from "./MissionControl";
 import { appendCoalesced, coalesceUpdates } from "./missionControlStream";
 
 /** Reference incremental fold, mirroring ChatTranscript.useCoalesced. */
@@ -9,6 +12,7 @@ function incrementalCoalesce(prefix: SessionUpdate[], tail: SessionUpdate[]) {
   const toolAt = new Map<string, number>();
   merged.forEach((u, i) => {
     if (u.kind === "tool_call") toolAt.set(u.tool_call_id, i);
+    if (u.kind === "file_edit" && u.tool_call_id) toolAt.set(`edit:${u.tool_call_id}`, i);
   });
   for (const u of tail) appendCoalesced(merged, toolAt, u);
   return merged;
@@ -40,6 +44,42 @@ describe("coalesceUpdates tool timing", () => {
       status: "completed",
     });
   });
+
+  it("coalesces lifecycle frames for one file edit and keeps the line counts", () => {
+    const updates: SessionUpdate[] = [
+      { kind: "file_edit", path: "src/App.tsx", tool_call_id: "edit-1" },
+      {
+        kind: "file_edit",
+        path: "src/App.tsx",
+        tool_call_id: "edit-1",
+        additions: 12,
+        deletions: 3,
+      },
+    ];
+
+    expect(coalesceUpdates(updates)).toEqual([updates[1]]);
+  });
+});
+
+describe("file edit line", () => {
+  it("shows a project-relative path and per-edit line counts", () => {
+    render(
+      createElement(StreamLine, {
+        update: {
+          kind: "file_edit",
+          path: "/Users/dev/warpforge/desktop/src/App.tsx",
+          additions: 12,
+          deletions: 3,
+        },
+        project: "warpforge",
+        resolveFilePath: () => "desktop/src/App.tsx",
+      }),
+    );
+
+    expect(screen.getByText("warpforge/desktop/src/App.tsx")).toBeInTheDocument();
+    expect(screen.queryByText("/Users/dev/warpforge/desktop/src/App.tsx")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("12 lines added, 3 lines deleted")).toBeInTheDocument();
+  });
 });
 
 describe("incremental coalescing", () => {
@@ -53,6 +93,14 @@ describe("incremental coalescing", () => {
       title: "read",
       tool_call_id: "t1",
       tool_kind: "read",
+    },
+    { kind: "file_edit", path: "src/App.tsx", tool_call_id: "edit-1" },
+    {
+      kind: "file_edit",
+      path: "src/App.tsx",
+      tool_call_id: "edit-1",
+      additions: 2,
+      deletions: 1,
     },
     { kind: "agent_text", text: "Hello" },
     { kind: "agent_text", text: ", world" },

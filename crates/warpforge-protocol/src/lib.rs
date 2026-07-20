@@ -687,6 +687,15 @@ pub enum SessionUpdate {
     },
     FileEdit {
         path: String,
+        /// ACP tool-call id, used by clients to coalesce lifecycle frames for
+        /// the same edit. Optional for histories written by older versions.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
+        /// Line-level changes reported by this individual edit operation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        additions: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deletions: Option<u32>,
     },
     PermissionRequest {
         request_id: String,
@@ -1228,6 +1237,18 @@ mod tests {
             old_tool,
             SessionUpdate::ToolCall {
                 started_at: None,
+                ..
+            }
+        ));
+
+        let old_file_edit: SessionUpdate =
+            serde_json::from_str(r#"{"kind":"file_edit","path":"src/main.rs"}"#).unwrap();
+        assert!(matches!(
+            old_file_edit,
+            SessionUpdate::FileEdit {
+                tool_call_id: None,
+                additions: None,
+                deletions: None,
                 ..
             }
         ));

@@ -60,6 +60,7 @@ function useCoalesced(updates: SessionUpdate[]): SessionUpdate[] {
     for (let i = 0; i < merged.length; i += 1) {
       const u = merged[i];
       if (u.kind === "tool_call") toolAt.set(u.tool_call_id, i);
+      if (u.kind === "file_edit" && u.tool_call_id) toolAt.set(`edit:${u.tool_call_id}`, i);
     }
     cache.current = { merged, src: updates, toolAt };
     return merged;
@@ -149,6 +150,7 @@ const TranscriptRow = memo(function TranscriptRow({
         resolved={resolved}
         resolveFilePath={resolveFilePath}
         onOpenFile={onOpenFile}
+        project={project}
       />
       {messageText && (
         <div className="absolute right-0 bottom-0 z-10">

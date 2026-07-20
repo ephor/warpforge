@@ -88,7 +88,7 @@ const MARKDOWN_COMPONENTS: Components = {
   ),
   table: ({ children: content }) => (
     <div className="my-2 overflow-x-auto">
-      <table className="w-full border-collapse text-xs">{content}</table>
+      <table className="w-full table-fixed border-collapse text-xs">{content}</table>
     </div>
   ),
   td: ({ children: content }) => <td className="border border-border px-2 py-1">{content}</td>,

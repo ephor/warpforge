@@ -4,6 +4,7 @@ import type { SessionUpdate } from "../protocol";
 /** Stable keys preserve row-local state while streamed blocks are coalesced. */
 export function streamKey(update: SessionUpdate, index: number): string {
   if (update.kind === "tool_call") return `tool:${update.tool_call_id}`;
+  if (update.kind === "file_edit" && update.tool_call_id) return `edit:${update.tool_call_id}`;
   if (update.kind === "permission_request") return `perm:${update.request_id}`;
   if (update.kind === "permission_resolved") return `res:${update.request_id}`;
   return `i:${index}`;
@@ -35,6 +36,21 @@ export function appendCoalesced(
       };
     } else {
       toolIndexes.set(update.tool_call_id, output.length);
+      output.push(update);
+    }
+  } else if (update.kind === "file_edit" && update.tool_call_id) {
+    const key = `edit:${update.tool_call_id}`;
+    const index = toolIndexes.get(key);
+    const existing = index !== undefined ? output[index] : undefined;
+    if (existing?.kind === "file_edit") {
+      output[index!] = {
+        ...existing,
+        path: update.path || existing.path,
+        additions: update.additions ?? existing.additions,
+        deletions: update.deletions ?? existing.deletions,
+      };
+    } else {
+      toolIndexes.set(key, output.length);
       output.push(update);
     }
   } else {

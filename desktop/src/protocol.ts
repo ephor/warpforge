@@ -279,7 +279,14 @@ export type SessionUpdate =
       /** Daemon-preserved start of this tool call, in Unix milliseconds. */
       started_at?: number;
     }
-  | { kind: "file_edit"; path: string }
+  | {
+      kind: "file_edit";
+      path: string;
+      /** Present on new histories; lets repeated ACP lifecycle frames coalesce. */
+      tool_call_id?: string;
+      additions?: number;
+      deletions?: number;
+    }
   | {
       kind: "permission_request";
       request_id: string;
