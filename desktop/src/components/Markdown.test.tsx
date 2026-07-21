@@ -69,4 +69,22 @@ describe("Markdown links", () => {
 
     expect(onOpenFile).toHaveBeenCalledWith("src/main.rs");
   });
+
+  it("opens file paths from markdown links in the editor", async () => {
+    const user = userEvent.setup();
+    const onOpenFile = vi.fn<(path: string) => void>();
+    render(
+      <Markdown
+        resolveFilePath={(text) => (text === "src/main.rs" ? text : null)}
+        onOpenFile={onOpenFile}
+      >
+        {"[src/main.rs](src/main.rs)"}
+      </Markdown>,
+    );
+
+    await user.click(screen.getByRole("link", { name: "src/main.rs" }));
+
+    expect(onOpenFile).toHaveBeenCalledWith("src/main.rs");
+    expect(window.open).not.toHaveBeenCalled();
+  });
 });

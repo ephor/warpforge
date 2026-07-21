@@ -15,18 +15,30 @@ interface MarkdownContextValue {
 const MarkdownContext = createContext<MarkdownContextValue>({});
 
 const MarkdownAnchor: NonNullable<Components["a"]> = ({ children: content, href }) => {
+  const { resolveFilePath, onOpenFile } = useContext(MarkdownContext);
   const external = Boolean(href && isExternalLink(href));
+
+  const handleClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (!href) return;
+    if (external) {
+      event.preventDefault();
+      void openExternalLink(href);
+      return;
+    }
+    const filePath = resolveFilePath?.(href);
+    if (filePath && onOpenFile) {
+      event.preventDefault();
+      onOpenFile(filePath);
+    }
+  };
+
   return (
     <a
       href={href}
       target={external ? "_blank" : undefined}
       rel={external ? "noreferrer" : undefined}
       className="text-primary underline"
-      onClick={(event) => {
-        if (!href || !external) return;
-        event.preventDefault();
-        void openExternalLink(href);
-      }}
+      onClick={handleClick}
     >
       {content}
     </a>
