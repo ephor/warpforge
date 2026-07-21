@@ -53,7 +53,7 @@ enum Commands {
     /// accept / edit / discard the proposed config.
     Bootstrap {
         /// Project directory to bootstrap
-        path: String,
+        path: Option<String>,
     },
     /// Start the TUI (default)
     Ui,
@@ -131,7 +131,8 @@ async fn main() -> Result<()> {
             }
         }
         Commands::Bootstrap { path } => {
-            run_bootstrap(&path).await?;
+            let dir = path.unwrap_or_else(|| ".".to_string());
+            run_bootstrap(&dir).await?;
         }
         Commands::Ui => {
             app::run().await?;
