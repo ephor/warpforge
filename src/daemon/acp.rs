@@ -192,6 +192,33 @@ impl FailureReporter {
 const STDERR_LINE_BYTES: usize = 512;
 const STDERR_TOTAL_BYTES: usize = 4096;
 
+/// Extract the JSON-RPC `error` from an agent response into a human-readable,
+/// secret-redacted suffix (leading space included) for reporting. Empty string
+/// when there is no error object. Surfaces the real reason (auth, bad cwd, …)
+/// that would otherwise be swallowed by the generic "rejected" message.
+fn acp_error_detail(response: &Value) -> String {
+    let Some(err) = response.get("error") else {
+        return String::new();
+    };
+    let message = err
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown error");
+    let code = err.get("code").and_then(Value::as_i64);
+    let data = err
+        .get("data")
+        .filter(|d| !d.is_null())
+        .map(|d| d.to_string());
+    let mut detail = match code {
+        Some(code) => format!(" Agent error {code}: {message}"),
+        None => format!(" Agent error: {message}"),
+    };
+    if let Some(data) = data {
+        detail.push_str(&format!(" ({data})"));
+    }
+    bound_diagnostic(&redact_secrets(&detail))
+}
+
 fn sanitize_stderr(input: &[u8]) -> String {
     let text = String::from_utf8_lossy(input);
     let clean: String = text
@@ -773,10 +800,11 @@ pub fn spawn_acp_session(
                     Ok(RpcOutcome::Response(response)) if response.get("error").is_none() => {
                         sid.clone()
                     }
-                    Ok(RpcOutcome::Response(_)) => {
+                    Ok(RpcOutcome::Response(response)) => {
+                        let detail = acp_error_detail(&response);
                         reporter.report(format!(
                             "Agent command '{agent_name}' rejected ACP session/load for saved \
-                             session '{sid}'."
+                             session '{sid}'.{detail}"
                         ));
                         let _ = driver_kill_tx.send(());
                         return;
@@ -816,8 +844,9 @@ pub fn spawn_acp_session(
                 {
                     Ok(RpcOutcome::Response(v)) => {
                         if v.get("error").is_some() {
+                            let detail = acp_error_detail(&v);
                             reporter.report(format!(
-                                "Agent command '{agent_name}' rejected the ACP session/new request."
+                                "Agent command '{agent_name}' rejected the ACP session/new request.{detail}"
                             ));
                             let _ = driver_kill_tx.send(());
                             return;
