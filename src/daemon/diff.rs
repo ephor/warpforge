@@ -12,6 +12,19 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use warpforge_protocol as wire;
 
+/// OS / editor junk never shown in the file tree.
+const IGNORED_NAMES: &[&str] = &[
+    ".DS_Store",
+    "Thumbs.db",
+    "Desktop.ini",
+    ".AppleDouble",
+    ".LSOverride",
+    "._*",
+    "*.swp",
+    "*.swo",
+    "*~",
+];
+
 /// Project files for the editor tree. Prefer git's view (tracked +
 /// untracked, honoring .gitignore); fall back to a small filesystem walk for
 /// non-git projects.
@@ -23,7 +36,6 @@ pub async fn list_files(repo: &str) -> Result<Vec<wire::ProjectFile>> {
             "ls-files",
             "--cached",
             "--others",
-            "--exclude-standard",
         ])
         .output()
         .await?;
@@ -39,7 +51,7 @@ pub async fn list_files(repo: &str) -> Result<Vec<wire::ProjectFile>> {
             .lines()
             .filter_map(|line| {
                 let path = line.trim();
-                (!path.is_empty()).then(|| wire::ProjectFile {
+                (!path.is_empty() && !is_ignored_path(path)).then(|| wire::ProjectFile {
                     path: path.to_string(),
                     changed: changed.contains(path),
                 })
@@ -57,6 +69,24 @@ pub async fn list_files(repo: &str) -> Result<Vec<wire::ProjectFile>> {
     )?;
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(files)
+}
+
+fn is_ignored_path(path: &str) -> bool {
+    let name = std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    IGNORED_NAMES.iter().any(|pat| {
+        if let Some(ext) = pat.strip_prefix("*.") {
+            name.ends_with(ext)
+        } else if let Some(prefix) = pat.strip_prefix(".*") {
+            name == prefix || name.starts_with(&format!(".{prefix}"))
+        } else if pat.ends_with('/') {
+            path.starts_with(pat)
+        } else {
+            name == *pat
+        }
+    })
 }
 
 fn walk_files(
