@@ -27,7 +27,6 @@ export function CodeEditor({
 }) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSaved = useRef<string | null>(null);
   const onSaveRef = useRef(onSave);
   onSaveRef.current = onSave;
@@ -41,9 +40,6 @@ export function CodeEditor({
     const view = viewRef.current;
     if (!view) {
       return true;
-    }
-    if (saveTimer.current) {
-      clearTimeout(saveTimer.current);
     }
     const current = view.state.doc.toString();
     lastSaved.current = current;
@@ -77,25 +73,13 @@ export function CodeEditor({
               return;
             }
             setStatus("unsaved");
-            if (saveTimer.current) {
-              clearTimeout(saveTimer.current);
-            }
-            const next = u.state.doc.toString();
-            setText(next);
-            saveTimer.current = setTimeout(() => {
-              lastSaved.current = next;
-              onSaveRef.current(next);
-              setStatus("saved");
-            }, 600);
+            setText(u.state.doc.toString());
           }),
         ],
       }),
     });
     viewRef.current = view;
     return () => {
-      if (saveTimer.current) {
-        clearTimeout(saveTimer.current);
-      }
       view.destroy();
       viewRef.current = null;
     };

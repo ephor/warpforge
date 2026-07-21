@@ -31,7 +31,6 @@ export function MergeDiff({
 }) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<MergeView | null>(null);
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onSaveRef = useRef(onSave);
   // Text we last wrote to disk — lets the sync effect tell our own save-echo
   // (harmless, skip) from a real external/agent edit (apply to the pane).
@@ -47,9 +46,6 @@ export function MergeDiff({
     const view = viewRef.current;
     if (!view) {
       return;
-    }
-    if (saveTimer.current) {
-      clearTimeout(saveTimer.current);
     }
     const text = view.b.state.doc.toString();
     lastSaved.current = text;
@@ -91,13 +87,6 @@ export function MergeDiff({
           EditorView.updateListener.of((u) => {
             if (!u.docChanged) return;
             setStatus("unsaved");
-            if (saveTimer.current) clearTimeout(saveTimer.current);
-            const text = u.state.doc.toString();
-            saveTimer.current = setTimeout(() => {
-              lastSaved.current = text;
-              onSaveRef.current(text);
-              setStatus("saved");
-            }, 600);
           }),
         ],
       },
@@ -114,9 +103,6 @@ export function MergeDiff({
     viewRef.current = view;
 
     return () => {
-      if (saveTimer.current) {
-        clearTimeout(saveTimer.current);
-      }
       view.destroy();
       viewRef.current = null;
     };
