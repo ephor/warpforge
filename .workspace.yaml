@@ -3,7 +3,7 @@ name: warpforge
 
 services:
   app:
-    command: npm run dev
+    command: bun run dev
     port: 3000
     # env:
     #   DATABASE_URL: postgres://localhost:${db.port}/mydb

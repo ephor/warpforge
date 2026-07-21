@@ -52,7 +52,7 @@ Phase 5 done: `SessionTile` enlarged with a live coalesced conversation preview 
 grid (`gridTasks = live.filter(!pinned)`), tiles have Pin + Expand buttons, `FocusPane`
 keeps Expand + Unpin, pin cap 4. Removed the old one-line `activityLine`.
 
-## What was built (mechanically works; `npx tsc --noEmit` clean, `cargo check`/`cargo test -p warpforge-protocol` pass)
+## What was built (mechanically works; `bun run typecheck` clean, `cargo check`/`cargo test -p warpforge-protocol` pass)
 
 **Backend (Rust) — this part is fine and reusable:**
 - `git.commit` RPC end-to-end: `Method::GitCommit {task_id, message, files: Option<Vec<String>>, amend}`
@@ -119,7 +119,7 @@ These are the likely reasons the result looks wrong. Verify each against #21/#22
 
 ## Build / run / verify
 
-- Typecheck: `cd desktop && npx tsc --noEmit`.
+- Typecheck: `cd desktop && bun run typecheck`.
 - Rust: `cargo check --bin warpforge`; `cargo test -p warpforge-protocol`.
 - Daemon has **no hot reload** — rebuild + restart the binary after Rust changes.
 - Desktop: run the tauri/vite dev script; UI prefs persist in localStorage `wf-ui`
