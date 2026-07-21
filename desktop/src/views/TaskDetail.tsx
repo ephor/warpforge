@@ -188,14 +188,15 @@ export default function TaskDetail({
   const activeFile = activeTab.kind === "file" ? activeTab.path : selectedFile;
 
   // ── On-demand daemon reads (TanStack Query) ──
-  // Keyed on the task's server-side updatedAt, so a `task.updated` event (agent
-  // Edit, git op, hunk resolve) changes the key and refetches on its own;
-  // KeepPreviousData avoids re-mounting the diff/editor on every save, and the
-  // Window-focus refetch (query default) catches edits made outside the app.
+  // The task's server-side updatedAt drives refetches (agent edit, git op, hunk
+  // Resolve) but must stay out of the keys: a new key is a new cache entry, so
+  // Every message — updatedAt also bumps on status change — would hand the
+  // Editors fresh objects. Invalidating a stable key keeps object identity when
+  // The content did not change. Window-focus refetch catches outside edits.
   const diffQuery = useQuery({
     placeholderData: keepPreviousData,
     queryFn: daemonQuery<TaskDiff>("diff.get", { task_id: task.id }),
-    queryKey: ["diff", task.id, task.updatedAt],
+    queryKey: ["diff", task.id],
     refetchOnWindowFocus: "always",
   });
   const diff = diffQuery.data ?? null;
@@ -203,7 +204,7 @@ export default function TaskDetail({
   const fileListQuery = useQuery({
     placeholderData: keepPreviousData,
     queryFn: daemonQuery<ProjectFile[]>("file.list", { task_id: task.id }),
-    queryKey: ["fileList", task.id, task.updatedAt],
+    queryKey: ["fileList", task.id],
   });
   const projectFiles = Array.isArray(fileListQuery.data) ? fileListQuery.data : EMPTY_PROJECT_FILES;
   const fileListError = fileListQuery.error?.message ?? null;
@@ -216,7 +217,7 @@ export default function TaskDetail({
       task_id: task.id,
       path: activeFile,
     }),
-    queryKey: ["fileContents", task.id, activeFile, task.updatedAt],
+    queryKey: ["fileContents", task.id, activeFile],
     refetchOnWindowFocus: "always",
   });
   const fileDoc = fileContentsEnabled ? (fileDocQuery.data ?? null) : null;
@@ -236,11 +237,17 @@ export default function TaskDetail({
               task_id: task.id,
               path: file.path,
             }),
-            queryKey: ["fileContents", task.id, file.path, task.updatedAt],
+            queryKey: ["fileContents", task.id, file.path],
             refetchOnWindowFocus: "always" as const,
           }))
         : [],
   });
+
+  useEffect(() => {
+    void queryClient.invalidateQueries({ queryKey: ["diff", task.id] });
+    void queryClient.invalidateQueries({ queryKey: ["fileList", task.id] });
+    void queryClient.invalidateQueries({ queryKey: ["fileContents", task.id] });
+  }, [queryClient, task.id, task.updatedAt]);
 
   // Keep large review surfaces virtualized. These live above the navigation
   // callbacks so the callbacks can safely depend on the current instances.
@@ -717,11 +724,10 @@ export default function TaskDetail({
                                     <div
                                       key={vi.key}
                                       id={fileAnchor(file.path)}
+                                      data-index={vi.index}
+                                      ref={splitVirtualizer.measureElement}
                                       className="absolute left-0 top-0 w-full border-b"
-                                      style={{
-                                        height: vi.size,
-                                        transform: `translateY(${vi.start}px)`,
-                                      }}
+                                      style={{ transform: `translateY(${vi.start}px)` }}
                                     >
                                       {doc ? (
                                         <Suspense fallback={<EditorLoading />}>

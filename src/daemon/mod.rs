@@ -11,6 +11,7 @@
 pub mod acp;
 pub mod acp_server;
 pub mod actor;
+pub mod agent_probe;
 pub mod agents;
 pub mod diff;
 pub mod prompt;
@@ -59,6 +60,7 @@ mod tests {
                 false,
                 None,
                 vec![],
+                None,
             )
             .await;
 
@@ -104,6 +106,7 @@ mod tests {
                 worktree: false,
                 parent_task_id: None,
                 attachments: Vec::new(),
+                default_model: None,
                 reply: task_tx,
             })
             .await;
@@ -152,6 +155,7 @@ mod tests {
                 false,
                 None,
                 vec![],
+                None,
             )
             .await;
 
@@ -256,6 +260,7 @@ mod tests {
                 false,
                 None,
                 vec![],
+                None,
             )
             .await;
 
@@ -296,7 +301,7 @@ mod tests {
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let daemon = Daemon::spawn(test_projects(), store);
         let id = daemon
-            .create_task("demo", "p", "claude", vec![], false, false, None, vec![])
+            .create_task("demo", "p", "claude", vec![], false, false, None, vec![], None)
             .await;
         let mut events = daemon.subscribe();
 
@@ -356,6 +361,7 @@ mod tests {
                         data: "iVBORw0KGgpyZXN0".into(),
                     },
                 ],
+                None,
             )
             .await;
         let mut initial = false;
@@ -433,6 +439,7 @@ mod tests {
                 vec![PromptAttachment::File {
                     path: "note.txt".into(),
                 }],
+                None,
             )
             .await;
         let mut fallback = false;
@@ -469,6 +476,7 @@ mod tests {
                     mime_type: "image/png".into(),
                     data: "iVBORw0KGgpyZXN0".into(),
                 }],
+                None,
             )
             .await;
         let mut blocked = false;
@@ -507,6 +515,7 @@ mod tests {
                 false,
                 None,
                 vec![],
+                None,
             )
             .await;
 

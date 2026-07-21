@@ -149,6 +149,7 @@ async fn handle_connection(
                         false,
                         None,
                         vec![],
+                        None,
                     )
                     .await;
 

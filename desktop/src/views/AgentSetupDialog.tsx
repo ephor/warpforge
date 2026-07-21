@@ -44,6 +44,8 @@ export default function AgentSetupDialog({ detected, onClose }: Props) {
         displayName: a.displayName,
         enabled: true,
         id: a.id,
+        models: [],
+        lastModel: undefined,
       }));
     await daemon.saveAgents(agents);
     onClose();

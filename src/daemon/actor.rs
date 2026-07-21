@@ -200,6 +200,11 @@ pub enum Command {
         /// Set when this task is a sub-agent of an orchestrator task.
         parent_task_id: Option<String>,
         attachments: Vec<wire::PromptAttachment>,
+        /// Model id to apply to the agent session before the first prompt
+        /// (via `session/set_config_option`). When None, the daemon falls back
+        /// to the agent's `last_model` so orchestrator-spawned sub-agents
+        /// inherit the user's previous pick without an explicit UI selection.
+        default_model: Option<String>,
         reply: oneshot::Sender<String>,
     },
     /// Drain an orchestrator task's inbox of finished sub-agent results.
@@ -331,6 +336,15 @@ pub enum Command {
     UpdateAgents {
         agents: Vec<wire::AgentConfig>,
     },
+    /// Trigger an ACP probe for one agent's model selectors. The probe runs in
+    /// a background task and reports back via [`Command::AgentProbed`].
+    ProbeAgent { id: String },
+    /// A probe finished — persist the discovered models and re-emit agents.
+    AgentProbed {
+        id: String,
+        models: Vec<wire::ConfigOption>,
+        last_model: Option<String>,
+    },
     /// Start an orchestration plan (planner→worker→reviewer pipeline).
     StartOrchestration {
         project: String,
@@ -445,7 +459,7 @@ pub enum Event {
 /// Cloneable handle clients use to talk to the daemon.
 #[derive(Clone)]
 pub struct DaemonHandle {
-    cmd_tx: mpsc::Sender<Command>,
+    pub cmd_tx: mpsc::Sender<Command>,
     event_tx: broadcast::Sender<Event>,
 }
 
@@ -487,6 +501,7 @@ impl DaemonHandle {
         worktree: bool,
         parent_task_id: Option<String>,
         attachments: Vec<wire::PromptAttachment>,
+        default_model: Option<String>,
     ) -> String {
         let (tx, rx) = oneshot::channel();
         self.send(Command::CreateTask {
@@ -498,6 +513,7 @@ impl DaemonHandle {
             worktree,
             parent_task_id,
             attachments,
+            default_model,
             reply: tx,
         })
         .await;
@@ -840,6 +856,10 @@ pub struct Daemon {
     portforwards: PortForwardManager,
     event_tx: broadcast::Sender<Event>,
     acp_tx: mpsc::UnboundedSender<(String, AcpUpdate)>,
+    /// Sender back to this actor's command channel — used so background tasks
+    /// (e.g. the ACP probe) can deliver results without needing a borrow of the
+    /// actor. Held alongside `store` etc. as a primary mutator handle.
+    cmd_tx: mpsc::Sender<Command>,
     store: Option<Store>,
     /// `session/load` may replay already persisted ACP updates. While the
     /// replay matches local history in order, drop it; the first mismatch is
@@ -893,6 +913,11 @@ impl Daemon {
             .as_ref()
             .and_then(|s| s.load_agents().ok())
             .unwrap_or_default();
+        let probe_candidates: Vec<String> = configured_agents
+            .iter()
+            .filter(|a| a.enabled && a.models.is_empty())
+            .map(|a| a.id.clone())
+            .collect();
 
         let needs_setup = store
             .as_ref()
@@ -932,6 +957,7 @@ impl Daemon {
             portforwards: PortForwardManager::new(pf_tx),
             event_tx: event_tx.clone(),
             acp_tx,
+            cmd_tx: cmd_tx.clone(),
             store,
             resume_replay: HashMap::new(),
             worktrees: HashMap::new(),
@@ -978,6 +1004,18 @@ impl Daemon {
         daemon.orch_event_rx = None; // receiver moved to forwarder task
 
         tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx, acp_rx, policy_rx));
+
+        // Kick off background ACP probes for agents whose cached model list is
+        // stale (enabled + empty `models`). Probes update the cache via
+        // `Command::AgentProbed`; cheap to issue even before `run` is ready.
+        let probe_tx = handle.cmd_tx.clone();
+        if !probe_candidates.is_empty() {
+            tokio::spawn(async move {
+                for id in probe_candidates {
+                    let _ = probe_tx.send(Command::ProbeAgent { id }).await;
+                }
+            });
+        }
 
         handle
     }
@@ -1467,6 +1505,7 @@ impl Daemon {
                 worktree: use_worktree,
                 parent_task_id,
                 attachments,
+                default_model,
                 reply,
             } => {
                 let mut task = Task::new(&project, &prompt, &agent, tags);
@@ -1488,6 +1527,33 @@ impl Daemon {
                         }
                     }
                 }
+                // Resolve the model the session should start with: an explicit
+                // UI pick wins; otherwise fall back to the user's last choice
+                // for this agent (so orchestrator-spawned sub-agents inherit it
+                // without a UI). Update the persisted last-model whenever the
+                // user made an explicit pick so the next task defaults to it.
+                let resolved_model = default_model.clone().or_else(|| {
+                    self.configured_agents
+                        .iter()
+                        .find(|a| a.id == agent)
+                        .and_then(|a| a.last_model.clone())
+                });
+                if let Some(ref m) = default_model {
+                    if let Some(agent_cfg) = self.configured_agents.iter_mut().find(|a| a.id == agent) {
+                        if agent_cfg.last_model.as_deref() != Some(m.as_str()) {
+                            agent_cfg.last_model = Some(m.clone());
+                            if let Some(ref store) = self.store {
+                                let _ = store.update_agent_models(
+                                    &agent_cfg.id,
+                                    &agent_cfg.models,
+                                    agent_cfg.last_model.as_deref(),
+                                );
+                            }
+                            let agents = self.configured_agents.clone();
+                            self.emit(Event::AgentsUpdated { agents });
+                        }
+                    }
+                }
                 let id = task.id.clone();
                 self.tasks.insert(id.clone(), task.clone());
                 self.persist(&task);
@@ -1501,6 +1567,7 @@ impl Daemon {
                     include_runtime_context,
                     None,
                     attachments,
+                    resolved_model,
                 );
             }
             Command::ReadInbox {
@@ -1900,7 +1967,7 @@ impl Daemon {
                 self.emit(Event::TaskCreated(task));
                 let _ = reply.send(id.clone());
                 // Load history only (empty prompt); user continues via session.prompt.
-                self.start_session(&id, &project, &agent, "", false, Some(session_id), vec![]);
+                self.start_session(&id, &project, &agent, "", false, Some(session_id), vec![], None);
             }
             Command::SessionPrompt {
                 task_id,
@@ -1979,6 +2046,7 @@ impl Daemon {
                                 false,
                                 Some(session_id),
                                 attachments,
+                                None,
                             );
                             let _ = reply.send(Ok(()));
                         } else {
@@ -2027,7 +2095,72 @@ impl Daemon {
                     let _ = store.save_agents(&agents);
                 }
                 self.configured_agents = agents.clone();
-                self.emit(Event::AgentsUpdated { agents });
+                self.emit(Event::AgentsUpdated { agents: self.configured_agents.clone() });
+                // Probe any newly-enabled agent without cached models.
+                let probe_ids: Vec<String> = self
+                    .configured_agents
+                    .iter()
+                    .filter(|a| a.enabled && a.models.is_empty())
+                    .map(|a| a.id.clone())
+                    .collect();
+                for id in probe_ids {
+                    let _ = self.cmd_tx.send(Command::ProbeAgent { id }).await;
+                }
+            }
+            Command::ProbeAgent { id } => {
+                if let Some(agent) = self.configured_agents.iter().find(|a| a.id == id) {
+                    if !agent.enabled || agent.models.is_empty() {
+                        let acp_command = agent.acp_command.clone();
+                        let agent_id = agent.id.clone();
+                        let last_model = agent.last_model.clone();
+                        let cmd_tx = self.cmd_tx.clone();
+                        let cwd = std::env::current_dir()
+                            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                        tokio::spawn(async move {
+                            let res = super::agent_probe::probe_models(
+                                &acp_command,
+                                &cwd,
+                            )
+                            .await;
+                            let models = match res {
+                                Ok(m) => m,
+                                Err(e) => {
+                                    eprintln!(
+                                        "[daemon] ACP probe failed for agent '{agent_id}': {e}"
+                                    );
+                                    Vec::new()
+                                }
+                            };
+                            let _ = cmd_tx
+                                .send(Command::AgentProbed {
+                                    id: agent_id,
+                                    models,
+                                    last_model,
+                                })
+                                .await;
+                        });
+                    }
+                }
+            }
+            Command::AgentProbed {
+                id,
+                models,
+                last_model,
+            } => {
+                if let Some(agent) = self.configured_agents.iter_mut().find(|a| a.id == id) {
+                    agent.models = models.clone();
+                    agent.last_model = last_model.clone();
+                    if let Some(store) = &self.store {
+                        let _ = store.update_agent_models(
+                            &id,
+                            &models,
+                            last_model.as_deref(),
+                        );
+                    }
+                }
+                self.emit(Event::AgentsUpdated {
+                    agents: self.configured_agents.clone(),
+                });
             }
             Command::StartOrchestration {
                 project,
@@ -2319,6 +2452,7 @@ impl Daemon {
         include_runtime_context: bool,
         resume: Option<String>,
         attachments: Vec<wire::PromptAttachment>,
+        default_model: Option<String>,
     ) {
         // Resolve cwd: worktree path if set, otherwise project root.
         let cwd = if let Some(task) = self.tasks.get(task_id) {
@@ -2399,6 +2533,7 @@ impl Daemon {
             mcp_servers,
             self.acp_tx.clone(),
             Some(self.policy_tx.clone()),
+            default_model,
         ) {
             Ok(handle) => {
                 self.sessions.insert(task_id.to_string(), handle);

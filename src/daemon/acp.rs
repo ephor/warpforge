@@ -357,6 +357,9 @@ pub fn spawn_acp_session(
     mcp_servers: Vec<Value>,
     updates: mpsc::UnboundedSender<(String, AcpUpdate)>,
     policy_tx: Option<mpsc::UnboundedSender<PolicyCheck>>,
+    // Model id to apply to the session before the first prompt (fresh
+    // `session/new` only; ignored when resuming). None = no override.
+    default_model: Option<String>,
 ) -> anyhow::Result<AcpHandle> {
     let run_id = NEXT_RUN_ID.fetch_add(1, Ordering::Relaxed);
     let mut child_command = Command::new("sh");
@@ -650,6 +653,7 @@ pub fn spawn_acp_session(
         let reporter = reporter.clone();
         let driver_kill_tx = process.kill_tx.clone();
         let driver_stderr_capture = Arc::clone(&stderr_capture);
+        let driver_default_model = default_model.clone();
         tokio::spawn(async move {
             const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
             const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -736,7 +740,8 @@ pub fn spawn_acp_session(
 
             // Resume an existing session (session/load) or start a fresh one
             // (session/new). Resume replays history back as session/update.
-            let session_id = if let Some(sid) = resume {
+            let mut fresh_config_options: Vec<wire::ConfigOption> = Vec::new();
+            let session_id = if let Some(ref sid) = resume {
                 if !load_supported {
                     reporter.report(format!(
                         "Agent command '{agent_name}' does not advertise ACP session/load; \
@@ -765,7 +770,7 @@ pub fn spawn_acp_session(
                 .await;
                 replaying.store(false, Ordering::Release);
                 match loaded {
-                    Ok(RpcOutcome::Response(response)) if response.get("error").is_none() => sid,
+                    Ok(RpcOutcome::Response(response)) if response.get("error").is_none() => sid.clone(),
                     Ok(RpcOutcome::Response(_)) => {
                         reporter.report(format!(
                             "Agent command '{agent_name}' rejected ACP session/load for saved \
@@ -819,6 +824,7 @@ pub fn spawn_acp_session(
                         if let Some(result) = v.get("result") {
                             let opts = parse_config_options(result.get("configOptions"));
                             if !opts.is_empty() {
+                                fresh_config_options = opts.clone();
                                 let _ = updates.send((
                                     task_id.clone(),
                                     AcpUpdate::ConfigOptions { options: opts },
@@ -858,6 +864,54 @@ pub fn spawn_acp_session(
                     }
                 }
             };
+
+            // Apply the user-selected model before the first prompt. Only for
+            // fresh sessions — resume must keep the loaded session's existing
+            // model state. We pick the option id whose category is "model" or
+            // whose id/name contains "model" (mirrors AgentConfigBar.tsx).
+            if resume.is_none() {
+                if let Some(ref model_value) = driver_default_model {
+                    if let Some(model_opt) = fresh_config_options.iter().find(|o| {
+                        let identity = format!(
+                            "{} {} {}",
+                            o.category.as_deref().unwrap_or(""),
+                            o.id,
+                            o.name
+                        )
+                        .to_lowercase();
+                        identity.contains("model")
+                    }) {
+                        if model_opt.current_value != *model_value {
+                            let set_res = tokio::time::timeout(
+                                RPC_TIMEOUT,
+                                rpc(
+                                    &out_tx,
+                                    &pending,
+                                    &next_id,
+                                    "session/set_config_option",
+                                    json!({
+                                        "sessionId": session_id,
+                                        "configId": model_opt.id,
+                                        "value": model_value,
+                                    }),
+                                ),
+                            )
+                            .await;
+                            if let Ok(Some(resp)) = set_res {
+                                if let Some(result) = resp.get("result") {
+                                    let opts = parse_config_options(result.get("configOptions"));
+                                    if !opts.is_empty() {
+                                        let _ = updates.send((
+                                            task_id.clone(),
+                                            AcpUpdate::ConfigOptions { options: opts },
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             let _ = updates.send((
                 task_id.clone(),
@@ -1249,7 +1303,7 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
 }
 
 /// Parse an ACP `configOptions` array (model/mode/reasoning selectors).
-fn parse_config_options(v: Option<&Value>) -> Vec<wire::ConfigOption> {
+pub fn parse_config_options(v: Option<&Value>) -> Vec<wire::ConfigOption> {
     let Some(arr) = v.and_then(|x| x.as_array()) else {
         return Vec::new();
     };
@@ -1759,6 +1813,7 @@ mod tests {
             Vec::new(),
             updates,
             None,
+            None,
         )
         .unwrap();
 
@@ -1802,6 +1857,7 @@ mod tests {
             None,
             Vec::new(),
             updates,
+            None,
             None,
         )
         .unwrap();
@@ -1862,6 +1918,7 @@ mod tests {
             None,
             Vec::new(),
             updates,
+            None,
             None,
         )
         .unwrap();

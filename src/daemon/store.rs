@@ -84,6 +84,14 @@ impl Store {
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN worktree TEXT", []);
         // Migration: add parent_task_id for orchestrator sub-agent tasks.
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT", []);
+        // Migration: cache probed ACP model selectors + the user's last pick so
+        // the New Task view can show a model picker before any prompt is sent
+        // and so orchestrator-spawned sub-agents inherit the last choice.
+        let _ = conn.execute(
+            "ALTER TABLE agents ADD COLUMN models TEXT NOT NULL DEFAULT '[]'",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE agents ADD COLUMN last_model TEXT", []);
         Ok(Self { conn })
     }
 
@@ -177,15 +185,20 @@ impl Store {
     }
 
     pub fn load_agents(&self) -> Result<Vec<wire::AgentConfig>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, display_name, acp_command, enabled FROM agents ORDER BY id")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, display_name, acp_command, enabled, models, last_model FROM agents ORDER BY id",
+        )?;
         let rows = stmt.query_map([], |row| {
+            let models_json: String = row.get(4)?;
+            let models: Vec<wire::ConfigOption> =
+                serde_json::from_str(&models_json).unwrap_or_default();
             Ok(wire::AgentConfig {
                 id: row.get(0)?,
                 display_name: row.get(1)?,
                 acp_command: row.get(2)?,
                 enabled: row.get::<_, i64>(3)? != 0,
+                models,
+                last_model: row.get::<_, Option<String>>(5)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -194,11 +207,36 @@ impl Store {
     pub fn save_agents(&self, agents: &[wire::AgentConfig]) -> Result<()> {
         self.conn.execute("DELETE FROM agents", [])?;
         for a in agents {
+            let models_json = serde_json::to_string(&a.models)?;
             self.conn.execute(
-                "INSERT INTO agents (id, display_name, acp_command, enabled) VALUES (?1,?2,?3,?4)",
-                rusqlite::params![a.id, a.display_name, a.acp_command, a.enabled as i64],
+                "INSERT INTO agents (id, display_name, acp_command, enabled, models, last_model) \
+                 VALUES (?1,?2,?3,?4,?5,?6)",
+                rusqlite::params![
+                    a.id,
+                    a.display_name,
+                    a.acp_command,
+                    a.enabled as i64,
+                    models_json,
+                    a.last_model,
+                ],
             )?;
         }
+        Ok(())
+    }
+
+    /// Update only the probed model selectors and the last-used model for one
+    /// agent, without touching the rest of the row.
+    pub fn update_agent_models(
+        &self,
+        id: &str,
+        models: &[wire::ConfigOption],
+        last_model: Option<&str>,
+    ) -> Result<()> {
+        let models_json = serde_json::to_string(models)?;
+        self.conn.execute(
+            "UPDATE agents SET models = ?1, last_model = ?2 WHERE id = ?3",
+            rusqlite::params![models_json, last_model, id],
+        )?;
         Ok(())
     }
 

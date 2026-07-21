@@ -167,6 +167,12 @@ pub enum Method {
         /// Files and images included with the initial prompt.
         #[serde(default)]
         attachments: Vec<PromptAttachment>,
+        /// Model id to apply to the agent session before the first prompt
+        /// (via `session/setConfigOption`). When `None`, the daemon falls back
+        /// to the agent's `last_model` so orchestrator-spawned sub-agents
+        /// inherit the user's previous choice without an explicit UI pick.
+        #[serde(default)]
+        default_model: Option<String>,
     },
     #[serde(rename = "task.cancel")]
     TaskCancel { task_id: String },
@@ -986,6 +992,19 @@ pub struct AgentConfig {
     /// The ACP server command run as `sh -c <acp_command>`.
     pub acp_command: String,
     pub enabled: bool,
+    /// Cached model/effort selectors the agent exposed via its last ACP
+    /// `session/update` (`configOptions`). Probed once on enable and refreshed
+    /// on daemon startup so the New Task view can offer a model picker before
+    /// any prompt is sent. Empty when the probe failed or the agent exposes no
+    /// model selector.
+    #[serde(default)]
+    pub models: Vec<ConfigOption>,
+    /// Last model the user explicitly picked when starting a task with this
+    /// agent. Used as the default for new tasks and for orchestrator-spawned
+    /// sub-agents (which have no UI to pick from). `None` until the first
+    /// explicit choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_model: Option<String>,
 }
 
 /// An agent candidate surfaced by auto-detection (sent in the setup popup).
@@ -1185,6 +1204,7 @@ mod tests {
                 worktree: false,
                 parent_task_id: None,
                 attachments: vec![],
+                default_model: Some("opus".into()),
             },
         };
         let json = serde_json::to_value(&req).unwrap();

@@ -102,6 +102,10 @@ export function MergeDiff({
         ],
       },
       collapseUnchanged: { margin: 3, minSize: 4 },
+      // The default scanLimit (500) makes the Myers diff bail out to a crude
+      // Match on any region over ~4k chars, which paints a whole file as
+      // Changed after a one-line insert. Source files need a real diff.
+      diffConfig: { scanLimit: 20000, timeout: 2000 },
       gutter: true,
       highlightChanges: true,
       parent: host.current,
@@ -143,7 +147,7 @@ export function MergeDiff({
   }, [doc.newText]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex flex-col">
       {editable && (
         <div className="flex items-center gap-3 border-b px-3 py-1 text-xs text-muted-foreground">
           <span className="font-mono">{doc.path}</span>
@@ -177,7 +181,7 @@ export function MergeDiff({
       )}
       <div
         ref={host}
-        className="warpforge-merge-diff min-h-0 flex-1 overflow-auto bg-card text-[13px]"
+        className="warpforge-merge-diff overflow-x-auto bg-card text-[13px]"
       />
     </div>
   );

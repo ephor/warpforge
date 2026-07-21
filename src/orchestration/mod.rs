@@ -188,6 +188,7 @@ impl Orchestrator {
                 false,
                 None,
                 vec![],
+                None,
             )
             .await;
         if parent_id.is_empty() {
@@ -226,6 +227,7 @@ impl Orchestrator {
                 false,
                 Some(parent_id),
                 vec![],
+                None,
             )
             .await
         {
@@ -430,6 +432,7 @@ impl Orchestrator {
                     worktree,
                     Some(parent_task_id.clone()),
                     vec![],
+                    None,
                 )
                 .await
             {

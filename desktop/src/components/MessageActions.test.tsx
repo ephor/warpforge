@@ -30,8 +30,22 @@ describe("MessageActions", () => {
     render(
       <MessageActions
         agents={[
-          { acpCommand: "codex-acp", displayName: "Codex", enabled: true, id: "codex" },
-          { acpCommand: "claude-acp", displayName: "Claude", enabled: true, id: "claude" },
+          {
+            acpCommand: "codex-acp",
+            displayName: "Codex",
+            enabled: true,
+            id: "codex",
+            models: [],
+            lastModel: undefined,
+          },
+          {
+            acpCommand: "claude-acp",
+            displayName: "Claude",
+            enabled: true,
+            id: "claude",
+            models: [],
+            lastModel: undefined,
+          },
         ]}
         text="Branch here"
         onContinue={onContinue}

@@ -415,6 +415,10 @@ export interface AgentConfig {
   displayName: string;
   acpCommand: string;
   enabled: boolean;
+  /** Cached model/effort selectors from the agent's last ACP probe. */
+  models: ConfigOption[];
+  /** Last model the user explicitly picked; used as default for new tasks. */
+  lastModel?: string;
 }
 
 export interface DetectedAgent {

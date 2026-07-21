@@ -397,6 +397,7 @@ async fn dispatch(
             worktree,
             parent_task_id,
             attachments,
+            default_model,
         } => {
             let id = handle
                 .create_task(
@@ -408,6 +409,7 @@ async fn dispatch(
                     worktree,
                     parent_task_id,
                     attachments,
+                    default_model,
                 )
                 .await;
             Ok(json!({ "taskId": id }))
@@ -747,6 +749,7 @@ async fn dispatch(
                     false,
                     None,
                     Vec::new(),
+                    None,
                 )
                 .await;
             Ok(json!({ "taskId": id }))
@@ -1157,6 +1160,7 @@ mod tests {
                 false,
                 None,
                 Vec::new(),
+                None,
             )
             .await;
         handle

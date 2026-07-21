@@ -529,6 +529,7 @@ export default function App() {
           </div>
         </div>
 
+        <PushDialog open={pushOpen} onOpenChange={setPushOpen} task={openTask} />
         <NewTaskDialog
           open={newTaskOpen}
           onOpenChange={setNewTaskOpen}
@@ -536,7 +537,6 @@ export default function App() {
           defaultProject={newTaskProject}
           initialPrompt={newTaskPrompt}
         />
-        <PushDialog open={pushOpen} onOpenChange={setPushOpen} task={openTask} />
         {(state.pendingAgentSetup ?? manualDetected) && (
           <AgentSetupDialog
             detected={(state.pendingAgentSetup ?? manualDetected)!}

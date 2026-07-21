@@ -1,30 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
-import { GitBranch, GitMerge, History, Share2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { History, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { cn } from "@/lib/utils";
 
 import type { ComposerHandle } from "../components/Composer";
 import { Composer } from "../components/Composer";
+import { AgentConfigBar } from "../components/AgentConfigBar";
+import { TaskComposeBar } from "../components/TaskComposeBar";
 import { daemon } from "../daemon";
-import type { ExternalSession, ProjectFile, PromptSubmission, Snapshot } from "../protocol";
 import { daemonQuery } from "../query";
+import type {
+  ExternalSession,
+  ProjectFile,
+  PromptSubmission,
+  Snapshot,
+} from "../protocol";
+import { useUi } from "../store/ui";
 
 interface Props {
   open: boolean;
@@ -34,41 +27,34 @@ interface Props {
   initialPrompt?: string;
 }
 
-export default function NewTaskDialog({
-  open,
-  onOpenChange,
-  snapshot,
-  defaultProject,
-  initialPrompt,
-}: Props) {
-  const [project, setProject] = useState(defaultProject ?? snapshot.projects[0]?.name ?? "");
+/**
+ * "New Task" full-screen overlay. Renders on top of the current view so
+ * the underlying view state is preserved. Sending the first prompt
+ * creates the task and closes the overlay.
+ */
+export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultProject, initialPrompt }: Props) {
+  const openTask = useUi((s) => s.openTask);
+
+  const firstProjectName = snapshot.projects[0]?.name ?? "";
+  const [project, setProject] = useState(defaultProject ?? firstProjectName);
   const [agent, setAgent] = useState("");
   const [prompt, setPrompt] = useState(initialPrompt ?? "");
+  const [configPicks, setConfigPicks] = useState<Record<string, string | undefined>>({});
   const [tags, setTags] = useState("");
   const [shareContext, setShareContext] = useState(true);
   const [useWorktree, setUseWorktree] = useState(false);
-  // Chat orchestrator: the selected agent becomes a lead that delegates to
-  // Sub-agents (via the spawn_agent / read_inbox MCP tools) and processes their
-  // Results in one conversation. Tag "orchestrator-chat" wires the bridge.
   const [orchChat, setOrchChat] = useState(false);
   const composerRef = useRef<ComposerHandle>(null);
 
-  const firstProjectName = snapshot.projects[0]?.name ?? "";
-  const projectInfo = snapshot.projects.find((p) => p.name === project);
-  const agentOptions = useMemo(
-    () =>
-      snapshot.agents && snapshot.agents.length > 0
-        ? snapshot.agents.filter((a) => a.enabled).map((a) => ({ id: a.id, label: a.displayName }))
-        : (projectInfo ? Object.keys(projectInfo.agentTemplates) : []).map((id) => ({
-            id,
-            label: id,
-          })),
-    [projectInfo, snapshot.agents],
+  const enabledAgents = useMemo(
+    () => snapshot.agents?.filter((a) => a.enabled) ?? [],
+    [snapshot.agents],
   );
-  const running = snapshot.services.filter(
-    (s) => s.project === project && s.status === "running" && s.allocatedPort > 0,
-  );
+  const currentAgent = (snapshot.agents ?? []).find((a) => a.id === agent);
+  const agentOptions = currentAgent?.models ?? [];
+  const probeLoading = !!currentAgent && currentAgent.enabled && agentOptions.length === 0;
 
+  // Reset selections when the overlay is (re)opened with new defaults.
   useEffect(() => {
     if (open) {
       setProject(defaultProject ?? firstProjectName);
@@ -79,21 +65,41 @@ export default function NewTaskDialog({
   }, [open, defaultProject, firstProjectName, initialPrompt]);
 
   useEffect(() => {
-    setAgent(agentOptions[0]?.id ?? "claude");
-  }, [agentOptions, project]);
+    setAgent(enabledAgents[0]?.id ?? "claude");
+  }, [enabledAgents, project]);
+
+  useEffect(() => {
+    setConfigPicks({});
+  }, [agent]);
+
+  // Escape key closes overlay.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onOpenChange(false);
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [open, onOpenChange]);
 
   const sessionsQuery = useQuery({
-    enabled: open && !!project,
+    enabled: !!project,
     queryFn: () => daemon.listSessions(project),
     queryKey: ["sessions", project],
   });
   const sessions = sessionsQuery.data ?? [];
   const filesQuery = useQuery({
-    enabled: open && !!project,
+    enabled: !!project,
     queryFn: daemonQuery<ProjectFile[]>("file.list", { project }),
     queryKey: ["fileList", "new", project],
   });
   const projectFiles = Array.isArray(filesQuery.data) ? filesQuery.data : [];
+
+  const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
   const resume = (s: ExternalSession) => {
     void daemon.resumeTask(project, s.agent, s.sessionId, s.title);
@@ -101,78 +107,86 @@ export default function NewTaskDialog({
   };
 
   const create = async (submission: PromptSubmission) => {
-    if (!submission.text.trim() || !project) {
-      return;
-    }
+    if (!submission.text.trim() || !project) return;
     const userTags = tags
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
-    await daemon.request("task.create", {
+    const modelOpt = agentOptions.find((opt) =>
+      `${opt.category ?? ""} ${opt.id} ${opt.name}`.toLowerCase().includes("model"),
+    );
+    const modelPick = modelOpt ? configPicks[modelOpt.id] : undefined;
+    const resp = await daemon.request("task.create", {
       project,
       prompt: submission.text.trim(),
       attachments: submission.attachments,
       agent,
-      // The "orchestrator-chat" tag makes the daemon wire the warpforge MCP
-      // Bridge (spawn_agent / read_inbox) into this session.
       tags: orchChat ? [...userTags, "orchestrator-chat"] : userTags,
       include_runtime_context: shareContext,
       worktree: orchChat ? false : useWorktree,
+      default_model: modelPick,
     });
+    const taskId =
+      (resp as { taskId?: string } | null)?.taskId ??
+      (resp as { result?: { taskId?: string } } | null)?.result?.taskId ??
+      null;
+    if (taskId) {
+      toast.success("Task started", {
+        description: `${orchChat ? "Orchestrator" : "Agent"} session created for ${project}`,
+        action: {
+          label: "Open task",
+          onClick: () => openTask(taskId),
+        },
+        duration: 8000,
+      });
+    }
     onOpenChange(false);
   };
 
+  if (!open) return null;
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>New task</DialogTitle>
-          <DialogDescription>
-            One task = one agent session. The agent starts working immediately.
-          </DialogDescription>
-        </DialogHeader>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background">
+      <div className="flex h-full max-h-full w-full max-w-3xl flex-col px-8 py-8">
+        <header className="mb-6 flex items-center justify-between">
+          <h1 className="text-lg font-semibold">New task</h1>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">
+              One task = one agent session. The agent starts working immediately.
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              onClick={close}
+              aria-label="Close"
+              type="button"
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+        </header>
 
-        <div className="flex flex-col gap-3">
-          {/* Project */}
-          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            Project
-            <Select value={project} onValueChange={setProject}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select project" />
-              </SelectTrigger>
-              <SelectContent>
-                {snapshot.projects.map((p) => (
-                  <SelectItem key={p.name} value={p.name}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </label>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <TaskComposeBar
+            projects={snapshot.projects}
+            agents={snapshot.agents ?? []}
+            services={snapshot.services}
+            project={project}
+            agent={agent}
+            shareContext={shareContext}
+            useWorktree={useWorktree}
+            orchChat={orchChat}
+            onProjectChange={setProject}
+            onAgentChange={setAgent}
+            onShareContextChange={setShareContext}
+            onUseWorktreeChange={setUseWorktree}
+            onOrchChatChange={setOrchChat}
+          />
 
-          {/* Agent — for an orchestrator this is the lead agent. */}
-          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            {orchChat ? "Lead agent (orchestrator)" : "Agent"}
-            <Select value={agent} onValueChange={setAgent}>
-              <SelectTrigger>
-                <SelectValue placeholder="Agent" />
-              </SelectTrigger>
-              <SelectContent>
-                {(agentOptions.length ? agentOptions : [{ id: "claude", label: "Claude" }]).map(
-                  (a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.label}
-                    </SelectItem>
-                  ),
-                )}
-              </SelectContent>
-            </Select>
-          </label>
-
-          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-            Prompt
+          <div className="mt-6 border-t border-border/70 pt-4">
             <Composer
-              key={`${open}-${project}-${initialPrompt ?? ""}`}
+              key={`${project}-${agent}`}
               ref={composerRef}
               initialValue={prompt}
               onDraftChange={setPrompt}
@@ -181,125 +195,40 @@ export default function NewTaskDialog({
               imageSupported
               hideSendButton
               onSend={create}
+              toolbar={
+                <AgentConfigBar
+                  options={agentOptions}
+                  picks={configPicks}
+                  loading={probeLoading}
+                  onSelect={(opt, value) =>
+                    setConfigPicks((prev) => ({ ...prev, [opt.id]: value }))
+                  }
+                />
+              }
               placeholder={
                 orchChat ? "What should the orchestrator coordinate?" : "What should the agent do?"
               }
             />
-            <span>
-              Image support is negotiated when the agent starts; unsupported image prompts are
-              marked blocked.
-            </span>
           </div>
 
-          {/* Tags */}
-          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-            Tags (comma-separated)
+          {/* Tags (collapsed, optional) */}
+          <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Tags</span>
             <input
               value={tags}
               onChange={(e) => setTags(e.target.value)}
               placeholder="bug, frontend"
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="h-7 flex-1 rounded-md border border-input bg-background px-2 text-xs"
             />
-          </label>
-
-          {/* Toggles: share context + worktree + orchestrator */}
-          <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              onClick={() => setShareContext((v) => !v)}
-              className={cn(
-                "flex items-start gap-3 rounded-md border p-3 text-left transition-colors",
-                shareContext ? "border-primary/40 bg-primary/5" : "border-border",
-              )}
-            >
-              <div
-                className={cn(
-                  "mt-0.5 flex size-4 items-center justify-center rounded border",
-                  shareContext ? "border-primary bg-primary" : "border-muted-foreground",
-                )}
-              >
-                {shareContext && <div className="size-2 rounded-sm bg-primary-foreground" />}
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-1.5 text-sm font-medium">
-                  <Share2 className="size-3.5 text-primary" />
-                  Share running services
-                </div>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {running.length > 0
-                    ? `Agent will see ${running.map((s) => `${s.name}:${s.allocatedPort}`).join(", ")}`
-                    : "No services running for this project."}
-                </p>
-              </div>
-            </button>
-
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => setUseWorktree((v) => !v)}
-                disabled={orchChat}
-                className={cn(
-                  "flex items-center gap-3 rounded-md border p-2.5 text-left transition-colors",
-                  useWorktree && !orchChat ? "border-primary/40 bg-primary/5" : "border-border",
-                  orchChat && "opacity-40",
-                )}
-              >
-                <div
-                  className={cn(
-                    "flex size-4 shrink-0 items-center justify-center rounded border",
-                    useWorktree && !orchChat
-                      ? "border-primary bg-primary"
-                      : "border-muted-foreground",
-                  )}
-                >
-                  {useWorktree && !orchChat && (
-                    <div className="size-2 rounded-sm bg-primary-foreground" />
-                  )}
-                </div>
-                <div>
-                  <div className="text-sm font-medium">
-                    <GitBranch className="mr-1 inline size-3.5 text-primary" />
-                    Worktree
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">Isolated git worktree</p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setOrchChat((v) => !v)}
-                className={cn(
-                  "flex items-center gap-3 rounded-md border p-2.5 text-left transition-colors",
-                  orchChat ? "border-primary/40 bg-primary/5" : "border-border",
-                )}
-              >
-                <div
-                  className={cn(
-                    "flex size-4 shrink-0 items-center justify-center rounded border",
-                    orchChat ? "border-primary bg-primary" : "border-muted-foreground",
-                  )}
-                >
-                  {orchChat && <div className="size-2 rounded-sm bg-primary-foreground" />}
-                </div>
-                <div>
-                  <div className="text-sm font-medium">
-                    <GitMerge className="mr-1 inline size-3.5 text-primary" />
-                    Orchestrator
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">Chat + sub-agents</p>
-                </div>
-              </button>
-            </div>
           </div>
 
-          {/* Resume session */}
           {sessions.length > 0 && (
-            <div className="flex flex-col gap-1.5">
+            <div className="mt-6 flex min-h-0 flex-1 flex-col gap-1.5">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <History className="size-3.5" />
                 Resume a previous session
               </div>
-              <div className="max-h-40 overflow-y-auto rounded-md border">
+              <div className="min-h-0 flex-1 overflow-y-auto rounded-md border">
                 {sessions.map((s) => (
                   <button
                     key={`${s.agent}:${s.sessionId}`}
@@ -323,18 +252,19 @@ export default function NewTaskDialog({
           )}
         </div>
 
-        <DialogFooter className="gap-2">
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+        <footer className="mt-6 flex items-center justify-end gap-2 border-t border-border/70 pt-4">
+          <Button variant="ghost" onClick={close} type="button">
             Cancel
           </Button>
           <Button
+            type="button"
             onClick={() => composerRef.current?.submit()}
             disabled={!prompt.trim() || !project}
           >
             {orchChat ? "Start orchestrator" : "Start task"}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </footer>
+      </div>
+    </div>
   );
 }
