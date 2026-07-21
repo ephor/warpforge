@@ -338,7 +338,9 @@ pub enum Command {
     },
     /// Trigger an ACP probe for one agent's model selectors. The probe runs in
     /// a background task and reports back via [`Command::AgentProbed`].
-    ProbeAgent { id: String },
+    ProbeAgent {
+        id: String,
+    },
     /// A probe finished — persist the discovered models and re-emit agents.
     AgentProbed {
         id: String,
@@ -1539,7 +1541,9 @@ impl Daemon {
                         .and_then(|a| a.last_model.clone())
                 });
                 if let Some(ref m) = default_model {
-                    if let Some(agent_cfg) = self.configured_agents.iter_mut().find(|a| a.id == agent) {
+                    if let Some(agent_cfg) =
+                        self.configured_agents.iter_mut().find(|a| a.id == agent)
+                    {
                         if agent_cfg.last_model.as_deref() != Some(m.as_str()) {
                             agent_cfg.last_model = Some(m.clone());
                             if let Some(ref store) = self.store {
@@ -1967,7 +1971,16 @@ impl Daemon {
                 self.emit(Event::TaskCreated(task));
                 let _ = reply.send(id.clone());
                 // Load history only (empty prompt); user continues via session.prompt.
-                self.start_session(&id, &project, &agent, "", false, Some(session_id), vec![], None);
+                self.start_session(
+                    &id,
+                    &project,
+                    &agent,
+                    "",
+                    false,
+                    Some(session_id),
+                    vec![],
+                    None,
+                );
             }
             Command::SessionPrompt {
                 task_id,
@@ -2095,7 +2108,9 @@ impl Daemon {
                     let _ = store.save_agents(&agents);
                 }
                 self.configured_agents = agents.clone();
-                self.emit(Event::AgentsUpdated { agents: self.configured_agents.clone() });
+                self.emit(Event::AgentsUpdated {
+                    agents: self.configured_agents.clone(),
+                });
                 // Probe any newly-enabled agent without cached models.
                 let probe_ids: Vec<String> = self
                     .configured_agents
@@ -2117,11 +2132,7 @@ impl Daemon {
                         let cwd = std::env::current_dir()
                             .unwrap_or_else(|_| std::path::PathBuf::from("."));
                         tokio::spawn(async move {
-                            let res = super::agent_probe::probe_models(
-                                &acp_command,
-                                &cwd,
-                            )
-                            .await;
+                            let res = super::agent_probe::probe_models(&acp_command, &cwd).await;
                             let models = match res {
                                 Ok(m) => m,
                                 Err(e) => {
@@ -2151,11 +2162,7 @@ impl Daemon {
                     agent.models = models.clone();
                     agent.last_model = last_model.clone();
                     if let Some(store) = &self.store {
-                        let _ = store.update_agent_models(
-                            &id,
-                            &models,
-                            last_model.as_deref(),
-                        );
+                        let _ = store.update_agent_models(&id, &models, last_model.as_deref());
                     }
                 }
                 self.emit(Event::AgentsUpdated {

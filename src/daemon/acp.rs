@@ -770,7 +770,9 @@ pub fn spawn_acp_session(
                 .await;
                 replaying.store(false, Ordering::Release);
                 match loaded {
-                    Ok(RpcOutcome::Response(response)) if response.get("error").is_none() => sid.clone(),
+                    Ok(RpcOutcome::Response(response)) if response.get("error").is_none() => {
+                        sid.clone()
+                    }
                     Ok(RpcOutcome::Response(_)) => {
                         reporter.report(format!(
                             "Agent command '{agent_name}' rejected ACP session/load for saved \

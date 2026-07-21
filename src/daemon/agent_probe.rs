@@ -150,7 +150,11 @@ async fn read_response(
                     return Ok(value);
                 }
             }
-            Ok(None) => return Err(anyhow!("agent closed stdout before replying to id {expected_id}")),
+            Ok(None) => {
+                return Err(anyhow!(
+                    "agent closed stdout before replying to id {expected_id}"
+                ))
+            }
             Err(e) => return Err(anyhow!("reading agent probe stdout: {e}")),
         }
     }

@@ -301,7 +301,17 @@ mod tests {
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let daemon = Daemon::spawn(test_projects(), store);
         let id = daemon
-            .create_task("demo", "p", "claude", vec![], false, false, None, vec![], None)
+            .create_task(
+                "demo",
+                "p",
+                "claude",
+                vec![],
+                false,
+                false,
+                None,
+                vec![],
+                None,
+            )
             .await;
         let mut events = daemon.subscribe();
 
