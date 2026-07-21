@@ -30,13 +30,7 @@ const IGNORED_NAMES: &[&str] = &[
 /// non-git projects.
 pub async fn list_files(repo: &str) -> Result<Vec<wire::ProjectFile>> {
     let out = Command::new("git")
-        .args([
-            "-C",
-            repo,
-            "ls-files",
-            "--cached",
-            "--others",
-        ])
+        .args(["-C", repo, "ls-files", "--cached", "--others"])
         .output()
         .await?;
 
