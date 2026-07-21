@@ -90,7 +90,7 @@ Agent work is not tied to an open window. A Rust daemon owns projects, services,
 ### Prerequisites
 
 - Rust and Cargo
-- A recent Node.js/npm toolchain
+- [Bun](https://bun.sh) 1.3 or newer — the desktop app's package manager and script runner
 - Git
 - The [Tauri 2 system prerequisites](https://v2.tauri.app/start/prerequisites/) for your operating system
 - At least one supported coding-agent CLI, installed and authenticated
@@ -108,8 +108,8 @@ cargo build
 
 ```bash
 cd desktop
-npm install
-npm run tauri dev
+bun install
+bun run tauri dev
 ```
 
 The Tauri shell starts or reuses the local Warpforge daemon. On first use, select the installed agents you want Warpforge to enable.
@@ -136,8 +136,8 @@ You can also initialize the current directory and register it in one step:
 
 ```bash
 cd desktop
-npm install
-npm run tauri build
+bun install
+bun run tauri build
 ```
 
 Release bundles/installers are not enabled in the current Tauri configuration, so this is a developer build rather than the final distribution experience.

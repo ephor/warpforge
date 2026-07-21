@@ -1,4 +1,6 @@
 node_modules/
+# This project is bun-only; bun.lock is the single source of truth.
+package-lock.json
 dist/
 src-tauri/target/
 shots/

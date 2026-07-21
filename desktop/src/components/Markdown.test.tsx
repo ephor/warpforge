@@ -16,6 +16,9 @@ describe("Markdown links", () => {
 
   afterEach(() => {
     Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    // Vitest 4 reuses an existing spy instead of re-wrapping it, so the
+    // window.open calls would otherwise accumulate across tests.
+    vi.restoreAllMocks();
   });
 
   it("opens external links outside the app webview", async () => {
