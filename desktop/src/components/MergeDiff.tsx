@@ -167,7 +167,8 @@ export function MergeDiff({
       )}
       <div
         ref={host}
-        className="warpforge-merge-diff overflow-x-auto bg-card text-[13px]"
+        className="warpforge-merge-diff overflow-x-auto bg-card"
+        style={{ fontSize: "var(--app-mono-font-size)" }}
       />
     </div>
   );

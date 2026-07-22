@@ -11,7 +11,25 @@ export type DiffView = "unified" | "split";
 export type RightPanel = "changes" | "files" | "subtasks" | null;
 export type RepositoryOperation = { taskId: string; kind: "pull" | "push" };
 
-interface UiState {
+const DEFAULT_FONT_SIZE = 14;
+const DEFAULT_MONO_FONT_SIZE = 13;
+const FONT_SIZE_STEP = 1;
+const FONT_SIZE_MIN = 10;
+const FONT_SIZE_MAX = 24;
+const MONO_FONT_SIZE_MIN = 9;
+const MONO_FONT_SIZE_MAX = 22;
+
+export interface SettingsState {
+  fontSize: number;
+  monoFontSize: number;
+  setFontSize: (size: number) => void;
+  setMonoFontSize: (size: number) => void;
+  bumpFontSize: (direction: 1 | -1) => void;
+  bumpMonoFontSize: (direction: 1 | -1) => void;
+  resetFontSizes: () => void;
+}
+
+interface UiState extends SettingsState {
   // Navigation
   view: View;
   openTaskId: string | null; // Transient — not persisted
@@ -45,6 +63,14 @@ interface UiState {
   setPinnedTaskIds: (ids: string[]) => void;
 }
 
+function clampFontSize(v: number): number {
+  return Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, Math.round(v)));
+}
+
+function clampMonoFontSize(v: number): number {
+  return Math.min(MONO_FONT_SIZE_MAX, Math.max(MONO_FONT_SIZE_MIN, Math.round(v)));
+}
+
 export const useUi = create<UiState>()(
   persist(
     (set) => ({
@@ -60,6 +86,8 @@ export const useUi = create<UiState>()(
       rightPanel: null,
       runtimeOpen: false,
       pinnedTaskIds: [],
+      fontSize: DEFAULT_FONT_SIZE,
+      monoFontSize: DEFAULT_MONO_FONT_SIZE,
 
       setView: (view) => set({ openTaskId: null, view }),
       // Contextual task tools must not leak from one task into the next.
@@ -90,6 +118,17 @@ export const useUi = create<UiState>()(
             ? s.pinnedTaskIds.filter((x) => x !== id)
             : [...s.pinnedTaskIds, id],
         })),
+
+      // ── Font size settings ──
+      setFontSize: (fontSize) => set({ fontSize: clampFontSize(fontSize) }),
+      setMonoFontSize: (monoFontSize) => set({ monoFontSize: clampMonoFontSize(monoFontSize) }),
+      bumpFontSize: (direction) =>
+        set((s) => ({ fontSize: clampFontSize(s.fontSize + direction * FONT_SIZE_STEP) })),
+      bumpMonoFontSize: (direction) =>
+        set((s) => ({
+          monoFontSize: clampMonoFontSize(s.monoFontSize + direction * FONT_SIZE_STEP),
+        })),
+      resetFontSizes: () => set({ fontSize: DEFAULT_FONT_SIZE, monoFontSize: DEFAULT_MONO_FONT_SIZE }),
     }),
     {
       name: "wf-ui",
