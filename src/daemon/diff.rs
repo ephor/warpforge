@@ -26,13 +26,14 @@ const IGNORED_NAMES: &[&str] = &[
 ];
 
 /// Project files for the editor tree. Prefer git's view (tracked +
-/// untracked, honoring .gitignore); fall back to a small filesystem walk for
-/// non-git projects.
-pub async fn list_files(repo: &str) -> Result<Vec<wire::ProjectFile>> {
-    let out = Command::new("git")
-        .args(["-C", repo, "ls-files", "--cached", "--others"])
-        .output()
-        .await?;
+/// untracked); fall back to a small filesystem walk for non-git projects.
+/// `include_ignored` keeps .gitignore'd paths in the list.
+pub async fn list_files(repo: &str, include_ignored: bool) -> Result<Vec<wire::ProjectFile>> {
+    let mut args = vec!["-C", repo, "ls-files", "--cached", "--others"];
+    if !include_ignored {
+        args.push("--exclude-standard");
+    }
+    let out = Command::new("git").args(&args).output().await?;
 
     if out.status.success() {
         let changed = working_diff(repo)

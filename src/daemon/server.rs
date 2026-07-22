@@ -451,8 +451,12 @@ async fn dispatch(
                 message: format!("cannot read {path}"),
             }),
         },
-        FileList { task_id, project } => {
-            let files = handle.list_files(&task_id, project).await;
+        FileList {
+            task_id,
+            project,
+            include_ignored,
+        } => {
+            let files = handle.list_files(&task_id, project, include_ignored).await;
             serde_json::to_value(files).map_err(|e| wire::RpcError {
                 code: wire::ErrorCode::Internal,
                 message: e.to_string(),

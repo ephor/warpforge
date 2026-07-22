@@ -201,13 +201,27 @@ export default function TaskDetail({
   });
   const diff = diffQuery.data ?? null;
 
+  // Tree shows gitignored files too; the composer's `@` picker must not (a
+  // node_modules-sized list makes ranking on every keystroke crawl).
   const fileListQuery = useQuery({
     placeholderData: keepPreviousData,
-    queryFn: daemonQuery<ProjectFile[]>("file.list", { task_id: task.id }),
-    queryKey: ["fileList", task.id],
+    queryFn: daemonQuery<ProjectFile[]>("file.list", {
+      include_ignored: true,
+      task_id: task.id,
+    }),
+    queryKey: ["fileList", task.id, "all"],
   });
   const projectFiles = Array.isArray(fileListQuery.data) ? fileListQuery.data : EMPTY_PROJECT_FILES;
   const fileListError = fileListQuery.error?.message ?? null;
+
+  const mentionFilesQuery = useQuery({
+    placeholderData: keepPreviousData,
+    queryFn: daemonQuery<ProjectFile[]>("file.list", { task_id: task.id }),
+    queryKey: ["fileList", task.id, "tracked"],
+  });
+  const mentionFiles = Array.isArray(mentionFilesQuery.data)
+    ? mentionFilesQuery.data
+    : EMPTY_PROJECT_FILES;
 
   const fileContentsEnabled = Boolean(activeFile) && activeTab.kind === "file";
   const fileDocQuery = useQuery({
@@ -540,8 +554,8 @@ export default function TaskDetail({
                   agents={enabledAgents}
                   activity={activity}
                   commands={commands}
-                  files={projectFiles}
-                  filesLoading={fileListQuery.isLoading}
+                  files={mentionFiles}
+                  filesLoading={mentionFilesQuery.isLoading}
                   imageSupported={imageSupported}
                   composerRef={composerRef}
                   onOpenFile={openFileTab}
