@@ -11,6 +11,8 @@
 //! - `spawn_agent(agent, task)` — dispatch a sub-agent asynchronously; returns
 //!   immediately. The result lands in the orchestrator's inbox on completion.
 //! - `read_inbox()` — drain finished sub-agent results.
+//! - `message_agent(task_id, message)` — send a follow-up message to a running
+//!   or idle sub-agent, continuing the same session.
 //!
 //! Environment (set by the daemon when it starts the orchestrator session):
 //! - `WF_ORCH_TASK`    — the orchestrator's task id (the inbox owner / parent).
@@ -219,6 +221,29 @@ fn tool_defs() -> Value {
             "description": "Collect finished sub-agent results delivered since you \
                 last checked. Drains the inbox (each result is returned once).",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "message_agent",
+            "description": "Send a follow-up message to a previously spawned sub-agent, \
+                continuing the same session. The agent sees the full conversation \
+                history and can respond in context. Use this instead of spawn_agent \
+                when you want to continue a conversation with an agent you already \
+                started. Returns immediately; the agent's response will be delivered \
+                to your inbox when it finishes — then call read_inbox.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "The task id returned by spawn_agent or a previous message_agent call."
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "The follow-up message / instruction to send to the agent."
+                    }
+                },
+                "required": ["task_id", "message"]
+            }
         }
     ])
 }
@@ -299,6 +324,29 @@ async fn handle_tool_call(
                 ));
             }
             Ok(out)
+        }
+        "message_agent" => {
+            let task_id = args
+                .get("task_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("'task_id' is required"))?;
+            let message = args
+                .get("message")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("'message' is required"))?;
+            client
+                .request(
+                    "session.prompt",
+                    json!({
+                        "task_id": task_id,
+                        "text": message,
+                    }),
+                )
+                .await?;
+            Ok(format!(
+                "Message sent to sub-agent task {task_id}. It runs asynchronously; \
+                 you will be notified when its result is waiting — then call read_inbox."
+            ))
         }
         other => Err(anyhow!("unknown tool: {other}")),
     }
