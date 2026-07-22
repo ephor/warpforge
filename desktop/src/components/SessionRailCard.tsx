@@ -2,12 +2,12 @@ import { ChevronDown, ChevronUp, FilePen, ListTodo, Pin, Wrench } from "lucide-r
 import { memo, useMemo } from "react";
 
 import { AgentBadge } from "@/components/AgentBadge";
-import { StatusBadge } from "@/components/StatusBadge";
+import { StatusBadge, statusEdge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { PermissionUpdate } from "@/lib/sessionPermissions";
 import { latestSessionPreview } from "@/lib/sessionPreview";
-import { elapsed, taskEdge } from "@/lib/status";
+import { elapsed } from "@/lib/status";
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
@@ -63,7 +63,7 @@ const SessionRailCard = memo(function SessionRailCard({
     <Card
       className={cn(
         "group relative flex cursor-pointer flex-col rounded-md border-l-2 bg-card/60 p-2.5 shadow-none transition-colors hover:bg-secondary/20",
-        taskEdge(task.status),
+        statusEdge(permission ? "permission" : task.status),
         attention && "bg-card",
         focused && "ring-1 ring-primary/70",
       )}
@@ -75,22 +75,32 @@ const SessionRailCard = memo(function SessionRailCard({
         aria-label={`Open ${task.project} session: ${taskLabel(task)}`}
         data-task-id={task.id}
       />
+      {/* Row 1: status + project (left) · agent · time (right) — the shared card grammar */}
       <div className="pointer-events-none relative z-10 flex items-center gap-2 text-xs text-muted-foreground">
+        <StatusBadge status={permission ? "permission" : task.status} size="xs" />
         <span className="min-w-0 truncate font-semibold text-foreground">{task.project}</span>
-        <AgentBadge agentId={task.agent} className="shrink-0" />
-        <span
-          className="tnum ml-auto shrink-0"
-          aria-label={`${timeLabel} ${elapsed(timestamp)} ago`}
-          title={`${timeLabel} ${elapsed(timestamp)} ago`}
-        >
-          {elapsed(timestamp)}
+        <span className="ml-auto flex shrink-0 items-center gap-2">
+          <AgentBadge agentId={task.agent} />
+          <span aria-hidden className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+          <span
+            className="tnum"
+            aria-label={`${timeLabel} ${elapsed(timestamp)} ago`}
+            title={`${timeLabel} ${elapsed(timestamp)} ago`}
+          >
+            {elapsed(timestamp)}
+          </span>
         </span>
+      </div>
+      {/* Row 2: title (left) · pin toggle (right) */}
+      <div className="pointer-events-none relative z-10 mt-1.5 flex items-start gap-2">
+        <p className="line-clamp-2 min-w-0 flex-1 text-sm font-medium leading-snug">
+          {taskLabel(task)}
+        </p>
         <button
           type="button"
           aria-label={pinned ? "Unpin from Mission Control" : "Pin to Mission Control"}
           className={cn(
-            "pointer-events-auto",
-            "rounded p-0.5 opacity-70 hover:bg-secondary hover:opacity-100",
+            "pointer-events-auto shrink-0 rounded p-0.5 opacity-70 hover:bg-secondary hover:opacity-100",
             pinned && "text-primary opacity-100",
           )}
           onClick={() => onPin(task.id)}
@@ -99,9 +109,6 @@ const SessionRailCard = memo(function SessionRailCard({
           <Pin className="size-3.5" />
         </button>
       </div>
-      <p className="pointer-events-none relative z-10 mt-1.5 line-clamp-2 text-sm font-medium leading-snug">
-        {taskLabel(task)}
-      </p>
       {parentTask && (
         <p
           className="pointer-events-none relative z-10 mt-1 truncate text-[11px] text-muted-foreground"
@@ -150,12 +157,11 @@ const SessionRailCard = memo(function SessionRailCard({
         </div>
       )}
 
-      <div className="pointer-events-none relative z-10 mt-2 flex items-center gap-2">
-        <StatusBadge status={permission ? "permission" : task.status} />
-        {task.filesChanged > 0 && (
+      {task.filesChanged > 0 && (
+        <div className="pointer-events-none relative z-10 mt-2 flex items-center gap-2">
           <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
-        )}
-      </div>
+        </div>
+      )}
 
       {permission && (
         <div className="pointer-events-none relative z-10 mt-2 flex flex-wrap gap-1.5">

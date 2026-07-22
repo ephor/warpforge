@@ -356,9 +356,10 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                   >
                     <StatusBadge status={t.status} />
                     <span className="flex-1 truncate text-sm">{taskLabel(t)}</span>
-                    <AgentBadge agentId={t.agent} className="shrink-0 text-muted-foreground" />
-                    <span className="tnum text-xs text-muted-foreground">
-                      {elapsed(t.createdAt)}
+                    <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                      <AgentBadge agentId={t.agent} className="text-muted-foreground" />
+                      <span aria-hidden className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+                      <span className="tnum">{elapsed(t.createdAt)}</span>
                     </span>
                   </button>
                 );
