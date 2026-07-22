@@ -154,9 +154,10 @@ export function CodeEditor({
         <div
           ref={host}
           className={cn(
-            "warpforge-code-editor h-full overflow-auto bg-card text-[13px]",
+            "warpforge-code-editor h-full overflow-auto bg-card",
             showPreview && "hidden",
           )}
+          style={{ fontSize: "var(--app-mono-font-size)" }}
         />
         {showPreview && (
           <div className="h-full overflow-auto px-4 py-3">

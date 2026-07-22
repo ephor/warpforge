@@ -1,4 +1,4 @@
-import { Bot, Circle, FolderTree, KanbanSquare, LayoutGrid, PanelLeft, Plus } from "lucide-react";
+import { Circle, FolderTree, KanbanSquare, LayoutGrid, PanelLeft, Plus, Settings } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
@@ -15,7 +15,7 @@ import UpdateControl from "./components/UpdateControl";
 import { daemon } from "./daemon";
 import { attentionToastSummary } from "./lib/attentionToast";
 import { permissionToastApproveOption, permissionToastContext } from "./lib/permissionToast";
-import type { DaemonEvent, DetectedAgent, GitOpResult, TaskInfo, TaskStatus } from "./protocol";
+import type { DaemonEvent, GitOpResult, TaskInfo, TaskStatus } from "./protocol";
 import { useUi } from "./store/ui";
 import type { View } from "./store/ui";
 import AgentSetupDialog from "./views/AgentSetupDialog";
@@ -24,6 +24,7 @@ import MissionControl from "./views/MissionControl";
 import NewTaskDialog from "./views/NewTaskDialog";
 import Projects from "./views/Projects";
 import PushDialog from "./views/PushDialog";
+import SettingsView from "./views/Settings";
 import TaskDetail from "./views/TaskDetail";
 
 const NAV: { id: View; label: string; icon: typeof LayoutGrid }[] = [
@@ -49,15 +50,52 @@ export default function App() {
   const attentionOpen = useUi((s) => s.attentionOpen);
   const toggleAttention = useUi((s) => s.toggleAttention);
   const setAttentionOpen = useUi((s) => s.setAttentionOpen);
+  const fontSize = useUi((s) => s.fontSize);
+  const monoFontSize = useUi((s) => s.monoFontSize);
+  const bumpFontSize = useUi((s) => s.bumpFontSize);
+  const bumpMonoFontSize = useUi((s) => s.bumpMonoFontSize);
+  const resetFontSizes = useUi((s) => s.resetFontSizes);
   const seenPermissionIds = useRef(new Set<string>());
   const notificationsReady = useRef(false);
   const [newTaskProject, setNewTaskProject] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
-  const [manualDetected, setManualDetected] = useState<DetectedAgent[] | null>(null);
   const [pushOpen, setPushOpen] = useState(false);
   const [railMounted, setRailMounted] = useState(attentionOpen);
   const [wizardProject, setWizardProject] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // ── Inject font-size CSS custom properties ──
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--app-font-size", `${fontSize}px`);
+    root.style.setProperty("--app-mono-font-size", `${monoFontSize}px`);
+    const fontScale = fontSize / 14;
+    const monoScale = monoFontSize / 13;
+    root.style.setProperty("--app-font-scale", String(fontScale));
+    root.style.setProperty("--app-mono-font-scale", String(monoScale));
+  }, [fontSize, monoFontSize]);
+
+  // ── Keyboard shortcuts: Cmd/Ctrl +/-/0 for font scaling ──
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key === "=" || e.key === "+") {
+        e.preventDefault();
+        bumpFontSize(1);
+        bumpMonoFontSize(1);
+      } else if (e.key === "-") {
+        e.preventDefault();
+        bumpFontSize(-1);
+        bumpMonoFontSize(-1);
+      } else if (e.key === "0") {
+        e.preventDefault();
+        resetFontSizes();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [bumpFontSize, bumpMonoFontSize, resetFontSizes]);
 
   const handleOpenTask = useCallback(
     (id: string) => {
@@ -421,18 +459,13 @@ export default function App() {
             <Button
               size="icon"
               variant="ghost"
-              onClick={() => {
-                daemon
-                  .detectAgents()
-                  .then((detected) => setManualDetected(Array.isArray(detected) ? detected : []))
-                  .catch(() => setManualDetected([]));
-              }}
-              aria-label="Manage agents"
-              title="Manage agents"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Settings"
+              title="Settings"
               type="button"
               className="size-7"
             >
-              <Bot className="size-4" />
+              <Settings className="size-4" />
             </Button>
             <div className="flex min-w-0 items-center gap-2 text-xs">
               <span
@@ -537,12 +570,12 @@ export default function App() {
           defaultProject={newTaskProject}
           initialPrompt={newTaskPrompt}
         />
-        {(state.pendingAgentSetup ?? manualDetected) && (
+        <SettingsView open={settingsOpen} onOpenChange={setSettingsOpen} />
+        {state.pendingAgentSetup && (
           <AgentSetupDialog
-            detected={(state.pendingAgentSetup ?? manualDetected)!}
+            detected={state.pendingAgentSetup}
             onClose={() => {
               daemon.dismissAgentSetup();
-              setManualDetected(null);
             }}
           />
         )}
