@@ -102,7 +102,11 @@ Agent work is not tied to an open window. A Rust daemon owns projects, services,
 git clone https://github.com/ephor/warpforge.git
 cd warpforge
 cargo build
+git config core.hooksPath .githooks   # pre-commit: fmt/clippy/lint/typecheck
 ```
+
+`bun install` in `desktop/` wires the hook up too. It runs the fast CI checks
+against staged files only; `git commit --no-verify` bypasses it.
 
 ### 2. Start the desktop app
 
