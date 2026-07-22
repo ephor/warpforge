@@ -494,16 +494,6 @@ export default function TaskDetail({
           <span>·</span>
           <span className="max-w-32 truncate">{task.agent}</span>
         </span>
-        {(task.status === "running" || task.status === "queued") && (
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            onClick={() => void daemon.request("task.cancel", { task_id: task.id })}
-          >
-            cancel
-          </Button>
-        )}
         <TaskMenu
           task={task}
           pinned={taskGroupPinned}

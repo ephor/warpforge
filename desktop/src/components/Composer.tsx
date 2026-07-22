@@ -1,4 +1,4 @@
-import { FileDiff, FileMinus, FilePen, FilePlus, ImagePlus, Send, X } from "lucide-react";
+import { FileDiff, FileMinus, FilePen, FilePlus, ImagePlus, Send, Square, X } from "lucide-react";
 import {
   forwardRef,
   useEffect,
@@ -71,6 +71,7 @@ export const Composer = forwardRef<
   ComposerHandle,
   {
     onSend: (submission: PromptSubmission) => void | Promise<void>;
+    onCancel?: () => void;
     commands?: CommandInfo[];
     files?: ProjectFile[];
     filesLoading?: boolean;
@@ -88,6 +89,7 @@ export const Composer = forwardRef<
   (
     {
       onSend,
+      onCancel,
       commands = EMPTY_COMMANDS,
       files = EMPTY_FILES,
       filesLoading = false,
@@ -428,11 +430,23 @@ export const Composer = forwardRef<
                 type="button"
                 size="icon"
                 aria-label="Send"
-                className="size-7 shrink-0"
+                className="size-6 shrink-0"
                 onClick={() => void send()}
                 disabled={!canSend}
               >
-                <Send className="size-3.5" />
+                <Send className="size-3" />
+              </Button>
+            )}
+            {!hideSendButton && onCancel && (
+              <Button
+                type="button"
+                size="icon"
+                variant="destructive"
+                aria-label="Cancel"
+                className="size-6 shrink-0"
+                onClick={() => onCancel()}
+              >
+                <Square className="size-3 fill-current" />
               </Button>
             )}
           </div>
@@ -468,7 +482,7 @@ function ContextUsageIndicator({ usage }: { usage: ContextUsage }) {
           aria-label={`Context window: ${detail}`}
           title="Context window"
           className={cn(
-            "flex size-7 items-center justify-center rounded-md outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring",
+            "flex size-6 items-center justify-center rounded-md outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring",
             tone,
           )}
         >

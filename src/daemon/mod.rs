@@ -301,7 +301,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancel_task_marks_done() {
+    async fn cancel_task_marks_idle() {
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let daemon = Daemon::spawn(test_projects(), store);
         let id = daemon
@@ -326,7 +326,7 @@ mod tests {
             loop {
                 match events.recv().await.expect("event") {
                     Event::TaskUpdated(task)
-                        if task.id == id && task.status == TaskStatus::Done =>
+                        if task.id == id && task.status == TaskStatus::Idle =>
                     {
                         break;
                     }
@@ -335,7 +335,7 @@ mod tests {
             }
         })
         .await
-        .expect("TaskUpdated with Done status");
+        .expect("TaskUpdated with Idle status");
     }
 
     #[tokio::test]

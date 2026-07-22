@@ -30,6 +30,13 @@ export const ChatComposer = memo(
       [onBeforeSend, task.id],
     );
 
+    const onCancel = useCallback(
+      () => void daemon.request("task.cancel", { task_id: task.id }),
+      [task.id],
+    );
+
+    const isRunning = task.status === "running" || task.status === "queued";
+
     return (
       <Composer
         ref={ref}
@@ -40,6 +47,7 @@ export const ChatComposer = memo(
         imageSupported={imageSupported}
         disabled={task.status === "done"}
         onSend={onSend}
+        onCancel={isRunning ? onCancel : undefined}
         toolbar={
           task.configOptions && task.configOptions.length > 0 ? (
             <AgentConfigBar taskId={task.id} options={task.configOptions} />
