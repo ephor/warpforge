@@ -205,6 +205,9 @@ pub enum Command {
         /// to the agent's `last_model` so orchestrator-spawned sub-agents
         /// inherit the user's previous pick without an explicit UI selection.
         default_model: Option<String>,
+        /// Non-model config overrides (reasoning effort, mode, etc.) keyed by
+        /// config-option id; applied via `session/setConfigOption` after model.
+        config_overrides: std::collections::HashMap<String, String>,
         reply: oneshot::Sender<String>,
     },
     /// Drain an orchestrator task's inbox of finished sub-agent results.
@@ -512,6 +515,7 @@ impl DaemonHandle {
         parent_task_id: Option<String>,
         attachments: Vec<wire::PromptAttachment>,
         default_model: Option<String>,
+        config_overrides: std::collections::HashMap<String, String>,
     ) -> String {
         let (tx, rx) = oneshot::channel();
         self.send(Command::CreateTask {
@@ -524,6 +528,7 @@ impl DaemonHandle {
             parent_task_id,
             attachments,
             default_model,
+            config_overrides,
             reply: tx,
         })
         .await;
@@ -1553,6 +1558,7 @@ impl Daemon {
                 parent_task_id,
                 attachments,
                 default_model,
+                config_overrides,
                 reply,
             } => {
                 let mut task = Task::new(&project, &prompt, &agent, tags);
@@ -1617,6 +1623,7 @@ impl Daemon {
                     None,
                     attachments,
                     resolved_model,
+                    config_overrides,
                 );
             }
             Command::ReadInbox {
@@ -2048,6 +2055,7 @@ impl Daemon {
                     Some(session_id),
                     vec![],
                     None,
+                    std::collections::HashMap::new(),
                 );
             }
             Command::SessionPrompt {
@@ -2128,6 +2136,7 @@ impl Daemon {
                                 Some(session_id),
                                 attachments,
                                 None,
+                                std::collections::HashMap::new(),
                             );
                             let _ = reply.send(Ok(()));
                         } else {
@@ -2529,6 +2538,7 @@ impl Daemon {
         resume: Option<String>,
         attachments: Vec<wire::PromptAttachment>,
         default_model: Option<String>,
+        config_overrides: std::collections::HashMap<String, String>,
     ) {
         // Resolve cwd: worktree path if set, otherwise project root.
         let cwd = if let Some(task) = self.tasks.get(task_id) {
@@ -2610,6 +2620,7 @@ impl Daemon {
             self.acp_tx.clone(),
             Some(self.policy_tx.clone()),
             default_model,
+            config_overrides,
         ) {
             Ok(handle) => {
                 self.sessions.insert(task_id.to_string(), handle);
