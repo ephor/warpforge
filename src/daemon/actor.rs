@@ -2053,7 +2053,7 @@ impl Daemon {
                     handle.cancel();
                 }
                 if let Some(task) = self.tasks.get_mut(&id) {
-                    task.set_status(TaskStatus::Done);
+                    task.set_status(TaskStatus::Idle);
                     let updated = task.clone();
                     self.persist(&updated);
                     self.emit(Event::TaskUpdated(updated));
