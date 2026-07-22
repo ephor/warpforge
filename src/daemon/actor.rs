@@ -127,8 +127,20 @@ below, with their combined diff). Output the PR title as the first line, then a 
 blank line, then a Markdown body summarizing what changed and why. Reply with ONLY \
 the title and body — no code fences, no preamble.";
 
+const TASK_TITLE_INSTRUCTION: &str = "\
+Given the task prompt below, write a short title for this task. The title must be \
+a single imperative line, at most 60 characters, plain text, no quotes, no trailing \
+period, no markdown. Reply with ONLY the title — no code fences, no preamble, no \
+closing remarks.";
+
 /// Build the one-shot prompt for `text.generate` from the repo's git state.
-async fn build_textgen_prompt(repo: &str, kind: wire::TextGenKind) -> Result<String, String> {
+/// When `message` is set (required for `TaskTitle`), it is used verbatim as the
+/// input to describe instead of running git.
+async fn build_textgen_prompt(
+    repo: &str,
+    kind: wire::TextGenKind,
+    message: Option<&str>,
+) -> Result<String, String> {
     async fn git_out(repo: &str, args: &[&str]) -> Result<String, String> {
         let out = tokio::process::Command::new("git")
             .arg("-C")
@@ -186,6 +198,15 @@ async fn build_textgen_prompt(repo: &str, kind: wire::TextGenKind) -> Result<Str
             Ok(format!(
                 "{PR_INSTRUCTION}\n\n----- commits -----\n{subjects}\n\n----- combined diff -----\n{}",
                 clamp(diff)
+            ))
+        }
+        wire::TextGenKind::TaskTitle => {
+            let prompt = message.unwrap_or("");
+            if prompt.trim().is_empty() {
+                return Err("no prompt to summarize".to_string());
+            }
+            Ok(format!(
+                "{TASK_TITLE_INSTRUCTION}\n\n----- task prompt -----\n{prompt}"
             ))
         }
     }
@@ -318,6 +339,11 @@ pub enum Command {
     /// Delete a task and its session history permanently.
     DeleteTask {
         id: String,
+    },
+    /// Override a task's title, persist, and emit TaskUpdated.
+    SetTaskTitle {
+        id: String,
+        title: String,
     },
     /// Merge a task's worktree branch back into its base branch and clean up.
     MergeWorktree {
@@ -639,6 +665,14 @@ impl DaemonHandle {
         self.send(Command::SetTaskStatus {
             id: id.to_string(),
             status,
+        })
+        .await;
+    }
+
+    pub async fn set_task_title(&self, id: &str, title: &str) {
+        self.send(Command::SetTaskTitle {
+            id: id.to_string(),
+            title: title.to_string(),
         })
         .await;
     }
@@ -2109,12 +2143,17 @@ impl Daemon {
                         .or_else(|| self.project_path(&task.project))
                         .unwrap_or_else(|| ".".to_string());
                     let command = self.resolve_agent_command(&task.project, &agent_id);
-                    (repo, command)
+                    let prompt = task.prompt.clone();
+                    (repo, command, prompt)
                 });
                 match resolved {
-                    Some((repo, command)) => {
+                    Some((repo, command, prompt)) => {
                         tokio::spawn(async move {
-                            let result = match build_textgen_prompt(&repo, kind).await {
+                            let message = match kind {
+                                wire::TextGenKind::TaskTitle => Some(prompt.as_str()),
+                                _ => None,
+                            };
+                            let result = match build_textgen_prompt(&repo, kind, message).await {
                                 Ok(prompt) => {
                                     super::acp::generate_text(command, repo, prompt, model).await
                                 }
@@ -2188,6 +2227,15 @@ impl Daemon {
                         let _ = store.delete_task(&id);
                     }
                     self.emit(Event::TaskRemoved { id });
+                }
+            }
+            Command::SetTaskTitle { id, title } => {
+                if let Some(task) = self.tasks.get_mut(&id) {
+                    task.title = title;
+                    task.updated_at = super::task::now_secs();
+                    let updated = task.clone();
+                    self.persist(&updated);
+                    self.emit(Event::TaskUpdated(updated));
                 }
             }
             Command::MergeWorktree { task_id, reply } => {

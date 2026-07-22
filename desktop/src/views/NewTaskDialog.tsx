@@ -34,6 +34,9 @@ interface Props {
  */
 export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultProject, initialPrompt }: Props) {
   const openTask = useUi((s) => s.openTask);
+  const autoNameTasks = useUi((s) => s.autoNameTasks);
+  const textGenAgentId = useUi((s) => s.textGenAgentId);
+  const textGenModel = useUi((s) => s.textGenModel);
 
   const firstProjectName = snapshot.projects[0]?.name ?? "";
   const [project, setProject] = useState(defaultProject ?? firstProjectName);
@@ -149,6 +152,24 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
         },
         duration: 8000,
       });
+      // Auto-generate a title asynchronously if enabled and an agent is picked.
+      if (autoNameTasks && textGenAgentId) {
+        void (async () => {
+          try {
+            const generated = await daemon.generateText(
+              taskId,
+              textGenAgentId,
+              "task_title",
+              textGenModel ?? undefined,
+            );
+            if (generated?.trim()) {
+              await daemon.setTaskTitle(taskId, generated.trim().slice(0, 80));
+            }
+          } catch {
+            // Silently ignore — task creation must never feel slow or noisy.
+          }
+        })();
+      }
     }
     onOpenChange(false);
   };

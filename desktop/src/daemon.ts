@@ -428,6 +428,7 @@ export class DaemonClient {
       }
       case "task.create": {
         const id = `t${Math.random().toString(36).slice(2, 7)}`;
+        const promptText = String(p.prompt);
         const task = {
           agent: String(p.agent ?? "claude"),
           blockedReason: null,
@@ -435,9 +436,10 @@ export class DaemonClient {
           filesChanged: 0,
           id,
           project: String(p.project),
-          prompt: String(p.prompt),
+          prompt: promptText,
           status: "running" as const,
           tags: (p.tags as string[]) ?? [],
+          title: promptText.trim().split("\n")[0]?.trim().slice(0, 80) ?? "",
           updatedAt: nowSecs(),
         };
         this.applyEvent({ data: task, event: "task.created" });
@@ -500,6 +502,7 @@ export class DaemonClient {
           prompt: goal,
           status: "running" as const,
           tags: ["orchestrator"],
+          title: goal.trim().split("\n")[0]?.trim().slice(0, 80) ?? "",
           updatedAt: nowSecs(),
         };
         this.applyEvent({ data: task, event: "task.created" });
@@ -717,7 +720,7 @@ export class DaemonClient {
   async generateText(
     taskId: string,
     agentId: string,
-    kind: "commit_message" | "pr_description",
+    kind: "commit_message" | "pr_description" | "task_title",
     model?: string,
   ): Promise<string> {
     const result = (await this.request("text.generate", {
@@ -727,6 +730,11 @@ export class DaemonClient {
       task_id: taskId,
     })) as { text: string };
     return result.text;
+  }
+
+  /** Update a task's title. */
+  async setTaskTitle(taskId: string, title: string) {
+    await this.request("task.setTitle", { task_id: taskId, title });
   }
 
   async deleteTask(taskId: string) {

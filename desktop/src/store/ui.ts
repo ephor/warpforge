@@ -33,6 +33,9 @@ export interface SettingsState {
   /** Model override for that agent. null = whatever the agent defaults to. */
   textGenModel: string | null;
   setTextGenModel: (model: string | null) => void;
+  /** When true and a text-gen agent is selected, auto-generate a task title after creation. */
+  autoNameTasks: boolean;
+  setAutoNameTasks: (v: boolean) => void;
 }
 
 interface UiState extends SettingsState {
@@ -96,6 +99,7 @@ export const useUi = create<UiState>()(
       monoFontSize: DEFAULT_MONO_FONT_SIZE,
       textGenAgentId: null,
       textGenModel: null,
+      autoNameTasks: true,
 
       setView: (view) => set({ openTaskId: null, view }),
       // Contextual task tools must not leak from one task into the next.
@@ -140,6 +144,7 @@ export const useUi = create<UiState>()(
       // Models are per-agent, so a stored pick is meaningless once the agent changes.
       setTextGenAgentId: (textGenAgentId) => set({ textGenAgentId, textGenModel: null }),
       setTextGenModel: (textGenModel) => set({ textGenModel }),
+      setAutoNameTasks: (autoNameTasks) => set({ autoNameTasks }),
     }),
     {
       name: "wf-ui",

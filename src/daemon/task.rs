@@ -51,6 +51,7 @@ pub struct Task {
     pub agent: String,
     pub status: TaskStatus,
     pub tags: Vec<String>,
+    pub title: String,
     pub created_at: u64,
     pub updated_at: u64,
     pub files_changed: u32,
@@ -72,6 +73,7 @@ pub struct Task {
 impl Task {
     pub fn new(project: &str, prompt: &str, agent: &str, tags: Vec<String>) -> Self {
         let ts = now_secs();
+        let title = derive_title(prompt);
         Self {
             id: format!("t_{}", &Uuid::new_v4().to_string()[..8]),
             session_id: None,
@@ -80,6 +82,7 @@ impl Task {
             agent: agent.to_string(),
             status: TaskStatus::Queued,
             tags,
+            title,
             created_at: ts,
             updated_at: ts,
             files_changed: 0,
@@ -102,5 +105,33 @@ impl Task {
     pub fn set_status(&mut self, status: TaskStatus) {
         self.status = status;
         self.updated_at = now_secs();
+    }
+}
+
+/// Derive a display title from a prompt: first line, stripped of leading
+/// whitespace and markdown fences, truncated to 80 characters. Returns empty
+/// string for empty prompts.
+fn derive_title(prompt: &str) -> String {
+    let line = prompt
+        .trim()
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_start_matches("# ")
+        .trim_start_matches('*')
+        .trim_start_matches('-')
+        .trim();
+    let max = 80;
+    if line.len() <= max {
+        line.to_string()
+    } else {
+        let end = line
+            .char_indices()
+            .take(max)
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(max);
+        line[..end].to_string()
     }
 }

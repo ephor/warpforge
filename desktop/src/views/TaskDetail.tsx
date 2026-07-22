@@ -37,6 +37,7 @@ import { withOccurrenceKeys } from "@/lib/renderKeys";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { activityBadge, orchNodeBadge, taskBadge } from "@/lib/status";
 import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/lib/taskGroups";
+import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
 import { ChangesRail } from "../components/ChangesRail";
@@ -486,7 +487,7 @@ export default function TaskDetail({
           <ArrowLeft className="size-4" />
         </Button>
         <h1 className="min-w-0 flex-1 truncate text-base font-semibold" title={task.prompt}>
-          {task.prompt}
+          {taskLabel(task)}
         </h1>
         <Badge variant={headerBadge.variant}>{headerBadge.label}</Badge>
         <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">

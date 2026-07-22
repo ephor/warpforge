@@ -14,6 +14,7 @@ const task = {
   prompt: "Build message actions",
   status: "idle",
   tags: [],
+  title: "",
   updatedAt: 1,
 } satisfies TaskInfo;
 

@@ -13,6 +13,7 @@ import { latestContextUsage } from "@/lib/sessionUsage";
 
 import { daemon } from "../daemon";
 import type { AgentConfig, CommandInfo, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
+import { useUi } from "../store/ui";
 import { StreamLine } from "../views/MissionControl";
 import { appendCoalesced, coalesceUpdates, streamKey } from "../views/missionControlStream";
 import { AgentActivityIndicator } from "./AgentActivityIndicator";
@@ -135,6 +136,26 @@ const TranscriptRow = memo(function TranscriptRow({
       });
       const createdTaskId = (result as { taskId?: string })?.taskId;
       if (!createdTaskId) throw new Error("Warpforge did not return the new task id");
+      // Auto-generate title if enabled.
+      const { autoNameTasks: autoName, textGenAgentId: genAgent, textGenModel: genModel } =
+        useUi.getState();
+      if (autoName && genAgent) {
+        void (async () => {
+          try {
+            const generated = await daemon.generateText(
+              createdTaskId,
+              genAgent,
+              "task_title",
+              genModel ?? undefined,
+            );
+            if (generated?.trim()) {
+              await daemon.setTaskTitle(createdTaskId, generated.trim().slice(0, 80));
+            }
+          } catch {
+            // Silent.
+          }
+        })();
+      }
       onOpenTask(createdTaskId);
     },
     [branchPrompt, onOpenTask, project, sourceTaskId],

@@ -27,6 +27,7 @@ function task(id: string, status: TaskStatus, parentTaskId?: string): TaskInfo {
     prompt: id,
     status,
     tags: [],
+    title: "",
     updatedAt: 1,
   };
 }

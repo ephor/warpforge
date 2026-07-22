@@ -19,6 +19,7 @@ function task(id: string, agent: string, status: TaskStatus, parentTaskId?: stri
     prompt: `${id} prompt`,
     status,
     tags: [],
+    title: "",
     updatedAt: 1,
   };
 }
