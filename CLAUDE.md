@@ -72,3 +72,15 @@ cargo build --release
 # or during dev:
 cargo run
 ```
+
+### Before committing
+
+Run the fast CI checks locally — CI rejects on these and it's avoidable:
+
+- `cargo fmt --all -- --check` (or `cargo fmt --all` to fix)
+- `cargo clippy --locked --all-targets -- -D warnings`
+- desktop changes: `cd desktop && bun run lint && bun run typecheck`
+
+A pre-commit hook (`.githooks/pre-commit`, enabled via
+`git config core.hooksPath .githooks`) runs these; do not rely on it — run them
+yourself before committing, and never `--no-verify` to dodge a real failure.

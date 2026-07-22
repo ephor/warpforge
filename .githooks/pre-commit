@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Fast subset of CI (.github/workflows/ci.yml). Slow checks (cargo test,
+# bun run test/build) stay in CI. Bypass with `git commit --no-verify`.
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root" || exit 1
+
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+[ -z "$staged" ] && exit 0
+
+fail() {
+  echo "pre-commit: FAILED — $1" >&2
+  echo "  fix it, or bypass with: git commit --no-verify" >&2
+  exit 1
+}
+
+run() {
+  echo "pre-commit: $*"
+  "$@" || fail "$*"
+}
+
+if grep -qE '(^|/)(Cargo\.(toml|lock)$|.*\.rs$)' <<<"$staged"; then
+  run cargo fmt --all -- --check
+  if [ "${WARPFORGE_PRECOMMIT_FAST:-}" != "1" ]; then
+    run cargo clippy --locked --all-targets -- -D warnings
+  fi
+fi
+
+if grep -q '^desktop/' <<<"$staged"; then
+  (cd desktop && bun run lint) || fail "cd desktop && bun run lint"
+  (cd desktop && bun run typecheck) || fail "cd desktop && bun run typecheck"
+fi
+
+exit 0
