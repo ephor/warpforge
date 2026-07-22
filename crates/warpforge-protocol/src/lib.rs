@@ -219,6 +219,10 @@ pub enum Method {
     /// Save the user's agent configuration (from setup wizard or settings).
     #[serde(rename = "agents.update")]
     AgentsUpdate { agents: Vec<AgentConfig> },
+    /// Install or update an agent's global package (npm/brew). Runs the agent's
+    /// install/update command and returns `{ ok, output }` when it finishes.
+    #[serde(rename = "agents.install")]
+    AgentsInstall { id: String },
 
     // ── ACP passthrough for a task's agent session ──
     /// Send a follow-up user message into a running session.
@@ -1016,6 +1020,24 @@ pub struct DetectedAgent {
     pub installed: bool,
     pub default_acp_command: String,
     pub install_hint: String,
+    /// Installed version, when it could be determined.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Latest published version (from the npm registry), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_version: Option<String>,
+    /// Freshness verdict: "current" | "behind" | "missing" | "unknown".
+    pub status: String,
+    /// Shell command that installs the agent (npm/brew). None when there is no
+    /// automatable install (unknown package manager).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_command: Option<String>,
+    /// Shell command that updates the agent to latest, derived from how the
+    /// existing binary was installed. None when we can't update it safely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_command: Option<String>,
+    /// Whether the daemon can run an automated install/update for this agent.
+    pub can_manage: bool,
 }
 
 /// An agent session discovered on disk (claude/codex native session store),
