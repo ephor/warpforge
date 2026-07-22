@@ -34,6 +34,7 @@ import {
 } from "@/lib/sessionPermissions";
 import { latestContextUsage } from "@/lib/sessionUsage";
 import { activityBadge, elapsed, taskBadge } from "@/lib/status";
+import { taskLabel } from "@/lib/taskLabel";
 import {
   buildTaskGroupIndex,
   flattenTaskTree,
@@ -313,7 +314,7 @@ function FocusPane({
               className="block max-w-full truncate text-left text-[15px] font-semibold leading-5 text-foreground hover:text-primary"
               title={task.prompt}
             >
-              {task.prompt}
+              {taskLabel(task)}
             </button>
           </div>
           <StatusPill variant={badge.variant} label={badge.label} />

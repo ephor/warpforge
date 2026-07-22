@@ -49,6 +49,7 @@ impl Store {
                 agent           TEXT NOT NULL,
                 status          TEXT NOT NULL,
                 tags            TEXT NOT NULL,      -- JSON array
+                title           TEXT NOT NULL DEFAULT '',
                 created_at      INTEGER NOT NULL,
                 updated_at      INTEGER NOT NULL,
                 files_changed   INTEGER NOT NULL,
@@ -84,6 +85,11 @@ impl Store {
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN worktree TEXT", []);
         // Migration: add parent_task_id for orchestrator sub-agent tasks.
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT", []);
+        // Migration: add title for human-readable task labels.
+        let _ = conn.execute(
+            "ALTER TABLE tasks ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+            [],
+        );
         // Migration: cache probed ACP model selectors + the user's last pick so
         // the New Task view can show a model picker before any prompt is sent
         // and so orchestrator-spawned sub-agents inherit the last choice.
@@ -101,14 +107,15 @@ impl Store {
         self.conn.execute(
             r#"
             INSERT INTO tasks
-                (id, session_id, project, prompt, agent, status, tags,
+                (id, session_id, project, prompt, agent, status, tags, title,
                  created_at, updated_at, files_changed, blocked_reason, config_options, worktree,
                  parent_task_id)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
             ON CONFLICT(id) DO UPDATE SET
                 session_id=excluded.session_id,
                 status=excluded.status,
                 tags=excluded.tags,
+                title=excluded.title,
                 updated_at=excluded.updated_at,
                 files_changed=excluded.files_changed,
                 blocked_reason=excluded.blocked_reason,
@@ -123,6 +130,7 @@ impl Store {
                 task.agent,
                 task.status.to_string(),
                 tags,
+                task.title,
                 task.created_at,
                 task.updated_at,
                 task.files_changed,
@@ -143,7 +151,7 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, project, prompt, agent, status, tags, \
              created_at, updated_at, files_changed, blocked_reason, config_options, worktree, \
-             parent_task_id FROM tasks",
+             parent_task_id, title FROM tasks",
         )?;
         let rows = stmt.query_map([], |row| {
             let tags_json: String = row.get(6)?;
@@ -161,6 +169,7 @@ impl Store {
                 agent: row.get(4)?,
                 status,
                 tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+                title: row.get(14)?,
                 created_at: row.get(7)?,
                 updated_at: row.get(8)?,
                 files_changed: row.get::<_, i64>(9)? as u32,

@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { taskBadge } from "@/lib/status";
 import { flattenTaskTree, type TaskTree } from "@/lib/taskGroups";
+import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
 export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
@@ -77,7 +78,7 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
                   <span className="text-xs text-muted-foreground">{badge.label}</span>
                 </span>
                 <span className="block truncate text-xs text-muted-foreground">
-                  {member.prompt}
+                  {taskLabel(member)}
                 </span>
               </span>
               <Check className={cn("mt-0.5 size-3.5", selected ? "opacity-100" : "opacity-0")} />

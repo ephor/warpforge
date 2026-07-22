@@ -8,6 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { taskLabel } from "@/lib/taskLabel";
 
 import { daemon } from "../daemon";
 import type { TaskInfo } from "../protocol";
@@ -54,7 +55,7 @@ export function TaskMenu({
         <DropdownMenuItem
           className="text-destructive focus:text-destructive"
           onSelect={() => {
-            if (window.confirm(`Delete "${task.prompt}"? This cannot be undone.`)) {
+            if (window.confirm(`Delete "${taskLabel(task)}"? This cannot be undone.`)) {
               void daemon.deleteTask(task.id);
               onClose();
             }

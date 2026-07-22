@@ -127,6 +127,7 @@ pub fn task_info(t: &Task) -> wire::TaskInfo {
         agent: t.agent.clone(),
         status: task_status(&t.status),
         tags: t.tags.clone(),
+        title: t.title.clone(),
         created_at: t.created_at,
         updated_at: t.updated_at,
         files_changed: t.files_changed,

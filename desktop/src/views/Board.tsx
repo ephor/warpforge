@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { elapsed, orchNodeBadge, taskBadge } from "@/lib/status";
+import { taskLabel } from "@/lib/taskLabel";
 import type { TaskTree } from "@/lib/taskGroups";
 import {
   buildTaskForest,
@@ -409,7 +410,7 @@ function ChildTaskRow({ tree, onOpenTask }: { tree: TaskTree; onOpenTask: (id: s
           <Badge variant={badge.variant} className="shrink-0">
             {badge.label}
           </Badge>
-          <span className="min-w-0 flex-1 truncate text-foreground">{tree.task.prompt}</span>
+          <span className="min-w-0 flex-1 truncate text-foreground">{taskLabel(tree.task)}</span>
         </div>
         <div className="mt-1 flex items-center gap-1.5 pl-0.5 text-[10px] text-muted-foreground">
           <span>{tree.task.agent}</span>
@@ -467,7 +468,7 @@ function TaskCard({
               {task.agent}
             </span>
           </div>
-          <p className="my-1.5 line-clamp-2 text-sm">{task.prompt}</p>
+          <p className="my-1.5 line-clamp-2 text-sm">{taskLabel(task)}</p>
           <div className="flex items-center gap-2">
             <Badge variant={badge.variant}>{badge.label}</Badge>
             {task.filesChanged > 0 && (
@@ -571,7 +572,7 @@ function QueueCard({
           <span className="font-semibold text-foreground">{task.project}</span>
           <span>{task.agent}</span>
         </div>
-        <p className="my-1 line-clamp-2 text-sm">{task.prompt}</p>
+        <p className="my-1 line-clamp-2 text-sm">{taskLabel(task)}</p>
         <div className="flex flex-wrap gap-1">
           {task.tags.map((tag) => (
             <Badge key={tag} variant="outline">

@@ -170,6 +170,8 @@ export interface TaskInfo {
   agent: string;
   status: TaskStatus;
   tags: string[];
+  /** Short imperative label derived from the prompt, or set explicitly. Empty until generated. */
+  title: string;
   createdAt: number;
   updatedAt: number;
   filesChanged: number;

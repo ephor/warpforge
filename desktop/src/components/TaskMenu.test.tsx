@@ -16,6 +16,7 @@ const task: TaskInfo = {
   prompt: "Improve task detail",
   status: "idle",
   tags: [],
+  title: "",
   updatedAt: 1,
 };
 

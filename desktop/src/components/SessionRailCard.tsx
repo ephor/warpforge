@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import type { PermissionUpdate } from "@/lib/sessionPermissions";
 import { latestSessionPreview } from "@/lib/sessionPreview";
 import { elapsed, taskBadge, taskEdge } from "@/lib/status";
+import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
@@ -71,7 +72,7 @@ const SessionRailCard = memo(function SessionRailCard({
         type="button"
         className="absolute inset-0 z-0 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
         onClick={() => onOpen(task.id)}
-        aria-label={`Open ${task.project} session: ${task.prompt}`}
+        aria-label={`Open ${task.project} session: ${taskLabel(task)}`}
         data-task-id={task.id}
       />
       <div className="pointer-events-none relative z-10 flex items-center gap-2 text-xs text-muted-foreground">
@@ -99,14 +100,14 @@ const SessionRailCard = memo(function SessionRailCard({
         </button>
       </div>
       <p className="pointer-events-none relative z-10 mt-1.5 line-clamp-2 text-sm font-medium leading-snug">
-        {task.prompt}
+        {taskLabel(task)}
       </p>
       {parentTask && (
         <p
           className="pointer-events-none relative z-10 mt-1 truncate text-[11px] text-muted-foreground"
           title={`${parentTask.prompt} → ${task.prompt}`}
         >
-          <span className="font-medium text-foreground/75">{parentTask.prompt}</span>
+          <span className="font-medium text-foreground/75">{taskLabel(parentTask)}</span>
           <span aria-hidden="true"> → </span>
           <span>{task.agent}</span>
         </p>

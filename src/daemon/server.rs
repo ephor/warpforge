@@ -595,6 +595,10 @@ async fn dispatch(
             handle.send(Command::DeleteTask { id: task_id }).await;
             Ok(json!(null))
         }
+        TaskSetTitle { task_id, title } => {
+            handle.set_task_title(&task_id, &title).await;
+            Ok(json!(null))
+        }
         TaskMergeWorktree { task_id } => {
             let result = handle.merge_worktree(&task_id).await;
             match result {

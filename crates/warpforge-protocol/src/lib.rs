@@ -200,6 +200,9 @@ pub enum Method {
     /// Delete a task and its persisted session history permanently.
     #[serde(rename = "task.delete")]
     TaskDelete { task_id: String },
+    /// Override a task's title (e.g. after async title generation completes).
+    #[serde(rename = "task.setTitle")]
+    TaskSetTitle { task_id: String, title: String },
     /// Merge a task's worktree branch back into its base branch and remove
     /// the worktree. No-op if the task has no worktree.
     #[serde(rename = "task.mergeWorktree")]
@@ -652,6 +655,10 @@ pub struct TaskInfo {
     pub agent: String,
     pub status: TaskStatus,
     pub tags: Vec<String>,
+    /// Short imperative label derived from the prompt, or set explicitly. May
+    /// be empty when no title has been generated or set yet.
+    #[serde(default)]
+    pub title: String,
     /// Unix seconds.
     pub created_at: u64,
     pub updated_at: u64,
@@ -923,6 +930,8 @@ pub enum TextGenKind {
     CommitMessage,
     /// A pull-request title + body for the branch's outgoing commits.
     PrDescription,
+    /// A short (≤60 chars) imperative title derived from a task's first prompt.
+    TaskTitle,
 }
 
 /// Preview returned by `git.pushInfo`.

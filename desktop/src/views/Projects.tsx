@@ -30,6 +30,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { elapsed, pfBadge, serviceBadge, taskBadge } from "@/lib/status";
+import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
@@ -353,7 +354,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                     className="flex min-h-9 w-full items-center gap-3 px-3 py-1.5 text-left hover:bg-secondary/40"
                   >
                     <Badge variant={badge.variant}>{badge.label}</Badge>
-                    <span className="flex-1 truncate text-sm">{t.prompt}</span>
+                    <span className="flex-1 truncate text-sm">{taskLabel(t)}</span>
                     <span className="text-xs text-muted-foreground">{t.agent}</span>
                     <span className="tnum text-xs text-muted-foreground">
                       {elapsed(t.createdAt)}

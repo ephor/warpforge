@@ -17,6 +17,7 @@ const task: TaskInfo = {
   prompt: "Implement task switching",
   status: "running",
   tags: [],
+  title: "",
   updatedAt: 1,
 };
 
