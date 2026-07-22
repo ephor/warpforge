@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX_IMAGE_BYTES, validateImageFiles } from "./imageAttachments";
+import { MAX_IMAGE_BYTES, MAX_IMAGES, validateImageFiles } from "./imageAttachments";
 
 describe("image attachments", () => {
   it("accepts PNG and JPEG and rejects unsupported MIME/extensions", () => {
@@ -18,6 +18,8 @@ describe("image attachments", () => {
     const huge = new File([new Uint8Array(MAX_IMAGE_BYTES + 1)], "huge.png", { type: "image/png" });
     expect(validateImageFiles([huge])).toMatch(/5 MiB/);
     const small = () => new File(["x"], "a.png", { type: "image/png" });
-    expect(validateImageFiles([small(), small(), small(), small(), small()])).toMatch(/up to 4/);
+    const tooMany = Array.from({ length: MAX_IMAGES + 1 }, small);
+    expect(validateImageFiles(tooMany)).toMatch(new RegExp(`up to ${MAX_IMAGES}`));
+    expect(validateImageFiles(tooMany.slice(1))).toBeNull();
   });
 });
