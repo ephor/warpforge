@@ -18,6 +18,7 @@ import {
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { AgentBadge } from "@/components/AgentBadge";
+import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -30,7 +31,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { elapsed, pfBadge, serviceBadge, taskBadge } from "@/lib/status";
+import { elapsed, pfBadge, serviceBadge } from "@/lib/status";
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
@@ -347,14 +348,13 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                 <div className="px-3 py-4 text-sm text-muted-foreground">No tasks yet.</div>
               )}
               {projectTasks.map((t) => {
-                const badge = taskBadge(t.status);
                 return (
                   <button
                     key={t.id}
                     onClick={() => onOpenTask(t.id)}
                     className="flex min-h-9 w-full items-center gap-3 px-3 py-1.5 text-left hover:bg-secondary/40"
                   >
-                    <Badge variant={badge.variant}>{badge.label}</Badge>
+                    <StatusBadge status={t.status} />
                     <span className="flex-1 truncate text-sm">{taskLabel(t)}</span>
                     <AgentBadge agentId={t.agent} className="shrink-0 text-muted-foreground" />
                     <span className="tnum text-xs text-muted-foreground">

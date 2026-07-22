@@ -2,12 +2,12 @@ import { ChevronDown, ChevronUp, FilePen, ListTodo, Pin, Wrench } from "lucide-r
 import { memo, useMemo } from "react";
 
 import { AgentBadge } from "@/components/AgentBadge";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { PermissionUpdate } from "@/lib/sessionPermissions";
 import { latestSessionPreview } from "@/lib/sessionPreview";
-import { elapsed, taskBadge, taskEdge } from "@/lib/status";
+import { elapsed, taskEdge } from "@/lib/status";
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
@@ -49,7 +49,6 @@ const SessionRailCard = memo(function SessionRailCard({
   onOpen,
   onTogglePreview,
 }: SessionRailCardProps) {
-  const badge = taskBadge(task.status);
   const latestUpdate = updates?.[updates.length - 1];
   const activelyStreaming =
     task.status === "running" && !permission && latestUpdate?.kind !== "turn_ended";
@@ -152,7 +151,7 @@ const SessionRailCard = memo(function SessionRailCard({
       )}
 
       <div className="pointer-events-none relative z-10 mt-2 flex items-center gap-2">
-        <Badge variant={badge.variant}>{badge.label}</Badge>
+        <StatusBadge status={permission ? "permission" : task.status} />
         {task.filesChanged > 0 && (
           <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
         )}

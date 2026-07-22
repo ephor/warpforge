@@ -2,35 +2,6 @@ import type { PortForwardStatus, ServiceStatus, TaskStatus } from "@/protocol";
 
 type Variant = "default" | "outline" | "ok" | "warn" | "destructive";
 
-export function taskBadge(s: TaskStatus): { variant: Variant; label: string } {
-  switch (s) {
-    case "running":
-      return { label: "running", variant: "ok" };
-    case "queued":
-      return { label: "queued", variant: "outline" };
-    case "idle":
-      return { label: "idle", variant: "outline" };
-    case "needs_review":
-      return { label: "needs review", variant: "warn" };
-    case "blocked":
-      return { label: "blocked", variant: "destructive" };
-    case "interrupted":
-      return { label: "interrupted", variant: "destructive" };
-    case "done":
-      return { label: "done", variant: "default" };
-  }
-}
-
-/** Badge reflecting the live agent activity (overrides the coarse status while
- * the agent is actively working a turn). */
-export function activityBadge(
-  tone: "thinking" | "working" | "writing",
-  label: string,
-): { variant: Variant; label: string } {
-  const variant: Variant = tone === "writing" ? "ok" : tone === "working" ? "warn" : "default";
-  return { label, variant };
-}
-
 export function serviceBadge(s: ServiceStatus): { variant: Variant; label: string } {
   switch (s) {
     case "running":
@@ -55,24 +26,6 @@ export function pfBadge(s: PortForwardStatus): { variant: Variant; label: string
       return { label: "failed", variant: "destructive" };
     case "stopped":
       return { label: "stopped", variant: "outline" };
-  }
-}
-
-export function orchNodeBadge(s: "pending" | "running" | "complete" | "failed" | "skipped"): {
-  variant: Variant;
-  label: string;
-} {
-  switch (s) {
-    case "running":
-      return { label: "running", variant: "ok" };
-    case "pending":
-      return { label: "pending", variant: "outline" };
-    case "complete":
-      return { label: "done", variant: "default" };
-    case "failed":
-      return { label: "failed", variant: "destructive" };
-    case "skipped":
-      return { label: "skipped", variant: "outline" };
   }
 }
 

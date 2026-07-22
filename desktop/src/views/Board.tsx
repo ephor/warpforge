@@ -10,6 +10,7 @@ import {
 import { useMemo, useState } from "react";
 
 import { AgentBadge } from "@/components/AgentBadge";
+import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -22,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { elapsed, orchNodeBadge, taskBadge } from "@/lib/status";
+import { elapsed } from "@/lib/status";
 import { taskLabel } from "@/lib/taskLabel";
 import type { TaskTree } from "@/lib/taskGroups";
 import {
@@ -398,7 +399,6 @@ function TaskGroupCard({
 }
 
 function ChildTaskRow({ tree, onOpenTask }: { tree: TaskTree; onOpenTask: (id: string) => void }) {
-  const badge = taskBadge(tree.task.status);
   return (
     <div className="relative border-b border-border/50 py-1.5 last:border-b-0">
       <span className="absolute -left-2.5 top-3.5 h-px w-2 bg-primary/30" />
@@ -408,9 +408,7 @@ function ChildTaskRow({ tree, onOpenTask }: { tree: TaskTree; onOpenTask: (id: s
         onClick={() => onOpenTask(tree.task.id)}
       >
         <div className="flex min-w-0 items-center gap-1.5 text-xs">
-          <Badge variant={badge.variant} className="shrink-0">
-            {badge.label}
-          </Badge>
+          <StatusBadge status={tree.task.status} size="xs" className="shrink-0" />
           <span className="min-w-0 flex-1 truncate text-foreground">{taskLabel(tree.task)}</span>
         </div>
         <div className="mt-1 flex items-center gap-1.5 pl-0.5 text-[10px] text-muted-foreground">
@@ -447,7 +445,6 @@ function TaskCard({
   hideOrchAccordion?: boolean;
   flattenBottom?: boolean;
 }) {
-  const badge = taskBadge(task.status);
   const nodes = task.orchestrationGraph?.nodes;
   const hasAccordion = !hideOrchAccordion && nodes && nodes.length > 0;
 
@@ -471,7 +468,7 @@ function TaskCard({
           </div>
           <p className="my-1.5 line-clamp-2 text-sm">{taskLabel(task)}</p>
           <div className="flex items-center gap-2">
-            <Badge variant={badge.variant}>{badge.label}</Badge>
+            <StatusBadge status={task.status} />
             {task.filesChanged > 0 && (
               <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
             )}
@@ -513,12 +510,9 @@ function TaskCard({
 }
 
 function NodeRow({ node }: { node: OrchNodeInfo }) {
-  const badge = orchNodeBadge(node.status);
   return (
     <div className="flex items-center gap-2 rounded bg-secondary/20 px-2 py-1 text-xs">
-      <Badge variant={badge.variant} className="w-14 text-center">
-        {badge.label}
-      </Badge>
+      <StatusBadge status={node.status} size="xs" />
       <span className="font-medium text-foreground">{node.kind}</span>
       <AgentBadge agentId={node.agent} size="xs" className="text-muted-foreground" />
       {node.taskId && (
