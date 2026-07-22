@@ -140,8 +140,9 @@ async fn main() -> Result<()> {
         Commands::Daemon { dev, owner } => {
             let projects = registry::list_projects().unwrap_or_default();
             let store = daemon::Store::open().ok();
+            let project_count = projects.len();
             let handle = daemon::Daemon::spawn(projects, store);
-            daemon::server::serve(handle, dev, owner.into()).await?;
+            daemon::server::serve(handle, dev, owner.into(), project_count).await?;
         }
         Commands::McpOrchestrator => {
             mcp::run().await?;

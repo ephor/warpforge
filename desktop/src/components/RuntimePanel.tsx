@@ -50,27 +50,40 @@ export function RuntimePanel({
   const activeServiceName = activeService?.name ?? null;
   const activePortForward =
     active?.kind === "portforward" ? portforwards.find((p) => p.name === active.name) : null;
-  const liveLogs = useSyncExternalStore(daemon.subscribe, () =>
+  const activePortForwardName = activePortForward?.name ?? null;
+  const liveServiceLogs = useSyncExternalStore(daemon.subscribe, () =>
     activeService
       ? (daemon.getState().serviceLogs[`${project}/${activeService.name}`] ?? [])
       : EMPTY_LOGS,
   );
-  const displayLogs = activeService && liveLogs.length > 0 ? liveLogs : logs;
+  const livePfLogs = useSyncExternalStore(daemon.subscribe, () =>
+    activePortForward
+      ? (daemon.getState().portforwardLogs[`${project}/${activePortForward.name}`] ?? [])
+      : EMPTY_LOGS,
+  );
+  const liveLogs = activeService ? liveServiceLogs : activePortForward ? livePfLogs : EMPTY_LOGS;
+  const displayLogs = liveLogs.length > 0 ? liveLogs : logs;
 
   const fetchLogs = useCallback(() => {
-    if (!activeServiceName) {
+    if (activeServiceName) {
+      setError(null);
+      daemon
+        .fetchServiceLogs(project, activeServiceName, { after: 0, limit: 300 })
+        .then(setLogs)
+        .catch((e: Error) => setError(e.message));
+    } else if (activePortForwardName) {
+      setError(null);
+      daemon
+        .fetchPortForwardLogs(project, activePortForwardName, { after: 0, limit: 300 })
+        .then(setLogs)
+        .catch((e: Error) => setError(e.message));
+    } else {
       setLogs([]);
       setError(null);
-      return;
     }
-    setError(null);
-    daemon
-      .fetchServiceLogs(project, activeServiceName, { after: 0, limit: 300 })
-      .then(setLogs)
-      .catch((e: Error) => setError(e.message));
-  }, [activeServiceName, project]);
+  }, [activeServiceName, activePortForwardName, project]);
 
-  useEffect(fetchLogs, [fetchLogs, activeService?.logSeq]);
+  useEffect(fetchLogs, [fetchLogs, activeService?.logSeq, activePortForward?.logSeq]);
 
   if (tabs.length === 0) {
     return (
@@ -114,7 +127,7 @@ export function RuntimePanel({
         <button
           type="button"
           onClick={fetchLogs}
-          disabled={!activeService}
+          disabled={!activeService && !activePortForward}
           className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:opacity-40"
           title="Refresh logs"
           aria-label="Refresh logs"
@@ -151,11 +164,13 @@ export function RuntimePanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto px-3 py-2 leading-relaxed">
-        {activeService ? (
+        {activeService || activePortForward ? (
           error ? (
             <pre className="whitespace-pre-wrap text-destructive">{error}</pre>
           ) : displayLogs.length === 0 ? (
-            <pre className="text-muted-foreground">[{activeService.name}] no logs yet</pre>
+            <pre className="text-muted-foreground">
+              [{activeService?.name ?? activePortForward?.name}] no logs yet
+            </pre>
           ) : (
             withOccurrenceKeys(displayLogs, (line) => line).map(({ item: line, key }) => (
               <pre key={key} className="whitespace-pre-wrap break-words">
@@ -164,16 +179,6 @@ export function RuntimePanel({
               </pre>
             ))
           )
-        ) : activePortForward ? (
-          <pre className="whitespace-pre-wrap text-muted-foreground">
-            {`$ port-forward ${activePortForward.name}
-status: ${activePortForward.status}
-target: ${activePortForward.namespace}/${activePortForward.pod}
-local:  :${activePortForward.localPort}
-remote: :${activePortForward.remotePort}
-
-Port-forward logs will appear here when daemon streaming is wired to this panel.`}
-          </pre>
         ) : null}
       </div>
     </div>
