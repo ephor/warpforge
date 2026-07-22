@@ -12,6 +12,9 @@ import { flattenTaskTree, type TaskTree } from "@/lib/taskGroups";
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
+import { AgentBadge } from "./AgentBadge";
+import { agentDisplayName } from "./AgentLogo";
+
 export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
   currentTaskId,
   onOpenTask,
@@ -24,7 +27,7 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
   const members = useMemo(() => flattenTaskTree(tree), [tree]);
   const currentIndex = members.findIndex((member) => member.id === currentTaskId);
   const current = members[currentIndex] ?? tree.task;
-  const currentLabel = currentIndex === 0 ? "Lead" : current.agent;
+  const currentLabel = currentIndex === 0 ? "Lead" : agentDisplayName(current.agent);
   const handleSelect = useCallback(
     (id: string) => {
       if (id !== currentTaskId) onOpenTask(id);
@@ -46,7 +49,11 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
           <Users className="size-3.5 text-primary" />
           <span>Agents {members.length - 1}</span>
           <span className="text-border">·</span>
-          <span className="max-w-24 truncate text-foreground">{currentLabel}</span>
+          {currentIndex === 0 ? (
+            <span className="max-w-24 truncate text-foreground">Lead</span>
+          ) : (
+            <AgentBadge agentId={current.agent} className="max-w-28 text-foreground" />
+          )}
           <ChevronDown className="size-3 opacity-60" />
         </button>
       </DropdownMenuTrigger>
@@ -54,7 +61,7 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
         {members.map((member, index) => {
           const badge = taskBadge(member.status);
           const selected = member.id === currentTaskId;
-          const label = index === 0 ? "Lead" : member.agent;
+          const label = index === 0 ? "Lead" : agentDisplayName(member.agent);
           return (
             <DropdownMenuItem
               key={member.id}
@@ -74,7 +81,14 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
               />
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-2">
-                  <span className="font-medium text-foreground">{label}</span>
+                  {index === 0 ? (
+                    <span className="font-medium text-foreground">Lead</span>
+                  ) : (
+                    <AgentBadge
+                      agentId={member.agent}
+                      className="font-medium text-foreground"
+                    />
+                  )}
                   <span className="text-xs text-muted-foreground">{badge.label}</span>
                 </span>
                 <span className="block truncate text-xs text-muted-foreground">

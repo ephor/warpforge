@@ -40,6 +40,7 @@ import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/li
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
+import { AgentBadge } from "../components/AgentBadge";
 import { ChangesRail } from "../components/ChangesRail";
 import { ChatTranscript } from "../components/ChatTranscript";
 import type { ComposerHandle } from "../components/Composer";
@@ -493,7 +494,7 @@ export default function TaskDetail({
         <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <span className="max-w-36 truncate">{task.project}</span>
           <span>·</span>
-          <span className="max-w-32 truncate">{task.agent}</span>
+          <AgentBadge agentId={task.agent} className="max-w-32" />
         </span>
         <TaskMenu
           task={task}
@@ -1490,7 +1491,9 @@ function SubtaskRow({ node }: { node: OrchNodeInfo }) {
       </Badge>
       <div className="min-w-0 flex-1">
         <div className="font-medium text-foreground">{node.kind}</div>
-        <div className="text-muted-foreground">{node.agent}</div>
+        <div className="text-muted-foreground">
+          <AgentBadge agentId={node.agent} size="xs" />
+        </div>
       </div>
       {node.taskId && (
         <span className="shrink-0 text-[10px] text-muted-foreground/60">{node.taskId}</span>

@@ -2,7 +2,7 @@ import { GitBranch, GitMerge, Share2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-import { AgentLogo } from "./AgentLogo";
+import { AgentBadge } from "./AgentBadge";
 import type { AgentConfig, ProjectInfo, ServiceInfo } from "../protocol";
 
 interface TaskComposeBarProps {
@@ -73,8 +73,7 @@ export function TaskComposeBar({
         <FieldLabel>{orchChat ? "Lead agent" : "Agent"}</FieldLabel>
         {agentChoices.map((a) => (
           <Chip key={a.id} active={agent === a.id} onClick={() => onAgentChange(a.id)}>
-            <AgentLogo agentId={a.id} displayName={a.displayName} className="mr-1" />
-            {a.displayName}
+            <AgentBadge agentId={a.id} displayName={a.displayName} size="md" />
           </Chip>
         ))}
       </div>

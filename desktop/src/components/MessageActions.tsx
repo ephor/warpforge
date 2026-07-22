@@ -12,6 +12,8 @@ import {
 import { cn } from "@/lib/utils";
 import type { AgentConfig } from "@/protocol";
 
+import { AgentBadge } from "./AgentBadge";
+
 export const MessageActions = memo(function MessageActions({
   agents,
   className,
@@ -94,7 +96,7 @@ export const MessageActions = memo(function MessageActions({
               disabled={startingAgent !== null}
               onSelect={() => void start(agent.id)}
             >
-              {agent.displayName}
+              <AgentBadge agentId={agent.id} displayName={agent.displayName} />
             </DropdownMenuItem>
           ))}
         </DropdownMenuContent>

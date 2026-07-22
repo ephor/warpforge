@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { AgentBadge } from "@/components/AgentBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -168,7 +169,7 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
             <SelectItem value="all">All agents</SelectItem>
             {agents.map((a) => (
               <SelectItem key={a} value={a}>
-                {a}
+                <AgentBadge agentId={a} />
               </SelectItem>
             ))}
           </SelectContent>
@@ -413,7 +414,7 @@ function ChildTaskRow({ tree, onOpenTask }: { tree: TaskTree; onOpenTask: (id: s
           <span className="min-w-0 flex-1 truncate text-foreground">{taskLabel(tree.task)}</span>
         </div>
         <div className="mt-1 flex items-center gap-1.5 pl-0.5 text-[10px] text-muted-foreground">
-          <span>{tree.task.agent}</span>
+          <AgentBadge agentId={tree.task.agent} size="xs" />
           {tree.task.filesChanged > 0 && <span>{tree.task.filesChanged} files</span>}
           <span className="ml-auto tnum">{elapsed(tree.task.updatedAt)} ago</span>
         </div>
@@ -463,9 +464,9 @@ function TaskCard({
         <button type="button" className="w-full cursor-pointer text-left" onClick={onOpen}>
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span className="font-semibold text-foreground">{task.project}</span>
-            <span className="flex items-center gap-1">
-              {task.worktree && <GitBranch className="size-3 text-primary" />}
-              {task.agent}
+            <span className="flex min-w-0 items-center gap-1">
+              {task.worktree && <GitBranch className="size-3 shrink-0 text-primary" />}
+              <AgentBadge agentId={task.agent} />
             </span>
           </div>
           <p className="my-1.5 line-clamp-2 text-sm">{taskLabel(task)}</p>
@@ -519,7 +520,7 @@ function NodeRow({ node }: { node: OrchNodeInfo }) {
         {badge.label}
       </Badge>
       <span className="font-medium text-foreground">{node.kind}</span>
-      <span className="text-muted-foreground">{node.agent}</span>
+      <AgentBadge agentId={node.agent} size="xs" className="text-muted-foreground" />
       {node.taskId && (
         <span className="ml-auto text-[10px] text-muted-foreground/60">{node.taskId}</span>
       )}
@@ -570,7 +571,7 @@ function QueueCard({
       <button type="button" className="min-w-0 flex-1 text-left" onClick={onOpen}>
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span className="font-semibold text-foreground">{task.project}</span>
-          <span>{task.agent}</span>
+          <AgentBadge agentId={task.agent} />
         </div>
         <p className="my-1 line-clamp-2 text-sm">{taskLabel(task)}</p>
         <div className="flex flex-wrap gap-1">

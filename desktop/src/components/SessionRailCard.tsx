@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, FilePen, ListTodo, Pin, Wrench } from "lucide-react";
 import { memo, useMemo } from "react";
 
+import { AgentBadge } from "@/components/AgentBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -77,7 +78,7 @@ const SessionRailCard = memo(function SessionRailCard({
       />
       <div className="pointer-events-none relative z-10 flex items-center gap-2 text-xs text-muted-foreground">
         <span className="min-w-0 truncate font-semibold text-foreground">{task.project}</span>
-        <span className="shrink-0 font-mono">{task.agent}</span>
+        <AgentBadge agentId={task.agent} className="shrink-0" />
         <span
           className="tnum ml-auto shrink-0"
           aria-label={`${timeLabel} ${elapsed(timestamp)} ago`}
@@ -109,7 +110,7 @@ const SessionRailCard = memo(function SessionRailCard({
         >
           <span className="font-medium text-foreground/75">{taskLabel(parentTask)}</span>
           <span aria-hidden="true"> → </span>
-          <span>{task.agent}</span>
+          <AgentBadge agentId={task.agent} size="xs" className="align-bottom" />
         </p>
       )}
       {reason && (

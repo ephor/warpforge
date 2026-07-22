@@ -4,6 +4,9 @@ import { taskBadge } from "@/lib/status";
 import { cn } from "@/lib/utils";
 import type { TaskInfo } from "@/protocol";
 
+import { AgentBadge } from "./AgentBadge";
+import { agentDisplayName } from "./AgentLogo";
+
 export const AgentTabButton = memo(function AgentTabButton({
   task,
   selected,
@@ -22,13 +25,14 @@ export const AgentTabButton = memo(function AgentTabButton({
   const badge = permission
     ? { label: "permission", variant: "warn" as const }
     : taskBadge(task.status);
+  const name = lead ? "Lead" : agentDisplayName(task.agent);
   return (
     <button
       type="button"
       role="tab"
       aria-selected={selected}
-      aria-label={`${lead ? "Lead" : task.agent}: ${badge.label}`}
-      title={`${lead ? "Lead" : task.agent} — ${task.prompt}`}
+      aria-label={`${name}: ${badge.label}`}
+      title={`${name} — ${task.prompt}`}
       className={cn(
         "flex h-7 min-w-0 max-w-36 items-center gap-1.5 rounded border px-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
         shrinkable ? "shrink" : "shrink-0",
@@ -47,7 +51,11 @@ export const AgentTabButton = memo(function AgentTabButton({
           (badge.variant === "default" || badge.variant === "outline") && "bg-muted-foreground",
         )}
       />
-      <span className="truncate">{lead ? "Lead" : task.agent}</span>
+      {lead ? (
+        <span className="truncate">Lead</span>
+      ) : (
+        <AgentBadge agentId={task.agent} className="min-w-0" />
+      )}
     </button>
   );
 });

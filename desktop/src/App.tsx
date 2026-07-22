@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
+import { agentDisplayName } from "./components/AgentLogo";
 import AttentionRail from "./components/AttentionRail";
 import AttentionToast from "./components/AttentionToast";
 import BootstrapWizard from "./components/BootstrapWizard";
@@ -147,7 +148,7 @@ export default function App() {
         (sonnerId) => (
           <AttentionToast
             title={attentionToastTitle(task.status)}
-            identity={`${task.project} · ${task.agent}`}
+            identity={`${task.project} · ${agentDisplayName(task.agent)}`}
             summary={attentionToastSummary(task.prompt)}
             onDismiss={() => toast.dismiss(sonnerId)}
             onOpen={() => {
@@ -196,7 +197,7 @@ export default function App() {
             (sonnerId) => (
               <PermissionToast
                 context={context}
-                identity={task ? `${task.project} · ${task.agent}` : undefined}
+                identity={task ? `${task.project} · ${agentDisplayName(task.agent)}` : undefined}
                 onApprove={
                   approveOption
                     ? async () => {

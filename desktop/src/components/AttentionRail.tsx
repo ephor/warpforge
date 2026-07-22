@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import type { DaemonState } from "../daemon";
 import type { TaskInfo, TaskStatus } from "../protocol";
 import { useUi } from "../store/ui";
+import { AgentBadge } from "./AgentBadge";
 import SessionRailCard from "./SessionRailCard";
 
 /**
@@ -406,7 +407,11 @@ function AttentionRail({ state, onOpenTask }: Props) {
                           !collapsed.has(`${effectiveGroup}:${row.group.key}`) && "rotate-90",
                         )}
                       />
-                      <span className="truncate">{row.group.label}</span>
+                      {effectiveGroup === "agent" ? (
+                        <AgentBadge agentId={row.group.key} size="xs" className="font-semibold" />
+                      ) : (
+                        <span className="truncate">{row.group.label}</span>
+                      )}
                       <span className="tnum ml-auto font-normal">{row.count}</span>
                     </button>
                   ) : (

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
+import { AgentLogo } from "./AgentLogo";
 import type { AgentConfig, DetectedAgent } from "../protocol";
 
 interface Props {
@@ -209,6 +210,7 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 text-sm font-medium">
+                  <AgentLogo agentId={agent.id} displayName={agent.displayName} />
                   {agent.displayName}
                   {agent.installed ? (
                     behind ? (
