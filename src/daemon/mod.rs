@@ -61,6 +61,7 @@ mod tests {
                 None,
                 vec![],
                 None,
+                std::collections::HashMap::new(),
             )
             .await;
 
@@ -107,6 +108,7 @@ mod tests {
                 parent_task_id: None,
                 attachments: Vec::new(),
                 default_model: None,
+                config_overrides: std::collections::HashMap::new(),
                 reply: task_tx,
             })
             .await;
@@ -156,6 +158,7 @@ mod tests {
                 None,
                 vec![],
                 None,
+                std::collections::HashMap::new(),
             )
             .await;
 
@@ -261,6 +264,7 @@ mod tests {
                 None,
                 vec![],
                 None,
+                std::collections::HashMap::new(),
             )
             .await;
 
@@ -311,6 +315,7 @@ mod tests {
                 None,
                 vec![],
                 None,
+                std::collections::HashMap::new(),
             )
             .await;
         let mut events = daemon.subscribe();
@@ -372,6 +377,7 @@ mod tests {
                     },
                 ],
                 None,
+                std::collections::HashMap::new(),
             )
             .await;
         let mut initial = false;
@@ -450,6 +456,7 @@ mod tests {
                     path: "note.txt".into(),
                 }],
                 None,
+                std::collections::HashMap::new(),
             )
             .await;
         let mut fallback = false;
@@ -487,6 +494,7 @@ mod tests {
                     data: "iVBORw0KGgpyZXN0".into(),
                 }],
                 None,
+                std::collections::HashMap::new(),
             )
             .await;
         let mut blocked = false;
@@ -526,6 +534,7 @@ mod tests {
                 None,
                 vec![],
                 None,
+                std::collections::HashMap::new(),
             )
             .await;
 

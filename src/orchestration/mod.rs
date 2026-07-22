@@ -189,6 +189,7 @@ impl Orchestrator {
                 None,
                 vec![],
                 None,
+                std::collections::HashMap::new(),
             )
             .await;
         if parent_id.is_empty() {
@@ -228,6 +229,7 @@ impl Orchestrator {
                 Some(parent_id),
                 vec![],
                 None,
+                std::collections::HashMap::new(),
             )
             .await
         {
@@ -433,6 +435,7 @@ impl Orchestrator {
                     Some(parent_task_id.clone()),
                     vec![],
                     None,
+                    std::collections::HashMap::new(),
                 )
                 .await
             {

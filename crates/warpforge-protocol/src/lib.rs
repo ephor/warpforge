@@ -173,6 +173,12 @@ pub enum Method {
         /// inherit the user's previous choice without an explicit UI pick.
         #[serde(default)]
         default_model: Option<String>,
+        /// Non-model config overrides the user picked in the "New task" dialog
+        /// (reasoning effort, mode, collaboration mode, fast mode, etc.).
+        /// Keyed by config-option id; applied via `session/setConfigOption`
+        /// after the model. Unknown option ids are logged and skipped.
+        #[serde(default)]
+        config_overrides: HashMap<String, String>,
     },
     #[serde(rename = "task.cancel")]
     TaskCancel { task_id: String },

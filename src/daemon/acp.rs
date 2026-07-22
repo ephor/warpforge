@@ -387,6 +387,9 @@ pub fn spawn_acp_session(
     // Model id to apply to the session before the first prompt (fresh
     // `session/new` only; ignored when resuming). None = no override.
     default_model: Option<String>,
+    // Non-model config overrides (reasoning effort, mode, etc.) keyed by
+    // config-option id; applied via `session/setConfigOption` after model.
+    config_overrides: std::collections::HashMap<String, String>,
 ) -> anyhow::Result<AcpHandle> {
     let run_id = NEXT_RUN_ID.fetch_add(1, Ordering::Relaxed);
     let mut child_command = Command::new("sh");
@@ -681,6 +684,7 @@ pub fn spawn_acp_session(
         let driver_kill_tx = process.kill_tx.clone();
         let driver_stderr_capture = Arc::clone(&stderr_capture);
         let driver_default_model = default_model.clone();
+        let driver_config_overrides = config_overrides;
         tokio::spawn(async move {
             const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
             const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
@@ -939,6 +943,55 @@ pub fn spawn_acp_session(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // Apply non-model config overrides (reasoning effort, mode, etc.)
+            // the user picked in the "New task" dialog. Unknown option ids are
+            // logged and skipped — never abort session startup.
+            if resume.is_none() {
+                for (opt_id, opt_value) in &driver_config_overrides {
+                    let set_res = tokio::time::timeout(
+                        RPC_TIMEOUT,
+                        rpc(
+                            &out_tx,
+                            &pending,
+                            &next_id,
+                            "session/set_config_option",
+                            json!({
+                                "sessionId": session_id,
+                                "configId": opt_id,
+                                "value": opt_value,
+                            }),
+                        ),
+                    )
+                    .await;
+                    match set_res {
+                        Ok(Some(resp)) if resp.get("error").is_none() => {
+                            if let Some(result) = resp.get("result") {
+                                let opts = parse_config_options(result.get("configOptions"));
+                                if !opts.is_empty() {
+                                    let _ = updates.send((
+                                        task_id.clone(),
+                                        AcpUpdate::ConfigOptions { options: opts },
+                                    ));
+                                }
+                            }
+                        }
+                        Ok(Some(resp)) => {
+                            eprintln!(
+                                "[daemon] config override '{}' rejected by agent: {}",
+                                opt_id,
+                                acp_error_detail(&resp)
+                            );
+                        }
+                        Ok(None) => {
+                            eprintln!("[daemon] config override '{}': transport closed", opt_id);
+                        }
+                        Err(_) => {
+                            eprintln!("[daemon] config override '{}': RPC timed out", opt_id);
                         }
                     }
                 }
@@ -1845,6 +1898,7 @@ mod tests {
             updates,
             None,
             None,
+            std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -1890,6 +1944,7 @@ mod tests {
             updates,
             None,
             None,
+            std::collections::HashMap::new(),
         )
         .unwrap();
 
@@ -1951,6 +2006,7 @@ mod tests {
             updates,
             None,
             None,
+            std::collections::HashMap::new(),
         )
         .unwrap();
         let pid = tokio::time::timeout(std::time::Duration::from_secs(2), async {

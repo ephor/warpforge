@@ -59,6 +59,7 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
     if (open) {
       setProject(defaultProject ?? firstProjectName);
       setPrompt(initialPrompt ?? "");
+      setConfigPicks({});
       setTags("");
       setOrchChat(false);
     }
@@ -116,6 +117,14 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
       `${opt.category ?? ""} ${opt.id} ${opt.name}`.toLowerCase().includes("model"),
     );
     const modelPick = modelOpt ? configPicks[modelOpt.id] : undefined;
+    // Forward all non-model picks as config_overrides so they're applied
+    // via session/setConfigOption before the first prompt.
+    const configOverrides: Record<string, string> = {};
+    for (const opt of agentOptions) {
+      if (opt.id === modelOpt?.id) continue;
+      const pick = configPicks[opt.id];
+      if (pick != null) configOverrides[opt.id] = pick;
+    }
     const resp = await daemon.request("task.create", {
       project,
       prompt: submission.text.trim(),
@@ -125,6 +134,7 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
       include_runtime_context: shareContext,
       worktree: orchChat ? false : useWorktree,
       default_model: modelPick,
+      config_overrides: configOverrides,
     });
     const taskId =
       (resp as { taskId?: string } | null)?.taskId ??

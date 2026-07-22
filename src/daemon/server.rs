@@ -398,6 +398,7 @@ async fn dispatch(
             parent_task_id,
             attachments,
             default_model,
+            config_overrides,
         } => {
             let id = handle
                 .create_task(
@@ -410,6 +411,7 @@ async fn dispatch(
                     parent_task_id,
                     attachments,
                     default_model,
+                    config_overrides,
                 )
                 .await;
             Ok(json!({ "taskId": id }))
@@ -779,6 +781,7 @@ async fn dispatch(
                     None,
                     Vec::new(),
                     None,
+                    std::collections::HashMap::new(),
                 )
                 .await;
             Ok(json!({ "taskId": id }))
@@ -1190,6 +1193,7 @@ mod tests {
                 None,
                 Vec::new(),
                 None,
+                std::collections::HashMap::new(),
             )
             .await;
         handle

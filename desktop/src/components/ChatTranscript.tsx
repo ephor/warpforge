@@ -126,6 +126,7 @@ const TranscriptRow = memo(function TranscriptRow({
       const result = await daemon.request("task.create", {
         agent,
         attachments: [],
+        config_overrides: {},
         include_runtime_context: true,
         project,
         prompt: branchPrompt,
