@@ -49,6 +49,7 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
   const [prBody, setPrBody] = useState("");
   const [prBase, setPrBase] = useState("");
   const [creatingPr, setCreatingPr] = useState(false);
+  const [prStep, setPrStep] = useState<"pushing" | "creating" | null>(null);
   const repositoryOperation = useUi((state) => state.repositoryOperation);
   const setRepositoryOperation = useUi((state) => state.setRepositoryOperation);
 
@@ -132,12 +133,32 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
     }
   };
 
+  // `gh pr create` works off commits already on the remote, so a branch with
+  // outgoing commits (or no upstream at all) has to be pushed first — the PR
+  // action does both in order rather than failing with "must first push".
+  const needsPush = Boolean(info) && (!info?.hasUpstream || (info?.commits.length ?? 0) > 0);
+
   const createPr = async () => {
     if (!task || creatingPr || !prTitle.trim()) {
       return;
     }
     setCreatingPr(true);
+    if (needsPush) {
+      setRepositoryOperation({ kind: "push", taskId: task.id });
+    }
     try {
+      if (needsPush) {
+        setPrStep("pushing");
+        const pushed = (await daemon.request("git.push", {
+          force: false,
+          task_id: task.id,
+        })) as GitOpResult;
+        if (pushed.status !== "ok" && pushed.status !== "up_to_date") {
+          toast.error(pushed.message);
+          return;
+        }
+      }
+      setPrStep("creating");
       const result = (await daemon.request("git.createPr", {
         base: prBase.trim() || undefined,
         body: prBody,
@@ -158,6 +179,11 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
       toast.error(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setCreatingPr(false);
+      setPrStep(null);
+      const operation = useUi.getState().repositoryOperation;
+      if (operation?.taskId === task.id && operation.kind === "push") {
+        setRepositoryOperation(null);
+      }
     }
   };
 
@@ -194,6 +220,13 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
               <ArrowRight className="size-4 shrink-0" />
               <span className="truncate">{prBase.trim() || "default branch"}</span>
             </div>
+            {needsPush && (
+              <p className="-mt-2 text-xs text-muted-foreground">
+                {info && info.commits.length > 0
+                  ? `${info.commits.length} ${info.commits.length === 1 ? "commit" : "commits"} will be pushed to ${info.upstream} first, then the PR is opened.`
+                  : "The branch will be pushed first, then the PR is opened."}
+              </p>
+            )}
             <label className="flex flex-col gap-1.5">
               <span className="text-xs font-medium text-muted-foreground">Title</span>
               <input
@@ -327,7 +360,7 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
               </Button>
               <Button
                 type="button"
-                disabled={creatingPr || !prTitle.trim()}
+                disabled={creatingPr || !prTitle.trim() || Boolean(repositoryOperation)}
                 onClick={() => void createPr()}
               >
                 {creatingPr ? (
@@ -335,7 +368,13 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
                 ) : (
                   <GitPullRequestArrow className="size-4" />
                 )}
-                Create Pull Request
+                {prStep === "pushing"
+                  ? "Pushing…"
+                  : prStep === "creating"
+                    ? "Creating PR…"
+                    : needsPush
+                      ? "Push & Create PR"
+                      : "Create Pull Request"}
               </Button>
             </div>
           </footer>
