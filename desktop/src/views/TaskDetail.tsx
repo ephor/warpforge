@@ -26,7 +26,6 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -35,12 +34,12 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { getFileIconUrl } from "@/lib/fileIcon";
 import { withOccurrenceKeys } from "@/lib/renderKeys";
 import { sessionActivity } from "@/lib/sessionActivity";
-import { activityBadge, orchNodeBadge, taskBadge } from "@/lib/status";
 import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/lib/taskGroups";
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
 import { AgentBadge } from "../components/AgentBadge";
+import { StatusBadge } from "../components/StatusBadge";
 import { ChangesRail } from "../components/ChangesRail";
 import { ChatTranscript } from "../components/ChatTranscript";
 import type { ComposerHandle } from "../components/Composer";
@@ -185,7 +184,6 @@ export default function TaskDetail({
   const composerRef = useRef<ComposerHandle>(null);
   const diffScrollParent = useRef<HTMLDivElement>(null);
   const splitScrollParent = useRef<HTMLDivElement>(null);
-  const badge = taskBadge(task.status);
   const editable = task.status !== "done";
   const activeFile = activeTab.kind === "file" ? activeTab.path : selectedFile;
 
@@ -358,9 +356,6 @@ export default function TaskDetail({
   }, [diff]);
 
   const activity = useMemo(() => sessionActivity(task, updates), [task, updates]);
-  // While the agent is actively working a turn, the header chip reflects the
-  // Live activity (thinking/working/writing) instead of the coarse status.
-  const headerBadge = activity ? activityBadge(activity.tone, activity.label) : badge;
 
   // Slash-menu commands = the agent's most recent available_commands update.
   const commands = useMemo<CommandInfo[]>(() => {
@@ -490,7 +485,7 @@ export default function TaskDetail({
         <h1 className="min-w-0 flex-1 truncate text-base font-semibold" title={task.prompt}>
           {taskLabel(task)}
         </h1>
-        <Badge variant={headerBadge.variant}>{headerBadge.label}</Badge>
+        <StatusBadge status={task.status} activity={activity} />
         <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <span className="max-w-36 truncate">{task.project}</span>
           <span>·</span>
@@ -1483,12 +1478,9 @@ function SubtasksRail({ task }: { task: TaskInfo }) {
 }
 
 function SubtaskRow({ node }: { node: OrchNodeInfo }) {
-  const badge = orchNodeBadge(node.status);
   return (
     <div className="flex items-center gap-2 rounded bg-secondary/30 px-2 py-1.5 text-xs">
-      <Badge variant={badge.variant} className="w-16 text-center text-[10px]">
-        {badge.label}
-      </Badge>
+      <StatusBadge status={node.status} size="xs" />
       <div className="min-w-0 flex-1">
         <div className="font-medium text-foreground">{node.kind}</div>
         <div className="text-muted-foreground">

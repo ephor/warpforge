@@ -33,7 +33,7 @@ import {
   resolvedPermissions,
 } from "@/lib/sessionPermissions";
 import { latestContextUsage } from "@/lib/sessionUsage";
-import { activityBadge, elapsed, taskBadge } from "@/lib/status";
+import { elapsed } from "@/lib/status";
 import { taskLabel } from "@/lib/taskLabel";
 import {
   buildTaskGroupIndex,
@@ -51,6 +51,7 @@ import { cn } from "@/lib/utils";
 import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
 import { AgentBadge } from "../components/AgentBadge";
 import { AgentConfigBar } from "../components/AgentConfigBar";
+import { StatusBadge, type StatusKind } from "../components/StatusBadge";
 import { Composer } from "../components/Composer";
 import type { FileLinkResolver } from "../components/Markdown";
 import { BufferedMarkdown, Markdown } from "../components/Markdown";
@@ -237,15 +238,9 @@ function focusGroupPaneEqual(previous: FocusGroupPaneProps, next: FocusGroupPane
   );
 }
 
-function groupStatusBadge(
-  status: TaskGroupStatus,
-  activity: ReturnType<typeof sessionActivity>,
-): { label: string; variant: ReturnType<typeof taskBadge>["variant"] | "warn" } {
-  if (status === "blocked") return { label: "blocked", variant: "destructive" };
-  if (status === "permission") return { label: "permission", variant: "warn" };
-  if (status === "review") return { label: "needs review", variant: "warn" };
-  if (status === "running" && activity) return activityBadge(activity.tone, activity.label);
-  return taskBadge(status);
+/** Collapse a group status onto the StatusBadge vocabulary. */
+function groupStatusKind(status: TaskGroupStatus): StatusKind {
+  return status === "review" ? "needs_review" : status;
 }
 
 function FocusPane({
@@ -290,7 +285,6 @@ function FocusPane({
   const capability = [...updates].reverse().find((update) => update.kind === "prompt_capabilities");
   const imageSupported = capability?.kind === "prompt_capabilities" ? capability.image : false;
   const activity = sessionActivity(task, stream);
-  const badge = groupStatusBadge(groupStatus, activity);
 
   return (
     <Card
@@ -318,7 +312,7 @@ function FocusPane({
               {taskLabel(task)}
             </button>
           </div>
-          <StatusPill variant={badge.variant} label={badge.label} />
+          <StatusBadge status={groupStatusKind(groupStatus)} activity={activity} />
           <button
             type="button"
             aria-label="Open task details"
@@ -518,38 +512,6 @@ function summarizeFiles(updates: SessionUpdate[]): string[] {
     }
   }
   return Array.from(seen);
-}
-
-function StatusPill({
-  variant,
-  label,
-}: {
-  variant: ReturnType<typeof taskBadge>["variant"] | "warn";
-  label: string;
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs font-medium",
-        variant === "ok" && "border-ok/35 bg-ok/10 text-ok",
-        variant === "warn" && "border-warn/40 bg-warn/10 text-warn",
-        variant === "destructive" && "border-destructive/40 bg-destructive/10 text-destructive",
-        (variant === "default" || variant === "outline") &&
-          "border-border bg-secondary/40 text-muted-foreground",
-      )}
-    >
-      <span
-        className={cn(
-          "size-1.5 rounded-full",
-          variant === "ok" && "bg-ok",
-          variant === "warn" && "bg-warn",
-          variant === "destructive" && "bg-destructive",
-          (variant === "default" || variant === "outline") && "bg-muted-foreground",
-        )}
-      />
-      {label}
-    </span>
-  );
 }
 
 function ActivityChip({

@@ -7,13 +7,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { taskBadge } from "@/lib/status";
 import { flattenTaskTree, type TaskTree } from "@/lib/taskGroups";
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
 import { AgentBadge } from "./AgentBadge";
 import { agentDisplayName } from "./AgentLogo";
+import { StatusBadge, statusLabel } from "./StatusBadge";
 
 export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
   currentTaskId,
@@ -59,26 +59,15 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
         {members.map((member, index) => {
-          const badge = taskBadge(member.status);
           const selected = member.id === currentTaskId;
           const label = index === 0 ? "Lead" : agentDisplayName(member.agent);
           return (
             <DropdownMenuItem
               key={member.id}
-              aria-label={`${label}: ${badge.label}`}
+              aria-label={`${label}: ${statusLabel(member.status)}`}
               onSelect={() => handleSelect(member.id)}
               className="items-start"
             >
-              <span
-                className={cn(
-                  "mt-1.5 size-1.5 shrink-0 rounded-full",
-                  badge.variant === "destructive" && "bg-destructive",
-                  badge.variant === "warn" && "bg-warn",
-                  badge.variant === "ok" && "bg-ok",
-                  (badge.variant === "default" || badge.variant === "outline") &&
-                    "bg-muted-foreground",
-                )}
-              />
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-2">
                   {index === 0 ? (
@@ -89,7 +78,7 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
                       className="font-medium text-foreground"
                     />
                   )}
-                  <span className="text-xs text-muted-foreground">{badge.label}</span>
+                  <StatusBadge status={member.status} size="xs" />
                 </span>
                 <span className="block truncate text-xs text-muted-foreground">
                   {taskLabel(member)}

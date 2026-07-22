@@ -22,6 +22,7 @@ import type { DaemonState } from "../daemon";
 import type { TaskInfo, TaskStatus } from "../protocol";
 import { useUi } from "../store/ui";
 import { AgentBadge } from "./AgentBadge";
+import { StatusBadge, type StatusKind } from "./StatusBadge";
 import SessionRailCard from "./SessionRailCard";
 
 /**
@@ -409,6 +410,8 @@ function AttentionRail({ state, onOpenTask }: Props) {
                       />
                       {effectiveGroup === "agent" ? (
                         <AgentBadge agentId={row.group.key} size="xs" className="font-semibold" />
+                      ) : effectiveGroup === "status" ? (
+                        <StatusBadge status={row.group.key as StatusKind} size="xs" />
                       ) : (
                         <span className="truncate">{row.group.label}</span>
                       )}
