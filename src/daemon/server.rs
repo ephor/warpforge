@@ -528,6 +528,21 @@ async fn dispatch(
                 message: e.to_string(),
             })
         }
+        GitCreatePr {
+            task_id,
+            title,
+            body,
+            base,
+        } => {
+            let url = handle
+                .git_create_pr(&task_id, title, body, base)
+                .await
+                .map_err(|message| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message,
+                })?;
+            Ok(json!({ "url": url }))
+        }
         TaskCancel { task_id } => {
             handle.send(Command::CancelTask { id: task_id }).await;
             Ok(json!(null))

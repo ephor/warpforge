@@ -1,10 +1,12 @@
 import {
+  ArrowLeft,
   ArrowRight,
   ChevronDown,
   FileCode2,
   FolderTree,
   GitBranch,
   GitCommitHorizontal,
+  GitPullRequestArrow,
   Loader2,
   RefreshCw,
   Upload,
@@ -14,6 +16,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { openExternalLink } from "@/lib/externalLinks";
 import { cn } from "@/lib/utils";
 import { useUi } from "@/store/ui";
 
@@ -41,6 +44,11 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
   const [pushing, setPushing] = useState<"push" | "force" | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<"push" | "pr">("push");
+  const [prTitle, setPrTitle] = useState("");
+  const [prBody, setPrBody] = useState("");
+  const [prBase, setPrBase] = useState("");
+  const [creatingPr, setCreatingPr] = useState(false);
   const repositoryOperation = useUi((state) => state.repositoryOperation);
   const setRepositoryOperation = useUi((state) => state.setRepositoryOperation);
 
@@ -61,6 +69,15 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
           ? current
           : (next.commits[0]?.hash ?? null),
       );
+      // Prefill the PR title once: a single-commit branch → its subject,
+      // otherwise the branch name. The user can edit before creating.
+      setPrTitle((current) =>
+        current
+          ? current
+          : next.commits.length === 1
+            ? (next.commits[0]?.subject ?? next.branch)
+            : next.branch,
+      );
     } catch (reason) {
       setInfo(null);
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -72,6 +89,7 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
   useEffect(() => {
     if (!open) {
       setMenuOpen(false);
+      setMode("push");
       return;
     }
     void load();
@@ -114,8 +132,37 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
     }
   };
 
+  const createPr = async () => {
+    if (!task || creatingPr || !prTitle.trim()) {
+      return;
+    }
+    setCreatingPr(true);
+    try {
+      const result = (await daemon.request("git.createPr", {
+        base: prBase.trim() || undefined,
+        body: prBody,
+        task_id: task.id,
+        title: prTitle.trim(),
+      })) as { url: string };
+      if (result.url) {
+        toast.success("Pull request created", {
+          action: { label: "Open", onClick: () => void openExternalLink(result.url) },
+          description: result.url,
+        });
+        void openExternalLink(result.url);
+      } else {
+        toast.success("Pull request created");
+      }
+      onOpenChange(false);
+    } catch (reason) {
+      toast.error(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setCreatingPr(false);
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={(next) => !pushing && onOpenChange(next)}>
+    <Dialog open={open} onOpenChange={(next) => !pushing && !creatingPr && onOpenChange(next)}>
       <DialogContent className="flex h-[72vh] max-h-[760px] w-[min(1050px,92vw)] max-w-none flex-col gap-0 overflow-hidden p-0">
         <div className="flex h-14 shrink-0 items-center border-b px-5">
           <div className="min-w-0">
@@ -139,6 +186,47 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
           </Button>
         </div>
 
+        {mode === "pr" && (
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
+            <div className="flex items-center gap-2 font-mono text-sm text-muted-foreground">
+              <GitBranch className="size-4 shrink-0 text-primary" />
+              <span className="truncate text-foreground">{info?.branch}</span>
+              <ArrowRight className="size-4 shrink-0" />
+              <span className="truncate">{prBase.trim() || "default branch"}</span>
+            </div>
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Title</span>
+              <input
+                value={prTitle}
+                onChange={(e) => setPrTitle(e.target.value)}
+                placeholder="Pull request title"
+                className="rounded-md border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+              />
+            </label>
+            <label className="flex min-h-0 flex-1 flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">Description</span>
+              <textarea
+                value={prBody}
+                onChange={(e) => setPrBody(e.target.value)}
+                placeholder="Optional — Markdown supported"
+                className="min-h-32 flex-1 resize-none rounded-md border bg-background px-3 py-2 font-mono text-sm outline-none focus:border-primary"
+              />
+            </label>
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">
+                Base branch <span className="text-muted-foreground/60">(optional)</span>
+              </span>
+              <input
+                value={prBase}
+                onChange={(e) => setPrBase(e.target.value)}
+                placeholder="repo default"
+                className="rounded-md border bg-background px-3 py-2 font-mono text-sm outline-none focus:border-primary"
+              />
+            </label>
+          </div>
+        )}
+
+        {mode === "push" && (
         <div className="flex min-h-0 flex-1">
           <section className="flex min-w-0 basis-[46%] flex-col border-r">
             {info && (
@@ -215,7 +303,43 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
             </div>
           </section>
         </div>
+        )}
 
+        {mode === "pr" ? (
+          <footer className="flex h-[72px] shrink-0 items-center border-t bg-card/50 px-5">
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={creatingPr}
+              onClick={() => setMode("push")}
+            >
+              <ArrowLeft className="size-4" />
+              Back
+            </Button>
+            <div className="ml-auto flex items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={creatingPr}
+                onClick={() => onOpenChange(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={creatingPr || !prTitle.trim()}
+                onClick={() => void createPr()}
+              >
+                {creatingPr ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <GitPullRequestArrow className="size-4" />
+                )}
+                Create Pull Request
+              </Button>
+            </div>
+          </footer>
+        ) : (
         <footer className="flex h-[72px] shrink-0 items-center border-t bg-card/50 px-5">
           <div className="min-w-0 text-xs text-muted-foreground">
             {info && !info.hasUpstream && info.commits.length > 0 && (
@@ -238,6 +362,16 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
               onClick={() => onOpenChange(false)}
             >
               Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!info || loading || Boolean(pushing)}
+              onClick={() => setMode("pr")}
+              title="Open a pull request for this branch"
+            >
+              <GitPullRequestArrow className="size-4" />
+              Create PR
             </Button>
             <div className="relative flex">
               <Button
@@ -291,6 +425,7 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
             </div>
           </div>
         </footer>
+        )}
       </DialogContent>
     </Dialog>
   );

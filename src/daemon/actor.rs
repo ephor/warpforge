@@ -309,6 +309,13 @@ pub enum Command {
         force: bool,
         reply: oneshot::Sender<wire::GitOpResult>,
     },
+    GitCreatePr {
+        task_id: String,
+        title: String,
+        body: String,
+        base: Option<String>,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
     /// Send a follow-up prompt into a task's running agent session.
     SessionPrompt {
         task_id: String,
@@ -662,6 +669,26 @@ impl DaemonHandle {
             conflicts: Vec::new(),
             branch: None,
         })
+    }
+
+    pub async fn git_create_pr(
+        &self,
+        task_id: &str,
+        title: String,
+        body: String,
+        base: Option<String>,
+    ) -> Result<String, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitCreatePr {
+            task_id: task_id.to_string(),
+            title,
+            body,
+            base,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the create-PR request".into()))
     }
 
     /// A window of a service's retained log lines (for backfill; live tail
@@ -1842,6 +1869,26 @@ impl Daemon {
                 if result.status == wire::GitOpStatus::Ok {
                     self.bump_task(&task_id);
                 }
+                let _ = reply.send(result);
+            }
+            Command::GitCreatePr {
+                task_id,
+                title,
+                body,
+                base,
+                reply,
+            } => {
+                let repo = self.tasks.get(&task_id).and_then(|task| {
+                    task.worktree
+                        .clone()
+                        .or_else(|| self.project_path(&task.project))
+                });
+                let result = match repo {
+                    Some(path) => super::diff::create_pr(&path, &title, &body, base.as_deref())
+                        .await
+                        .map_err(|e| e.to_string()),
+                    None => Err(format!("no repo for task {task_id}")),
+                };
                 let _ = reply.send(result);
             }
             Command::CancelTask { id } => {
