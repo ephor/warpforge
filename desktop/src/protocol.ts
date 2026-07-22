@@ -151,6 +151,7 @@ export interface PortForwardInfo {
   localPort: number;
   remotePort: number;
   status: PortForwardStatus;
+  logSeq: number;
 }
 
 export type TaskStatus =

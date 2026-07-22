@@ -37,11 +37,14 @@ export interface DaemonState {
   sessionUpdates: Record<string, SessionUpdate[]>;
   /** Service log lines keyed by "project/service", bounded to MAX_SERVICE_LOGS. */
   serviceLogs: Record<string, string[]>;
+  /** Port-forward log lines keyed by "project/name", bounded to MAX_PORTFORWARD_LOGS. */
+  portforwardLogs: Record<string, string[]>;
   /** Non-null when daemon signals first-run setup is needed. */
   pendingAgentSetup: DetectedAgent[] | null;
 }
 
 const MAX_SERVICE_LOGS = 1000;
+const MAX_PORTFORWARD_LOGS = 500;
 export const DAEMON_PROTOCOL_VERSION = 1;
 
 type Listener = () => void;
@@ -66,6 +69,7 @@ export class DaemonClient {
     connectionError: null,
     pendingAgentSetup: null,
     serviceLogs: {},
+    portforwardLogs: {},
     sessionUpdates: {},
     snapshot: EMPTY_SNAPSHOT,
   };
@@ -383,6 +387,12 @@ export class DaemonClient {
           `[${String(p.service)}] loading workspace config`,
           `[${String(p.service)}] listening on allocated port`,
         ]);
+      case "portforward.logs":
+        return Promise.resolve([
+          `[${String(p.name)}] resolving pod`,
+          `[${String(p.name)}] starting kubectl port-forward`,
+          `[${String(p.name)}] forwarding :${String(p.localPort ?? 8080)}`,
+        ]);
       case "runtime.stopAll":
         return Promise.resolve({});
       case "session.permission": {
@@ -647,6 +657,13 @@ export class DaemonClient {
         this.setState({ serviceLogs: { ...this.state.serviceLogs, [key]: trimmed } });
         break;
       }
+      case "portforward.log": {
+        const key = `${ev.data.project}/${ev.data.name}`;
+        const existing = this.state.portforwardLogs[key] ?? [];
+        const trimmed = [...existing, ev.data.line].slice(-MAX_PORTFORWARD_LOGS);
+        this.setState({ portforwardLogs: { ...this.state.portforwardLogs, [key]: trimmed } });
+        break;
+      }
       case "agents.setup_needed":
         this.setState({ pendingAgentSetup: ev.data.detected });
         break;
@@ -657,7 +674,6 @@ export class DaemonClient {
         });
         break;
       // High-frequency events with no retained state yet.
-      case "portforward.log":
       case "terminal.screen":
       case "terminal.exited":
         break;
@@ -748,6 +764,34 @@ export class DaemonClient {
       serviceLogs: {
         ...this.state.serviceLogs,
         [key]: lines.slice(-MAX_SERVICE_LOGS),
+      },
+    });
+    return lines;
+  }
+
+  async fetchPortForwardLogs(
+    project: string,
+    name: string,
+    options: { after?: number; limit?: number } = {},
+  ): Promise<string[]> {
+    const result = await this.request("portforward.logs", {
+      after: options.after ?? 0,
+      limit: options.limit ?? 300,
+      project,
+      name,
+    });
+    const payload = result as { lines?: unknown };
+    const rawLines = Array.isArray(result)
+      ? result
+      : Array.isArray(payload?.lines)
+        ? payload.lines
+        : [];
+    const lines = rawLines.map(String);
+    const key = `${project}/${name}`;
+    this.setState({
+      portforwardLogs: {
+        ...this.state.portforwardLogs,
+        [key]: lines.slice(-MAX_PORTFORWARD_LOGS),
       },
     });
     return lines;

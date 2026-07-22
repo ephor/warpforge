@@ -54,7 +54,19 @@ fn write_endpoint(addr: SocketAddr, token: &str, owner: wire::DaemonOwner) -> Re
 
 /// Bind, publish the endpoint, and serve forever. `dev` disables the auth token
 /// so a browser (vite dev, no Tauri) can connect to a known address.
-pub async fn serve(handle: DaemonHandle, dev: bool, owner: wire::DaemonOwner) -> Result<()> {
+pub async fn serve(
+    handle: DaemonHandle,
+    dev: bool,
+    owner: wire::DaemonOwner,
+    project_count: usize,
+) -> Result<()> {
+    // Clean up orphan listeners from a previous daemon crash
+    let port_ranges: Vec<(u16, u16)> = (0..project_count).map(crate::ports::port_range).collect();
+    if !port_ranges.is_empty() {
+        eprintln!("warpforge daemon: cleaning up orphan listeners from previous run");
+        crate::service::kill_listeners_in_ranges(&port_ranges).await;
+    }
+
     let bind = if dev {
         "127.0.0.1:61814"
     } else {
@@ -76,6 +88,7 @@ pub async fn serve(handle: DaemonHandle, dev: bool, owner: wire::DaemonOwner) ->
     {
         use tokio::signal::unix::{signal, SignalKind};
         let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigint = signal(SignalKind::interrupt())?;
         tokio::select! {
             r = run_controlled(listener, handle.clone(), token, Arc::clone(&lifecycle)) => {
                 handle.shutdown().await;
@@ -84,6 +97,12 @@ pub async fn serve(handle: DaemonHandle, dev: bool, owner: wire::DaemonOwner) ->
             },
             _ = sigterm.recv() => {
                 eprintln!("warpforge daemon: SIGTERM — stopping services");
+                handle.shutdown().await;
+                std::fs::remove_file(daemon_json_path()).ok();
+                Ok(())
+            }
+            _ = sigint.recv() => {
+                eprintln!("warpforge daemon: SIGINT — stopping services");
                 handle.shutdown().await;
                 std::fs::remove_file(daemon_json_path()).ok();
                 Ok(())
@@ -648,6 +667,19 @@ async fn dispatch(
                 .await;
             Ok(json!(null))
         }
+        PortForwardStopAll { project } => {
+            handle.send(Command::StopAllPortForwards { project }).await;
+            Ok(json!(null))
+        }
+        PortForwardLogs {
+            project,
+            name,
+            after,
+            limit,
+        } => {
+            let lines = handle.portforward_logs(&project, &name, after, limit).await;
+            Ok(json!({ "lines": lines }))
+        }
         // ── Legacy PTY terminals (the TUI's live agent panes) ──
         TerminalSpawn { project, command } => {
             let id = handle
@@ -897,6 +929,7 @@ fn method_is_mutation(method: &wire::Method) -> bool {
         SystemHandshake { .. }
             | StateSubscribe { .. }
             | ServiceLogs { .. }
+            | PortForwardLogs { .. }
             | TaskListWorktrees { .. }
             | SessionsList { .. }
             | AgentsDetect {}

@@ -33,7 +33,7 @@ import { elapsed, pfBadge, serviceBadge, taskBadge } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
-import type { ServiceInfo, Snapshot } from "../protocol";
+import type { PortForwardInfo, ServiceInfo, Snapshot } from "../protocol";
 import AddProjectDialog from "./AddProjectDialog";
 
 interface Props {
@@ -207,38 +207,6 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                 </span>
               </p>
             </div>
-            <div className="ml-auto flex gap-1.5">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7"
-                onClick={() =>
-                  void daemon.request("portforward.startAll", { project: project.name })
-                }
-              >
-                <PlugZap className="size-4" />
-                Start forwards
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7"
-                onClick={() => void daemon.request("service.startAll", { project: project.name })}
-              >
-                <Play className="size-4" />
-                Start services
-              </Button>
-              <Button
-                variant="destructive"
-                size="sm"
-                className="h-7"
-                disabled={running.length === 0}
-                onClick={() => void daemon.request("service.stopAll", { project: project.name })}
-              >
-                <Square className="size-4" />
-                Stop all
-              </Button>
-            </div>
           </div>
 
           {/* Agent context — the integration that ties infra to tasks */}
@@ -268,8 +236,37 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
 
           {/* Services */}
           <Card className="overflow-hidden rounded-md border-border/80 bg-card shadow-none">
-            <div className="flex h-9 items-center border-b border-border/80 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Services
+            <div className="flex h-9 items-center gap-2 border-b border-border/80 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <span>Services</span>
+              {project.declaredServices.length > 0 && (
+                <div className="ml-auto">
+                  {running.length === project.declaredServices.length ? (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="h-6 text-[10px] font-normal normal-case tracking-normal"
+                      onClick={() =>
+                        void daemon.request("service.stopAll", { project: project.name })
+                      }
+                    >
+                      <Square className="size-3" />
+                      Stop all
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 text-[10px] font-normal normal-case tracking-normal"
+                      onClick={() =>
+                        void daemon.request("service.startAll", { project: project.name })
+                      }
+                    >
+                      <Play className="size-3" />
+                      Start all
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
             <div className="divide-y">
               {project.declaredServices.length === 0 && (
@@ -295,57 +292,45 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
           {/* Port-forwards */}
           {pfs.length > 0 && (
             <Card className="overflow-hidden rounded-md border-border/80 bg-card shadow-none">
-              <div className="flex h-9 items-center border-b border-border/80 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Port Forwards
+              <div className="flex h-9 items-center gap-2 border-b border-border/80 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                <span>Port Forwards</span>
+                <div className="ml-auto">
+                  {pfs.every((pf) => pf.status === "active") ? (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="h-6 text-[10px] font-normal normal-case tracking-normal"
+                      onClick={() =>
+                        void daemon.request("portforward.stopAll", { project: project.name })
+                      }
+                    >
+                      <Square className="size-3" />
+                      Stop all
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-6 text-[10px] font-normal normal-case tracking-normal"
+                      onClick={() =>
+                        void daemon.request("portforward.startAll", { project: project.name })
+                      }
+                    >
+                      <Play className="size-3" />
+                      Start all
+                    </Button>
+                  )}
+                </div>
               </div>
               <div className="divide-y">
-                {pfs.map((pf) => {
-                  const badge = pfBadge(pf.status);
-                  const active = pf.status === "active";
-                  return (
-                    <div key={pf.name} className="flex min-h-9 items-center gap-3 px-3 py-1.5">
-                      <PlugZap className="size-4 text-muted-foreground" />
-                      <span className="w-40 truncate text-sm font-medium">{pf.name}</span>
-                      <Badge variant={badge.variant}>{badge.label}</Badge>
-                      <span className="tnum font-mono text-xs text-primary">
-                        :{pf.localPort} → {pf.remotePort}
-                      </span>
-                      <span className="truncate font-mono text-xs text-muted-foreground">
-                        {pf.namespace}/{pf.pod}
-                      </span>
-                      <div className="ml-auto flex gap-1">
-                        {!active && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7"
-                            onClick={() =>
-                              void daemon.request("portforward.start", {
-                                name: pf.name,
-                                project: project.name,
-                              })
-                            }
-                          >
-                            <Play className="size-3" />
-                          </Button>
-                        )}
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          className="h-7"
-                          onClick={() =>
-                            void daemon.request("portforward.stop", {
-                              name: pf.name,
-                              project: project.name,
-                            })
-                          }
-                        >
-                          <Square className="size-3" />
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
+                {pfs.map((pf) => (
+                  <PortForwardRow
+                    key={pf.name}
+                    project={project.name}
+                    pf={pf}
+                    onSendToAgent={(proj, text) => onNewTask(proj, text)}
+                  />
+                ))}
               </div>
             </Card>
           )}
@@ -412,18 +397,7 @@ function ServiceRow({
   const badge = serviceBadge(svc?.status ?? "stopped");
   const logText = logs.join("\n");
   const canStop = svc?.status === "running" || svc?.status === "starting";
-  const canRestart = svc?.status === "running" || svc?.status === "starting";
-  const primaryAction = canRestart
-    ? {
-        action: "service.restart",
-        icon: <RotateCw className="size-3" />,
-        label: `Restart ${name}`,
-      }
-    : {
-        action: "service.start",
-        icon: <Play className="size-3" />,
-        label: `Start ${name}`,
-      };
+  const canRestart = svc?.status === "running";
 
   useEffect(() => {
     if (!open) {
@@ -452,27 +426,42 @@ function ServiceRow({
           {svc?.command ?? ""}
         </span>
         <div className="ml-auto flex gap-1" onClick={(e) => e.stopPropagation()}>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7"
-            title={primaryAction.label}
-            aria-label={primaryAction.label}
-            onClick={() => void daemon.request(primaryAction.action, { project, service: name })}
-          >
-            {primaryAction.icon}
-          </Button>
-          <Button
-            variant="destructive"
-            size="sm"
-            className="h-7"
-            disabled={!canStop}
-            title={`Stop ${name}`}
-            aria-label={`Stop ${name}`}
-            onClick={() => void daemon.request("service.stop", { project, service: name })}
-          >
-            <Square className="size-3" />
-          </Button>
+          {!canStop && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7"
+              title={`Start ${name}`}
+              aria-label={`Start ${name}`}
+              onClick={() => void daemon.request("service.start", { project, service: name })}
+            >
+              <Play className="size-3" />
+            </Button>
+          )}
+          {canRestart && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7"
+              title={`Restart ${name}`}
+              aria-label={`Restart ${name}`}
+              onClick={() => void daemon.request("service.restart", { project, service: name })}
+            >
+              <RotateCw className="size-3" />
+            </Button>
+          )}
+          {canStop && (
+            <Button
+              variant="destructive"
+              size="sm"
+              className="h-7"
+              title={`Stop ${name}`}
+              aria-label={`Stop ${name}`}
+              onClick={() => void daemon.request("service.stop", { project, service: name })}
+            >
+              <Square className="size-3" />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -492,6 +481,118 @@ function ServiceRow({
               className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
               onClick={() =>
                 onSendToAgent(project, `Logs for service "${name}":\n\`\`\`\n${logText}\n\`\`\``)
+              }
+            >
+              <Send className="size-3" /> send to agent
+            </button>
+          </div>
+          <ScrollArea className="h-48">
+            <pre className="font-mono text-xs leading-relaxed text-green-400 whitespace-pre-wrap break-all">
+              {logs.length === 0 ? "no logs yet" : logText}
+            </pre>
+          </ScrollArea>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PortForwardRow({
+  project,
+  pf,
+  onSendToAgent,
+}: {
+  project: string;
+  pf: PortForwardInfo;
+  onSendToAgent: (project: string, text: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const logs = useSyncExternalStore(
+    daemon.subscribe,
+    () => daemon.getState().portforwardLogs[`${project}/${pf.name}`] ?? EMPTY_LOGS,
+  );
+
+  const badge = pfBadge(pf.status);
+  const logText = logs.join("\n");
+  const active = pf.status === "active";
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    void daemon.fetchPortForwardLogs(project, pf.name, { after: 0, limit: 300 });
+  }, [open, project, pf.name, pf.logSeq]);
+
+  return (
+    <div>
+      <div
+        className="flex min-h-9 cursor-pointer items-center gap-3 px-3 py-1.5 hover:bg-secondary/30"
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? (
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <PlugZap className="size-4 text-muted-foreground" />
+        <span className="w-36 truncate text-sm font-medium">{pf.name}</span>
+        <Badge variant={badge.variant}>{badge.label}</Badge>
+        <span className="tnum font-mono text-xs text-primary">
+          :{pf.localPort} → {pf.remotePort}
+        </span>
+        <span className="flex-1 truncate font-mono text-xs text-muted-foreground">
+          {pf.namespace}/{pf.pod}
+        </span>
+        <div className="ml-auto flex gap-1" onClick={(e) => e.stopPropagation()}>
+          {!active && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7"
+              onClick={() =>
+                void daemon.request("portforward.start", {
+                  name: pf.name,
+                  project: project,
+                })
+              }
+            >
+              <Play className="size-3" />
+            </Button>
+          )}
+          {active && (
+            <Button
+              variant="destructive"
+              size="sm"
+              className="h-7"
+              onClick={() =>
+                void daemon.request("portforward.stop", {
+                  name: pf.name,
+                  project: project,
+                })
+              }
+            >
+            <Square className="size-3" />
+          </Button>
+          )}
+        </div>
+      </div>
+
+      {open && (
+        <div className="bg-deep-surface border-t px-3 pb-3 pt-2">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">{logs.length} lines</span>
+            <button
+              type="button"
+              className="ml-auto flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
+              onClick={() => void navigator.clipboard.writeText(logText)}
+            >
+              <Copy className="size-3" /> copy
+            </button>
+            <button
+              type="button"
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
+              onClick={() =>
+                onSendToAgent(project, `Logs for port-forward "${pf.name}":\n\`\`\`\n${logText}\n\`\`\``)
               }
             >
               <Send className="size-3" /> send to agent

@@ -238,6 +238,14 @@ pub enum Command {
         limit: Option<u32>,
         reply: oneshot::Sender<Vec<String>>,
     },
+    /// A window of a port-forward's retained log lines.
+    PortForwardLogs {
+        project: String,
+        name: String,
+        after: u64,
+        limit: Option<u32>,
+        reply: oneshot::Sender<Vec<String>>,
+    },
     /// Start every declared port-forward for a project (port-forwards only).
     StartAllPortForwards {
         project: String,
@@ -250,6 +258,9 @@ pub enum Command {
     StopPortForward {
         project: String,
         name: String,
+    },
+    StopAllPortForwards {
+        project: String,
     },
     SpawnAgent {
         project: String,
@@ -829,6 +840,27 @@ impl DaemonHandle {
         rx.await.unwrap_or_default()
     }
 
+    /// A window of a port-forward's retained log lines (for backfill; live tail
+    /// arrives via `PortForwardLog` events).
+    pub async fn portforward_logs(
+        &self,
+        project: &str,
+        name: &str,
+        after: u64,
+        limit: Option<u32>,
+    ) -> Vec<String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::PortForwardLogs {
+            project: project.to_string(),
+            name: name.to_string(),
+            after,
+            limit,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_default()
+    }
+
     /// Register a new project, generate config if needed, broadcast to clients.
     pub async fn add_project(
         &self,
@@ -1254,6 +1286,7 @@ impl Daemon {
                             local_port: pf_cfg.local_port,
                             remote_port: pf_cfg.remote_port,
                             status: wire::PortForwardStatus::Stopped,
+                            log_seq: 0,
                         },
                     );
                 }
@@ -1275,6 +1308,7 @@ impl Daemon {
                     local_port: pf.local_port,
                     remote_port: pf.remote_port,
                     status: wireconv::pf_status(&pf.status),
+                    log_seq: 0,
                 },
             );
         }
@@ -1580,6 +1614,12 @@ impl Daemon {
                     .into_iter()
                     .map(|svc| svc.name.clone())
                     .collect();
+                let pfs: Vec<String> = self
+                    .portforwards
+                    .list_for_project(&project)
+                    .iter()
+                    .map(|pf| pf.name.clone())
+                    .collect();
                 self.services.stop_project(&project).await.ok();
                 self.portforwards.stop_project(&project);
                 if let Some(index) = self.projects.iter().position(|p| p.name == project) {
@@ -1588,6 +1628,7 @@ impl Daemon {
                 for service in services {
                     self.emit_service_status(&project, &service);
                 }
+                self.emit_portforward_statuses(&project, &pfs);
             }
             Command::StopRuntime => {
                 self.stop_runtime().await;
@@ -1624,6 +1665,45 @@ impl Daemon {
             }
             Command::StopPortForward { project, name } => {
                 self.portforwards.stop(&project, &name);
+                self.emit_portforward_status(&project, &name);
+            }
+            Command::StopAllPortForwards { project } => {
+                let pfs: Vec<String> = self
+                    .portforwards
+                    .list_for_project(&project)
+                    .iter()
+                    .map(|pf| pf.name.clone())
+                    .collect();
+                self.portforwards.stop_project(&project);
+                for name in pfs {
+                    self.emit_portforward_status(&project, &name);
+                }
+            }
+            Command::PortForwardLogs {
+                project,
+                name,
+                after,
+                limit,
+                reply,
+            } => {
+                let key = format!("{project}/{name}");
+                let lines = self
+                    .portforwards
+                    .forwards
+                    .get(&key)
+                    .map(|pf| {
+                        let start = (after as usize).min(pf.logs.len());
+                        let mut window: Vec<String> = pf.logs[start..].to_vec();
+                        if let Some(n) = limit {
+                            let n = n as usize;
+                            if window.len() > n {
+                                window = window.split_off(window.len() - n);
+                            }
+                        }
+                        window
+                    })
+                    .unwrap_or_default();
+                let _ = reply.send(lines);
             }
             Command::SpawnAgent {
                 project,
@@ -3145,6 +3225,23 @@ impl Daemon {
         }
     }
 
+    fn emit_portforward_status(&self, project: &str, name: &str) {
+        let key = format!("{project}/{name}");
+        if let Some(pf) = self.portforwards.forwards.get(&key) {
+            self.emit(Event::PortForwardStatus {
+                project: project.to_string(),
+                name: name.to_string(),
+                status: pf.status.clone(),
+            });
+        }
+    }
+
+    fn emit_portforward_statuses(&self, project: &str, names: &[String]) {
+        for name in names {
+            self.emit_portforward_status(project, name);
+        }
+    }
+
     async fn stop_runtime(&mut self) {
         let services: Vec<(String, String)> = self
             .services
@@ -3152,11 +3249,26 @@ impl Daemon {
             .into_iter()
             .map(|svc| (svc.project_name.clone(), svc.name.clone()))
             .collect();
+        let pfs: Vec<(String, String)> = self
+            .portforwards
+            .forwards
+            .keys()
+            .map(|key| {
+                let parts: Vec<&str> = key.splitn(2, '/').collect();
+                (
+                    parts.first().map(|s| s.to_string()).unwrap_or_default(),
+                    parts.get(1).map(|s| s.to_string()).unwrap_or_default(),
+                )
+            })
+            .collect();
         self.services.stop_all().await.ok();
         self.portforwards.stop_all().await.ok();
         kill_listeners_in_ranges(&self.project_port_ranges()).await;
         for (project, service) in services {
             self.emit_service_status(&project, &service);
+        }
+        for (project, name) in pfs {
+            self.emit_portforward_status(&project, &name);
         }
     }
 

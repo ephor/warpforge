@@ -138,6 +138,18 @@ pub enum Method {
     PortForwardStart { project: String, name: String },
     #[serde(rename = "portforward.stop")]
     PortForwardStop { project: String, name: String },
+    #[serde(rename = "portforward.stopAll")]
+    PortForwardStopAll { project: String },
+    /// Fetch a window of retained port-forward log lines.
+    #[serde(rename = "portforward.logs")]
+    PortForwardLogs {
+        project: String,
+        name: String,
+        #[serde(default)]
+        after: u64,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
 
     // ── Tasks (agent sessions on the board) ──
     #[serde(rename = "task.create")]
@@ -617,6 +629,7 @@ pub struct PortForwardInfo {
     pub local_port: u16,
     pub remote_port: u16,
     pub status: PortForwardStatus,
+    pub log_seq: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
