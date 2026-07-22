@@ -268,16 +268,15 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
                     onClick={() => resume(s)}
                     className="flex w-full items-center gap-2 overflow-hidden border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-secondary"
                   >
-                    <AgentBadge
-                      agentId={s.agent}
-                      size="xs"
-                      variant="chip"
-                      className="text-muted-foreground"
-                    />
                     <span className="min-w-0 flex-1 truncate">
                       {s.title || `(untitled ${s.sessionId.slice(0, 8)})`}
                     </span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
+                    <AgentBadge
+                      agentId={s.agent}
+                      size="xs"
+                      className="shrink-0 text-muted-foreground"
+                    />
+                    <span className="tnum shrink-0 text-xs text-muted-foreground">
                       {new Date(s.updatedAt * 1000).toLocaleDateString()}
                     </span>
                   </button>

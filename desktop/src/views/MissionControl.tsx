@@ -294,52 +294,55 @@ function FocusPane({
       )}
     >
       <div className="border-b border-border/80 px-3 py-1.5">
-        <div className="flex items-start gap-2">
-          <div className="min-w-0 flex-1">
-            <div className="mb-1 flex min-w-0 items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
-              <span className="truncate font-semibold text-foreground/90">{task.project}</span>
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
-              <AgentBadge agentId={task.agent} size="xs" />
-              <span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
-              <span className="tnum shrink-0">{elapsed(task.updatedAt)}</span>
-            </div>
+        {/* Row 1: title (left) · window actions (right) */}
+        <div className="flex min-w-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onOpen}
+            className="min-w-0 flex-1 truncate text-left text-[15px] font-semibold leading-5 text-foreground hover:text-primary"
+            title={task.prompt}
+          >
+            {taskLabel(task)}
+          </button>
+          <div className="flex shrink-0 items-center">
             <button
               type="button"
+              aria-label="Open task details"
+              className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
               onClick={onOpen}
-              className="block max-w-full truncate text-left text-[15px] font-semibold leading-5 text-foreground hover:text-primary"
-              title={task.prompt}
+              title="Open task details"
             >
-              {taskLabel(task)}
+              <ExternalLink className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label={focused ? "Exit focus mode" : "Focus this conversation"}
+              className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+              onClick={onFocus}
+              title={focused ? "Exit focus mode" : "Focus"}
+            >
+              {focused ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+            </button>
+            <button
+              type="button"
+              aria-label="Unpin from Mission Control"
+              className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+              onClick={onUnpin}
+              title="Unpin from Mission Control"
+            >
+              <PinOff className="size-3.5" />
             </button>
           </div>
-          <StatusBadge status={groupStatusKind(groupStatus)} activity={activity} />
-          <button
-            type="button"
-            aria-label="Open task details"
-            className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
-            onClick={onOpen}
-            title="Open task details"
-          >
-            <ExternalLink className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            aria-label={focused ? "Exit focus mode" : "Focus this conversation"}
-            className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
-            onClick={onFocus}
-            title={focused ? "Exit focus mode" : "Focus"}
-          >
-            {focused ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
-          </button>
-          <button
-            type="button"
-            aria-label="Unpin from Mission Control"
-            className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
-            onClick={onUnpin}
-            title="Unpin from Mission Control"
-          >
-            <PinOff className="size-3.5" />
-          </button>
+        </div>
+        {/* Row 2: status + project (left) · agent · time (right) — the shared card grammar */}
+        <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+          <StatusBadge status={groupStatusKind(groupStatus)} activity={activity} size="xs" />
+          <span className="min-w-0 truncate font-semibold text-foreground/90">{task.project}</span>
+          <span className="ml-auto flex shrink-0 items-center gap-2">
+            <AgentBadge agentId={task.agent} size="xs" />
+            <span aria-hidden className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+            <span className="tnum">{elapsed(task.updatedAt)}</span>
+          </span>
         </div>
       </div>
 

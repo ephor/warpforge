@@ -482,13 +482,13 @@ export default function TaskDetail({
         >
           <ArrowLeft className="size-4" />
         </Button>
+        <StatusBadge status={task.status} activity={activity} />
         <h1 className="min-w-0 flex-1 truncate text-base font-semibold" title={task.prompt}>
           {taskLabel(task)}
         </h1>
-        <StatusBadge status={task.status} activity={activity} />
         <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <span className="max-w-36 truncate">{task.project}</span>
-          <span>·</span>
+          <span aria-hidden className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
           <AgentBadge agentId={task.agent} className="max-w-32" />
         </span>
         <TaskMenu
@@ -1481,12 +1481,8 @@ function SubtaskRow({ node }: { node: OrchNodeInfo }) {
   return (
     <div className="flex items-center gap-2 rounded bg-secondary/30 px-2 py-1.5 text-xs">
       <StatusBadge status={node.status} size="xs" />
-      <div className="min-w-0 flex-1">
-        <div className="font-medium text-foreground">{node.kind}</div>
-        <div className="text-muted-foreground">
-          <AgentBadge agentId={node.agent} size="xs" />
-        </div>
-      </div>
+      <span className="min-w-0 flex-1 truncate font-medium text-foreground">{node.kind}</span>
+      <AgentBadge agentId={node.agent} size="xs" className="shrink-0 text-muted-foreground" />
       {node.taskId && (
         <span className="shrink-0 text-[10px] text-muted-foreground/60">{node.taskId}</span>
       )}

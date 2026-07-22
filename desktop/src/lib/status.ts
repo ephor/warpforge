@@ -1,4 +1,4 @@
-import type { PortForwardStatus, ServiceStatus, TaskStatus } from "@/protocol";
+import type { PortForwardStatus, ServiceStatus } from "@/protocol";
 
 type Variant = "default" | "outline" | "ok" | "warn" | "destructive";
 
@@ -26,21 +26,6 @@ export function pfBadge(s: PortForwardStatus): { variant: Variant; label: string
       return { label: "failed", variant: "destructive" };
     case "stopped":
       return { label: "stopped", variant: "outline" };
-  }
-}
-
-/** Left-edge accent colour for a task tile, by status. */
-export function taskEdge(s: TaskStatus): string {
-  switch (s) {
-    case "running":
-      return "border-l-ok";
-    case "needs_review":
-      return "border-l-warn";
-    case "blocked":
-    case "interrupted":
-      return "border-l-destructive";
-    default:
-      return "border-l-border";
   }
 }
 

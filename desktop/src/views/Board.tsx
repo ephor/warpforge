@@ -459,23 +459,25 @@ function TaskCard({
       >
         {/* Clickable row: opens TaskDetail */}
         <button type="button" className="w-full cursor-pointer text-left" onClick={onOpen}>
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-semibold text-foreground">{task.project}</span>
-            <span className="flex min-w-0 items-center gap-1">
-              {task.worktree && <GitBranch className="size-3 shrink-0 text-primary" />}
-              <AgentBadge agentId={task.agent} />
-            </span>
-          </div>
-          <p className="my-1.5 line-clamp-2 text-sm">{taskLabel(task)}</p>
-          <div className="flex items-center gap-2">
-            <StatusBadge status={task.status} />
-            {task.filesChanged > 0 && (
-              <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
-            )}
-            <span className="tnum ml-auto text-xs text-muted-foreground">
+          <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <StatusBadge status={task.status} size="xs" />
+            <span className="min-w-0 truncate font-semibold text-foreground">{task.project}</span>
+            {task.worktree && <GitBranch className="ml-auto size-3 shrink-0 text-primary" />}
+            <AgentBadge
+              agentId={task.agent}
+              className={cn("shrink-0", task.worktree ? undefined : "ml-auto")}
+            />
+            <span aria-hidden className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
+            <span className="tnum shrink-0">
               {task.status === "done" ? `${elapsed(task.updatedAt)} ago` : elapsed(task.createdAt)}
             </span>
           </div>
+          <p className="mt-1.5 line-clamp-2 text-sm">{taskLabel(task)}</p>
+          {task.filesChanged > 0 && (
+            <div className="mt-1.5 flex items-center">
+              <span className="tnum text-xs text-muted-foreground">{task.filesChanged} files</span>
+            </div>
+          )}
         </button>
 
         {/* Accordion toggle for orchestrator tasks */}
@@ -513,10 +515,10 @@ function NodeRow({ node }: { node: OrchNodeInfo }) {
   return (
     <div className="flex items-center gap-2 rounded bg-secondary/20 px-2 py-1 text-xs">
       <StatusBadge status={node.status} size="xs" />
-      <span className="font-medium text-foreground">{node.kind}</span>
-      <AgentBadge agentId={node.agent} size="xs" className="text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate font-medium text-foreground">{node.kind}</span>
+      <AgentBadge agentId={node.agent} size="xs" className="shrink-0 text-muted-foreground" />
       {node.taskId && (
-        <span className="ml-auto text-[10px] text-muted-foreground/60">{node.taskId}</span>
+        <span className="shrink-0 text-[10px] text-muted-foreground/60">{node.taskId}</span>
       )}
     </div>
   );
@@ -563,9 +565,10 @@ function QueueCard({
         </button>
       </div>
       <button type="button" className="min-w-0 flex-1 text-left" onClick={onOpen}>
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span className="font-semibold text-foreground">{task.project}</span>
-          <AgentBadge agentId={task.agent} />
+        <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+          <span className="min-w-0 truncate font-semibold text-foreground">{task.project}</span>
+          <span aria-hidden className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
+          <AgentBadge agentId={task.agent} className="shrink-0" />
         </div>
         <p className="my-1 line-clamp-2 text-sm">{taskLabel(task)}</p>
         <div className="flex flex-wrap gap-1">

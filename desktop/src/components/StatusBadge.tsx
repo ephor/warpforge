@@ -23,15 +23,20 @@ type Glyph = "dot" | "ring" | "clock" | "check" | "minus";
  * The one visual language for statuses: tone = urgency, glyph = meaning,
  * pulse = live activity. Green pulsing dot — agent is working right now;
  * amber dot — needs the user; red — stopped abnormally (ring = interrupted);
- * neutral clock — waiting in line; neutral ring — idle; green check in a
- * neutral pill — finished fine without shouting about it.
+ * neutral clock — waiting in line; brand-blue ring — idle (the same accent as
+ * links and the project name); green check in a neutral pill — finished fine
+ * without shouting about it. `glyphAccent` tints just the glyph, leaving the
+ * pill/label in the tone colour.
  */
-const META: Record<StatusKind, { label: string; tone: Tone; glyph: Glyph; pulse?: boolean }> = {
+const META: Record<
+  StatusKind,
+  { label: string; tone: Tone; glyph: Glyph; pulse?: boolean; glyphAccent?: string }
+> = {
   blocked: { glyph: "dot", label: "blocked", tone: "destructive" },
-  complete: { glyph: "check", label: "done", tone: "neutral" },
-  done: { glyph: "check", label: "done", tone: "neutral" },
+  complete: { glyph: "check", glyphAccent: "text-ok", label: "done", tone: "neutral" },
+  done: { glyph: "check", glyphAccent: "text-ok", label: "done", tone: "neutral" },
   failed: { glyph: "dot", label: "failed", tone: "destructive" },
-  idle: { glyph: "ring", label: "idle", tone: "neutral" },
+  idle: { glyph: "ring", glyphAccent: "text-primary", label: "idle", tone: "neutral" },
   interrupted: { glyph: "ring", label: "interrupted", tone: "destructive" },
   needs_review: { glyph: "dot", label: "needs review", tone: "warn" },
   pending: { glyph: "clock", label: "pending", tone: "neutral" },
@@ -43,6 +48,24 @@ const META: Record<StatusKind, { label: string; tone: Tone; glyph: Glyph; pulse?
 
 export function statusLabel(status: StatusKind): string {
   return META[status].label;
+}
+
+/** Left-edge accent class for a card, echoing the status glyph's colour. */
+const TONE_EDGE: Record<Tone, string> = {
+  destructive: "border-l-destructive",
+  neutral: "border-l-border",
+  ok: "border-l-ok",
+  warn: "border-l-warn",
+};
+
+const ACCENT_EDGE: Record<string, string> = {
+  "text-ok": "border-l-ok",
+  "text-primary": "border-l-primary",
+};
+
+export function statusEdge(status: StatusKind): string {
+  const meta = META[status];
+  return (meta.glyphAccent && ACCENT_EDGE[meta.glyphAccent]) || TONE_EDGE[meta.tone];
 }
 
 /** Live-activity chip tones mirror the old activityBadge mapping. */
@@ -64,6 +87,16 @@ const TONE_PILL: Record<Tone, string> = {
   warn: "border-warn/40 bg-warn/10 text-warn",
 };
 
+/**
+ * Calm statuses (idle, done) echo their glyph accent in the border and a faint
+ * fill, but keep the label muted — themed like the active pills, a shade
+ * quieter (the hollow ring / static check does the rest of the calming).
+ */
+const ACCENT_PILL: Record<string, string> = {
+  "text-ok": "border-ok/50 bg-ok/10 text-muted-foreground",
+  "text-primary": "border-primary/50 bg-primary/10 text-muted-foreground",
+};
+
 const TONE_TEXT: Record<Tone, string> = {
   destructive: "text-destructive",
   neutral: "text-muted-foreground",
@@ -71,18 +104,28 @@ const TONE_TEXT: Record<Tone, string> = {
   warn: "text-warn",
 };
 
-function GlyphMark({ glyph, pulse, iconCls }: { glyph: Glyph; pulse: boolean; iconCls: string }) {
+function GlyphMark({
+  glyph,
+  pulse,
+  iconCls,
+  accent,
+}: {
+  glyph: Glyph;
+  pulse: boolean;
+  iconCls: string;
+  accent?: string;
+}) {
   if (glyph === "check") {
-    return <Check aria-hidden className={cn(iconCls, "shrink-0 text-ok")} strokeWidth={3} />;
+    return <Check aria-hidden className={cn(iconCls, "shrink-0", accent)} strokeWidth={3} />;
   }
   if (glyph === "clock") {
-    return <Clock aria-hidden className={cn(iconCls, "shrink-0")} />;
+    return <Clock aria-hidden className={cn(iconCls, "shrink-0", accent)} />;
   }
   if (glyph === "minus") {
-    return <Minus aria-hidden className={cn(iconCls, "shrink-0")} />;
+    return <Minus aria-hidden className={cn(iconCls, "shrink-0", accent)} />;
   }
   return (
-    <span aria-hidden className="relative flex size-1.5 shrink-0">
+    <span aria-hidden className={cn("relative flex size-1.5 shrink-0", accent)}>
       {pulse && (
         <span className="absolute inline-flex size-full animate-ping rounded-full bg-current opacity-60 motion-reduce:animate-none" />
       )}
@@ -125,27 +168,29 @@ export function StatusBadge({
   const tone = live ? ACTIVITY_TONE[activity.tone] : meta.tone;
   const glyph = live ? "dot" : meta.glyph;
   const pulse = live || !!meta.pulse;
+  const accent = live ? undefined : meta.glyphAccent;
   const iconCls = size === "xs" ? "size-2.5" : "size-3";
 
   if (variant === "dot") {
     return (
       <span title={label} className={cn("inline-flex items-center", TONE_TEXT[tone], className)}>
-        <GlyphMark glyph={glyph} pulse={pulse} iconCls={iconCls} />
+        <GlyphMark glyph={glyph} pulse={pulse} iconCls={iconCls} accent={accent} />
         <span className="sr-only">{label}</span>
       </span>
     );
   }
 
+  const pillTone = (accent && ACCENT_PILL[accent]) || TONE_PILL[tone];
   return (
     <span
       className={cn(
         "inline-flex shrink-0 items-center whitespace-nowrap rounded-full border font-medium normal-case tracking-normal",
         size === "xs" ? "gap-1 px-1.5 py-px text-[11px]" : "gap-1.5 px-2 py-0.5 text-xs",
-        TONE_PILL[tone],
+        pillTone,
         className,
       )}
     >
-      <GlyphMark glyph={glyph} pulse={pulse} iconCls={iconCls} />
+      <GlyphMark glyph={glyph} pulse={pulse} iconCls={iconCls} accent={accent} />
       {label}
     </span>
   );
