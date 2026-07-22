@@ -9,6 +9,7 @@ import {
   GitPullRequestArrow,
   Loader2,
   RefreshCw,
+  Sparkles,
   Upload,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -50,6 +51,9 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
   const [prBase, setPrBase] = useState("");
   const [creatingPr, setCreatingPr] = useState(false);
   const [prStep, setPrStep] = useState<"pushing" | "creating" | null>(null);
+  const [generatingPr, setGeneratingPr] = useState(false);
+  const textGenAgentId = useUi((state) => state.textGenAgentId);
+  const textGenModel = useUi((state) => state.textGenModel);
   const repositoryOperation = useUi((state) => state.repositoryOperation);
   const setRepositoryOperation = useUi((state) => state.setRepositoryOperation);
 
@@ -137,6 +141,30 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
   // outgoing commits (or no upstream at all) has to be pushed first — the PR
   // action does both in order rather than failing with "must first push".
   const needsPush = Boolean(info) && (!info?.hasUpstream || (info?.commits.length ?? 0) > 0);
+
+  // The agent replies with the title on the first line and the body below it.
+  const generatePr = async () => {
+    if (!task || !textGenAgentId || generatingPr) {
+      return;
+    }
+    setGeneratingPr(true);
+    setError(null);
+    try {
+      const text = await daemon.generateText(
+        task.id,
+        textGenAgentId,
+        "pr_description",
+        textGenModel ?? undefined,
+      );
+      const [first = "", ...rest] = text.split("\n");
+      setPrTitle(first.replace(/^#+\s*/, "").trim());
+      setPrBody(rest.join("\n").trim());
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setGeneratingPr(false);
+    }
+  };
 
   const createPr = async () => {
     if (!task || creatingPr || !prTitle.trim()) {
@@ -238,12 +266,33 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
             </label>
             <label className="flex min-h-0 flex-1 flex-col gap-1.5">
               <span className="text-xs font-medium text-muted-foreground">Description</span>
-              <textarea
-                value={prBody}
-                onChange={(e) => setPrBody(e.target.value)}
-                placeholder="Optional — Markdown supported"
-                className="min-h-32 flex-1 resize-none rounded-md border bg-background px-3 py-2 font-mono text-sm outline-none focus:border-primary"
-              />
+              <div className="relative flex min-h-0 flex-1">
+                <textarea
+                  value={prBody}
+                  onChange={(e) => setPrBody(e.target.value)}
+                  placeholder="Optional — Markdown supported"
+                  // Room in the bottom-right corner for the drafting button.
+                  className="min-h-32 flex-1 resize-none rounded-md border bg-background py-2 pl-3 pr-10 font-mono text-sm outline-none focus:border-primary"
+                />
+                <button
+                  type="button"
+                  className="absolute bottom-2 right-2 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                  disabled={generatingPr || !textGenAgentId}
+                  aria-label="Draft pull request title and description"
+                  title={
+                    textGenAgentId
+                      ? "Draft the title and description from the outgoing commits"
+                      : "Pick a text-generation agent in Settings first"
+                  }
+                  onClick={generatePr}
+                >
+                  {generatingPr ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-4" />
+                  )}
+                </button>
+              </div>
             </label>
             <label className="flex flex-col gap-1.5">
               <span className="text-xs font-medium text-muted-foreground">

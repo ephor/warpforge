@@ -1,8 +1,10 @@
 import { RotateCcw, X } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
+import { configRole } from "@/components/AgentConfigBar";
 import AgentSetupPanel from "@/components/AgentSetupPanel";
 import { Button } from "@/components/ui/button";
+import { daemon } from "@/daemon";
 import { useUi } from "@/store/ui";
 
 // ── Helpers ──
@@ -97,6 +99,17 @@ export default function SettingsView({ open, onOpenChange }: Props) {
   const setFontSize = useUi((s) => s.setFontSize);
   const setMonoFontSize = useUi((s) => s.setMonoFontSize);
   const resetFontSizes = useUi((s) => s.resetFontSizes);
+  const textGenAgentId = useUi((s) => s.textGenAgentId);
+  const setTextGenAgentId = useUi((s) => s.setTextGenAgentId);
+  const textGenModel = useUi((s) => s.textGenModel);
+  const setTextGenModel = useUi((s) => s.setTextGenModel);
+  const state = useSyncExternalStore(daemon.subscribe, daemon.getState);
+  const enabledAgents = (state.snapshot.agents ?? []).filter((a) => a.enabled);
+  // The daemon caches an agent's config options after probing it over ACP; the
+  // model list is empty until that probe has happened at least once.
+  const modelOption = enabledAgents
+    .find((a) => a.id === textGenAgentId)
+    ?.models.find((o) => configRole(o) === "model");
 
   const fontDirty = fontSize !== 14 || monoFontSize !== 13;
 
@@ -190,31 +203,51 @@ export default function SettingsView({ open, onOpenChange }: Props) {
           </div>
         </Section>
 
-        {/* ── Harness per action ── */}
-        <Section title="Harness per action">
+        {/* ── Text generation ── */}
+        <Section title="Text generation">
           <SettingRow
-            title="Default agent for new tasks"
-            description="Select which agent handles new tasks by default. Currently set per-task via the task creation dialog."
+            title="Agent for git text"
+            description="Drafts commit messages and PR descriptions from the diff, on demand. Used for both."
             control={
-              <span className="text-xs text-muted-foreground">
-                Per-task selection (no backend hook yet)
-              </span>
+              <select
+                value={textGenAgentId ?? ""}
+                onChange={(e) => setTextGenAgentId(e.target.value || null)}
+                className="bg-deep-surface h-7 rounded-md border px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="">None</option>
+                {enabledAgents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.displayName}
+                  </option>
+                ))}
+              </select>
             }
           />
-          <SettingRow
-            title="Commit message generation"
-            description="Which agent/model generates commit messages. TODO: wire to backend once the daemon exposes a per-action harness selector."
-            control={
-              <span className="text-xs text-muted-foreground">Not wired — backend TODO</span>
-            }
-          />
-          <SettingRow
-            title="PR description generation"
-            description="Which agent/model generates PR descriptions. TODO: wire to backend once the daemon exposes a per-action harness selector."
-            control={
-              <span className="text-xs text-muted-foreground">Not wired — backend TODO</span>
-            }
-          />
+          {textGenAgentId && (
+            <SettingRow
+              title="Model"
+              description={
+                modelOption
+                  ? "Which model that agent uses for this. Agent default when unset."
+                  : "Model list appears once the agent has been started at least once, so Warpforge can read its options."
+              }
+              control={
+                <select
+                  value={textGenModel ?? ""}
+                  onChange={(e) => setTextGenModel(e.target.value || null)}
+                  disabled={!modelOption}
+                  className="bg-deep-surface h-7 max-w-56 rounded-md border px-2 text-xs outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                >
+                  <option value="">Agent default</option>
+                  {modelOption?.options.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.name}
+                    </option>
+                  ))}
+                </select>
+              }
+            />
+          )}
         </Section>
         </div>
       </div>

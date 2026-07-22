@@ -549,6 +549,21 @@ async fn dispatch(
                 })?;
             Ok(json!({ "url": url }))
         }
+        TextGenerate {
+            task_id,
+            agent_id,
+            kind,
+            model,
+        } => {
+            let text = handle
+                .generate_text(&task_id, &agent_id, kind, model)
+                .await
+                .map_err(|message| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message,
+                })?;
+            Ok(json!({ "text": text }))
+        }
         TaskCancel { task_id } => {
             handle.send(Command::CancelTask { id: task_id }).await;
             Ok(json!(null))

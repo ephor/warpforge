@@ -696,6 +696,23 @@ export class DaemonClient {
     return result;
   }
 
+  /** Draft a commit message or PR description by running the chosen agent
+   *  one-shot over the task's diff. Resolves with the generated text. */
+  async generateText(
+    taskId: string,
+    agentId: string,
+    kind: "commit_message" | "pr_description",
+    model?: string,
+  ): Promise<string> {
+    const result = (await this.request("text.generate", {
+      agent_id: agentId,
+      kind,
+      model,
+      task_id: taskId,
+    })) as { text: string };
+    return result.text;
+  }
+
   async deleteTask(taskId: string) {
     await this.request("task.delete", { task_id: taskId });
   }
