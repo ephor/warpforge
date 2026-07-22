@@ -49,6 +49,7 @@ import { toolDisplayTitle } from "@/lib/toolDisplay";
 import { cn } from "@/lib/utils";
 
 import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
+import { AgentBadge } from "../components/AgentBadge";
 import { AgentConfigBar } from "../components/AgentConfigBar";
 import { Composer } from "../components/Composer";
 import type { FileLinkResolver } from "../components/Markdown";
@@ -304,7 +305,7 @@ function FocusPane({
             <div className="mb-1 flex min-w-0 items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
               <span className="truncate font-semibold text-foreground/90">{task.project}</span>
               <span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
-              <span className="truncate">{task.agent}</span>
+              <AgentBadge agentId={task.agent} size="xs" />
               <span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
               <span className="tnum shrink-0">{elapsed(task.updatedAt)}</span>
             </div>

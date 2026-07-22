@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
+import { AgentBadge } from "@/components/AgentBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -355,7 +356,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                   >
                     <Badge variant={badge.variant}>{badge.label}</Badge>
                     <span className="flex-1 truncate text-sm">{taskLabel(t)}</span>
-                    <span className="text-xs text-muted-foreground">{t.agent}</span>
+                    <AgentBadge agentId={t.agent} className="shrink-0 text-muted-foreground" />
                     <span className="tnum text-xs text-muted-foreground">
                       {elapsed(t.createdAt)}
                     </span>
