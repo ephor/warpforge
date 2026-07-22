@@ -427,6 +427,13 @@ export interface DetectedAgent {
   installed: boolean;
   defaultAcpCommand: string;
   installHint: string;
+  version?: string;
+  latestVersion?: string;
+  /** "current" | "behind" | "missing" | "unknown" */
+  status: string;
+  installCommand?: string;
+  updateCommand?: string;
+  canManage: boolean;
 }
 
 /** An agent session discovered on disk (claude/codex), resumable via task.resume. */

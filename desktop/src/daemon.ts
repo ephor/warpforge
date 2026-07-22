@@ -685,6 +685,17 @@ export class DaemonClient {
     await this.request("agents.update", { agents });
   }
 
+  /** Install or update an agent's global package. Resolves with the command's
+   *  success flag and captured output. */
+  async installAgent(id: string): Promise<{ ok: boolean; command: string; output: string }> {
+    const result = (await this.request("agents.install", { id })) as {
+      ok: boolean;
+      command: string;
+      output: string;
+    };
+    return result;
+  }
+
   async deleteTask(taskId: string) {
     await this.request("task.delete", { task_id: taskId });
   }

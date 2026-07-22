@@ -673,6 +673,16 @@ async fn dispatch(
             handle.update_agents(agents).await;
             Ok(json!(null))
         }
+        AgentsInstall { id } => {
+            let Some(command) = crate::daemon::agents::manage_command(&id).await else {
+                return Err(wire::RpcError {
+                    code: wire::ErrorCode::InvalidRequest,
+                    message: format!("no automated install/update available for agent '{id}'"),
+                });
+            };
+            let (ok, output) = crate::daemon::agents::run_manage_command(&command).await;
+            Ok(json!({ "ok": ok, "command": command, "output": output }))
+        }
         // ── Orchestration ──
         OrchestrateStart { project, goal } => {
             let (tx, rx) = oneshot::channel();

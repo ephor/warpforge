@@ -911,10 +911,25 @@ impl Daemon {
             .map(|t| (t.id.clone(), t))
             .collect();
 
-        let configured_agents = store
+        let mut configured_agents = store
             .as_ref()
             .and_then(|s| s.load_agents().ok())
             .unwrap_or_default();
+        // Migrate retired `npx …@latest` launch commands to the global-binary
+        // form. Persist once if anything changed so it's a one-time rewrite.
+        let mut migrated = false;
+        for agent in &mut configured_agents {
+            if let Some(new_cmd) = super::agents::migrate_npx_command(&agent.id, &agent.acp_command)
+            {
+                agent.acp_command = new_cmd;
+                migrated = true;
+            }
+        }
+        if migrated {
+            if let Some(store) = store.as_ref() {
+                let _ = store.save_agents(&configured_agents);
+            }
+        }
         let probe_candidates: Vec<String> = configured_agents
             .iter()
             .filter(|a| a.enabled && a.models.is_empty())
@@ -979,8 +994,8 @@ impl Daemon {
         // then emit setup_needed if no agents are configured yet.
         if needs_setup {
             let ev_tx = handle.event_tx.clone();
-            tokio::task::spawn_blocking(move || {
-                let detected = super::agents::detected_agents();
+            tokio::spawn(async move {
+                let detected = super::agents::detect_agents_local().await;
                 let _ = ev_tx.send(Event::AgentsSetupNeeded { detected });
             });
         }
@@ -2097,9 +2112,10 @@ impl Daemon {
                 }
             }
             Command::DetectAgents { reply } => {
-                // Spawn blocking so `which` calls don't stall the actor loop.
-                tokio::task::spawn_blocking(move || {
-                    let detected = super::agents::detected_agents();
+                // Detection shells out (which/npm) and hits the registry, so run
+                // it off the actor loop rather than blocking command handling.
+                tokio::spawn(async move {
+                    let detected = super::agents::detect_agents().await;
                     let _ = reply.send(detected);
                 });
             }
