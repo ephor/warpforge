@@ -325,6 +325,88 @@ pub async fn update_project(repo: &str) -> Result<wire::GitOpResult> {
     }
 }
 
+/// Run `gh` in `repo`, mapping a missing binary to a friendly message.
+async fn gh(repo: &str, args: &[&str]) -> Result<std::process::Output> {
+    Command::new("gh")
+        .current_dir(repo)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow!(
+                    "GitHub CLI (`gh`) is not installed. Install it (`brew install gh`) and run \
+                     `gh auth login`."
+                )
+            } else {
+                anyhow!(e)
+            }
+        })
+}
+
+fn friendly_gh_error(stderr: &str) -> String {
+    let low = stderr.to_lowercase();
+    if low.contains("auth") || low.contains("not logged in") || low.contains("gh auth login") {
+        return format!(
+            "GitHub CLI is not authenticated. Run `gh auth login` and retry. ({stderr})"
+        );
+    }
+    if stderr.trim().is_empty() {
+        "gh pr create failed".to_string()
+    } else {
+        format!("gh pr create failed: {}", stderr.trim())
+    }
+}
+
+/// `git.createPr`: open a GitHub pull request for the current branch via `gh`.
+/// Requires `gh` on PATH and authenticated. Returns the PR URL. If a PR for the
+/// branch already exists, returns its URL instead of erroring.
+pub async fn create_pr(repo: &str, title: &str, body: &str, base: Option<&str>) -> Result<String> {
+    let branch = current_branch(repo)
+        .await
+        .ok_or_else(|| anyhow!("not on a branch (detached HEAD or not a git repo)"))?;
+
+    let mut args: Vec<&str> = vec!["pr", "create", "--head", &branch, "--title", title];
+    if !body.trim().is_empty() {
+        args.push("--body");
+        args.push(body);
+    } else {
+        args.push("--body");
+        args.push("");
+    }
+    let base = base.map(str::trim).filter(|b| !b.is_empty());
+    if let Some(base) = base {
+        args.push("--base");
+        args.push(base);
+    }
+
+    let out = gh(repo, &args).await?;
+    if out.status.success() {
+        // gh prints the PR URL as the last line of stdout.
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let url = stdout
+            .lines()
+            .rev()
+            .find(|l| l.contains("://"))
+            .unwrap_or("");
+        return Ok(url.trim().to_string());
+    }
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // A branch that already has a PR: surface the existing one instead of failing.
+    if stderr.to_lowercase().contains("already exists") {
+        if let Ok(view) = gh(repo, &["pr", "view", "--json", "url", "--jq", ".url"]).await {
+            if view.status.success() {
+                let url = String::from_utf8_lossy(&view.stdout).trim().to_string();
+                if !url.is_empty() {
+                    return Ok(url);
+                }
+            }
+        }
+    }
+    Err(anyhow!(friendly_gh_error(&stderr)))
+}
+
 /// `git.branches`: local branch names + the current one.
 pub async fn list_branches(repo: &str) -> Result<wire::GitBranchList> {
     let out = git(repo, &["branch", "--format=%(refname:short)"]).await?;

@@ -310,6 +310,17 @@ pub enum Method {
         #[serde(default)]
         force: bool,
     },
+    /// Open a GitHub pull request for the task branch via `gh`. Returns
+    /// `{ url }`. `base` defaults to the repo's default branch when omitted.
+    #[serde(rename = "git.createPr")]
+    GitCreatePr {
+        task_id: String,
+        title: String,
+        #[serde(default)]
+        body: String,
+        #[serde(default)]
+        base: Option<String>,
+    },
 
     // ── Raw terminal agents (legacy PTY sessions, kept for the TUI) ──
     #[serde(rename = "terminal.spawn")]
