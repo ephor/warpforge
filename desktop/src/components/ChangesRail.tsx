@@ -1,9 +1,18 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronDown, ChevronRight, GitCommitVertical, RefreshCw, Undo2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  GitCommitVertical,
+  Loader2,
+  RefreshCw,
+  Sparkles,
+  Undo2,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useUi } from "@/store/ui";
 
 import { daemon } from "../daemon";
 import type { FileDiff } from "../protocol";
@@ -184,6 +193,9 @@ export function ChangesRail({
     onCommitExpandedChange?.(expanded);
   };
   const [busy, setBusy] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const textGenAgentId = useUi((s) => s.textGenAgentId);
+  const textGenModel = useUi((s) => s.textGenModel);
   const [rollbackBusy, setRollbackBusy] = useState(false);
   const [rollbackConfirm, setRollbackConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -283,6 +295,27 @@ export function ChangesRail({
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const generateMessage = async () => {
+    if (!textGenAgentId || generating) {
+      return;
+    }
+    setGenerating(true);
+    setError(null);
+    try {
+      const text = await daemon.generateText(
+        taskId,
+        textGenAgentId,
+        "commit_message",
+        textGenModel ?? undefined,
+      );
+      setMessage(text);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGenerating(false);
     }
   };
 
@@ -482,14 +515,35 @@ export function ChangesRail({
                   <ChevronDown className="size-3.5" />
                 </button>
               </div>
-              <textarea
-                autoFocus
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                placeholder="Commit message"
-                rows={3}
-                className="bg-deep-surface min-h-20 w-full resize-none rounded-md border px-2 py-1.5 text-xs outline-none placeholder:text-muted-foreground/80 focus:ring-1 focus:ring-ring"
-              />
+              <div className="relative">
+                <textarea
+                  autoFocus
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  placeholder="Commit message"
+                  rows={3}
+                  // Room in the bottom-right corner for the drafting button.
+                  className="bg-deep-surface min-h-20 w-full resize-none rounded-md border py-1.5 pl-2 pr-9 text-xs outline-none placeholder:text-muted-foreground/80 focus:ring-1 focus:ring-ring"
+                />
+                <button
+                  type="button"
+                  className="absolute bottom-1.5 right-1.5 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                  disabled={generating || busy || !textGenAgentId}
+                  aria-label="Draft commit message"
+                  title={
+                    textGenAgentId
+                      ? "Draft a commit message from the staged diff"
+                      : "Pick a text-generation agent in Settings first"
+                  }
+                  onClick={generateMessage}
+                >
+                  {generating ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="size-3.5" />
+                  )}
+                </button>
+              </div>
               {error && <p className="text-xs text-destructive">{error}</p>}
               <div className="flex items-center gap-2">
                 <label className="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground">

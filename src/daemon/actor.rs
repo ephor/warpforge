@@ -109,6 +109,88 @@ pub struct ChildResult {
     pub success: bool,
 }
 
+/// Cap the diff we feed a text-generation agent. A commit message or PR body
+/// only needs the shape of the change, not every line of a huge diff, and an
+/// oversized prompt is slow and can blow the model's context.
+const TEXTGEN_DIFF_LIMIT: usize = 48 * 1024;
+
+const COMMIT_INSTRUCTION: &str = "\
+Write a git commit message for the changes below (the output of `git diff HEAD`). \
+Use Conventional Commits: a concise subject line in the imperative mood, at most \
+72 characters, then a blank line and a short body only if it adds information the \
+subject cannot. Reply with ONLY the commit message — no code fences, no preamble, \
+no closing remarks.";
+
+const PR_INSTRUCTION: &str = "\
+Write a GitHub pull-request description for the branch's outgoing commits (listed \
+below, with their combined diff). Output the PR title as the first line, then a \
+blank line, then a Markdown body summarizing what changed and why. Reply with ONLY \
+the title and body — no code fences, no preamble.";
+
+/// Build the one-shot prompt for `text.generate` from the repo's git state.
+async fn build_textgen_prompt(repo: &str, kind: wire::TextGenKind) -> Result<String, String> {
+    async fn git_out(repo: &str, args: &[&str]) -> Result<String, String> {
+        let out = tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .await
+            .map_err(|e| format!("git failed to run: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    fn clamp(mut diff: String) -> String {
+        if diff.len() > TEXTGEN_DIFF_LIMIT {
+            diff.truncate(TEXTGEN_DIFF_LIMIT);
+            diff.push_str("\n… diff truncated …\n");
+        }
+        diff
+    }
+
+    match kind {
+        wire::TextGenKind::CommitMessage => {
+            let diff = git_out(repo, &["diff", "HEAD"]).await?;
+            if diff.trim().is_empty() {
+                return Err("no changes to describe".to_string());
+            }
+            Ok(format!(
+                "{COMMIT_INSTRUCTION}\n\n----- git diff HEAD -----\n{}",
+                clamp(diff)
+            ))
+        }
+        wire::TextGenKind::PrDescription => {
+            let info = super::diff::push_info(repo)
+                .await
+                .map_err(|e| e.to_string())?;
+            if info.commits.is_empty() {
+                return Err("no outgoing commits to describe".to_string());
+            }
+            let subjects = info
+                .commits
+                .iter()
+                .map(|c| format!("- {}", c.subject))
+                .collect::<Vec<_>>()
+                .join("\n");
+            // commits are oldest-first; parent of the first covers exactly the
+            // outgoing range without depending on the upstream ref existing.
+            let range = format!("{}^..HEAD", info.commits[0].hash);
+            let diff = git_out(repo, &["diff", &range]).await.unwrap_or_default();
+            Ok(format!(
+                "{PR_INSTRUCTION}\n\n----- commits -----\n{subjects}\n\n----- combined diff -----\n{}",
+                clamp(diff)
+            ))
+        }
+    }
+}
+
 /// Commands from clients to the daemon.
 pub enum Command {
     Projects(oneshot::Sender<Vec<ProjectEntry>>),
@@ -318,6 +400,13 @@ pub enum Command {
         title: String,
         body: String,
         base: Option<String>,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
+    GenerateText {
+        task_id: String,
+        agent_id: String,
+        kind: wire::TextGenKind,
+        model: Option<String>,
         reply: oneshot::Sender<Result<String, String>>,
     },
     /// Send a follow-up prompt into a task's running agent session.
@@ -697,6 +786,26 @@ impl DaemonHandle {
         .await;
         rx.await
             .unwrap_or_else(|_| Err("daemon dropped the create-PR request".into()))
+    }
+
+    pub async fn generate_text(
+        &self,
+        task_id: &str,
+        agent_id: &str,
+        kind: wire::TextGenKind,
+        model: Option<String>,
+    ) -> Result<String, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GenerateText {
+            task_id: task_id.to_string(),
+            agent_id: agent_id.to_string(),
+            kind,
+            model,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the text-generation request".into()))
     }
 
     /// A window of a service's retained log lines (for backfill; live tail
@@ -1903,6 +2012,41 @@ impl Daemon {
                     None => Err(format!("no repo for task {task_id}")),
                 };
                 let _ = reply.send(result);
+            }
+            Command::GenerateText {
+                task_id,
+                agent_id,
+                kind,
+                model,
+                reply,
+            } => {
+                // Resolve everything that needs actor state up front, then run
+                // the (slow) git + agent work off the actor loop.
+                let resolved = self.tasks.get(&task_id).map(|task| {
+                    let repo = task
+                        .worktree
+                        .clone()
+                        .or_else(|| self.project_path(&task.project))
+                        .unwrap_or_else(|| ".".to_string());
+                    let command = self.resolve_agent_command(&task.project, &agent_id);
+                    (repo, command)
+                });
+                match resolved {
+                    Some((repo, command)) => {
+                        tokio::spawn(async move {
+                            let result = match build_textgen_prompt(&repo, kind).await {
+                                Ok(prompt) => {
+                                    super::acp::generate_text(command, repo, prompt, model).await
+                                }
+                                Err(e) => Err(e),
+                            };
+                            let _ = reply.send(result);
+                        });
+                    }
+                    None => {
+                        let _ = reply.send(Err(format!("no task {task_id}")));
+                    }
+                }
             }
             Command::CancelTask { id } => {
                 if let Some(handle) = self.sessions.remove(&id) {

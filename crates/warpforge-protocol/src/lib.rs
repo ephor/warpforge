@@ -331,6 +331,17 @@ pub enum Method {
         #[serde(default)]
         base: Option<String>,
     },
+    /// Generate git prose (a commit message or a PR description) by running the
+    /// configured text-generation agent one-shot over the task's diff. Returns
+    /// `{ text }`. `model` overrides the agent's default when set.
+    #[serde(rename = "text.generate")]
+    TextGenerate {
+        task_id: String,
+        agent_id: String,
+        kind: TextGenKind,
+        #[serde(default)]
+        model: Option<String>,
+    },
 
     // ── Raw terminal agents (legacy PTY sessions, kept for the TUI) ──
     #[serde(rename = "terminal.spawn")]
@@ -891,6 +902,16 @@ pub struct GitPushCommit {
     pub files: Vec<GitPushFile>,
 }
 
+/// Which kind of git prose `text.generate` should produce.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TextGenKind {
+    /// A conventional-commit message for the working-tree changes.
+    CommitMessage,
+    /// A pull-request title + body for the branch's outgoing commits.
+    PrDescription,
+}
+
 /// Preview returned by `git.pushInfo`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -1248,6 +1269,7 @@ mod tests {
                 parent_task_id: None,
                 attachments: vec![],
                 default_model: Some("opus".into()),
+                config_overrides: Default::default(),
             },
         };
         let json = serde_json::to_value(&req).unwrap();

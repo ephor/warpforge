@@ -27,6 +27,12 @@ export interface SettingsState {
   bumpFontSize: (direction: 1 | -1) => void;
   bumpMonoFontSize: (direction: 1 | -1) => void;
   resetFontSizes: () => void;
+  /** Agent that drafts commit messages and PR descriptions. null = none picked. */
+  textGenAgentId: string | null;
+  setTextGenAgentId: (id: string | null) => void;
+  /** Model override for that agent. null = whatever the agent defaults to. */
+  textGenModel: string | null;
+  setTextGenModel: (model: string | null) => void;
 }
 
 interface UiState extends SettingsState {
@@ -88,6 +94,8 @@ export const useUi = create<UiState>()(
       pinnedTaskIds: [],
       fontSize: DEFAULT_FONT_SIZE,
       monoFontSize: DEFAULT_MONO_FONT_SIZE,
+      textGenAgentId: null,
+      textGenModel: null,
 
       setView: (view) => set({ openTaskId: null, view }),
       // Contextual task tools must not leak from one task into the next.
@@ -129,6 +137,9 @@ export const useUi = create<UiState>()(
           monoFontSize: clampMonoFontSize(s.monoFontSize + direction * FONT_SIZE_STEP),
         })),
       resetFontSizes: () => set({ fontSize: DEFAULT_FONT_SIZE, monoFontSize: DEFAULT_MONO_FONT_SIZE }),
+      // Models are per-agent, so a stored pick is meaningless once the agent changes.
+      setTextGenAgentId: (textGenAgentId) => set({ textGenAgentId, textGenModel: null }),
+      setTextGenModel: (textGenModel) => set({ textGenModel }),
     }),
     {
       name: "wf-ui",

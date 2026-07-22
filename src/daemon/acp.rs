@@ -23,7 +23,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot, watch};
 use warpforge_protocol as wire;
 
-use super::prompt::PreparedPrompt;
+use super::prompt::{PreparedPrompt, PromptContent};
 use crate::policies::{Phase, PolicyAction, PolicyContext, PolicyResult};
 
 /// A request from the ACP reader to evaluate a policy before executing an op.
@@ -363,6 +363,79 @@ struct PendingPerm {
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
 static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Run an agent one-shot over a self-contained prompt and return its text.
+///
+/// Unlike a task session this owns an ephemeral, throwaway ACP session: it
+/// spawns the agent, sends a single prompt, collects the agent's text until the
+/// turn ends, then kills the process. The prompt must carry all context (the
+/// diff) inline — permission requests are auto-denied so the agent cannot stall
+/// waiting on a human, and there is no policy gate. Used by `text.generate` to
+/// draft commit messages and PR descriptions.
+pub async fn generate_text(
+    command: String,
+    cwd: String,
+    prompt: String,
+    model: Option<String>,
+) -> Result<String, String> {
+    const OVERALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+    let prepared = PreparedPrompt {
+        content: vec![PromptContent::Text(prompt)],
+        summaries: Vec::new(),
+        has_images: false,
+    };
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let handle = spawn_acp_session(
+        "__textgen__".to_string(),
+        command,
+        cwd,
+        prepared,
+        None,
+        Vec::new(),
+        tx,
+        None,
+        model,
+        HashMap::new(),
+    )
+    .map_err(|e| format!("failed to start agent: {e}"))?;
+
+    let collect = async {
+        let mut text = String::new();
+        while let Some((_, update)) = rx.recv().await {
+            match update {
+                AcpUpdate::AgentText(chunk) => text.push_str(&chunk),
+                AcpUpdate::TurnEnded { .. } => return Ok(text),
+                AcpUpdate::Error { message, .. } => return Err(message),
+                // No human is watching — refuse tool permissions rather than
+                // hang. A well-formed prompt with the diff inline never needs them.
+                AcpUpdate::PermissionRequest { request_id, .. } => {
+                    handle.answer(request_id, "deny".to_string());
+                }
+                _ => {}
+            }
+        }
+        // Stream closed without a turn end: return whatever we have, if any.
+        if text.is_empty() {
+            Err("agent produced no output".to_string())
+        } else {
+            Ok(text)
+        }
+    };
+
+    let result = match tokio::time::timeout(OVERALL_TIMEOUT, collect).await {
+        Ok(r) => r,
+        Err(_) => Err("text generation timed out".to_string()),
+    };
+    handle.cancel();
+    result.map(|t| t.trim().to_string()).and_then(|t| {
+        if t.is_empty() {
+            Err("agent produced no output".to_string())
+        } else {
+            Ok(t)
+        }
+    })
+}
 
 /// Spawn an agent process and its ACP session. Returns immediately; the
 /// `initialize` → `session/new` → initial `session/prompt` handshake runs in

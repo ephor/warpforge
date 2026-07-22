@@ -110,7 +110,7 @@ export function AgentConfigBar({
   );
 }
 
-function configRole(option: ConfigOption): "model" | "effort" | null {
+export function configRole(option: ConfigOption): "model" | "effort" | null {
   const identity = `${option.category ?? ""} ${option.id} ${option.name}`.toLowerCase();
   if (identity.includes("model")) return "model";
   if (/effort|reasoning|thought[_ -]?level/.test(identity)) return "effort";
