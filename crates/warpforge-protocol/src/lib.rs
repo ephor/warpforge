@@ -269,6 +269,10 @@ pub enum Method {
         task_id: String,
         #[serde(default)]
         project: Option<String>,
+        /// Include .gitignore'd paths (editor tree wants them; the composer's
+        /// `@` picker does not — node_modules/target swamp it).
+        #[serde(default)]
+        include_ignored: bool,
     },
     /// Write new contents to a file in the task's working tree (in-review edit).
     #[serde(rename = "file.save")]

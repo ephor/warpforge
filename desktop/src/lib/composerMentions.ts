@@ -39,9 +39,15 @@ export function rankFiles(files: ProjectFile[], query: string): ProjectFile[] {
     }
     return 4;
   };
-  return files
-    .filter((f) => score(f.path) < 4)
-    .sort((a, b) => score(a.path) - score(b.path) || a.path.localeCompare(b.path));
+  const scored: { file: ProjectFile; score: number }[] = [];
+  for (const file of files) {
+    const s = score(file.path);
+    if (s < 4) {
+      scored.push({ file, score: s });
+    }
+  }
+  scored.sort((a, b) => a.score - b.score || a.file.path.localeCompare(b.file.path));
+  return scored.map((entry) => entry.file);
 }
 
 export function mentionToken(path: string): string {

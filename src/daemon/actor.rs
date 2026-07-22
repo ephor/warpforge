@@ -261,6 +261,7 @@ pub enum Command {
     ListFiles {
         task_id: String,
         project: Option<String>,
+        include_ignored: bool,
         reply: oneshot::Sender<Vec<wire::ProjectFile>>,
     },
     /// Write new contents to a file in the task's working tree.
@@ -572,11 +573,13 @@ impl DaemonHandle {
         &self,
         task_id: &str,
         project: Option<String>,
+        include_ignored: bool,
     ) -> Vec<wire::ProjectFile> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::ListFiles {
             task_id: task_id.to_string(),
             project,
+            include_ignored,
             reply: tx,
         })
         .await;
@@ -1665,6 +1668,7 @@ impl Daemon {
             Command::ListFiles {
                 task_id,
                 project,
+                include_ignored,
                 reply,
             } => {
                 let repo = self
@@ -1673,7 +1677,9 @@ impl Daemon {
                     .and_then(|t| self.project_path(&t.project))
                     .or_else(|| project.as_deref().and_then(|name| self.project_path(name)));
                 let files = match repo {
-                    Some(p) => super::diff::list_files(&p).await.unwrap_or_default(),
+                    Some(p) => super::diff::list_files(&p, include_ignored)
+                        .await
+                        .unwrap_or_default(),
                     None => Vec::new(),
                 };
                 let _ = reply.send(files);
