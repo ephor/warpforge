@@ -5,11 +5,6 @@ import codexLogo from "../assets/app-logos/codex_dark.svg";
 import opencodeLogo from "../assets/app-logos/opencode-dark.svg";
 import qwenLogo from "../assets/app-logos/qwen_dark.svg";
 
-/**
- * Tiny agent company logo. Uses the agent's SVG icon when available,
- * otherwise renders a colored circle with the agent's initial(s).
- */
-
 const AGENT_SVGS: Record<string, string> = {
   claude: claudeLogo,
   codex: codexLogo,
@@ -24,23 +19,6 @@ const AGENT_COLORS: Record<string, string> = {
   qwen: "#7c3aed",
   goose: "#f59e0b",
 };
-
-/** Mirrors the daemon's static agent registry (src/daemon/agents.rs). */
-const AGENT_NAMES: Record<string, string> = {
-  claude: "Claude Code",
-  codex: "Codex",
-  opencode: "OpenCode",
-  qwen: "Qwen Code",
-  goose: "Goose",
-};
-
-/**
- * Proper display name for an agent id. An explicit name (from an AgentConfig)
- * wins; otherwise the built-in registry, then the raw id for unknown agents.
- */
-export function agentDisplayName(agentId: string, override?: string): string {
-  return override ?? AGENT_NAMES[agentId] ?? agentId;
-}
 
 function initials(name: string): string {
   return name

@@ -1,5 +1,5 @@
 import { ArrowDown } from "lucide-react";
-import { memo, useCallback, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 
 import type { FileLinkResolver } from "@/components/Markdown";
 import { Button } from "@/components/ui/button";
@@ -36,7 +36,7 @@ function useCoalesced(updates: SessionUpdate[]): SessionUpdate[] {
     toolAt: Map<string, number>;
   } | null>(null);
 
-  return useMemo(() => {
+  const result = useMemo(() => {
     const prev = cache.current;
     const isAppend =
       prev !== null &&
@@ -45,15 +45,14 @@ function useCoalesced(updates: SessionUpdate[]): SessionUpdate[] {
 
     if (isAppend && prev) {
       if (updates.length === prev.src.length) {
-        return prev.merged;
+        return { merged: prev.merged, dirty: false } as const;
       }
       const merged = prev.merged.slice();
       const toolAt = new Map(prev.toolAt);
       for (let i = prev.src.length; i < updates.length; i += 1) {
         appendCoalesced(merged, toolAt, updates[i]);
       }
-      cache.current = { merged, src: updates, toolAt };
-      return merged;
+      return { merged, toolAt, dirty: true } as const;
     }
 
     const merged = coalesceUpdates(updates);
@@ -63,9 +62,16 @@ function useCoalesced(updates: SessionUpdate[]): SessionUpdate[] {
       if (u.kind === "tool_call") toolAt.set(u.tool_call_id, i);
       if (u.kind === "file_edit" && u.tool_call_id) toolAt.set(`edit:${u.tool_call_id}`, i);
     }
-    cache.current = { merged, src: updates, toolAt };
-    return merged;
+    return { merged, toolAt, dirty: true } as const;
   }, [updates]);
+
+  useEffect(() => {
+    if (result.dirty && result.toolAt) {
+      cache.current = { merged: result.merged, src: updates, toolAt: result.toolAt };
+    }
+  }, [updates, result]);
+
+  return result.merged;
 }
 
 /**
@@ -75,7 +81,7 @@ function useCoalesced(updates: SessionUpdate[]): SessionUpdate[] {
  */
 function useStableResolved(updates: SessionUpdate[]): Record<string, string> {
   const ref = useRef<Record<string, string>>({});
-  return useMemo(() => {
+  const result = useMemo(() => {
     const next = resolvedPermissions(updates);
     const prev = ref.current;
     const prevKeys = Object.keys(prev);
@@ -85,9 +91,14 @@ function useStableResolved(updates: SessionUpdate[]): Record<string, string> {
     if (same) {
       return prev;
     }
-    ref.current = next;
     return next;
   }, [updates]);
+
+  useEffect(() => {
+    ref.current = result;
+  }, [result]);
+
+  return result;
 }
 
 /**

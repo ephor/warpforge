@@ -49,8 +49,8 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
     () =>
       new Set(
         configured?.length
-          ? configured.filter((a) => a.enabled).map((a) => a.id)
-          : (detected ?? []).filter((a) => a.installed).map((a) => a.id),
+          ? configured.reduce<string[]>((acc, a) => { if (a.enabled) acc.push(a.id); return acc; }, [])
+          : (detected ?? []).reduce<string[]>((acc, a) => { if (a.installed) acc.push(a.id); return acc; }, []),
       ),
   );
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
@@ -72,7 +72,7 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
         if (cancelled) return;
         setAgents(list);
         if (!touched.current && !configured?.length) {
-          setEnabled(new Set(list.filter((a) => a.installed).map((a) => a.id)));
+          setEnabled(new Set(list.reduce<string[]>((acc, a) => { if (a.installed) acc.push(a.id); return acc; }, [])));
         }
       })
       .catch((e) => {

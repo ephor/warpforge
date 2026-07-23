@@ -1,15 +1,8 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Activity, ChevronRight, Search } from "lucide-react";
+import { Activity, ChevronRight } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Card } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   latestPendingPermission,
   prunePermissionCache,
@@ -21,8 +14,10 @@ import { cn } from "@/lib/utils";
 import type { DaemonState } from "../daemon";
 import type { TaskInfo, TaskStatus } from "../protocol";
 import { useUi } from "../store/ui";
+import { RailFilterBar, type FilterMode, type GroupMode, type SortMode } from "./attention/RailFilterBar";
 import { AgentBadge } from "./AgentBadge";
-import { StatusBadge, type StatusKind } from "./StatusBadge";
+import { StatusBadge } from "./StatusBadge";
+import type { StatusKind } from "@/lib/statusMeta";
 import SessionRailCard from "./SessionRailCard";
 
 /**
@@ -58,10 +53,6 @@ function buildAttentionQueue(
   }
   return items.sort((a, b) => a.priority - b.priority || b.task.updatedAt - a.task.updatedAt);
 }
-
-type SortMode = "updated" | "created" | "status" | "project";
-type GroupMode = "none" | "project" | "agent" | "status";
-type FilterMode = "attention" | "running" | "all";
 
 interface GroupInfo {
   key: string;
@@ -323,60 +314,16 @@ function AttentionRail({ state, onOpenTask }: Props) {
         )}
       </div>
 
-      <div className="space-y-1.5 border-y border-border/80 bg-secondary/10 p-2">
-        <label className="flex h-7 items-center gap-2 rounded border border-border/80 bg-deep-surface px-2 text-muted-foreground focus-within:ring-1 focus-within:ring-ring">
-          <Search className="size-3.5 shrink-0" />
-          <input
-            aria-label="Search sessions"
-            className="min-w-0 flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search task or project"
-            type="search"
-            value={query}
-          />
-        </label>
-
-        <div className="grid grid-cols-2 gap-1.5">
-          <Select value={sort} onValueChange={(value) => setSort(value as SortMode)}>
-            <SelectTrigger aria-label="Sort sessions" className="h-7 rounded px-2 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="updated">Recently updated</SelectItem>
-              <SelectItem value="created">Recently created</SelectItem>
-              <SelectItem value="status">Status (grouped)</SelectItem>
-              <SelectItem value="project">Project (grouped)</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={effectiveGroup} onValueChange={handleGroupChange}>
-            <SelectTrigger aria-label="Group sessions" className="h-7 rounded px-2 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">No grouping</SelectItem>
-              <SelectItem value="project">By project</SelectItem>
-              <SelectItem value="agent">By agent</SelectItem>
-              <SelectItem value="status">By status</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="grid grid-cols-3 rounded border border-border/50 bg-deep-surface p-0.5">
-          {(["attention", "running", "all"] as const).map((value) => (
-            <button
-              key={value}
-              type="button"
-              className={cn(
-                "rounded px-1.5 py-1 text-[11px] capitalize text-muted-foreground transition-colors",
-                filter === value && "bg-secondary text-foreground",
-              )}
-              onClick={() => setFilter(value)}
-            >
-              {value === "attention" ? "Needs you" : value}
-            </button>
-          ))}
-        </div>
-      </div>
+      <RailFilterBar
+        query={query}
+        setQuery={setQuery}
+        sort={sort}
+        setSort={setSort}
+        effectiveGroup={effectiveGroup}
+        handleGroupChange={handleGroupChange}
+        filter={filter}
+        setFilter={setFilter}
+      />
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto bg-background">
         {rows.length === 0 ? (

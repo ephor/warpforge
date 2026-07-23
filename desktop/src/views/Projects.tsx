@@ -2,18 +2,13 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
-  EllipsisVertical,
   FolderGit2,
-  Pencil,
-  Plus,
   Play,
   PlugZap,
-  Radio,
   RotateCw,
   Send,
   Share2,
   Square,
-  Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
@@ -22,22 +17,14 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
 import { elapsed, pfBadge, serviceBadge } from "@/lib/status";
 import { taskLabel } from "@/lib/taskLabel";
-import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
 import type { PortForwardInfo, ServiceInfo, Snapshot } from "../protocol";
 import AddProjectDialog from "./AddProjectDialog";
+import { ProjectList } from "./projects/ProjectList";
 
 interface Props {
   snapshot: Snapshot;
@@ -46,12 +33,6 @@ interface Props {
   onProjectAdded?: (projectName: string) => void;
 }
 
-/**
- * Projects — per-project drilldown, not just an infra table. Crucially, the
- * running services are framed as *agent context*: the block a new task from
- * this project inherits, so the agent knows the app is already up on real
- * ports and can hit endpoints / run tests.
- */
 export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdded }: Props) {
   const [selected, setSelected] = useState(snapshot.projects[0]?.name ?? "");
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -80,7 +61,6 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
     () => services.filter((s) => s.status === "running" && s.allocatedPort > 0),
     [services],
   );
-  // Pre-compute running service count per project to avoid O(projects × services) in the map.
   const runningByProject = useMemo(() => {
     const map = new Map<string, number>();
     for (const s of snapshot.services) {
@@ -99,7 +79,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
           or add one below.
         </p>
         <Button variant="outline" onClick={() => setShowAddDialog(true)}>
-          <Plus className="mr-1 size-4" />
+          <FolderGit2 className="mr-1 size-4" />
           Add Project
         </Button>
         <AddProjectDialog
@@ -113,91 +93,19 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
 
   return (
     <div className="grid h-full grid-cols-[200px_minmax(0,1fr)] gap-2">
-      {/* Project list */}
-      <Card className="flex min-h-0 flex-col rounded-md border-border/80 bg-card shadow-none">
-        <div className="flex h-10 items-center px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Projects
-        </div>
-        <Separator />
-        <ScrollArea className="flex-1">
-          <div className="flex flex-col gap-0.5 p-1.5">
-            {snapshot.projects.map((p) => {
-              const active = p.name === project.name;
-              const up = runningByProject.get(p.name) ?? 0;
-              return (
-                <div
-                  key={p.name}
-                  onMouseEnter={() => onRowMouseEnter(p.name)}
-                  onMouseLeave={onRowMouseLeave}
-                  className={cn(
-                    "relative flex h-8 items-center rounded px-2 text-sm transition-colors",
-                    active ? "bg-secondary text-foreground" : "hover:bg-secondary/60",
-                  )}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setSelected(p.name)}
-                    className="flex flex-1 items-center gap-2 text-left"
-                  >
-                    <FolderGit2 className="size-4 text-muted-foreground" />
-                    <span className="flex-1 truncate">{p.name}</span>
-                    {up > 0 && (
-                      <span className="tnum flex items-center gap-1 text-xs text-ok">
-                        <Radio className="size-3" />
-                        {up}
-                      </span>
-                    )}
-                  </button>
-                  {(hoveredProject === p.name || openMenu === p.name) && (
-                    <DropdownMenu
-                      open={openMenu === p.name}
-                      onOpenChange={(open) => setOpenMenu(open ? p.name : null)}
-                    >
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          type="button"
-                          className="ml-1 flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-background/60 hover:text-foreground"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <EllipsisVertical className="size-3.5" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" side="right">
-                        <DropdownMenuItem disabled>
-                          <Pencil className="size-4" />
-                          Edit
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          className="text-destructive focus:text-destructive"
-                          onClick={() => {
-                            void daemon.removeProject(p.name);
-                          }}
-                        >
-                          <Trash2 className="size-4" />
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </ScrollArea>
-        <Separator />
-        <Button
-          variant="ghost"
-          size="sm"
-          className="m-1.5 h-7 gap-1.5 text-muted-foreground"
-          onClick={() => setShowAddDialog(true)}
-        >
-          <Plus className="size-4" />
-          Add Project
-        </Button>
-      </Card>
+      <ProjectList
+        projects={snapshot.projects}
+        selected={project.name}
+        onSelect={setSelected}
+        runningByProject={runningByProject}
+        hoveredProject={hoveredProject}
+        onRowMouseEnter={onRowMouseEnter}
+        onRowMouseLeave={onRowMouseLeave}
+        openMenu={openMenu}
+        onMenuOpenChange={setOpenMenu}
+        onAddProject={() => setShowAddDialog(true)}
+      />
 
-      {/* Detail */}
       <ScrollArea className="min-h-0">
         <div className="flex flex-col gap-2 pr-2">
           <div className="flex min-h-10 items-center gap-3 px-1">
@@ -212,7 +120,6 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
             </div>
           </div>
 
-          {/* Agent context — the integration that ties infra to tasks */}
           <Card className="overflow-hidden rounded-md border-border/80 bg-card shadow-none">
             <div className="flex h-9 items-center gap-2 border-b border-border/80 px-3 text-xs font-medium text-muted-foreground">
               <Share2 className="size-3.5 text-primary" />
@@ -237,7 +144,6 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
             </div>
           </Card>
 
-          {/* Services */}
           <Card className="overflow-hidden rounded-md border-border/80 bg-card shadow-none">
             <div className="flex h-9 items-center gap-2 border-b border-border/80 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <span>Services</span>
@@ -292,7 +198,6 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
             </div>
           </Card>
 
-          {/* Port-forwards */}
           {pfs.length > 0 && (
             <Card className="overflow-hidden rounded-md border-border/80 bg-card shadow-none">
               <div className="flex h-9 items-center gap-2 border-b border-border/80 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -338,7 +243,6 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
             </Card>
           )}
 
-          {/* Tasks in this project */}
           <Card className="overflow-hidden rounded-md border-border/80 bg-card shadow-none">
             <div className="flex h-9 items-center border-b border-border/80 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Tasks
@@ -350,6 +254,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
               {projectTasks.map((t) => {
                 return (
                   <button
+                    type="button"
                     key={t.id}
                     onClick={() => onOpenTask(t.id)}
                     className="flex min-h-9 w-full items-center gap-3 px-3 py-1.5 text-left hover:bg-secondary/40"
@@ -412,8 +317,18 @@ function ServiceRow({
   return (
     <div>
       <div
+        role="button"
+        tabIndex={0}
+        aria-label={`Toggle ${name} service details`}
+        aria-expanded={open}
         className="flex min-h-9 cursor-pointer items-center gap-3 px-3 py-1.5 hover:bg-secondary/30"
         onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen((v) => !v);
+          }
+        }}
       >
         {open ? (
           <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
@@ -531,8 +446,18 @@ function PortForwardRow({
   return (
     <div>
       <div
+        role="button"
+        tabIndex={0}
+        aria-label={`Toggle ${pf.name} port-forward details`}
+        aria-expanded={open}
         className="flex min-h-9 cursor-pointer items-center gap-3 px-3 py-1.5 hover:bg-secondary/30"
         onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen((v) => !v);
+          }
+        }}
       >
         {open ? (
           <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />

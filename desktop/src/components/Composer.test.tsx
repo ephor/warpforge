@@ -45,6 +45,27 @@ describe("Composer", () => {
     expect(screen.getByText("27% · 53K/200K")).toBeInTheDocument();
   });
 
+  it("switches the stream action between stop and send based on the draft", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn<() => void>();
+    render(<Composer onSend={vi.fn<OnSend>()} onCancel={onCancel} />);
+
+    const input = screen.getByRole("textbox");
+    const stop = screen.getByRole("button", { name: "Stop" });
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+
+    await user.click(stop);
+    expect(onCancel).toHaveBeenCalledOnce();
+
+    await user.type(input, "Steer the agent");
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+
+    await user.clear(input);
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+  });
+
   it("opens the @ menu, navigates, inserts paths, and sends a structured file ref", async () => {
     const user = userEvent.setup();
     const onSend = vi.fn<OnSend>();

@@ -2,7 +2,8 @@ import { ChevronDown, ChevronUp, FilePen, ListTodo, Pin, Wrench } from "lucide-r
 import { memo, useMemo } from "react";
 
 import { AgentBadge } from "@/components/AgentBadge";
-import { StatusBadge, statusEdge } from "@/components/StatusBadge";
+import { StatusBadge } from "@/components/StatusBadge";
+import { statusEdge } from "@/lib/statusMeta";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { PermissionUpdate } from "@/lib/sessionPermissions";

@@ -1,6 +1,8 @@
-import { FileDiff, FileMinus, FilePen, FilePlus, ImagePlus, Send, Square, X } from "lucide-react";
+import { ImagePlus, Send, Square } from "lucide-react";
 import {
   forwardRef,
+  memo,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -36,8 +38,9 @@ import type {
   ProjectFile,
   PromptSubmission,
 } from "../protocol";
+import { AttachmentBar } from "./composer/AttachmentBar";
 import { FileMentionMenu } from "./composer/FileMentionMenu";
-import { ImageAttachmentPreview } from "./composer/ImageAttachmentPreview";
+import { SlashCommandMenu } from "./composer/SlashCommandMenu";
 
 export interface ComposerAttachment {
   id: string;
@@ -53,19 +56,6 @@ export interface ComposerHandle {
 }
 const EMPTY_COMMANDS: CommandInfo[] = [];
 const EMPTY_FILES: ProjectFile[] = [];
-
-const statusIcon = (s: FileDiffType["status"]) => {
-  switch (s) {
-    case "added":
-      return <FilePlus className="size-3.5 text-emerald-400" />;
-    case "deleted":
-      return <FileMinus className="size-3.5 text-destructive" />;
-    case "renamed":
-      return <FilePen className="size-3.5 text-sky-400" />;
-    default:
-      return <FileDiff className="size-3.5 text-amber-400" />;
-  }
-};
 
 export const Composer = forwardRef<
   ComposerHandle,
@@ -116,11 +106,26 @@ export const Composer = forwardRef<
     const textRef = useRef<HTMLTextAreaElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const imagesRef = useRef(images);
+    const sendActionRef = useRef<() => void>(() => {});
 
     useEffect(() => {
       imagesRef.current = images;
     }, [images]);
     useEffect(() => () => revokeImagePreviews(imagesRef.current), []);
+
+    const removeDiff = useCallback((id: string) => {
+      setDiffs((prev) => prev.filter((diff) => diff.id !== id));
+    }, []);
+
+    const removeImage = useCallback((image: ImageAttachmentDraft) => {
+      URL.revokeObjectURL(image.previewUrl);
+      setImages((prev) => prev.filter((item) => item.id !== image.id));
+    }, []);
+
+    const openImagePicker = useCallback(() => {
+      inputRef.current?.click();
+    }, []);
+
     useImperativeHandle(ref, () => ({
       attachDiff(file, formattedContent) {
         setDiffs((prev) => [
@@ -146,7 +151,7 @@ export const Composer = forwardRef<
         textRef.current?.focus();
       },
       submit() {
-        void send();
+        sendActionRef.current();
       },
     }));
 
@@ -215,6 +220,10 @@ export const Composer = forwardRef<
       }
     }
 
+    useLayoutEffect(() => {
+      sendActionRef.current = () => void send();
+    });
+
     const pickFile = (path: string) => {
       if (!mention) return;
       const result = replaceMention(value, mention, path);
@@ -276,7 +285,9 @@ export const Composer = forwardRef<
       }
     };
 
-    const canSend = !!(value.trim() || diffs.length || images.length) && !disabled && !sending;
+    const hasSubmission = !!(value.trim() || diffs.length || images.length);
+    const canSend = hasSubmission && !disabled && !sending;
+    const action = onCancel && !hasSubmission ? "stop" : "send";
     return (
       <div
         className={cn("relative", compact ? "p-1.5" : "p-2")}
@@ -304,28 +315,12 @@ export const Composer = forwardRef<
           />
         )}
         {slashOpen && (
-          <div className="absolute bottom-full left-2 right-2 z-20 mb-1 max-h-[50vh] overflow-y-auto rounded-md border bg-popover shadow-md">
-            {commandMatches.map((command, index) => (
-              <button
-                type="button"
-                key={command.name}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  pickCommand(command);
-                }}
-                onMouseEnter={() => setMenuIndex(index)}
-                className={cn(
-                  "flex w-full flex-col items-start px-3 py-1.5 text-left text-sm",
-                  index === menuIndex ? "bg-accent" : "hover:bg-accent/50",
-                )}
-              >
-                <span className="font-mono text-primary">/{command.name}</span>
-                {command.description && (
-                  <span className="text-xs text-muted-foreground">{command.description}</span>
-                )}
-              </button>
-            ))}
-          </div>
+          <SlashCommandMenu
+            commands={commandMatches}
+            menuIndex={menuIndex}
+            onPick={pickCommand}
+            onHover={setMenuIndex}
+          />
         )}
         <div className="bg-deep-surface relative flex flex-col rounded-lg border border-input focus-within:ring-2 focus-within:ring-ring">
           {dragging && (
@@ -334,38 +329,12 @@ export const Composer = forwardRef<
             </div>
           )}
           {(diffs.length > 0 || images.length > 0) && (
-            <div className="flex flex-wrap gap-1.5 border-b border-input/50 px-2.5 py-2">
-              {diffs.map((a) => (
-                <div
-                  key={a.id}
-                  className="group flex items-center gap-1.5 rounded-md border bg-secondary/60 px-2 py-1 font-mono text-xs"
-                >
-                  {statusIcon(a.status)}
-                  <span className="max-w-[180px] truncate">{a.filePath}</span>
-                  <span>
-                    <span className="text-emerald-400">+{a.addedLines}</span>{" "}
-                    <span className="text-destructive">-{a.removedLines}</span>
-                  </span>
-                  <button
-                    type="button"
-                    aria-label={`Remove ${a.filePath}`}
-                    onClick={() => setDiffs((prev) => prev.filter((d) => d.id !== a.id))}
-                  >
-                    <X className="size-3" />
-                  </button>
-                </div>
-              ))}
-              {images.map((image) => (
-                <ImageAttachmentPreview
-                  key={image.id}
-                  image={image}
-                  onRemove={() => {
-                    URL.revokeObjectURL(image.previewUrl);
-                    setImages((prev) => prev.filter((item) => item.id !== image.id));
-                  }}
-                />
-              ))}
-            </div>
+            <AttachmentBar
+              diffs={diffs}
+              images={images}
+              onRemoveDiff={removeDiff}
+              onRemoveImage={removeImage}
+            />
           )}
           <textarea
             ref={textRef}
@@ -407,17 +376,11 @@ export const Composer = forwardRef<
                 e.currentTarget.value = "";
               }}
             />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-5"
+            <ImageUploadButton
               disabled={!imageSupported || disabled || sending}
-              title={imageSupported ? "Attach images (⌘⇧I)" : "This agent does not support images"}
-              onClick={() => inputRef.current?.click()}
-            >
-              <ImagePlus className="size-3" />
-            </Button>
+              imageSupported={imageSupported}
+              onClick={openImagePicker}
+            />
             <div className="ml-auto shrink-0">
               {contextUsage && contextUsage.size > 0 ? (
                 <ContextUsageIndicator usage={contextUsage} />
@@ -426,28 +389,12 @@ export const Composer = forwardRef<
               )}
             </div>
             {!hideSendButton && (
-              <Button
-                type="button"
-                size="icon"
-                aria-label="Send"
-                className="size-6 shrink-0"
-                onClick={() => void send()}
-                disabled={!canSend}
-              >
-                <Send className="size-3" />
-              </Button>
-            )}
-            {!hideSendButton && onCancel && (
-              <Button
-                type="button"
-                size="icon"
-                variant="destructive"
-                aria-label="Cancel"
-                className="size-6 shrink-0"
-                onClick={() => onCancel()}
-              >
-                <Square className="size-3 fill-current" />
-              </Button>
+              <ComposerActionButton
+                action={action}
+                disabled={action === "send" && !canSend}
+                sendActionRef={sendActionRef}
+                onStop={onCancel}
+              />
             )}
           </div>
         </div>
@@ -456,7 +403,63 @@ export const Composer = forwardRef<
   },
 );
 
-function ContextUsageIndicator({ usage }: { usage: ContextUsage }) {
+const ComposerActionButton = memo(function ComposerActionButton({
+  action,
+  disabled,
+  sendActionRef,
+  onStop,
+}: {
+  action: "send" | "stop";
+  disabled: boolean;
+  sendActionRef: React.RefObject<() => void>;
+  onStop?: () => void;
+}) {
+  const stopping = action === "stop";
+
+  return (
+    <Button
+      type="button"
+      size="icon"
+      variant={stopping ? "destructive" : "default"}
+      aria-label={stopping ? "Stop" : "Send"}
+      className="size-6 shrink-0"
+      onClick={stopping ? onStop : () => sendActionRef.current?.()}
+      disabled={disabled}
+    >
+      {stopping ? <Square className="size-3 fill-current" /> : <Send className="size-3" />}
+    </Button>
+  );
+});
+
+const ImageUploadButton = memo(function ImageUploadButton({
+  disabled,
+  imageSupported,
+  onClick,
+}: {
+  disabled: boolean;
+  imageSupported: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className="size-5"
+      disabled={disabled}
+      title={imageSupported ? "Attach images (⌘⇧I)" : "This agent does not support images"}
+      onClick={onClick}
+    >
+      <ImagePlus className="size-3" />
+    </Button>
+  );
+});
+
+const ContextUsageIndicator = memo(function ContextUsageIndicator({
+  usage,
+}: {
+  usage: ContextUsage;
+}) {
   const used = Math.max(0, usage.used);
   const size = Math.max(1, usage.size);
   const remaining = Math.max(0, size - used);
@@ -530,4 +533,4 @@ function ContextUsageIndicator({ usage }: { usage: ContextUsage }) {
       </DropdownMenuContent>
     </DropdownMenu>
   );
-}
+});

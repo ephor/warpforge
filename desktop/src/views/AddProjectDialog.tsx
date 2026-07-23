@@ -104,11 +104,12 @@ export default function AddProjectDialog({ open, onOpenChange, onAdded }: Props)
 
         <div className="flex flex-col gap-3">
           <div>
-            <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            <label htmlFor="project-path" className="mb-1 block text-xs font-medium text-muted-foreground">
               Folder path
             </label>
             <div className="flex gap-2">
               <input
+                id="project-path"
                 type="text"
                 value={path}
                 onChange={(e) => handlePathChange(e.target.value)}
@@ -128,10 +129,11 @@ export default function AddProjectDialog({ open, onOpenChange, onAdded }: Props)
           </div>
 
           <div>
-            <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            <label htmlFor="project-name" className="mb-1 block text-xs font-medium text-muted-foreground">
               Name (optional)
             </label>
             <input
+              id="project-name"
               type="text"
               value={name}
               onChange={(e) => {

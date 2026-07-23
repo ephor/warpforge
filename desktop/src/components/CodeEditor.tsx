@@ -27,14 +27,16 @@ export function CodeEditor({
 }) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const lastSaved = useRef<string | null>(null);
   const onSaveRef = useRef(onSave);
-  onSaveRef.current = onSave;
   const [status, setStatus] = useState<SaveStatus>("clean");
   const [preview, setPreview] = useState(false);
-  const [text, setText] = useState(doc.newText);
   const markdown = isMarkdownPath(doc.path);
   const showPreview = markdown && preview;
+  const previewText = viewRef.current?.state.doc.toString() ?? doc.newText;
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
 
   const flushSave = () => {
     const view = viewRef.current;
@@ -42,67 +44,67 @@ export function CodeEditor({
       return true;
     }
     const current = view.state.doc.toString();
-    lastSaved.current = current;
     onSaveRef.current(current);
     setStatus("saved");
     return true;
   };
 
   useEffect(() => {
-    if (!host.current) {
+    const parent = host.current;
+    if (!parent) {
       return;
     }
-    setStatus("clean");
-    setText(doc.newText);
-    setPreview(false);
-    lastSaved.current = null;
-    const view = new EditorView({
-      parent: host.current,
-      state: EditorState.create({
-        doc: doc.newText,
-        extensions: [
-          basicSetup,
-          lintGutter(),
-          oneDark,
-          EditorView.lineWrapping,
-          ...codemirrorLanguageForPath(doc.path),
-          EditorState.readOnly.of(!editable),
-          keymap.of([{ key: "Mod-s", run: flushSave }]),
-          EditorView.updateListener.of((u) => {
-            if (!u.docChanged) {
-              return;
-            }
-            setStatus("unsaved");
-            setText(u.state.doc.toString());
-          }),
-        ],
-      }),
+    let disposed = false;
+    let view: EditorView | null = null;
+
+    void codemirrorLanguageForPath(doc.path).then((language) => {
+      if (disposed) return;
+      view = new EditorView({
+        parent,
+        state: EditorState.create({
+          doc: doc.newText,
+          extensions: [
+            basicSetup,
+            lintGutter(),
+            oneDark,
+            EditorView.lineWrapping,
+            ...language,
+            EditorState.readOnly.of(!editable),
+            keymap.of([{ key: "Mod-s", run: flushSave }]),
+            EditorView.updateListener.of((u) => {
+              if (!u.docChanged) {
+                return;
+              }
+              setStatus("unsaved");
+            }),
+          ],
+        }),
+      });
+      viewRef.current = view;
     });
-    viewRef.current = view;
+
     return () => {
-      view.destroy();
-      viewRef.current = null;
+      disposed = true;
+      view?.destroy();
+      if (viewRef.current === view) {
+        viewRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.path, editable]);
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view) {
-      return;
+    if (!view) return;
+    if (status === "clean") {
+      const current = view.state.doc.toString();
+      if (current !== doc.newText) {
+        view.dispatch({
+          changes: { from: 0, insert: doc.newText, to: current.length },
+        });
+      }
     }
-    if (doc.newText === lastSaved.current) {
-      return;
-    }
-    const cur = view.state.doc.toString();
-    if (doc.newText === cur) {
-      return;
-    }
-    view.dispatch({ changes: { from: 0, insert: doc.newText, to: view.state.doc.length } });
-    setText(doc.newText);
-    setStatus("clean");
-    lastSaved.current = null;
-  }, [doc.newText]);
+  }, [doc.newText, status]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -161,7 +163,7 @@ export function CodeEditor({
         />
         {showPreview && (
           <div className="h-full overflow-auto px-4 py-3">
-            <Markdown>{text}</Markdown>
+            <Markdown>{previewText}</Markdown>
           </div>
         )}
       </div>

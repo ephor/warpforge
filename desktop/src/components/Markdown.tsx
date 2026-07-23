@@ -162,29 +162,17 @@ export const BufferedMarkdown = memo(function BufferedMarkdown({
 }) {
   const [display, setDisplay] = useState(children);
   const latest = useRef(children);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     latest.current = children;
-    // Already showing the latest, or a flush is already scheduled that will
-    // pick it up: nothing to schedule.
-    if (children === display || timer.current) {
-      return;
-    }
-    timer.current = setTimeout(() => {
-      timer.current = null;
-      setDisplay(latest.current);
-    }, intervalMs);
-  }, [children, display, intervalMs]);
+  }, [children]);
 
-  useEffect(
-    () => () => {
-      if (timer.current) {
-        clearTimeout(timer.current);
-      }
-    },
-    [],
-  );
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setDisplay((current) => (current === latest.current ? current : latest.current));
+    }, intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
 
   return <Markdown {...rest}>{display}</Markdown>;
 });

@@ -1,6 +1,7 @@
+import { agentDisplayName } from "@/lib/agentNames";
 import { cn } from "@/lib/utils";
 
-import { AgentLogo, agentDisplayName } from "./AgentLogo";
+import { AgentLogo } from "./AgentLogo";
 
 type BadgeSize = "xs" | "sm" | "md";
 
