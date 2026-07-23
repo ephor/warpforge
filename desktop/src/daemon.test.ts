@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DaemonClient } from "./daemon";
+import type { Snapshot } from "./protocol";
 
 class MockWebSocket {
   static readonly CONNECTING = 0;
@@ -104,5 +105,102 @@ describe("DaemonClient connection state", () => {
 
     await expect(client.waitForDisconnect()).resolves.toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("replaces only one project's config-derived state", () => {
+    const client = new DaemonClient();
+    const snapshot: Snapshot = {
+      agents: [],
+      portforwards: [],
+      projects: [
+        {
+          agentTemplates: {},
+          declaredServices: ["old"],
+          name: "demo",
+          path: "/demo",
+          portRange: [4000, 4099],
+        },
+        {
+          agentTemplates: {},
+          declaredServices: ["api"],
+          name: "other",
+          path: "/other",
+          portRange: [4100, 4199],
+        },
+      ],
+      services: [
+        {
+          allocatedPort: 0,
+          command: "old",
+          logSeq: 0,
+          name: "old",
+          originalPort: 3000,
+          project: "demo",
+          status: "stopped",
+        },
+        {
+          allocatedPort: 4101,
+          command: "api",
+          logSeq: 0,
+          name: "api",
+          originalPort: 3001,
+          project: "other",
+          status: "running",
+        },
+      ],
+      tasks: [],
+      terminals: [],
+    };
+    client.enableDemoMode({
+      snapshot,
+      sessionUpdates: {},
+      diffFor: (taskId) => ({ files: [], taskId }),
+      fileDocFor: (path) => ({
+        newText: "",
+        oldText: "",
+        path,
+        status: "modified",
+      }),
+    });
+
+    client.demoEvent({
+      event: "project.configChanged",
+      data: {
+        project: {
+          ...snapshot.projects[0],
+          declaredServices: ["web"],
+        },
+        services: [
+          {
+            allocatedPort: 0,
+            command: "bun dev",
+            logSeq: 0,
+            name: "web",
+            originalPort: 5173,
+            project: "demo",
+            status: "stopped",
+          },
+        ],
+        portforwards: [
+          {
+            localPort: 5432,
+            logSeq: 0,
+            name: "db",
+            namespace: "dev",
+            pod: "postgres",
+            project: "demo",
+            remotePort: 5432,
+            status: "stopped",
+          },
+        ],
+      },
+    });
+
+    expect(client.getState().snapshot.projects[0].declaredServices).toEqual(["web"]);
+    expect(client.getState().snapshot.services.map((service) => service.name)).toEqual([
+      "api",
+      "web",
+    ]);
+    expect(client.getState().snapshot.portforwards[0].name).toBe("db");
   });
 });

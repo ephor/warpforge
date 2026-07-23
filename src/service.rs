@@ -397,6 +397,15 @@ impl ServiceManager {
         Ok(())
     }
 
+    /// Stop and forget a service that is no longer declared in project config.
+    pub async fn remove(&mut self, project_name: &str, service_name: &str) -> Result<()> {
+        let key = format!("{project_name}/{service_name}");
+        self.stop_key(&key).await;
+        self.services.remove(&key);
+        ports::release(project_name, service_name);
+        Ok(())
+    }
+
     pub async fn stop_project(&mut self, project_name: &str) -> Result<()> {
         let keys: Vec<String> = self
             .services
