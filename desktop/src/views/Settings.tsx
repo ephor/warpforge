@@ -1,7 +1,7 @@
 import { RotateCcw, X } from "lucide-react";
 import { useEffect, useSyncExternalStore } from "react";
 
-import { configRole } from "@/components/AgentConfigBar";
+import { configRole } from "@/lib/configRole";
 import AgentSetupPanel from "@/components/AgentSetupPanel";
 import { Button } from "@/components/ui/button";
 import { daemon } from "@/daemon";
@@ -211,8 +211,9 @@ export default function SettingsView({ open, onOpenChange }: Props) {
             title="Auto-name tasks"
             description="On task creation, ask the selected agent to generate a short title. Respects your agent and model picks above."
             control={
-              <label className="relative inline-flex cursor-pointer items-center">
+              <label htmlFor="auto-name-tasks" className="relative inline-flex cursor-pointer items-center">
                 <input
+                  id="auto-name-tasks"
                   type="checkbox"
                   className="peer sr-only"
                   checked={autoNameTasks}

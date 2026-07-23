@@ -40,8 +40,12 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
   const textGenModel = useUi((s) => s.textGenModel);
 
   const firstProjectName = snapshot.projects[0]?.name ?? "";
+  const enabledAgents = useMemo(
+    () => snapshot.agents?.filter((a) => a.enabled) ?? [],
+    [snapshot.agents],
+  );
   const [project, setProject] = useState(defaultProject ?? firstProjectName);
-  const [agent, setAgent] = useState("");
+  const [selectedAgent, setSelectedAgent] = useState(enabledAgents[0]?.id ?? "claude");
   const [prompt, setPrompt] = useState(initialPrompt ?? "");
   const [configPicks, setConfigPicks] = useState<Record<string, string | undefined>>({});
   const [tags, setTags] = useState("");
@@ -50,32 +54,23 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
   const [orchChat, setOrchChat] = useState(false);
   const composerRef = useRef<ComposerHandle>(null);
 
-  const enabledAgents = useMemo(
-    () => snapshot.agents?.filter((a) => a.enabled) ?? [],
-    [snapshot.agents],
-  );
+  const agent = enabledAgents.some((candidate) => candidate.id === selectedAgent)
+    ? selectedAgent
+    : (enabledAgents[0]?.id ?? "claude");
   const currentAgent = (snapshot.agents ?? []).find((a) => a.id === agent);
   const agentOptions = currentAgent?.models ?? [];
   const probeLoading = !!currentAgent && currentAgent.enabled && agentOptions.length === 0;
 
-  // Reset selections when the overlay is (re)opened with new defaults.
-  useEffect(() => {
-    if (open) {
-      setProject(defaultProject ?? firstProjectName);
-      setPrompt(initialPrompt ?? "");
-      setConfigPicks({});
-      setTags("");
-      setOrchChat(false);
-    }
-  }, [open, defaultProject, firstProjectName, initialPrompt]);
-
-  useEffect(() => {
-    setAgent(enabledAgents[0]?.id ?? "claude");
-  }, [enabledAgents, project]);
-
-  useEffect(() => {
+  const changeProject = (nextProject: string) => {
+    setProject(nextProject);
+    setSelectedAgent(enabledAgents[0]?.id ?? "claude");
     setConfigPicks({});
-  }, [agent]);
+  };
+
+  const changeAgent = (nextAgent: string) => {
+    setSelectedAgent(nextAgent);
+    setConfigPicks({});
+  };
 
   // Escape key closes overlay.
   useEffect(() => {
@@ -209,8 +204,8 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
             shareContext={shareContext}
             useWorktree={useWorktree}
             orchChat={orchChat}
-            onProjectChange={setProject}
-            onAgentChange={setAgent}
+            onProjectChange={changeProject}
+            onAgentChange={changeAgent}
             onShareContextChange={setShareContext}
             onUseWorktreeChange={setUseWorktree}
             onOrchChatChange={setOrchChat}
@@ -245,8 +240,9 @@ export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultPro
 
           {/* Tags (collapsed, optional) */}
           <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
-            <span>Tags</span>
+            <label htmlFor="task-tags">Tags</label>
             <input
+              id="task-tags"
               value={tags}
               onChange={(e) => setTags(e.target.value)}
               placeholder="bug, frontend"

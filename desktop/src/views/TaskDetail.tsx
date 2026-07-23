@@ -1,86 +1,64 @@
+import { useMutation } from "@tanstack/react-query";
+import { ArrowLeft, FileText, Folder, Loader2, X } from "lucide-react";
 import {
-  keepPreviousData,
-  useMutation,
-  useQueries,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import {
-  ArrowLeft,
-  Check,
-  ChevronDown,
-  Download,
-  FileText,
-  Folder,
-  GitBranch,
-  GitCommitVertical,
-  ListTodo,
-  Loader2,
-  Maximize2,
-  Minimize2,
-  Search,
-  Send,
-  X,
-} from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ComponentProps,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import { getFileIconUrl } from "@/lib/fileIcon";
-import { withOccurrenceKeys } from "@/lib/renderKeys";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/lib/taskGroups";
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
 import { AgentBadge } from "../components/AgentBadge";
-import { StatusBadge } from "../components/StatusBadge";
 import { ChangesRail } from "../components/ChangesRail";
 import { ChatTranscript } from "../components/ChatTranscript";
 import type { ComposerHandle } from "../components/Composer";
 import { RuntimePanel } from "../components/RuntimePanel";
+import { StatusBadge } from "../components/StatusBadge";
 import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { TaskDetailActions } from "../components/TaskDetailActions";
 import { TaskMenu } from "../components/TaskMenu";
-import type { DaemonState } from "../daemon";
 import { daemon } from "../daemon";
 import type {
   CommandInfo,
   FileDiff,
-  FileDoc,
-  GitBranchList,
-  GitOpResult,
   HunkResolution,
-  OrchNodeInfo,
-  ProjectFile,
   SessionUpdate,
-  TaskDiff,
+  Snapshot,
   TaskInfo,
 } from "../protocol";
-import { daemonQuery } from "../query";
 import { useUi } from "../store/ui";
+import { DiffWorkspace, type DiffWorkspaceHandle } from "./task-detail/DiffWorkspace";
+import { formatFileDiffAsMessage } from "./task-detail/FileDiffView";
+import { FocusButton } from "./task-detail/FocusButton";
+import { GitWorkspaceControls } from "./task-detail/GitWorkspaceControls";
+import { ProjectFilesPanel } from "./task-detail/ProjectFilesPanel";
+import { SubtasksRail } from "./task-detail/SubtasksRail";
+import { useTaskQueries, type ActiveTab } from "./task-detail/useTaskQueries";
 
 interface Props {
   task: TaskInfo;
-  updates: SessionUpdate[];
-  state: DaemonState;
+  snapshot: Snapshot;
   onClose: () => void;
   onOpenTask: (id: string) => void;
   onOpenPush: () => void;
 }
 
-const EMPTY_PROJECT_FILES: ProjectFile[] = [];
-
 const CodeEditor = lazy(async () => ({
   default: (await import("../components/CodeEditor")).CodeEditor,
-}));
-const MergeDiff = lazy(async () => ({
-  default: (await import("../components/MergeDiff")).MergeDiff,
 }));
 
 function EditorLoading() {
@@ -91,41 +69,62 @@ function EditorLoading() {
   );
 }
 
-function EmptyChangesState({ onOpenFiles }: { onOpenFiles: () => void }) {
-  return (
-    <div className="flex h-full min-h-56 flex-col items-center justify-center gap-3 px-6 text-center">
-      <div className="rounded-full border border-border/70 bg-secondary/40 p-3 text-muted-foreground">
-        <GitCommitVertical className="size-5" />
-      </div>
-      <div>
-        <p className="text-sm font-medium text-foreground">No file changes yet</p>
-        <p className="mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">
-          Continue the conversation, or open a project file while the agent is working.
-        </p>
-      </div>
-      <Button type="button" size="sm" variant="outline" onClick={onOpenFiles}>
-        <FileText className="size-3.5" />
-        Open files
-      </Button>
-    </div>
+const EMPTY_SESSION_UPDATES: SessionUpdate[] = [];
+const EMPTY_TASK_COMMANDS: CommandInfo[] = [];
+
+function useTaskSessionUpdates(taskId: string) {
+  const getUpdates = useCallback(
+    () => daemon.getState().sessionUpdates[taskId] ?? EMPTY_SESSION_UPDATES,
+    [taskId],
   );
+  return useSyncExternalStore(daemon.subscribe, getUpdates, getUpdates);
 }
 
-type ActiveTab = { kind: "changes" } | { kind: "file"; path: string };
+const TaskActivityStatus = memo(function TaskActivityStatus({ task }: { task: TaskInfo }) {
+  const updates = useTaskSessionUpdates(task.id);
+  const activity = useMemo(() => sessionActivity(task, updates), [task, updates]);
+  return <StatusBadge status={task.status} activity={activity} />;
+});
 
-/**
- * Task detail: the conversation with the agent (stream + composer) on the
- * left, multi-file diff with per-hunk accept/reject on the right — Zed's
- * agent-panel review is the bar.
- */
-export default function TaskDetail({
-  task,
-  updates,
-  state,
-  onClose,
-  onOpenTask,
-  onOpenPush,
-}: Props) {
+type TaskConversationProps = Omit<
+  ComponentProps<typeof ChatTranscript>,
+  "activity" | "commands" | "imageSupported" | "updates"
+>;
+
+const TaskConversation = memo(function TaskConversation(props: TaskConversationProps) {
+  const updates = useTaskSessionUpdates(props.task.id);
+  const activity = useMemo(() => sessionActivity(props.task, updates), [props.task, updates]);
+  const commands = useMemo<CommandInfo[]>(() => {
+    for (let index = updates.length - 1; index >= 0; index -= 1) {
+      const update = updates[index];
+      if (update.kind === "available_commands") {
+        return update.commands;
+      }
+    }
+    return EMPTY_TASK_COMMANDS;
+  }, [updates]);
+  const imageSupported = useMemo(() => {
+    for (let index = updates.length - 1; index >= 0; index -= 1) {
+      const update = updates[index];
+      if (update.kind === "prompt_capabilities") {
+        return update.image;
+      }
+    }
+    return false;
+  }, [updates]);
+
+  return (
+    <ChatTranscript
+      {...props}
+      activity={activity}
+      commands={commands}
+      imageSupported={imageSupported}
+      updates={updates}
+    />
+  );
+});
+
+export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpenPush }: Props) {
   const [localRes, setLocalRes] = useState<Record<string, HunkResolution>>({});
   const [activeTab, setActiveTab] = useState<ActiveTab>({ kind: "changes" });
   const [openFileTabs, setOpenFileTabs] = useState<string[]>([]);
@@ -146,22 +145,18 @@ export default function TaskDetail({
   const repositoryOperation = useUi((s) =>
     s.repositoryOperation?.taskId === task.id ? s.repositoryOperation : null,
   );
-  const taskGroupIndex = useMemo(
-    () => buildTaskGroupIndex(state.snapshot.tasks),
-    [state.snapshot.tasks],
-  );
+  const taskGroupIndex = useMemo(() => buildTaskGroupIndex(snapshot.tasks), [snapshot.tasks]);
   const enabledAgents = useMemo(
-    () => (state.snapshot.agents ?? []).filter((agent) => agent.enabled),
-    [state.snapshot.agents],
+    () => (snapshot.agents ?? []).filter((agent) => agent.enabled),
+    [snapshot.agents],
   );
   const taskGroup = taskGroupIndex.rootByTaskId.get(task.id);
   const taskGroupPinned = isTaskGroupPinned(taskGroupIndex, pinnedTaskIds, task.id);
   const toggleTaskGroupPin = useCallback(() => {
     setPinnedTaskIds(setTaskGroupPinned(taskGroupIndex, pinnedTaskIds, task.id, !taskGroupPinned));
   }, [pinnedTaskIds, setPinnedTaskIds, task.id, taskGroupIndex, taskGroupPinned]);
-  const services = state.snapshot.services.filter((s) => s.project === task.project);
-  const portforwards = state.snapshot.portforwards.filter((p) => p.project === task.project);
-  const queryClient = useQueryClient();
+  const services = snapshot.services.filter((s) => s.project === task.project);
+  const portforwards = snapshot.portforwards.filter((p) => p.project === task.project);
 
   const openCommit = useCallback(() => {
     setShowDiff(true);
@@ -182,110 +177,20 @@ export default function TaskDetail({
   }, [openCommit]);
 
   const composerRef = useRef<ComposerHandle>(null);
-  const diffScrollParent = useRef<HTMLDivElement>(null);
-  const splitScrollParent = useRef<HTMLDivElement>(null);
+  const diffWorkspaceRef = useRef<DiffWorkspaceHandle>(null);
   const editable = task.status !== "done";
   const activeFile = activeTab.kind === "file" ? activeTab.path : selectedFile;
 
-  // ── On-demand daemon reads (TanStack Query) ──
-  // The task's server-side updatedAt drives refetches (agent edit, git op, hunk
-  // Resolve) but must stay out of the keys: a new key is a new cache entry, so
-  // Every message — updatedAt also bumps on status change — would hand the
-  // Editors fresh objects. Invalidating a stable key keeps object identity when
-  // The content did not change. Window-focus refetch catches outside edits.
-  const diffQuery = useQuery({
-    placeholderData: keepPreviousData,
-    queryFn: daemonQuery<TaskDiff>("diff.get", { task_id: task.id }),
-    queryKey: ["diff", task.id],
-    refetchOnWindowFocus: "always",
-  });
-  const diff = diffQuery.data ?? null;
-
-  // Tree shows gitignored files too; the composer's `@` picker must not (a
-  // node_modules-sized list makes ranking on every keystroke crawl).
-  const fileListQuery = useQuery({
-    placeholderData: keepPreviousData,
-    queryFn: daemonQuery<ProjectFile[]>("file.list", {
-      include_ignored: true,
-      task_id: task.id,
-    }),
-    queryKey: ["fileList", task.id, "all"],
-  });
-  const projectFiles = Array.isArray(fileListQuery.data) ? fileListQuery.data : EMPTY_PROJECT_FILES;
-  const fileListError = fileListQuery.error?.message ?? null;
-
-  const mentionFilesQuery = useQuery({
-    placeholderData: keepPreviousData,
-    queryFn: daemonQuery<ProjectFile[]>("file.list", { task_id: task.id }),
-    queryKey: ["fileList", task.id, "tracked"],
-  });
-  const mentionFiles = Array.isArray(mentionFilesQuery.data)
-    ? mentionFilesQuery.data
-    : EMPTY_PROJECT_FILES;
-
-  const fileContentsEnabled = Boolean(activeFile) && activeTab.kind === "file";
-  const fileDocQuery = useQuery({
-    enabled: fileContentsEnabled,
-    placeholderData: keepPreviousData,
-    queryFn: daemonQuery<FileDoc>("file.contents", {
-      task_id: task.id,
-      path: activeFile,
-    }),
-    queryKey: ["fileContents", task.id, activeFile],
-    refetchOnWindowFocus: "always",
-  });
-  const fileDoc = fileContentsEnabled ? (fileDocQuery.data ?? null) : null;
-
-  // Split review is still an all-changes view. Fetch every changed file here;
-  // SelectedFile only tracks the rail highlight/scroll target and must not
-  // Determine which diff blocks are mounted.
-  // Only fetch file contents for files near the viewport to avoid 900+ simultaneous queries.
-  const [splitRange, setSplitRange] = useState({ start: 0, end: 20 });
-  const splitFileQueries = useQueries({
-    queries:
-      activeTab.kind === "changes" && diffView === "split"
-        ? (diff?.files ?? []).map((file, i) => ({
-            enabled: i >= splitRange.start && i <= splitRange.end,
-            placeholderData: keepPreviousData,
-            queryFn: daemonQuery<FileDoc>("file.contents", {
-              task_id: task.id,
-              path: file.path,
-            }),
-            queryKey: ["fileContents", task.id, file.path],
-            refetchOnWindowFocus: "always" as const,
-          }))
-        : [],
-  });
-
-  useEffect(() => {
-    void queryClient.invalidateQueries({ queryKey: ["diff", task.id] });
-    void queryClient.invalidateQueries({ queryKey: ["fileList", task.id] });
-    void queryClient.invalidateQueries({ queryKey: ["fileContents", task.id] });
-  }, [queryClient, task.id, task.updatedAt]);
-
-  // Keep large review surfaces virtualized. These live above the navigation
-  // callbacks so the callbacks can safely depend on the current instances.
-  const diffVirtualizer = useVirtualizer({
-    count: diff?.files.length ?? 0,
-    estimateSize: () => 200,
-    getScrollElement: () => diffScrollParent.current,
-    overscan: 5,
-  });
-  const splitFileCount = diff?.files.length ?? 0;
-  const splitVirtualizer = useVirtualizer({
-    count: splitFileCount,
-    estimateSize: () => 384,
-    getScrollElement: () => splitScrollParent.current,
-    overscan: 3,
-  });
-  const splitVisItems = splitVirtualizer.getVirtualItems();
-  if (splitVisItems.length > 0) {
-    const newStart = splitVisItems[0].index;
-    const newEnd = splitVisItems[splitVisItems.length - 1].index;
-    if (splitRange.start !== newStart || splitRange.end !== newEnd) {
-      setSplitRange({ start: newStart, end: newEnd });
-    }
-  }
+  const {
+    diff,
+    diffQuery,
+    projectFiles,
+    fileListError,
+    mentionFiles,
+    mentionFilesQuery,
+    fileDoc,
+    queryClient,
+  } = useTaskQueries(task.id, activeFile, activeTab, task.updatedAt);
 
   const setView = (v: "unified" | "split") => setDiffView(v);
   const openFileTab = useCallback(
@@ -305,21 +210,10 @@ export default function TaskDetail({
       setShowDiff(true);
       setRightPanel("changes");
       requestAnimationFrame(() => {
-        const idx = diff?.files.findIndex((f) => f.path === path);
-        if (idx !== undefined && idx >= 0) {
-          const viz = diffView === "unified" ? diffVirtualizer : splitVirtualizer;
-          viz.scrollToIndex(idx, { align: "start" });
-        }
-        // After virtualizer scrolls, the DOM element should be mounted.
-        requestAnimationFrame(() => {
-          document.getElementById(fileAnchor(path))?.scrollIntoView({
-            behavior: "smooth",
-            block: "start",
-          });
-        });
+        diffWorkspaceRef.current?.scrollToFile(path);
       });
     },
-    [diff?.files, diffView, diffVirtualizer, setRightPanel, setShowDiff, splitVirtualizer],
+    [setRightPanel, setShowDiff],
   );
   const openChangesTab = useCallback(() => {
     setActiveTab({ kind: "changes" });
@@ -341,7 +235,6 @@ export default function TaskDetail({
     [activeTab, diff, openFileTabs, setRightPanel],
   );
 
-  // Default the split-view selection to the first changed file.
   useEffect(() => {
     if (!diff) {
       return;
@@ -355,28 +248,6 @@ export default function TaskDetail({
     });
   }, [diff]);
 
-  const activity = useMemo(() => sessionActivity(task, updates), [task, updates]);
-
-  // Slash-menu commands = the agent's most recent available_commands update.
-  const commands = useMemo<CommandInfo[]>(() => {
-    for (let i = updates.length - 1; i >= 0; i--) {
-      const u = updates[i];
-      if (u.kind === "available_commands") {
-        return u.commands;
-      }
-    }
-    return [];
-  }, [updates]);
-  const imageSupported = useMemo(() => {
-    for (let i = updates.length - 1; i >= 0; i--) {
-      const update = updates[i];
-      if (update.kind === "prompt_capabilities") {
-        return update.image;
-      }
-    }
-    return false;
-  }, [updates]);
-
   const resolveHunkMut = useMutation({
     mutationFn: (v: { file: string; hunkIndex: number; resolution: HunkResolution }) =>
       daemon.request("diff.resolveHunk", {
@@ -385,14 +256,19 @@ export default function TaskDetail({
         resolution: v.resolution,
         task_id: task.id,
       }),
-    // A reject rewrites the tree; refetch the diff to reflect the revert.
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["diff", task.id] }),
   });
-  const resolveHunk = (file: string, hunkIndex: number, resolution: HunkResolution) => {
-    // Optimistic: mark it now; onSettled revert-refetches the diff.
-    setLocalRes((prev) => ({ ...prev, [`${file}#${hunkIndex}`]: resolution }));
-    resolveHunkMut.mutate({ file, hunkIndex, resolution });
-  };
+  const resolveHunk = useCallback(
+    (file: string, hunkIndex: number, resolution: HunkResolution) => {
+      setLocalRes((prev) => ({ ...prev, [`${file}#${hunkIndex}`]: resolution }));
+      resolveHunkMut.mutate({ file, hunkIndex, resolution });
+    },
+    [resolveHunkMut],
+  );
+  const openProjectFiles = useCallback(() => setRightPanel("files"), [setRightPanel]);
+  const sendDiffToChat = useCallback((file: FileDiff) => {
+    composerRef.current?.attachDiff(file, formatFileDiffAsMessage(file));
+  }, []);
   const diffError = diffQuery.error?.message ?? resolveHunkMut.error?.message ?? null;
 
   const openTabs = useMemo(() => {
@@ -400,8 +276,8 @@ export default function TaskDetail({
     return openFileTabs.map((path) => ({ changed: changed.has(path), path }));
   }, [diff?.files, openFileTabs]);
   const projectRoot = useMemo(
-    () => state.snapshot.projects.find((p) => p.name === task.project)?.path.replace(/\/+$/, ""),
-    [state.snapshot.projects, task.project],
+    () => snapshot.projects.find((p) => p.name === task.project)?.path.replace(/\/+$/, ""),
+    [snapshot.projects, task.project],
   );
   const knownFilePaths = useMemo(() => {
     const paths = new Set<string>();
@@ -482,7 +358,7 @@ export default function TaskDetail({
         >
           <ArrowLeft className="size-4" />
         </Button>
-        <StatusBadge status={task.status} activity={activity} />
+        <TaskActivityStatus task={task} />
         <h1 className="min-w-0 flex-1 truncate text-base font-semibold" title={task.prompt}>
           {taskLabel(task)}
         </h1>
@@ -507,7 +383,6 @@ export default function TaskDetail({
             showChat && showDiff && "overflow-hidden rounded-md border border-border/80",
           )}
         >
-          {/* ── Conversation ── */}
           {showChat && (
             <ResizablePanel id="chat" order={1} defaultSize={showDiff ? 42 : 100} minSize={28}>
               <Card
@@ -536,20 +411,16 @@ export default function TaskDetail({
                     onClick={() => setShowDiff(!showDiff)}
                   />
                 </div>
-                <ChatTranscript
+                <TaskConversation
                   active={showChat}
                   agents={enabledAgents}
-                  activity={activity}
-                  commands={commands}
                   files={mentionFiles}
                   filesLoading={mentionFilesQuery.isLoading}
-                  imageSupported={imageSupported}
                   composerRef={composerRef}
                   onOpenFile={openFileTab}
                   onOpenTask={onOpenTask}
                   resolveFilePath={resolveSessionFilePath}
                   task={task}
-                  updates={updates}
                 />
               </Card>
             </ResizablePanel>
@@ -557,7 +428,6 @@ export default function TaskDetail({
 
           {showChat && showDiff && <ResizableHandle />}
 
-          {/* ── Center: Changes / Editor ── */}
           {showDiff && (
             <ResizablePanel id="center" order={2} defaultSize={showChat ? 58 : 100} minSize={30}>
               <Card
@@ -664,106 +534,23 @@ export default function TaskDetail({
                   >
                     {activeTab.kind === "changes" ? (
                       <div className="flex h-full min-h-0 min-w-0 flex-col">
-                        {diffView === "unified" ? (
-                          <div ref={diffScrollParent} className="min-h-0 flex-1 overflow-auto p-3">
-                            {diffError && <p className="text-sm text-destructive">{diffError}</p>}
-                            {!diff && !diffError && (
-                              <p className="text-sm text-muted-foreground">Loading diff…</p>
-                            )}
-                            {diff && diff.files.length === 0 && (
-                              <EmptyChangesState onOpenFiles={() => setRightPanel("files")} />
-                            )}
-                            {diff && diff.files.length > 0 && (
-                              <div
-                                className="relative w-full"
-                                style={{ height: diffVirtualizer.getTotalSize() }}
-                              >
-                                {diffVirtualizer.getVirtualItems().map((vi) => {
-                                  const file = diff.files[vi.index];
-                                  return (
-                                    <div
-                                      key={vi.key}
-                                      data-index={vi.index}
-                                      ref={diffVirtualizer.measureElement}
-                                      className="absolute left-0 top-0 w-full pb-3"
-                                      style={{ transform: `translateY(${vi.start}px)` }}
-                                    >
-                                      <FileDiffView
-                                        id={fileAnchor(file.path)}
-                                        file={file}
-                                        localRes={localRes}
-                                        onResolve={resolveHunk}
-                                        onSendToChat={(f) => {
-                                          composerRef.current?.attachDiff(
-                                            f,
-                                            formatFileDiffAsMessage(f),
-                                          );
-                                        }}
-                                      />
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <div ref={splitScrollParent} className="min-h-0 flex-1 overflow-auto">
-                            {!diff ? (
-                              <p className="p-3 text-sm text-muted-foreground">Loading diff…</p>
-                            ) : diff.files.length === 0 ? (
-                              <EmptyChangesState onOpenFiles={() => setRightPanel("files")} />
-                            ) : (
-                              <div
-                                className="relative w-full"
-                                style={{ height: splitVirtualizer.getTotalSize() }}
-                              >
-                                {splitVirtualizer.getVirtualItems().map((vi) => {
-                                  const file = diff.files[vi.index];
-                                  const query = splitFileQueries[vi.index];
-                                  const doc = query?.data;
-                                  return (
-                                    <div
-                                      key={vi.key}
-                                      id={fileAnchor(file.path)}
-                                      data-index={vi.index}
-                                      ref={splitVirtualizer.measureElement}
-                                      className="absolute left-0 top-0 w-full border-b"
-                                      style={{ transform: `translateY(${vi.start}px)` }}
-                                    >
-                                      {doc ? (
-                                        <Suspense fallback={<EditorLoading />}>
-                                          <MergeDiff
-                                            doc={doc}
-                                            editable={editable}
-                                            onSave={(content) =>
-                                              void daemon.request("file.save", {
-                                                content,
-                                                path: doc.path,
-                                                task_id: task.id,
-                                              })
-                                            }
-                                          />
-                                        </Suspense>
-                                      ) : query?.error ? (
-                                        <p className="p-3 text-sm text-destructive">
-                                          Failed to load {file.path}: {query.error.message}
-                                        </p>
-                                      ) : (
-                                        <p className="p-3 text-sm text-muted-foreground">
-                                          Loading {file.path}…
-                                        </p>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        )}
+                        <DiffWorkspace
+                          ref={diffWorkspaceRef}
+                          diff={diff}
+                          diffError={diffError}
+                          diffView={diffView}
+                          editable={editable}
+                          localRes={localRes}
+                          onOpenFiles={openProjectFiles}
+                          onResolve={resolveHunk}
+                          onSendToChat={sendDiffToChat}
+                          taskId={task.id}
+                        />
                       </div>
                     ) : fileDoc ? (
                       <Suspense fallback={<EditorLoading />}>
                         <CodeEditor
+                          key={`${fileDoc.path}:${editable}`}
                           doc={fileDoc}
                           editable={editable}
                           onSave={(content) =>
@@ -843,649 +630,6 @@ export default function TaskDetail({
           />
         </span>
       </div>
-    </div>
-  );
-}
-
-function FocusButton({
-  focused,
-  label,
-  onClick,
-}: {
-  focused: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      className="shrink-0 rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
-    >
-      {focused ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
-    </button>
-  );
-}
-
-interface ProjectTreeNode {
-  name: string;
-  path?: string;
-  changed?: boolean;
-  children: Map<string, ProjectTreeNode>;
-}
-
-function buildProjectTree(files: ProjectFile[]): ProjectTreeNode {
-  const root: ProjectTreeNode = { children: new Map(), name: "" };
-  for (const f of files) {
-    const parts = f.path.split("/").filter(Boolean);
-    let node = root;
-    parts.forEach((part, i) => {
-      let child = node.children.get(part);
-      if (!child) {
-        child = { children: new Map(), name: part };
-        node.children.set(part, child);
-      }
-      if (i === parts.length - 1) {
-        child.path = f.path;
-        child.changed = f.changed;
-      }
-      node = child;
-    });
-  }
-  return root;
-}
-
-/** Unique key for a folder node in the openFolders set. */
-function projectFolderKey(parentPath: string, name: string): string {
-  return parentPath ? `${parentPath}/${name}` : name;
-}
-
-interface ProjectFlatRow {
-  key: string;
-  node: ProjectTreeNode;
-  depth: number;
-  fKey?: string;
-}
-
-function flattenProjectTree(
-  node: ProjectTreeNode,
-  depth: number,
-  parentPath: string,
-  openFolders: Set<string>,
-  out: ProjectFlatRow[],
-): void {
-  const kids = [...node.children.values()].sort((a, b) => {
-    const af = a.path ? 1 : 0;
-    const bf = b.path ? 1 : 0;
-    return af - bf || a.name.localeCompare(b.name);
-  });
-  for (const child of kids) {
-    if (child.path) {
-      out.push({ key: child.path, node: child, depth });
-    } else {
-      const fk = projectFolderKey(parentPath, child.name);
-      out.push({ key: `f:${fk}`, node: child, depth, fKey: fk });
-      if (openFolders.has(fk)) {
-        flattenProjectTree(child, depth + 1, fk, openFolders, out);
-      }
-    }
-  }
-}
-
-const PROJECT_ROW_HEIGHT = 28; // h-7
-
-function ProjectFilesPanel({
-  files,
-  error,
-  selected,
-  onSelect,
-}: {
-  files: ProjectFile[];
-  error: string | null;
-  selected: string | null;
-  onSelect: (path: string) => void;
-}) {
-  const root = useMemo(() => buildProjectTree(files), [files]);
-  const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  const rows = useMemo(() => {
-    const out: ProjectFlatRow[] = [];
-    flattenProjectTree(root, 0, "", openFolders, out);
-    return out;
-  }, [root, openFolders]);
-
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    estimateSize: () => PROJECT_ROW_HEIGHT,
-    getScrollElement: () => scrollRef.current,
-    overscan: 20,
-  });
-
-  const toggleFolder = useCallback((fk: string) => {
-    setOpenFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(fk)) {
-        next.delete(fk);
-      } else {
-        next.add(fk);
-      }
-      return next;
-    });
-  }, []);
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-11 items-center border-b px-3 text-sm font-semibold">Files</div>
-      {error && <p className="border-b px-3 py-2 text-xs text-destructive">{error}</p>}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto py-1.5">
-        {rows.length === 0 && !error ? (
-          <p className="px-3 py-2 text-xs text-muted-foreground">No files found.</p>
-        ) : (
-          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-            {virtualizer.getVirtualItems().map((vi) => {
-              const row = rows[vi.index];
-              const pad = { paddingLeft: `${row.depth * 12 + 10}px` };
-
-              if (row.node.path) {
-                const iconUrl = getFileIconUrl(row.node.name);
-                return (
-                  <button
-                    key={vi.key}
-                    type="button"
-                    style={{ ...pad, transform: `translateY(${vi.start}px)` }}
-                    onClick={() => onSelect(row.node.path!)}
-                    title={row.node.path}
-                    className={cn(
-                      "absolute left-0 top-0 flex h-7 w-full min-w-0 items-center gap-1.5 pr-2 text-left text-xs",
-                      selected === row.node.path
-                        ? "bg-secondary text-foreground"
-                        : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
-                    )}
-                  >
-                    {iconUrl ? (
-                      <img src={iconUrl} alt="" aria-hidden className="size-3.5 shrink-0" />
-                    ) : (
-                      <FileText
-                        className={cn(
-                          "size-3.5 shrink-0",
-                          row.node.changed ? "text-sky-400" : "text-muted-foreground",
-                        )}
-                      />
-                    )}
-                    <span className="truncate">{row.node.name}</span>
-                  </button>
-                );
-              }
-
-              const isOpen = openFolders.has(row.fKey!);
-              return (
-                <button
-                  key={vi.key}
-                  type="button"
-                  style={{ ...pad, transform: `translateY(${vi.start}px)` }}
-                  onClick={() => toggleFolder(row.fKey!)}
-                  className="absolute left-0 top-0 flex h-7 w-full min-w-0 items-center gap-1.5 pr-2 text-left text-xs text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
-                >
-                  <ChevronDown
-                    className={cn(
-                      "size-3.5 shrink-0 transition-transform",
-                      !isOpen && "-rotate-90",
-                    )}
-                  />
-                  <span className="truncate">{row.node.name}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** Stable DOM id for a file's unified-diff block, for tree-click scroll-to. */
-const fileAnchor = (path: string) => `diff-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
-
-/** Format a FileDiff as a git-style unified diff message for sending to chat. */
-function formatFileDiffAsMessage(file: FileDiff): string {
-  const header =
-    file.oldPath && file.oldPath !== file.path
-      ? `diff --git a/${file.oldPath} b/${file.path}`
-      : `diff --git a/${file.path} b/${file.path}`;
-  const statusLine =
-    file.status === "added"
-      ? `new file mode 100644`
-      : file.status === "deleted"
-        ? `deleted file mode 100644`
-        : file.status === "renamed"
-          ? `rename from ${file.oldPath}\nrename to ${file.path}`
-          : `index ---..+++ 100644`;
-
-  const hunkHeaders = file.hunks.map(
-    (h) => `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`,
-  );
-  const lines = file.hunks.flatMap((h) => h.lines);
-
-  return `${header}\n${statusLine}\n${hunkHeaders.join("\n")}\n${lines.join("\n")}`;
-}
-
-function FileDiffView({
-  id,
-  file,
-  localRes,
-  onResolve,
-  onSendToChat,
-}: {
-  id?: string;
-  file: FileDiff;
-  localRes: Record<string, HunkResolution>;
-  onResolve: (file: string, hunkIndex: number, r: HunkResolution) => void;
-  onSendToChat?: (file: FileDiff) => void;
-}) {
-  const [open, setOpen] = useState(true);
-  const statusColor =
-    file.status === "added"
-      ? "text-ok"
-      : file.status === "deleted"
-        ? "text-destructive"
-        : "text-warn";
-
-  return (
-    <div id={id} className="mb-3 scroll-mt-2 overflow-hidden rounded-md border">
-      <button
-        type="button"
-        className="flex w-full items-center gap-2 bg-secondary/50 px-3 py-2 text-left font-mono text-xs hover:bg-secondary"
-        onClick={() => setOpen((o) => !o)}
-      >
-        <ChevronDown className={cn("size-3.5 transition-transform", !open && "-rotate-90")} />
-        <span className={cn("uppercase", statusColor)}>{file.status}</span>
-        <span>
-          {file.status === "renamed" && file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
-        </span>
-        {onSendToChat && (
-          <span className="ml-auto flex items-center gap-1">
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="h-6 gap-1 px-1.5 text-xs text-muted-foreground hover:text-foreground"
-              title="Send this file's diff to chat"
-              onClick={(e) => {
-                e.stopPropagation();
-                onSendToChat(file);
-              }}
-            >
-              <Send className="size-3" />
-              send
-            </Button>
-          </span>
-        )}
-      </button>
-      {open &&
-        file.hunks.map((hunk, i) => {
-          const resolution = hunk.resolution ?? localRes[`${file.path}#${i}`] ?? null;
-          return (
-            <div
-              key={`${hunk.oldStart}:${hunk.oldLines}:${hunk.newStart}:${hunk.newLines}`}
-              className={cn(
-                "border-t",
-                resolution === "accept" && "border-l-2 border-l-ok",
-                resolution === "reject" && "border-l-2 border-l-destructive opacity-50",
-              )}
-            >
-              <div className="flex items-center justify-between bg-muted/40 px-3 py-1">
-                <code className="tnum text-xs text-muted-foreground">
-                  @@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@
-                </code>
-                <div className="flex gap-1">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={resolution === "accept" ? "default" : "outline"}
-                    className="h-6"
-                    onClick={() => onResolve(file.path, i, "accept")}
-                  >
-                    <Check className="size-3" />
-                    accept
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={resolution === "reject" ? "destructive" : "outline"}
-                    className="h-6"
-                    onClick={() => onResolve(file.path, i, "reject")}
-                  >
-                    <X className="size-3" />
-                    reject
-                  </Button>
-                </div>
-              </div>
-              <pre className="overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed">
-                {withOccurrenceKeys(hunk.lines, (line) => line).map(({ item: line, key }) => (
-                  <div
-                    key={`${hunk.oldStart}:${hunk.newStart}:${key}`}
-                    className={cn(
-                      "px-1",
-                      line.startsWith("+") && "bg-ok/10 text-ok",
-                      line.startsWith("-") && "bg-destructive/10 text-destructive",
-                    )}
-                  >
-                    {line || " "}
-                  </div>
-                ))}
-              </pre>
-            </div>
-          );
-        })}
-    </div>
-  );
-}
-
-/// Compact repository status and a searchable, viewport-bound branch/action menu.
-function GitWorkspaceControls({
-  taskId,
-  branch,
-  onOpenCommit,
-  onOpenPush,
-}: {
-  taskId: string;
-  branch: string | null;
-  onOpenCommit: () => void;
-  onOpenPush: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const menuRef = useRef<HTMLDivElement>(null);
-  const queryClient = useQueryClient();
-  const repositoryOperation = useUi((s) => s.repositoryOperation);
-  const setRepositoryOperation = useUi((s) => s.setRepositoryOperation);
-
-  // Branch list is only needed while the dropdown is open.
-  const branchesQuery = useQuery({
-    enabled: open,
-    queryFn: daemonQuery<GitBranchList>("git.branches", { task_id: taskId }),
-    queryKey: ["branches", taskId],
-  });
-  const branches = branchesQuery.data?.branches ?? [];
-  const normalizedSearch = search.trim().toLowerCase();
-  const filteredBranches = normalizedSearch
-    ? branches.filter((item) => item.toLowerCase().includes(normalizedSearch))
-    : branches;
-  const showSync =
-    !normalizedSearch || "sync with remote update project".includes(normalizedSearch);
-  const showCommit = !normalizedSearch || "commit changes".includes(normalizedSearch);
-  const showPush = !normalizedSearch || "push changes".includes(normalizedSearch);
-
-  useEffect(() => {
-    if (!open) {
-      setSearch("");
-      return;
-    }
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    window.addEventListener("pointerdown", closeOnOutsidePointer);
-    return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
-  }, [open]);
-
-  // After a clean op the tree changed — refetch the task's reads. (The daemon's
-  // Task.updated event also refetches via the updatedAt-keyed queries; this just
-  // Makes it immediate.)
-  const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["diff", taskId] });
-    void queryClient.invalidateQueries({ queryKey: ["fileList", taskId] });
-    void queryClient.invalidateQueries({ queryKey: ["branches", taskId] });
-  };
-  const onOk = (r: GitOpResult) => {
-    switch (r.status) {
-      case "up_to_date":
-        toast.info(r.message);
-        break;
-      case "ok":
-        toast.success(r.message);
-        break;
-      case "conflict":
-        toast.error(r.message, {
-          description: r.conflicts.length > 0 ? r.conflicts.join(", ") : undefined,
-        });
-        break;
-      case "error":
-        toast.error(r.message);
-        break;
-    }
-  };
-  const onErr = (e: Error) => toast.error(e.message);
-
-  const updateMut = useMutation({
-    mutationFn: () => daemon.request("git.update", { task_id: taskId }) as Promise<GitOpResult>,
-    onMutate: () => setRepositoryOperation({ kind: "pull", taskId }),
-    onError: (e: Error) => onErr(e),
-    onSettled: () => {
-      const operation = useUi.getState().repositoryOperation;
-      if (operation?.taskId === taskId && operation.kind === "pull") {
-        setRepositoryOperation(null);
-      }
-    },
-    onSuccess: (r) => {
-      onOk(r);
-      invalidate();
-    },
-  });
-  const switchMut = useMutation({
-    mutationFn: (target: string) =>
-      daemon.request("git.switchBranch", {
-        task_id: taskId,
-        branch: target,
-      }) as Promise<GitOpResult>,
-    onError: (e: Error) => onErr(e),
-    onSuccess: (r) => {
-      onOk(r);
-      invalidate();
-    },
-  });
-
-  const updating =
-    updateMut.isPending ||
-    (repositoryOperation?.taskId === taskId && repositoryOperation.kind === "pull");
-  const switching = switchMut.isPending ? switchMut.variables : null;
-  const busy = Boolean(repositoryOperation) || updating || switchMut.isPending;
-
-  const switchTo = (target: string) => {
-    setOpen(false);
-    if (busy || target === branch) {
-      return;
-    }
-    switchMut.mutate(target);
-  };
-
-  return (
-    <span className="flex min-w-0 items-center">
-      <div ref={menuRef} className="relative min-w-0">
-        <button
-          type="button"
-          disabled={!branch}
-          onClick={() => setOpen((o) => !o)}
-          title="Branches and Git actions"
-          className="flex items-center gap-1 rounded px-1 font-mono hover:bg-secondary hover:text-foreground disabled:opacity-60"
-        >
-          <GitBranch className="size-3 shrink-0" />
-          <span className="max-w-40 truncate">{branch ?? "no-branch"}</span>
-          {switching ? (
-            <Loader2 className="size-2.5 animate-spin opacity-60" />
-          ) : (
-            branch && <ChevronDown className="size-2.5 opacity-60" />
-          )}
-        </button>
-        {open && branch && (
-          <div className="absolute bottom-full right-0 z-50 mb-1 flex max-h-[min(520px,calc(100vh-4rem))] w-[min(420px,calc(100vw-1rem))] flex-col overflow-hidden rounded-md border border-border bg-popover shadow-xl">
-            <div className="shrink-0 border-b p-2">
-              <label className="flex h-8 items-center gap-2 rounded-md border border-input bg-background/60 px-2 focus-within:ring-1 focus-within:ring-ring">
-                <Search className="size-4 shrink-0 text-muted-foreground" />
-                <input
-                  autoFocus
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") setOpen(false);
-                  }}
-                  placeholder="Search branches and actions"
-                  className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
-                />
-              </label>
-            </div>
-            <div className="min-h-0 overflow-y-auto p-1.5">
-              {(showSync || showCommit || showPush) && (
-                <div className="space-y-0.5 pb-1.5">
-                  {showSync && (
-                    <GitMenuAction
-                      icon={
-                        updating ? (
-                          <Loader2 className="size-4 animate-spin" />
-                        ) : (
-                          <Download className="size-4" />
-                        )
-                      }
-                      label="Sync with remote"
-                      shortcut="⌘T"
-                      disabled={busy || !branch}
-                      onClick={() => updateMut.mutate()}
-                    />
-                  )}
-                  {showCommit && (
-                    <GitMenuAction
-                      icon={<GitCommitVertical className="size-4" />}
-                      label="Commit…"
-                      shortcut="⌘K"
-                      onClick={() => {
-                        setOpen(false);
-                        onOpenCommit();
-                      }}
-                    />
-                  )}
-                  {showPush && (
-                    <GitMenuAction
-                      icon={<Send className="size-4" />}
-                      label="Push…"
-                      shortcut="⇧⌘K"
-                      onClick={() => {
-                        setOpen(false);
-                        onOpenPush();
-                      }}
-                    />
-                  )}
-                </div>
-              )}
-
-              {(showSync || showCommit || showPush) && filteredBranches.length > 0 && (
-                <div className="mx-1 border-t" />
-              )}
-              <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                Branches
-              </div>
-              {branchesQuery.isLoading && (
-                <div className="px-2 py-1.5 text-xs text-muted-foreground">Loading…</div>
-              )}
-              {!branchesQuery.isLoading && filteredBranches.length === 0 && (
-                <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                  {branches.length === 0 ? "No branches" : "No matching branches or actions"}
-                </div>
-              )}
-              {filteredBranches.map((item) => (
-                <button
-                  type="button"
-                  key={item}
-                  onClick={() => switchTo(item)}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left font-mono text-xs",
-                    item === branch ? "bg-accent text-foreground" : "hover:bg-accent/50",
-                  )}
-                >
-                  <Check
-                    className={cn(
-                      "size-3.5 shrink-0",
-                      item === branch ? "opacity-100" : "opacity-0",
-                    )}
-                  />
-                  <span className="min-w-0 flex-1 truncate">{item}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </span>
-  );
-}
-
-function GitMenuAction({
-  disabled,
-  icon,
-  label,
-  onClick,
-  shortcut,
-}: {
-  disabled?: boolean;
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  shortcut: string;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent/50 disabled:opacity-50"
-    >
-      <span className="text-muted-foreground">{icon}</span>
-      <span className="flex-1">{label}</span>
-      <kbd className="font-sans text-[11px] text-muted-foreground">{shortcut}</kbd>
-    </button>
-  );
-}
-
-function SubtasksRail({ task }: { task: TaskInfo }) {
-  const nodes = task.orchestrationGraph?.nodes ?? [];
-  const graph = task.orchestrationGraph;
-  if (!graph) {
-    return <p className="p-3 text-sm text-muted-foreground">No orchestration data.</p>;
-  }
-
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 border-b px-3 py-2">
-        <ListTodo className="size-4 text-muted-foreground" />
-        <span className="text-sm font-semibold">Subtasks</span>
-        <span className="ml-auto text-xs text-muted-foreground">
-          {nodes.filter((n) => n.status === "complete").length}/{nodes.length}
-        </span>
-      </div>
-      <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-1 p-2">
-          {nodes.map((node) => (
-            <SubtaskRow key={node.id} node={node} />
-          ))}
-        </div>
-      </ScrollArea>
-      <div className="border-t px-3 py-2">
-        <div className="text-xs text-muted-foreground">{graph.goal}</div>
-      </div>
-    </div>
-  );
-}
-
-function SubtaskRow({ node }: { node: OrchNodeInfo }) {
-  return (
-    <div className="flex items-center gap-2 rounded bg-secondary/30 px-2 py-1.5 text-xs">
-      <StatusBadge status={node.status} size="xs" />
-      <span className="min-w-0 flex-1 truncate font-medium text-foreground">{node.kind}</span>
-      <AgentBadge agentId={node.agent} size="xs" className="shrink-0 text-muted-foreground" />
-      {node.taskId && (
-        <span className="shrink-0 text-[10px] text-muted-foreground/60">{node.taskId}</span>
-      )}
     </div>
   );
 }

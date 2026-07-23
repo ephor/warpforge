@@ -53,12 +53,12 @@ export function RuntimePanel({
   const activePortForwardName = activePortForward?.name ?? null;
   const liveServiceLogs = useSyncExternalStore(daemon.subscribe, () =>
     activeService
-      ? (daemon.getState().serviceLogs[`${project}/${activeService.name}`] ?? [])
+      ? (daemon.getState().serviceLogs[`${project}/${activeService.name}`] ?? EMPTY_LOGS)
       : EMPTY_LOGS,
   );
   const livePfLogs = useSyncExternalStore(daemon.subscribe, () =>
     activePortForward
-      ? (daemon.getState().portforwardLogs[`${project}/${activePortForward.name}`] ?? [])
+      ? (daemon.getState().portforwardLogs[`${project}/${activePortForward.name}`] ?? EMPTY_LOGS)
       : EMPTY_LOGS,
   );
   const liveLogs = activeService ? liveServiceLogs : activePortForward ? livePfLogs : EMPTY_LOGS;

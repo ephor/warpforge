@@ -32,15 +32,16 @@ export function MergeDiff({
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<MergeView | null>(null);
   const onSaveRef = useRef(onSave);
-  // Text we last wrote to disk — lets the sync effect tell our own save-echo
-  // (harmless, skip) from a real external/agent edit (apply to the pane).
-  const lastSaved = useRef<string | null>(null);
-  const original = doc.newText; // The agent's version, for "discard edits"
+  const originalRef = useRef(doc.newText);
   const [status, setStatus] = useState<SaveStatus>("clean");
 
   useEffect(() => {
     onSaveRef.current = onSave;
   }, [onSave]);
+
+  useEffect(() => {
+    originalRef.current = doc.newText;
+  }, [doc.newText]);
 
   const flushSave = () => {
     const view = viewRef.current;
@@ -48,7 +49,6 @@ export function MergeDiff({
       return;
     }
     const text = view.b.state.doc.toString();
-    lastSaved.current = text;
     onSaveRef.current(text);
     setStatus("saved");
   };
@@ -59,78 +59,85 @@ export function MergeDiff({
       return;
     }
     view.b.dispatch({
-      changes: { from: 0, insert: original, to: view.b.state.doc.length },
+      changes: { from: 0, insert: originalRef.current, to: view.b.state.doc.length },
     });
     flushSave();
   };
 
   useEffect(() => {
-    if (!host.current) {
+    const parent = host.current;
+    if (!parent) {
       return;
     }
-    setStatus("clean");
-    lastSaved.current = null;
-    const lang = codemirrorLanguageForPath(doc.path);
-    const common: Extension[] = [lineNumbers(), oneDark, EditorView.lineWrapping, ...lang];
+    let disposed = false;
+    let view: MergeView | null = null;
 
-    const view = new MergeView({
-      a: {
-        doc: doc.oldText,
-        extensions: [...common, EditorState.readOnly.of(true)],
-      },
-      b: {
-        doc: doc.newText,
-        extensions: [
-          ...common,
-          EditorState.readOnly.of(!editable),
-          keymap.of([{ key: "Mod-s", run: () => (flushSave(), true) }]),
-          EditorView.updateListener.of((u) => {
-            if (!u.docChanged) return;
-            setStatus("unsaved");
-          }),
-        ],
-      },
-      collapseUnchanged: { margin: 3, minSize: 4 },
-      // The default scanLimit (500) makes the Myers diff bail out to a crude
-      // Match on any region over ~4k chars, which paints a whole file as
-      // Changed after a one-line insert. Source files need a real diff.
-      diffConfig: { scanLimit: 20000, timeout: 2000 },
-      gutter: true,
-      highlightChanges: true,
-      parent: host.current,
-      revertControls: editable ? "a-to-b" : undefined,
+    void codemirrorLanguageForPath(doc.path).then((lang) => {
+      if (disposed) return;
+      const common: Extension[] = [lineNumbers(), oneDark, EditorView.lineWrapping, ...lang];
+      view = new MergeView({
+        a: {
+          doc: doc.oldText,
+          extensions: [...common, EditorState.readOnly.of(true)],
+        },
+        b: {
+          doc: doc.newText,
+          extensions: [
+            ...common,
+            EditorState.readOnly.of(!editable),
+            keymap.of([{ key: "Mod-s", run: () => (flushSave(), true) }]),
+            EditorView.updateListener.of((u) => {
+              if (!u.docChanged) return;
+              setStatus("unsaved");
+            }),
+          ],
+        },
+        collapseUnchanged: { margin: 3, minSize: 4 },
+        // The default scanLimit (500) makes the Myers diff bail out to a crude
+        // Match on any region over ~4k chars, which paints a whole file as
+        // Changed after a one-line insert. Source files need a real diff.
+        diffConfig: { scanLimit: 20000, timeout: 250 },
+        gutter: true,
+        highlightChanges: true,
+        parent,
+        revertControls: editable ? "a-to-b" : undefined,
+      });
+      viewRef.current = view;
     });
-    viewRef.current = view;
 
     return () => {
-      view.destroy();
-      viewRef.current = null;
+      disposed = true;
+      view?.destroy();
+      if (viewRef.current === view) {
+        viewRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.path, doc.oldText, editable]);
+  }, [doc.path, editable]);
 
-  // The right pane changed on disk (agent edited the open file). Apply it in
-  // Place — but skip our own save-echo and any content that already matches,
-  // So a user's unsaved edits and cursor survive.
   useEffect(() => {
     const view = viewRef.current;
-    if (!view) {
-      return;
+    if (!view) return;
+    const currentOld = view.a.state.doc.toString();
+    if (currentOld !== doc.oldText) {
+      view.a.dispatch({
+        changes: { from: 0, insert: doc.oldText, to: currentOld.length },
+      });
     }
-    if (doc.newText === lastSaved.current) {
-      return;
+  }, [doc.oldText]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    if (status === "clean") {
+      const currentNew = view.b.state.doc.toString();
+      if (currentNew !== doc.newText) {
+        view.b.dispatch({
+          changes: { from: 0, insert: doc.newText, to: currentNew.length },
+        });
+      }
     }
-    const cur = view.b.state.doc.toString();
-    if (doc.newText === cur) {
-      return;
-    }
-    view.b.dispatch({
-      changes: { from: 0, insert: doc.newText, to: view.b.state.doc.length },
-    });
-    setStatus("clean");
-    lastSaved.current = null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.newText]);
+  }, [doc.newText, status]);
 
   return (
     <div className="flex flex-col">

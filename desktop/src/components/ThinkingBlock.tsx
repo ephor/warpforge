@@ -28,9 +28,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
 }: ThinkingBlockProps) {
   const contentId = useId();
   const [open, setOpen] = useState(streaming);
-  const [displayText, setDisplayText] = useState(text);
   const wasStreaming = useRef(streaming);
-  const latestText = useRef(text);
 
   // Only stream state transitions control the disclosure. Text deltas do not,
   // so a manual choice is not overwritten on every token. Completion closes
@@ -38,24 +36,9 @@ export const ThinkingBlock = memo(function ThinkingBlock({
   useEffect(() => {
     if (streaming !== wasStreaming.current) {
       setOpen(streaming);
-      if (streaming) {
-        setDisplayText(text);
-      }
     }
     wasStreaming.current = streaming;
-  }, [streaming, text]);
-
-  // ACP emits sub-word thought chunks. Stream them immediately so the user
-  // sees reasoning build up in real time. The final text is set synchronously
-  // at the turn boundary when streaming flips to false.
-  useEffect(() => {
-    latestText.current = text;
-    if (!streaming) {
-      setDisplayText(text);
-      return;
-    }
-    setDisplayText(text);
-  }, [streaming, text]);
+  }, [streaming]);
 
   return (
     <section
@@ -100,7 +83,7 @@ export const ThinkingBlock = memo(function ThinkingBlock({
             resolveFilePath={resolveFilePath}
             onOpenFile={onOpenFile}
           >
-            {displayText}
+            {text}
           </MemoizedMarkdown>
         </div>
       )}

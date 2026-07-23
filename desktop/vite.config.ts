@@ -1,10 +1,17 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
 import { fileURLToPath, URL } from "node:url";
+
+import babel from "@rolldown/plugin-babel";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 
 // Tauri expects a fixed dev port (see src-tauri/tauri.conf.json devUrl).
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    babel({
+      presets: [reactCompilerPreset({ target: "19" })],
+    }),
+  ],
   clearScreen: false,
   resolve: {
     alias: {

@@ -1,6 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { scan } from "react-scan";
 import { Toaster } from "sonner";
 
 import App from "./App";
@@ -10,6 +11,13 @@ import { queryClient } from "./query";
 // CSS is loaded for its global side effect at the application boundary.
 // eslint-disable-next-line import/no-unassigned-import
 import "./globals.css";
+
+const reactScanEnabled = import.meta.env.DEV && import.meta.env.VITE_REACT_SCAN === "true";
+
+scan({
+  enabled: reactScanEnabled,
+  showToolbar: reactScanEnabled,
+});
 
 void daemon.connect().catch(() => {
   /* Reconnect loop takes over */

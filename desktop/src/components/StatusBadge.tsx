@@ -1,84 +1,16 @@
 import { Check, Clock, Minus } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import type { TaskStatus } from "@/protocol";
-
-/**
- * Every task-ish status the UI shows: task statuses, orchestration node
- * statuses (pending/complete/failed/skipped) and the synthetic attention
- * states (permission, group review).
- */
-export type StatusKind =
-  | TaskStatus
-  | "permission"
-  | "pending"
-  | "complete"
-  | "failed"
-  | "skipped";
+import { META, type StatusActivity, type StatusKind } from "@/lib/statusMeta";
 
 type Tone = "ok" | "warn" | "destructive" | "neutral";
 type Glyph = "dot" | "ring" | "clock" | "check" | "minus";
 
-/**
- * The one visual language for statuses: tone = urgency, glyph = meaning,
- * pulse = live activity. Green pulsing dot — agent is working right now;
- * amber dot — needs the user; red — stopped abnormally (ring = interrupted);
- * neutral clock — waiting in line; brand-blue ring — idle (the same accent as
- * links and the project name); green check in a neutral pill — finished fine
- * without shouting about it. `glyphAccent` tints just the glyph, leaving the
- * pill/label in the tone colour.
- */
-const META: Record<
-  StatusKind,
-  { label: string; tone: Tone; glyph: Glyph; pulse?: boolean; glyphAccent?: string }
-> = {
-  blocked: { glyph: "dot", label: "blocked", tone: "destructive" },
-  complete: { glyph: "check", glyphAccent: "text-ok", label: "done", tone: "neutral" },
-  done: { glyph: "check", glyphAccent: "text-ok", label: "done", tone: "neutral" },
-  failed: { glyph: "dot", label: "failed", tone: "destructive" },
-  idle: { glyph: "ring", glyphAccent: "text-primary", label: "idle", tone: "neutral" },
-  interrupted: { glyph: "ring", label: "interrupted", tone: "destructive" },
-  needs_review: { glyph: "dot", label: "needs review", tone: "warn" },
-  pending: { glyph: "clock", label: "pending", tone: "neutral" },
-  permission: { glyph: "dot", label: "permission", tone: "warn" },
-  queued: { glyph: "clock", label: "queued", tone: "neutral" },
-  running: { glyph: "dot", label: "running", pulse: true, tone: "ok" },
-  skipped: { glyph: "minus", label: "skipped", tone: "neutral" },
-};
-
-export function statusLabel(status: StatusKind): string {
-  return META[status].label;
-}
-
-/** Left-edge accent class for a card, echoing the status glyph's colour. */
-const TONE_EDGE: Record<Tone, string> = {
-  destructive: "border-l-destructive",
-  neutral: "border-l-border",
-  ok: "border-l-ok",
-  warn: "border-l-warn",
-};
-
-const ACCENT_EDGE: Record<string, string> = {
-  "text-ok": "border-l-ok",
-  "text-primary": "border-l-primary",
-};
-
-export function statusEdge(status: StatusKind): string {
-  const meta = META[status];
-  return (meta.glyphAccent && ACCENT_EDGE[meta.glyphAccent]) || TONE_EDGE[meta.tone];
-}
-
-/** Live-activity chip tones mirror the old activityBadge mapping. */
 const ACTIVITY_TONE: Record<"thinking" | "working" | "writing", Tone> = {
   thinking: "neutral",
   working: "warn",
   writing: "ok",
 };
-
-export interface StatusActivity {
-  tone: "thinking" | "working" | "writing";
-  label: string;
-}
 
 const TONE_PILL: Record<Tone, string> = {
   destructive: "border-destructive/40 bg-destructive/10 text-destructive",
@@ -87,11 +19,6 @@ const TONE_PILL: Record<Tone, string> = {
   warn: "border-warn/40 bg-warn/10 text-warn",
 };
 
-/**
- * Calm statuses (idle, done) echo their glyph accent in the border and a faint
- * fill, but keep the label muted — themed like the active pills, a shade
- * quieter (the hollow ring / static check does the rest of the calming).
- */
 const ACCENT_PILL: Record<string, string> = {
   "text-ok": "border-ok/50 bg-ok/10 text-muted-foreground",
   "text-primary": "border-primary/50 bg-primary/10 text-muted-foreground",

@@ -11,9 +11,11 @@ import { flattenTaskTree, type TaskTree } from "@/lib/taskGroups";
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
+import { agentDisplayName } from "@/lib/agentNames";
+
 import { AgentBadge } from "./AgentBadge";
-import { agentDisplayName } from "./AgentLogo";
-import { StatusBadge, statusLabel } from "./StatusBadge";
+import { StatusBadge } from "./StatusBadge";
+import { statusLabel } from "@/lib/statusMeta";
 
 export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
   currentTaskId,

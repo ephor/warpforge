@@ -1,6 +1,7 @@
 import { Check, ChevronDown, Loader2, Settings2 } from "lucide-react";
 import { useState } from "react";
 
+import { configRole } from "@/lib/configRole";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
@@ -108,13 +109,6 @@ export function AgentConfigBar({
       )}
     </>
   );
-}
-
-export function configRole(option: ConfigOption): "model" | "effort" | null {
-  const identity = `${option.category ?? ""} ${option.id} ${option.name}`.toLowerCase();
-  if (identity.includes("model")) return "model";
-  if (/effort|reasoning|thought[_ -]?level/.test(identity)) return "effort";
-  return null;
 }
 
 function AgentConfigSelect({

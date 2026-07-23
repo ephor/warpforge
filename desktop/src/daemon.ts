@@ -508,17 +508,20 @@ export class DaemonClient {
         this.applyEvent({ data: task, event: "task.created" });
         return Promise.resolve({ graphId, taskId });
       }
-      case "orchestrate.list":
-        return Promise.resolve({
-          graphs: this.state.snapshot.tasks
-            .filter((t) => t.orchestrationGraph)
-            .map((t) => ({
-              goal: t.orchestrationGraph!.goal,
-              id: t.orchestrationGraph!.id,
+      case "orchestrate.list": {
+        const graphs: { goal: string; id: string; project: string; totalNodes: number }[] = [];
+        for (const t of this.state.snapshot.tasks) {
+          if (t.orchestrationGraph) {
+            graphs.push({
+              goal: t.orchestrationGraph.goal,
+              id: t.orchestrationGraph.id,
               project: t.project,
-              totalNodes: t.orchestrationGraph!.nodes.length,
-            })),
-        });
+              totalNodes: t.orchestrationGraph.nodes.length,
+            });
+          }
+        }
+        return Promise.resolve({ graphs });
+      }
       default:
         return Promise.resolve({});
     }

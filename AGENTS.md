@@ -1,21 +1,37 @@
 
 ## Project: Warpforge
 
-TUI-based workspace orchestrator. Manages multiple dev projects: isolated services with auto-resolved ports, embedded agent terminals (Codex, codex), instant context switching.
+Workspace orchestrator with TUI and desktop interfaces. Manages multiple dev projects: isolated services with auto-resolved ports, embedded agent terminals (Codex, Claude), instant context switching.
 
 ### Architecture
 
+**Core (Rust):**
 - **Language:** Rust
 - **Async runtime:** Tokio
-- **TUI:** Ratatui + Crossterm
+- **Daemon:** Background process that manages services, agents, and project state
 - **PTY:** `portable-pty` — real TTY for spawned agents
-- **Terminal emulation:** `vt100` crate — parses ANSI into screen buffer, rendered cell-by-cell into ratatui `Buffer` via `TerminalPane` widget
+- **Terminal emulation:** `vt100` crate — parses ANSI into screen buffer
 - **CLI:** `clap` derive API
 - **Config:** `.workspace.yaml` per project (serde_yaml), registry in `~/.warpforge/projects.json`
 - **Port isolation:** each project gets 100-port range (4000+), `${svc.port}` interpolation in env vars
-- **Binary:** `cargo build --release` → `target/release/warpforge`
+- **Daemon IPC:** WebSocket JSON-RPC (port 61814)
 
-**Key crates:** ratatui 0.29, crossterm 0.28 (event-stream), portable-pty 0.8, vt100 0.15, tokio, clap 4, serde, anyhow
+**TUI (Rust):**
+- **Framework:** Ratatui + Crossterm
+- **Binary:** `cargo build --release` → `target/release/warpforge`
+- **Key crates:** ratatui 0.29, crossterm 0.28 (event-stream), vt100 0.15
+
+**Desktop (TypeScript + Tauri):**
+- **Framework:** Tauri v2 (Rust shell + WebView)
+- **Frontend:** React 18 + TypeScript + Vite
+- **UI:** Tailwind CSS + Radix UI primitives + shadcn/ui components
+- **State:** Zustand (persisted to localStorage)
+- **Terminal:** CodeMirror for editor (interactive terminal not yet implemented)
+- **Package manager:** Bun
+- **Linting:** oxlint + oxfmt
+- **Tests:** Vitest + React Testing Library
+
+**Key crates (Rust):** tokio, clap 4, serde, anyhow, portable-pty 0.8, vt100 0.15, ratatui 0.29, crossterm 0.28
 
 ### Source layout (`src/`)
 
@@ -34,6 +50,40 @@ tui/
   terminal.rs    — TerminalPane widget: vt100 Screen → ratatui Buffer (cell-by-cell, colors, cursor)
 ```
 
+**Daemon (`src/daemon/`):**
+- WebSocket server (port 61814) that desktop/TUI connect to
+- Manages agents, services, port-forwards, tasks, git operations
+- Key files: server.rs, actor.rs, task.rs, agents.rs, diff.rs
+
+**Desktop source (`desktop/src/`):**
+```
+main.tsx              — React entry point
+App.tsx               — Main app shell, navigation
+daemon.ts             — WebSocket client to Rust daemon (ONLY place that talks to daemon)
+protocol.ts           — TypeScript types for daemon protocol (mirrors Rust)
+query.ts              — React Query setup
+store/
+  ui.ts               — Zustand store (UI state: view, panels, toggles)
+views/
+  MissionControl.tsx  — Main dashboard with session tiles
+  Board.tsx           — Kanban board view
+  Projects.tsx        — Project list
+  TaskDetail.tsx      — Task detail: chat + changes rail + runtime panel
+  Settings.tsx        — Settings view
+components/
+  AttentionRail.tsx   — "Needs you" sidebar
+  ChangesRail.tsx     — Git staging tree + commit box
+  ChatComposer.tsx    — Agent chat input
+  ChatTranscript.tsx  — Agent conversation display
+  RuntimePanel.tsx    — Services/port-forward status
+  CodeEditor.tsx      — CodeMirror editor
+  MergeDiff.tsx       — Diff viewer
+  FileTree.tsx        — File tree navigator
+  + 30 more UI components
+hooks/                — React hooks (useChatFollow, useMediaQuery)
+lib/                  — Utilities (38 files: sessionActivity, sessionTiming, etc.)
+```
+
 ### What Works (Rust)
 
 - **CLI:** `warpforge add/remove/list` — project registry CRUD
@@ -46,6 +96,22 @@ tui/
 - **Service logs:** `l` toggles logs pane, scroll with j/k, `[/]` switch between services
 - **Port isolation:** per-project 100-port ranges, env interpolation
 - **Process cleanup:** process-group kill (`kill -9 -<pgid>`) for service subtrees, PTY drop on agent kill
+
+### What Works (Desktop)
+
+- **Daemon connection:** WebSocket JSON-RPC client with auto-reconnect, handshake, demo mode
+- **Task management:** create, archive, delete, title editing, session resume
+- **Agent chat:** conversation stream, composer with mentions/attachments, thinking blocks
+- **Changes rail:** staging tree with tri-state checkboxes, per-file diff counts, commit with amend
+- **Mission Control:** session tiles with live conversation preview, pinned tasks
+- **Board view:** Kanban-style task grouping
+- **Services/PF status:** read-only runtime panel
+- **Git operations:** commit, push (with force-with-lease), branch info
+- **Code editor:** CodeMirror with syntax highlighting for multiple languages
+- **Diff viewer:** unified/split merge view
+- **Agent setup:** detect/install agents (Claude, Codex), bootstrap wizard
+- **UI state:** Zustand store with localStorage persistence (panels, toggles, view)
+- **Orchestration:** planner → workers → reviewers pipeline (daemon-driven)
 
 ### Known Issues / TODO
 
@@ -68,7 +134,26 @@ tui/
 ### Build & Run
 
 ```bash
+# Rust TUI
 cargo build --release
 # or during dev:
 cargo run
+
+# Desktop (Tauri + React)
+cd desktop
+bun install
+bun run tauri dev
+```
+
+### Desktop Commands
+
+```bash
+cd desktop
+bun run dev          # Vite dev server only
+bun run tauri dev    # Full Tauri dev (Rust + frontend)
+bun run lint         # oxlint
+bun run lint:fix     # oxlint --fix
+bun run format       # oxfmt
+bun run typecheck    # tsc --noEmit
+bun run test         # vitest
 ```

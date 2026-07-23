@@ -1,16 +1,11 @@
 import {
-  ArrowLeft,
   ArrowRight,
-  ChevronDown,
   FileCode2,
   FolderTree,
   GitBranch,
   GitCommitHorizontal,
-  GitPullRequestArrow,
   Loader2,
   RefreshCw,
-  Sparkles,
-  Upload,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -23,6 +18,9 @@ import { useUi } from "@/store/ui";
 
 import { daemon } from "../daemon";
 import type { GitOpResult, GitPushCommit, GitPushInfo, TaskInfo } from "../protocol";
+import { PrFooter } from "./push/PrFooter";
+import { PrForm } from "./push/PrForm";
+import { PushFooter } from "./push/PushFooter";
 
 interface Props {
   open: boolean;
@@ -74,8 +72,6 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
           ? current
           : (next.commits[0]?.hash ?? null),
       );
-      // Prefill the PR title once: a single-commit branch → its subject,
-      // otherwise the branch name. The user can edit before creating.
       setPrTitle((current) =>
         current
           ? current
@@ -92,13 +88,8 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
   }, [taskId]);
 
   useEffect(() => {
-    if (!open) {
-      setMenuOpen(false);
-      setMode("push");
-      return;
-    }
     void load();
-  }, [load, open]);
+  }, [load]);
 
   const selected = useMemo(
     () => info?.commits.find((commit) => commit.hash === selectedHash) ?? null,
@@ -137,12 +128,8 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
     }
   };
 
-  // `gh pr create` works off commits already on the remote, so a branch with
-  // outgoing commits (or no upstream at all) has to be pushed first — the PR
-  // action does both in order rather than failing with "must first push".
   const needsPush = Boolean(info) && (!info?.hasUpstream || (info?.commits.length ?? 0) > 0);
 
-  // The agent replies with the title on the first line and the body below it.
   const generatePr = async () => {
     if (!task || !textGenAgentId || generatingPr) {
       return;
@@ -241,71 +228,19 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
         </div>
 
         {mode === "pr" && (
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5">
-            <div className="flex items-center gap-2 font-mono text-sm text-muted-foreground">
-              <GitBranch className="size-4 shrink-0 text-primary" />
-              <span className="truncate text-foreground">{info?.branch}</span>
-              <ArrowRight className="size-4 shrink-0" />
-              <span className="truncate">{prBase.trim() || "default branch"}</span>
-            </div>
-            {needsPush && (
-              <p className="-mt-2 text-xs text-muted-foreground">
-                {info && info.commits.length > 0
-                  ? `${info.commits.length} ${info.commits.length === 1 ? "commit" : "commits"} will be pushed to ${info.upstream} first, then the PR is opened.`
-                  : "The branch will be pushed first, then the PR is opened."}
-              </p>
-            )}
-            <label className="flex flex-col gap-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Title</span>
-              <input
-                value={prTitle}
-                onChange={(e) => setPrTitle(e.target.value)}
-                placeholder="Pull request title"
-                className="rounded-md border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-              />
-            </label>
-            <label className="flex min-h-0 flex-1 flex-col gap-1.5">
-              <span className="text-xs font-medium text-muted-foreground">Description</span>
-              <div className="relative flex min-h-0 flex-1">
-                <textarea
-                  value={prBody}
-                  onChange={(e) => setPrBody(e.target.value)}
-                  placeholder="Optional — Markdown supported"
-                  // Room in the bottom-right corner for the drafting button.
-                  className="min-h-32 flex-1 resize-none rounded-md border bg-background py-2 pl-3 pr-10 font-mono text-sm outline-none focus:border-primary"
-                />
-                <button
-                  type="button"
-                  className="absolute bottom-2 right-2 rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-                  disabled={generatingPr || !textGenAgentId}
-                  aria-label="Draft pull request title and description"
-                  title={
-                    textGenAgentId
-                      ? "Draft the title and description from the outgoing commits"
-                      : "Pick a text-generation agent in Settings first"
-                  }
-                  onClick={generatePr}
-                >
-                  {generatingPr ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Sparkles className="size-4" />
-                  )}
-                </button>
-              </div>
-            </label>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-xs font-medium text-muted-foreground">
-                Base branch <span className="text-muted-foreground/60">(optional)</span>
-              </span>
-              <input
-                value={prBase}
-                onChange={(e) => setPrBase(e.target.value)}
-                placeholder="repo default"
-                className="rounded-md border bg-background px-3 py-2 font-mono text-sm outline-none focus:border-primary"
-              />
-            </label>
-          </div>
+          <PrForm
+            info={info}
+            needsPush={needsPush}
+            prTitle={prTitle}
+            setPrTitle={setPrTitle}
+            prBody={prBody}
+            setPrBody={setPrBody}
+            prBase={prBase}
+            setPrBase={setPrBase}
+            generatingPr={generatingPr}
+            textGenAgentId={textGenAgentId}
+            onGenerate={() => void generatePr()}
+          />
         )}
 
         {mode === "push" && (
@@ -388,131 +323,28 @@ export default function PushDialog({ open, onOpenChange, task }: Props) {
         )}
 
         {mode === "pr" ? (
-          <footer className="flex h-[72px] shrink-0 items-center border-t bg-card/50 px-5">
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={creatingPr}
-              onClick={() => setMode("push")}
-            >
-              <ArrowLeft className="size-4" />
-              Back
-            </Button>
-            <div className="ml-auto flex items-center gap-3">
-              <Button
-                type="button"
-                variant="outline"
-                disabled={creatingPr}
-                onClick={() => onOpenChange(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                disabled={creatingPr || !prTitle.trim() || Boolean(repositoryOperation)}
-                onClick={() => void createPr()}
-              >
-                {creatingPr ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <GitPullRequestArrow className="size-4" />
-                )}
-                {prStep === "pushing"
-                  ? "Pushing…"
-                  : prStep === "creating"
-                    ? "Creating PR…"
-                    : needsPush
-                      ? "Push & Create PR"
-                      : "Create Pull Request"}
-              </Button>
-            </div>
-          </footer>
+          <PrFooter
+            creatingPr={creatingPr}
+            prTitle={prTitle}
+            prStep={prStep}
+            needsPush={needsPush}
+            repositoryOperation={repositoryOperation}
+            onBack={() => setMode("push")}
+            onCancel={() => onOpenChange(false)}
+            onCreatePr={() => void createPr()}
+          />
         ) : (
-        <footer className="flex h-[72px] shrink-0 items-center border-t bg-card/50 px-5">
-          <div className="min-w-0 text-xs text-muted-foreground">
-            {info && !info.hasUpstream && info.commits.length > 0 && (
-              <span>
-                First push will create upstream{" "}
-                <span className="font-mono text-foreground">{info.upstream}</span>.
-              </span>
-            )}
-            {info?.hasUpstream && info.commits.length > 0 && (
-              <span>
-                {info.commits.length} outgoing {info.commits.length === 1 ? "commit" : "commits"}
-              </span>
-            )}
-          </div>
-          <div className="ml-auto flex items-center gap-3">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={Boolean(pushing)}
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={!info || loading || Boolean(pushing)}
-              onClick={() => setMode("pr")}
-              title="Open a pull request for this branch"
-            >
-              <GitPullRequestArrow className="size-4" />
-              Create PR
-            </Button>
-            <div className="relative flex">
-              <Button
-                type="button"
-                className="rounded-r-none px-4"
-                disabled={
-                  !info?.commits.length ||
-                  loading ||
-                  Boolean(pushing) ||
-                  Boolean(repositoryOperation)
-                }
-                onClick={() => void push(false)}
-              >
-                {pushing === "push" ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <Upload className="size-4" />
-                )}
-                Push
-              </Button>
-              <Button
-                type="button"
-                size="icon"
-                className="rounded-l-none border-l border-primary-foreground/20"
-                disabled={
-                  !info?.commits.length ||
-                  loading ||
-                  Boolean(pushing) ||
-                  Boolean(repositoryOperation)
-                }
-                aria-label="Push options"
-                aria-expanded={menuOpen}
-                onClick={() => setMenuOpen((value) => !value)}
-              >
-                <ChevronDown className="size-4" />
-              </Button>
-              {menuOpen && (
-                <div className="absolute bottom-full right-0 z-20 mb-2 min-w-48 rounded-md border bg-popover p-1 shadow-xl">
-                  <button
-                    type="button"
-                    className="w-full rounded px-3 py-2 text-left text-sm hover:bg-accent"
-                    onClick={() => void push(true)}
-                  >
-                    <span className="block font-medium">Force Push</span>
-                    <span className="block text-xs text-muted-foreground">
-                      Uses force-with-lease
-                    </span>
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </footer>
+          <PushFooter
+            info={info}
+            loading={loading}
+            pushing={pushing}
+            menuOpen={menuOpen}
+            onMenuOpenChange={setMenuOpen}
+            repositoryOperation={repositoryOperation}
+            onCancel={() => onOpenChange(false)}
+            onCreatePr={() => setMode("pr")}
+            onPush={(force) => void push(force)}
+          />
         )}
       </DialogContent>
     </Dialog>

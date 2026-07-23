@@ -1,50 +1,63 @@
-import { css } from "@codemirror/lang-css";
-import { go } from "@codemirror/lang-go";
-import { html } from "@codemirror/lang-html";
-import { javascript } from "@codemirror/lang-javascript";
-import { json, jsonParseLinter } from "@codemirror/lang-json";
-import { markdown } from "@codemirror/lang-markdown";
-import { python } from "@codemirror/lang-python";
-import { rust } from "@codemirror/lang-rust";
-import { yaml } from "@codemirror/lang-yaml";
-import { linter } from "@codemirror/lint";
 import type { Extension } from "@codemirror/state";
 
-export function codemirrorLanguageForPath(path: string): Extension[] {
+export async function codemirrorLanguageForPath(path: string): Promise<Extension[]> {
   const filename = path.split(/[\\/]/).pop()?.toLowerCase() ?? "";
   const ext = filename.split(".").pop();
 
   switch (ext) {
     case "ts":
-    case "tsx":
+    case "tsx": {
+      const { javascript } = await import("@codemirror/lang-javascript");
       return [javascript({ jsx: true, typescript: true })];
+    }
     case "js":
     case "jsx":
     case "mjs":
-    case "cjs":
+    case "cjs": {
+      const { javascript } = await import("@codemirror/lang-javascript");
       return [javascript({ jsx: true })];
-    case "rs":
+    }
+    case "rs": {
+      const { rust } = await import("@codemirror/lang-rust");
       return [rust()];
-    case "go":
+    }
+    case "go": {
+      const { go } = await import("@codemirror/lang-go");
       return [go()];
-    case "json":
+    }
+    case "json": {
+      const [{ json, jsonParseLinter }, { linter }] = await Promise.all([
+        import("@codemirror/lang-json"),
+        import("@codemirror/lint"),
+      ]);
       return [json(), linter(jsonParseLinter())];
-    case "py":
+    }
     case "pyi":
     case "pyw":
+    case "py": {
+      const { python } = await import("@codemirror/lang-python");
       return [python()];
+    }
     case "yaml":
-    case "yml":
+    case "yml": {
+      const { yaml } = await import("@codemirror/lang-yaml");
       return [yaml()];
+    }
     case "md":
     case "markdown":
-    case "mdx":
+    case "mdx": {
+      const { markdown } = await import("@codemirror/lang-markdown");
       return [markdown()];
-    case "css":
+    }
+    case "css": {
+      const { css } = await import("@codemirror/lang-css");
       return [css()];
+    }
     case "html":
-    case "htm":
+    case "htm": {
+      const { html } = await import("@codemirror/lang-html");
       return [html()];
+    }
     default:
       return [];
   }
