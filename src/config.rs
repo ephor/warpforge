@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -91,15 +92,27 @@ pub fn sorted_services(config: &WorkspaceConfig) -> Vec<String> {
 /// Config file names in priority order: new → legacy.
 const CONFIG_NAMES: &[&str] = &[".warpforge.yaml", ".wf.yaml", ".workspace.yaml"];
 
-pub fn load_workspace_config(project_path: &Path) -> Option<WorkspaceConfig> {
+/// Load a project's config while preserving the distinction between a missing
+/// config and an existing file that could not be read or parsed.
+///
+/// Config observers use this to avoid replacing the last good UI state while
+/// an editor is in the middle of writing invalid YAML.
+pub fn try_load_workspace_config(project_path: &Path) -> Result<Option<WorkspaceConfig>> {
     for name in CONFIG_NAMES {
         let config_path = project_path.join(name);
         if config_path.exists() {
-            let text = fs::read_to_string(&config_path).ok()?;
-            return serde_yaml::from_str(&text).ok();
+            let text = fs::read_to_string(&config_path)
+                .with_context(|| format!("reading {}", config_path.display()))?;
+            let config = serde_yaml::from_str(&text)
+                .with_context(|| format!("parsing {}", config_path.display()))?;
+            return Ok(Some(config));
         }
     }
-    auto_detect(project_path)
+    Ok(auto_detect(project_path))
+}
+
+pub fn load_workspace_config(project_path: &Path) -> Option<WorkspaceConfig> {
+    try_load_workspace_config(project_path).ok().flatten()
 }
 
 /// Return the first existing config file path, or the default `.warpforge.yaml`.

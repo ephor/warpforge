@@ -470,6 +470,10 @@ pub enum Event {
     ProjectAdded(ProjectInfo),
     #[serde(rename = "project.removed")]
     ProjectRemoved { name: String },
+    /// A registered project's .warpforge.yaml changed. Replaces only the
+    /// config-derived slice of client state; task/session history is untouched.
+    #[serde(rename = "project.configChanged")]
+    ProjectConfigChanged(ProjectConfigState),
 
     #[serde(rename = "service.status")]
     ServiceStatus {
@@ -598,6 +602,14 @@ pub struct ProjectInfo {
     /// Services declared in .warpforge.yaml (may not be running).
     pub declared_services: Vec<String>,
     pub agent_templates: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectConfigState {
+    pub project: ProjectInfo,
+    pub services: Vec<ServiceInfo>,
+    pub portforwards: Vec<PortForwardInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1435,6 +1447,34 @@ mod tests {
     fn snapshot_event_roundtrip() {
         let ev = Event::Snapshot(Snapshot::default());
         let json = serde_json::to_string(&ev).unwrap();
+        let back: Event = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn project_config_changed_event_roundtrip() {
+        let ev = Event::ProjectConfigChanged(ProjectConfigState {
+            project: ProjectInfo {
+                name: "demo".into(),
+                path: "/tmp/demo".into(),
+                port_range: (4000, 4099),
+                declared_services: vec!["web".into()],
+                agent_templates: HashMap::new(),
+            },
+            services: vec![ServiceInfo {
+                project: "demo".into(),
+                name: "web".into(),
+                command: "npm run dev".into(),
+                status: ServiceStatus::Stopped,
+                original_port: 3000,
+                allocated_port: 0,
+                log_seq: 0,
+            }],
+            portforwards: Vec::new(),
+        });
+
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""event":"project.configChanged""#));
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(back, ev);
     }

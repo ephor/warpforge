@@ -420,6 +420,56 @@ fn apply_event(state: &Arc<Mutex<ClientState>>, ev: wire::Event) {
         wire::Event::ProjectRemoved { name } => {
             s.projects.retain(|p| p.name != name);
         }
+        wire::Event::ProjectConfigChanged(config) => {
+            let project = config.project.name.clone();
+            match s.projects.iter_mut().find(|p| p.name == project) {
+                Some(entry) => entry.path = config.project.path,
+                None => s.projects.push(ProjectEntry {
+                    name: project.clone(),
+                    path: config.project.path,
+                    added_at: String::new(),
+                }),
+            }
+
+            let mut service_logs = HashMap::new();
+            s.services.items.retain(|item| {
+                if item.project == project {
+                    service_logs.insert(item.name.clone(), item.logs.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            s.services
+                .items
+                .extend(config.services.into_iter().map(|item| ServiceView {
+                    logs: service_logs.remove(&item.name).unwrap_or_default(),
+                    project: item.project,
+                    name: item.name,
+                    status: service_status(item.status),
+                    original_port: item.original_port,
+                    allocated_port: item.allocated_port,
+                }));
+
+            let mut pf_logs = HashMap::new();
+            s.portforwards.items.retain(|item| {
+                if item.project == project {
+                    pf_logs.insert(item.name.clone(), item.logs.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            s.portforwards
+                .items
+                .extend(config.portforwards.into_iter().map(|item| PfView {
+                    logs: pf_logs.remove(&item.name).unwrap_or_default(),
+                    project: item.project,
+                    name: item.name,
+                    status: pf_status(item.status),
+                    local_port: item.local_port,
+                }));
+        }
         _ => {}
     }
 }

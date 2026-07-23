@@ -34,6 +34,7 @@ export type DaemonEvent =
   | { event: "state.snapshot"; data: Snapshot }
   | { event: "project.added"; data: ProjectInfo }
   | { event: "project.removed"; data: { name: string } }
+  | { event: "project.configChanged"; data: ProjectConfigState }
   | {
       event: "service.status";
       data: {
@@ -127,6 +128,12 @@ export interface ProjectInfo {
   portRange: [number, number];
   declaredServices: string[];
   agentTemplates: Record<string, string>;
+}
+
+export interface ProjectConfigState {
+  project: ProjectInfo;
+  services: ServiceInfo[];
+  portforwards: PortForwardInfo[];
 }
 
 export type ServiceStatus = "starting" | "running" | "stopped" | "failed";

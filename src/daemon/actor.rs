@@ -12,8 +12,10 @@
 //! live vt100 parser. Stage 2 adds a thin translation from this to the wire
 //! type for the socket.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -21,7 +23,10 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use warpforge_protocol as wire;
 
 use crate::agent::{AgentEvent, AgentManager, AgentStatus};
-use crate::config::{load_workspace_config, sorted_services};
+use crate::config::{
+    find_config_file, load_workspace_config, sorted_services, try_load_workspace_config,
+    WorkspaceConfig,
+};
 use crate::portforward::{PfEvent, PfStatus, PortForwardManager};
 use crate::registry::ProjectEntry;
 use crate::service::{kill_listeners_in_ranges, ServiceEvent, ServiceManager, ServiceStatus};
@@ -41,6 +46,99 @@ fn split_key(key: &str) -> (String, String) {
     match key.split_once('/') {
         Some((p, s)) => (p.to_string(), s.to_string()),
         None => (String::new(), key.to_string()),
+    }
+}
+
+type ConfigFingerprint = Option<(PathBuf, Vec<u8>)>;
+
+const CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const CONFIG_CHANGE_DEBOUNCE: Duration = Duration::from_millis(200);
+
+fn config_fingerprint(project_path: &Path) -> ConfigFingerprint {
+    let path = find_config_file(project_path);
+    std::fs::read(&path).ok().map(|contents| (path, contents))
+}
+
+/// Content-based, debounced observer for registered project configs.
+///
+/// Resolving the active config path on each pass rather than tracking one inode
+/// is important because many editors save by replacing the file atomically.
+/// Polling the small config files also keeps the daemon cross-platform without
+/// another native watcher dependency.
+struct ConfigObserver {
+    applied: HashMap<String, ConfigFingerprint>,
+    pending: HashMap<String, (ConfigFingerprint, Instant)>,
+}
+
+impl ConfigObserver {
+    fn new(projects: &[ProjectEntry]) -> Self {
+        Self {
+            applied: projects
+                .iter()
+                .map(|project| {
+                    (
+                        project.name.clone(),
+                        config_fingerprint(Path::new(&project.path)),
+                    )
+                })
+                .collect(),
+            pending: HashMap::new(),
+        }
+    }
+
+    fn track(&mut self, project: &ProjectEntry) {
+        self.applied.insert(
+            project.name.clone(),
+            config_fingerprint(Path::new(&project.path)),
+        );
+        self.pending.remove(&project.name);
+    }
+
+    fn untrack(&mut self, project: &str) {
+        self.applied.remove(project);
+        self.pending.remove(project);
+    }
+
+    fn ready(
+        &mut self,
+        projects: &[ProjectEntry],
+        now: Instant,
+    ) -> Vec<(String, ConfigFingerprint)> {
+        let registered: HashSet<&str> = projects.iter().map(|p| p.name.as_str()).collect();
+        self.applied
+            .retain(|project, _| registered.contains(project.as_str()));
+        self.pending
+            .retain(|project, _| registered.contains(project.as_str()));
+
+        let mut ready = Vec::new();
+        for project in projects {
+            let current = config_fingerprint(Path::new(&project.path));
+            if self.applied.get(&project.name) == Some(&current) {
+                self.pending.remove(&project.name);
+                continue;
+            }
+
+            match self.pending.get_mut(&project.name) {
+                Some((pending, since)) if *pending == current => {
+                    if now.duration_since(*since) >= CONFIG_CHANGE_DEBOUNCE {
+                        ready.push((project.name.clone(), current));
+                    }
+                }
+                Some((pending, since)) => {
+                    *pending = current;
+                    *since = now;
+                }
+                None => {
+                    self.pending.insert(project.name.clone(), (current, now));
+                }
+            }
+        }
+        ready
+    }
+
+    fn mark_applied(&mut self, project: &str, fingerprint: ConfigFingerprint) {
+        self.applied.insert(project.to_string(), fingerprint);
+        self.pending.remove(project);
     }
 }
 
@@ -558,6 +656,7 @@ pub enum Event {
     ProjectRemoved {
         name: String,
     },
+    ProjectConfigChanged(wire::ProjectConfigState),
     AgentsSetupNeeded {
         detected: Vec<wire::DetectedAgent>,
     },
@@ -1062,6 +1161,7 @@ impl DaemonHandle {
 
 pub struct Daemon {
     projects: Vec<ProjectEntry>,
+    config_observer: ConfigObserver,
     tasks: HashMap<String, Task>,
     /// Enabled ACP agent configurations (from SQLite, user-managed).
     configured_agents: Vec<wire::AgentConfig>,
@@ -1179,8 +1279,10 @@ impl Daemon {
             })
             .collect();
 
+        let config_observer = ConfigObserver::new(&projects);
         let daemon = Daemon {
             projects,
+            config_observer,
             tasks,
             configured_agents,
             sessions: HashMap::new(),
@@ -1263,96 +1365,143 @@ impl Daemon {
         }
     }
 
-    /// Build the serializable snapshot handed to a client on subscribe.
-    fn build_snapshot(&self) -> wire::Snapshot {
-        let projects = self
-            .projects
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let (start, end) = crate::ports::port_range(i);
-                let config = load_workspace_config(std::path::Path::new(&p.path));
-                let declared_services = config.as_ref().map(sorted_services).unwrap_or_default();
-                let agent_templates = config
-                    .as_ref()
-                    .and_then(|c| c.agent_templates.clone())
-                    .map(|m| m.into_iter().map(|(k, v)| (k, v.command)).collect())
-                    .unwrap_or_default();
-                wire::ProjectInfo {
-                    name: p.name.clone(),
-                    path: p.path.clone(),
-                    port_range: (start, end),
-                    declared_services,
-                    agent_templates,
-                }
+    fn build_project_config_state(
+        &self,
+        index: usize,
+        config: Option<&WorkspaceConfig>,
+    ) -> wire::ProjectConfigState {
+        let project = &self.projects[index];
+        let (start, end) = crate::ports::port_range(index);
+        let declared_services = config.map(sorted_services).unwrap_or_default();
+        let agent_templates = config
+            .and_then(|c| c.agent_templates.as_ref())
+            .map(|templates| {
+                templates
+                    .iter()
+                    .map(|(name, template)| (name.clone(), template.command.clone()))
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
 
-        let services = self
-            .services
-            .all()
-            .map(|s| wire::ServiceInfo {
-                project: s.project_name.clone(),
-                name: s.name.clone(),
-                command: s.command.clone(),
-                status: wireconv::service_status(&s.status),
-                original_port: s.original_port,
-                allocated_port: s.allocated_port,
-                log_seq: 0,
+        // Start from every declared service in a stopped state, then overlay a
+        // matching live process. This lets clients render Start controls before
+        // a service has ever been launched.
+        let mut service_map: HashMap<String, wire::ServiceInfo> = config
+            .map(|config| {
+                config
+                    .services
+                    .iter()
+                    .map(|(name, service)| {
+                        (
+                            name.clone(),
+                            wire::ServiceInfo {
+                                project: project.name.clone(),
+                                name: name.clone(),
+                                command: service.command.clone(),
+                                status: wire::ServiceStatus::Stopped,
+                                original_port: service.port.unwrap_or(0),
+                                allocated_port: 0,
+                                log_seq: 0,
+                            },
+                        )
+                    })
+                    .collect()
             })
-            .collect();
-
-        // Build portforwards from config first (Stopped), then override with
-        // live state for any that have been started. This ensures portforwards
-        // always appear in the snapshot even before they're started.
-        let mut pf_map: std::collections::HashMap<String, wire::PortForwardInfo> =
-            std::collections::HashMap::new();
-        for p in &self.projects {
-            if let Some(config) = load_workspace_config(std::path::Path::new(&p.path)) {
-                for pf_cfg in &config.portforwards {
-                    let name = pf_cfg
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| format!("{}:{}", pf_cfg.namespace, pf_cfg.pod));
-                    let key = format!("{}/{}", p.name, name);
-                    pf_map.insert(
-                        key,
-                        wire::PortForwardInfo {
-                            project: p.name.clone(),
-                            name,
-                            namespace: pf_cfg.namespace.clone(),
-                            pod: pf_cfg.pod.clone(),
-                            local_port: pf_cfg.local_port,
-                            remote_port: pf_cfg.remote_port,
-                            status: wire::PortForwardStatus::Stopped,
-                            log_seq: 0,
-                        },
-                    );
+            .unwrap_or_default();
+        for service in self.services.list_for_project(&project.name) {
+            if let Some(declared) = service_map.get_mut(&service.name) {
+                declared.status = wireconv::service_status(&service.status);
+                declared.allocated_port = service.allocated_port;
+                if matches!(
+                    service.status,
+                    ServiceStatus::Starting | ServiceStatus::Running
+                ) {
+                    // A running process still reflects the definition it was
+                    // launched with. Stopped/failed entries use the refreshed
+                    // config so their next Start is represented accurately.
+                    declared.command = service.command.clone();
+                    declared.original_port = service.original_port;
                 }
             }
         }
-        for (key, pf) in &self.portforwards.forwards {
-            let project = key
-                .split_once('/')
-                .map(|(p, _)| p)
-                .unwrap_or("")
-                .to_string();
-            pf_map.insert(
-                key.clone(),
-                wire::PortForwardInfo {
-                    project,
-                    name: pf.name.clone(),
-                    namespace: pf.namespace.clone(),
-                    pod: pf.pod_prefix.clone(),
-                    local_port: pf.local_port,
-                    remote_port: pf.remote_port,
-                    status: wireconv::pf_status(&pf.status),
-                    log_seq: 0,
-                },
-            );
+        let mut services: Vec<_> = service_map.into_values().collect();
+        services.sort_by(|a, b| a.name.cmp(&b.name));
+
+        // As with services, declared port-forwards exist in client state even
+        // before kubectl has been started. Live state wins only while that
+        // forward is still present in the current config.
+        let mut pf_map: HashMap<String, wire::PortForwardInfo> = config
+            .map(|config| {
+                config
+                    .portforwards
+                    .iter()
+                    .map(|pf| {
+                        let name = pf
+                            .name
+                            .clone()
+                            .unwrap_or_else(|| format!("{}:{}", pf.namespace, pf.pod));
+                        (
+                            name.clone(),
+                            wire::PortForwardInfo {
+                                project: project.name.clone(),
+                                name,
+                                namespace: pf.namespace.clone(),
+                                pod: pf.pod.clone(),
+                                local_port: pf.local_port,
+                                remote_port: pf.remote_port,
+                                status: wire::PortForwardStatus::Stopped,
+                                log_seq: 0,
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for pf in self.portforwards.list_for_project(&project.name) {
+            if pf_map.contains_key(&pf.name) {
+                pf_map.insert(
+                    pf.name.clone(),
+                    wire::PortForwardInfo {
+                        project: project.name.clone(),
+                        name: pf.name.clone(),
+                        namespace: pf.namespace.clone(),
+                        pod: pf.pod_prefix.clone(),
+                        local_port: pf.local_port,
+                        remote_port: pf.remote_port,
+                        status: wireconv::pf_status(&pf.status),
+                        log_seq: 0,
+                    },
+                );
+            }
         }
-        let mut portforwards: Vec<wire::PortForwardInfo> = pf_map.into_values().collect();
+        let mut portforwards: Vec<_> = pf_map.into_values().collect();
         portforwards.sort_by(|a, b| a.name.cmp(&b.name));
+
+        wire::ProjectConfigState {
+            project: wire::ProjectInfo {
+                name: project.name.clone(),
+                path: project.path.clone(),
+                port_range: (start, end),
+                declared_services,
+                agent_templates,
+            },
+            services,
+            portforwards,
+        }
+    }
+
+    /// Build the serializable snapshot handed to a client on subscribe.
+    fn build_snapshot(&self) -> wire::Snapshot {
+        let mut projects = Vec::new();
+        let mut services = Vec::new();
+        let mut portforwards = Vec::new();
+        for (index, project) in self.projects.iter().enumerate() {
+            let config = load_workspace_config(Path::new(&project.path));
+            let state = self.build_project_config_state(index, config.as_ref());
+            projects.push(state.project);
+            services.extend(state.services);
+            portforwards.extend(state.portforwards);
+        }
 
         let mut tasks: Vec<wire::TaskInfo> = self.tasks.values().map(wireconv::task_info).collect();
         tasks.sort_by_key(|task| std::cmp::Reverse(task.created_at));
@@ -1429,6 +1578,9 @@ impl Daemon {
             Update(oneshot::Sender<Vec<String>>),
         }
 
+        let mut config_poll = tokio::time::interval(CONFIG_POLL_INTERVAL);
+        config_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         let shutdown_reply = loop {
             tokio::select! {
                 maybe_cmd = cmd_rx.recv() => {
@@ -1450,6 +1602,7 @@ impl Daemon {
                 Some(ev) = pf_rx.recv() => self.handle_pf_event(ev),
                 Some((task_id, update)) = acp_rx.recv() => self.handle_acp_update(task_id, update),
                 Some(check) = policy_rx.recv() => self.handle_policy_check(check).await,
+                _ = config_poll.tick() => self.handle_config_changes().await,
             }
         };
 
@@ -1466,6 +1619,35 @@ impl Daemon {
                 let _ = reply.send(Vec::new());
             }
             None => {}
+        }
+    }
+
+    async fn handle_config_changes(&mut self) {
+        let ready = self.config_observer.ready(&self.projects, Instant::now());
+        for (project_name, fingerprint) in ready {
+            let Some(index) = self
+                .projects
+                .iter()
+                .position(|project| project.name == project_name)
+            else {
+                continue;
+            };
+            let project_path = self.projects[index].path.clone();
+
+            // An existing but invalid file is commonly just an editor's
+            // intermediate save. Keep the last rendered state and retry after
+            // the contents change instead of flashing empty controls.
+            let config = match try_load_workspace_config(Path::new(&project_path)) {
+                Ok(config) => config,
+                Err(_) => continue,
+            };
+
+            self.remove_undeclared_runtime(&project_name, config.as_ref())
+                .await;
+            self.config_observer
+                .mark_applied(&project_name, fingerprint);
+            let state = self.build_project_config_state(index, config.as_ref());
+            self.emit(Event::ProjectConfigChanged(state));
         }
     }
 
@@ -1524,11 +1706,15 @@ impl Daemon {
             } => {
                 self.emit_service_status(project, service);
             }
-            _ => self.emit(broadcast),
+            Event::ServiceLog {
+                project, service, ..
+            } if self.services.get(project, service).is_some() => self.emit(broadcast),
+            _ => {}
         }
     }
 
     fn handle_pf_event(&mut self, ev: PfEvent) {
+        let key = format!("{}/{}", ev.project(), ev.name());
         let broadcast = match &ev {
             PfEvent::Log {
                 project,
@@ -1553,7 +1739,9 @@ impl Daemon {
             },
         };
         self.portforwards.apply_event(ev);
-        self.emit(broadcast);
+        if self.portforwards.forwards.contains_key(&key) {
+            self.emit(broadcast);
+        }
     }
 
     fn update_blockers_snapshot(&self) -> Vec<String> {
@@ -2591,6 +2779,52 @@ impl Daemon {
         self.start_portforwards(name).await;
     }
 
+    /// Retire runtime entries that the refreshed config can no longer control.
+    /// Existing services whose command changed keep running until the user
+    /// restarts them; removed services and changed/removed forwards are stopped
+    /// so no invisible processes are left behind.
+    async fn remove_undeclared_runtime(&mut self, project: &str, config: Option<&WorkspaceConfig>) {
+        let declared_services: HashSet<&str> = config
+            .map(|config| config.services.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+        let removed_services: Vec<String> = self
+            .services
+            .list_for_project(project)
+            .into_iter()
+            .filter(|service| !declared_services.contains(service.name.as_str()))
+            .map(|service| service.name.clone())
+            .collect();
+        for service in removed_services {
+            self.services.remove(project, &service).await.ok();
+        }
+
+        let removed_or_changed_forwards: Vec<String> = self
+            .portforwards
+            .list_for_project(project)
+            .into_iter()
+            .filter(|running| {
+                !config.is_some_and(|config| {
+                    config.portforwards.iter().any(|declared| {
+                        let name = declared
+                            .name
+                            .as_deref()
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("{}:{}", declared.namespace, declared.pod));
+                        name == running.name
+                            && declared.namespace == running.namespace
+                            && declared.pod == running.pod_prefix
+                            && declared.local_port == running.local_port
+                            && declared.remote_port == running.remote_port
+                    })
+                })
+            })
+            .map(|forward| forward.name.clone())
+            .collect();
+        for forward in removed_or_changed_forwards {
+            self.portforwards.remove(project, &forward);
+        }
+    }
+
     /// Register a new project: write to registry, generate config if missing,
     /// add to in-memory list, and broadcast the update to all clients.
     async fn add_project(
@@ -2610,25 +2844,14 @@ impl Daemon {
 
         // Add to in-memory list.
         self.projects.push(entry.clone());
+        self.config_observer.track(&entry);
 
         // Broadcast to all subscribed clients.
         let index = self.projects.len() - 1;
-        let (start, end) = crate::ports::port_range(index);
         let config = load_workspace_config(std::path::Path::new(&entry.path));
-        let declared_services = config.as_ref().map(sorted_services).unwrap_or_default();
-        let agent_templates = config
-            .as_ref()
-            .and_then(|c| c.agent_templates.clone())
-            .map(|m| m.into_iter().map(|(k, v)| (k, v.command)).collect())
-            .unwrap_or_default();
-        let info = wire::ProjectInfo {
-            name: entry.name.clone(),
-            path: entry.path.clone(),
-            port_range: (start, end),
-            declared_services,
-            agent_templates,
-        };
-        self.emit(Event::ProjectAdded(info));
+        let state = self.build_project_config_state(index, config.as_ref());
+        self.emit(Event::ProjectAdded(state.project.clone()));
+        self.emit(Event::ProjectConfigChanged(state));
 
         Ok(entry)
     }
@@ -2638,6 +2861,7 @@ impl Daemon {
         crate::registry::remove_project(name).map_err(|e| format!("registry: {e}"))?;
 
         self.projects.retain(|p| p.name != name);
+        self.config_observer.untrack(name);
 
         self.emit(Event::ProjectRemoved {
             name: name.to_string(),

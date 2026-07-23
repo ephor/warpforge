@@ -245,9 +245,9 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                 <div className="ml-auto">
                   {running.length === project.declaredServices.length ? (
                     <Button
-                      variant="destructive"
+                      variant="outline"
                       size="sm"
-                      className="h-6 text-[10px] font-normal normal-case tracking-normal"
+                      className="h-6 border-destructive/20 bg-destructive/5 px-2 text-[10px] font-normal normal-case tracking-normal text-destructive/75 hover:border-destructive/35 hover:bg-destructive/10 hover:text-destructive"
                       onClick={() =>
                         void daemon.request("service.stopAll", { project: project.name })
                       }
@@ -300,9 +300,9 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                 <div className="ml-auto">
                   {pfs.every((pf) => pf.status === "active") ? (
                     <Button
-                      variant="destructive"
+                      variant="outline"
                       size="sm"
-                      className="h-6 text-[10px] font-normal normal-case tracking-normal"
+                      className="h-6 border-destructive/20 bg-destructive/5 px-2 text-[10px] font-normal normal-case tracking-normal text-destructive/75 hover:border-destructive/35 hover:bg-destructive/10 hover:text-destructive"
                       onClick={() =>
                         void daemon.request("portforward.stopAll", { project: project.name })
                       }
@@ -420,7 +420,9 @@ function ServiceRow({
         ) : (
           <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
         )}
-        <span className="w-36 truncate text-sm font-medium">{name}</span>
+        <span className="w-36 truncate text-sm font-medium" title={name}>
+          {name}
+        </span>
         <Badge variant={badge.variant}>{badge.label}</Badge>
         <span className="tnum w-16 font-mono text-xs text-primary">
           {svc && svc.allocatedPort > 0 ? `:${svc.allocatedPort}` : ""}
@@ -432,8 +434,8 @@ function ServiceRow({
           {!canStop && (
             <Button
               variant="outline"
-              size="sm"
-              className="h-7"
+              size="icon"
+              className="size-7"
               title={`Start ${name}`}
               aria-label={`Start ${name}`}
               onClick={() => void daemon.request("service.start", { project, service: name })}
@@ -444,8 +446,8 @@ function ServiceRow({
           {canRestart && (
             <Button
               variant="outline"
-              size="sm"
-              className="h-7"
+              size="icon"
+              className="size-7"
               title={`Restart ${name}`}
               aria-label={`Restart ${name}`}
               onClick={() => void daemon.request("service.restart", { project, service: name })}
@@ -455,9 +457,9 @@ function ServiceRow({
           )}
           {canStop && (
             <Button
-              variant="destructive"
-              size="sm"
-              className="h-7"
+              variant="outline"
+              size="icon"
+              className="size-7 border-destructive/20 bg-destructive/5 text-destructive/75 hover:border-destructive/35 hover:bg-destructive/10 hover:text-destructive"
               title={`Stop ${name}`}
               aria-label={`Stop ${name}`}
               onClick={() => void daemon.request("service.stop", { project, service: name })}
@@ -538,7 +540,9 @@ function PortForwardRow({
           <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
         )}
         <PlugZap className="size-4 text-muted-foreground" />
-        <span className="w-36 truncate text-sm font-medium">{pf.name}</span>
+        <span className="w-36 truncate text-sm font-medium" title={pf.name}>
+          {pf.name}
+        </span>
         <Badge variant={badge.variant}>{badge.label}</Badge>
         <span className="tnum font-mono text-xs text-primary">
           :{pf.localPort} → {pf.remotePort}
@@ -550,8 +554,10 @@ function PortForwardRow({
           {!active && (
             <Button
               variant="outline"
-              size="sm"
-              className="h-7"
+              size="icon"
+              className="size-7"
+              title={`Start ${pf.name}`}
+              aria-label={`Start ${pf.name}`}
               onClick={() =>
                 void daemon.request("portforward.start", {
                   name: pf.name,
@@ -564,9 +570,11 @@ function PortForwardRow({
           )}
           {active && (
             <Button
-              variant="destructive"
-              size="sm"
-              className="h-7"
+              variant="outline"
+              size="icon"
+              className="size-7 border-destructive/20 bg-destructive/5 text-destructive/75 hover:border-destructive/35 hover:bg-destructive/10 hover:text-destructive"
+              title={`Stop ${pf.name}`}
+              aria-label={`Stop ${pf.name}`}
               onClick={() =>
                 void daemon.request("portforward.stop", {
                   name: pf.name,
@@ -574,8 +582,8 @@ function PortForwardRow({
                 })
               }
             >
-            <Square className="size-3" />
-          </Button>
+              <Square className="size-3" />
+            </Button>
           )}
         </div>
       </div>
@@ -595,7 +603,10 @@ function PortForwardRow({
               type="button"
               className="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
               onClick={() =>
-                onSendToAgent(project, `Logs for port-forward "${pf.name}":\n\`\`\`\n${logText}\n\`\`\``)
+                onSendToAgent(
+                  project,
+                  `Logs for port-forward "${pf.name}":\n\`\`\`\n${logText}\n\`\`\``,
+                )
               }
             >
               <Send className="size-3" /> send to agent

@@ -238,6 +238,13 @@ impl PortForwardManager {
         }
     }
 
+    /// Stop and forget a forward removed from (or changed in) project config.
+    pub fn remove(&mut self, project_name: &str, name: &str) {
+        let key = format!("{project_name}/{name}");
+        self.stop(project_name, name);
+        self.forwards.remove(&key);
+    }
+
     #[allow(dead_code)] // retained for symmetry with the other managers
     pub fn list_for_project(&self, project_name: &str) -> Vec<&ManagedPortForward> {
         let prefix = format!("{project_name}/");

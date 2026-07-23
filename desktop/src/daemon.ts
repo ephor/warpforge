@@ -577,6 +577,27 @@ export class DaemonClient {
           },
         });
         break;
+      case "project.configChanged": {
+        const { project, services, portforwards } = ev.data;
+        const exists = snap.projects.some((item) => item.name === project.name);
+        this.setState({
+          snapshot: {
+            ...snap,
+            projects: exists
+              ? snap.projects.map((item) => (item.name === project.name ? project : item))
+              : [...snap.projects, project],
+            services: [
+              ...snap.services.filter((item) => item.project !== project.name),
+              ...services,
+            ],
+            portforwards: [
+              ...snap.portforwards.filter((item) => item.project !== project.name),
+              ...portforwards,
+            ],
+          },
+        });
+        break;
+      }
       case "service.status": {
         const exists = snap.services.some(
           (s) => s.project === ev.data.project && s.name === ev.data.service,
