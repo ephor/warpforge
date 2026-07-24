@@ -1,8 +1,4 @@
-import {
-  ArrowLeft,
-  GitPullRequestArrow,
-  Loader2,
-} from "lucide-react";
+import { ArrowLeft, GitPullRequestArrow, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -31,22 +27,12 @@ export function PrFooter({
 }: PrFooterProps) {
   return (
     <footer className="flex h-[72px] shrink-0 items-center border-t bg-card/50 px-5">
-      <Button
-        type="button"
-        variant="ghost"
-        disabled={creatingPr}
-        onClick={onBack}
-      >
+      <Button type="button" variant="ghost" disabled={creatingPr} onClick={onBack}>
         <ArrowLeft className="size-4" />
         Back
       </Button>
       <div className="ml-auto flex items-center gap-3">
-        <Button
-          type="button"
-          variant="outline"
-          disabled={creatingPr}
-          onClick={onCancel}
-        >
+        <Button type="button" variant="outline" disabled={creatingPr} onClick={onCancel}>
           Cancel
         </Button>
         <Button

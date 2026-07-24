@@ -6,33 +6,24 @@ export function buildConversationBranchPrompt(
   updates: SessionUpdate[],
   throughIndex: number,
 ): string {
-  return buildConversationBranchPrompts(task, updates)[throughIndex] ?? "";
-}
-
-/** Build every branch point in one pass so streaming does not create O(n²) work. */
-export function buildConversationBranchPrompts(task: TaskInfo, updates: SessionUpdate[]): string[] {
+  if (throughIndex < 0 || throughIndex >= updates.length) return "";
   const messages: string[] = [];
-  const prompts: string[] = [];
+  for (let index = 0; index <= throughIndex; index += 1) {
+    const update = updates[index];
+    if (update.kind === "user_message") messages.push(`User:\n${update.text}`);
+    if (update.kind === "agent_text") messages.push(`Assistant (${task.agent}):\n${update.text}`);
+  }
 
   const workspace = task.worktree
     ? `The source task uses this worktree: ${task.worktree}`
     : `The source task uses the main ${task.project} project checkout.`;
-
-  for (const update of updates) {
-    if (update.kind === "user_message") messages.push(`User:\n${update.text}`);
-    if (update.kind === "agent_text") messages.push(`Assistant (${task.agent}):\n${update.text}`);
-    prompts.push(
-      [
-        `Continue a branched conversation from Warpforge task ${task.id}.`,
-        `Original task: ${task.prompt}`,
-        workspace,
-        "The transcript intentionally ends at the message where the branch was created. The original conversation remains active. Inspect the current repository state before making changes, then continue from this point.",
-        "--- Branched conversation ---",
-        messages.join("\n\n") ||
-          "(No user or assistant text was available before this branch point.)",
-        "--- End branched conversation ---",
-      ].join("\n\n"),
-    );
-  }
-  return prompts;
+  return [
+    `Continue a branched conversation from Warpforge task ${task.id}.`,
+    `Original task: ${task.prompt}`,
+    workspace,
+    "The transcript intentionally ends at the message where the branch was created. The original conversation remains active. Inspect the current repository state before making changes, then continue from this point.",
+    "--- Branched conversation ---",
+    messages.join("\n\n") || "(No user or assistant text was available before this branch point.)",
+    "--- End branched conversation ---",
+  ].join("\n\n");
 }

@@ -1,7 +1,7 @@
 import { Check, Clock, Minus } from "lucide-react";
 
-import { cn } from "@/lib/utils";
 import { META, type StatusActivity, type StatusKind } from "@/lib/statusMeta";
+import { cn } from "@/lib/utils";
 
 type Tone = "ok" | "warn" | "destructive" | "neutral";
 type Glyph = "dot" | "ring" | "clock" | "check" | "minus";

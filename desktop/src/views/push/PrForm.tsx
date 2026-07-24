@@ -1,9 +1,4 @@
-import {
-  ArrowRight,
-  GitBranch,
-  Loader2,
-  Sparkles,
-} from "lucide-react";
+import { ArrowRight, GitBranch, Loader2, Sparkles } from "lucide-react";
 
 import type { GitPushInfo } from "../../protocol";
 

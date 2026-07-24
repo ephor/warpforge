@@ -7,15 +7,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { agentDisplayName } from "@/lib/agentNames";
+import { statusLabel } from "@/lib/statusMeta";
 import { flattenTaskTree, type TaskTree } from "@/lib/taskGroups";
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
-import { agentDisplayName } from "@/lib/agentNames";
-
 import { AgentBadge } from "./AgentBadge";
 import { StatusBadge } from "./StatusBadge";
-import { statusLabel } from "@/lib/statusMeta";
 
 export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
   currentTaskId,
@@ -75,10 +74,7 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
                   {index === 0 ? (
                     <span className="font-medium text-foreground">Lead</span>
                   ) : (
-                    <AgentBadge
-                      agentId={member.agent}
-                      className="font-medium text-foreground"
-                    />
+                    <AgentBadge agentId={member.agent} className="font-medium text-foreground" />
                   )}
                   <StatusBadge status={member.status} size="xs" />
                 </span>

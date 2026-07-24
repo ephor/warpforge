@@ -770,6 +770,10 @@ pub enum SessionUpdate {
         additions: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         deletions: Option<u32>,
+        /// Compact per-operation hunks derived from ACP's oldText/newText.
+        /// Older histories and lower-fidelity agents may not include them.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        hunks: Vec<EditHunk>,
     },
     PermissionRequest {
         request_id: String,
@@ -800,6 +804,19 @@ pub enum SessionUpdate {
     TurnEnded {
         stop_reason: String,
     },
+}
+
+/// One concrete edit operation reported by ACP. Unlike `Hunk`, this is scoped
+/// to one tool call rather than the aggregate working-tree diff against HEAD.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EditHunk {
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
+    /// Only changed lines, prefixed with '+' or '-'.
+    pub lines: Vec<String>,
 }
 
 /// A transient attachment sent with a prompt. Image data is never persisted.
@@ -1368,9 +1385,30 @@ mod tests {
                 tool_call_id: None,
                 additions: None,
                 deletions: None,
+                hunks,
                 ..
-            }
+            } if hunks.is_empty()
         ));
+
+        let detailed_file_edit = SessionUpdate::FileEdit {
+            path: "src/main.rs".into(),
+            tool_call_id: Some("edit-1".into()),
+            additions: Some(1),
+            deletions: Some(1),
+            hunks: vec![EditHunk {
+                old_start: 4,
+                old_lines: 1,
+                new_start: 4,
+                new_lines: 1,
+                lines: vec!["-old".into(), "+new".into()],
+            }],
+        };
+        let value = serde_json::to_value(&detailed_file_edit).unwrap();
+        assert_eq!(value["hunks"][0]["newStart"], 4);
+        assert_eq!(
+            serde_json::from_value::<SessionUpdate>(value).unwrap(),
+            detailed_file_edit
+        );
     }
 
     #[test]

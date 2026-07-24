@@ -3214,12 +3214,14 @@ impl Daemon {
                 tool_call_id,
                 additions,
                 deletions,
+                hunks,
             } => {
                 let update = wire::SessionUpdate::FileEdit {
                     path,
                     tool_call_id: Some(tool_call_id),
                     additions,
                     deletions,
+                    hunks,
                 };
                 if self.should_skip_resume_replay(&task_id, &update) {
                     return;

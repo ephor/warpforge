@@ -8,17 +8,22 @@ import {
   prunePermissionCache,
   type PermissionUpdate,
 } from "@/lib/sessionPermissions";
+import type { StatusKind } from "@/lib/statusMeta";
 import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/lib/taskGroups";
 import { cn } from "@/lib/utils";
 
 import type { DaemonState } from "../daemon";
 import type { TaskInfo, TaskStatus } from "../protocol";
 import { useUi } from "../store/ui";
-import { RailFilterBar, type FilterMode, type GroupMode, type SortMode } from "./attention/RailFilterBar";
 import { AgentBadge } from "./AgentBadge";
-import { StatusBadge } from "./StatusBadge";
-import type { StatusKind } from "@/lib/statusMeta";
+import {
+  RailFilterBar,
+  type FilterMode,
+  type GroupMode,
+  type SortMode,
+} from "./attention/RailFilterBar";
 import SessionRailCard from "./SessionRailCard";
+import { StatusBadge } from "./StatusBadge";
 
 /**
  * "Needs you" rail — live tasks, with human-blocked work promoted to the top.

@@ -6,9 +6,7 @@ import type { DetectedAgent } from "@/protocol";
 const { daemonState, detectAgents, installAgent, saveAgents } = vi.hoisted(() => ({
   daemonState: { snapshot: { agents: [] as unknown[] } },
   detectAgents: vi.fn<() => Promise<DetectedAgent[]>>(),
-  installAgent: vi.fn<
-    (id: string) => Promise<{ ok: boolean; command: string; output: string }>
-  >(),
+  installAgent: vi.fn<(id: string) => Promise<{ ok: boolean; command: string; output: string }>>(),
   saveAgents: vi.fn<() => Promise<void>>(),
 }));
 
@@ -26,10 +24,7 @@ vi.mock("@/daemon", () => ({
 
 import AgentSetupPanel from "./AgentSetupPanel";
 
-const agent = (
-  id: string,
-  overrides: Partial<DetectedAgent> = {},
-): DetectedAgent => ({
+const agent = (id: string, overrides: Partial<DetectedAgent> = {}): DetectedAgent => ({
   canManage: true,
   defaultAcpCommand: `acp-${id}`,
   displayName: id.charAt(0).toUpperCase() + id.slice(1),

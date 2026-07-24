@@ -10,8 +10,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-import type { DetectedAgent } from "../protocol";
 import AgentSetupPanel from "../components/AgentSetupPanel";
+import type { DetectedAgent } from "../protocol";
 
 interface Props {
   detected: DetectedAgent[];

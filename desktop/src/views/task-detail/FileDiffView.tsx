@@ -6,8 +6,7 @@ import { withOccurrenceKeys } from "@/lib/renderKeys";
 import { cn } from "@/lib/utils";
 
 import type { FileDiff, HunkResolution } from "../../protocol";
-
-export const fileAnchor = (path: string) => `diff-${path.replace(/[^a-zA-Z0-9]/g, "-")}`;
+import { hunkAnchor } from "./diffAnchors";
 
 export function formatFileDiffAsMessage(file: FileDiff): string {
   const header =
@@ -37,14 +36,17 @@ export function FileDiffView({
   localRes,
   onResolve,
   onSendToChat,
+  highlightedHunks,
 }: {
   id?: string;
   file: FileDiff;
   localRes: Record<string, HunkResolution>;
   onResolve: (file: string, hunkIndex: number, r: HunkResolution) => void;
   onSendToChat?: (file: FileDiff) => void;
+  highlightedHunks?: ReadonlySet<number>;
 }) {
   const [open, setOpen] = useState(true);
+  const expanded = open || Boolean(highlightedHunks?.size);
   const statusColor =
     file.status === "added"
       ? "text-ok"
@@ -59,7 +61,7 @@ export function FileDiffView({
         className="flex w-full items-center gap-2 bg-secondary/50 px-3 py-2 text-left font-mono text-xs hover:bg-secondary"
         onClick={() => setOpen((o) => !o)}
       >
-        <ChevronDown className={cn("size-3.5 transition-transform", !open && "-rotate-90")} />
+        <ChevronDown className={cn("size-3.5 transition-transform", !expanded && "-rotate-90")} />
         <span className={cn("uppercase", statusColor)}>{file.status}</span>
         <span>
           {file.status === "renamed" && file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
@@ -83,14 +85,17 @@ export function FileDiffView({
           </span>
         )}
       </button>
-      {open &&
+      {expanded &&
         file.hunks.map((hunk, i) => {
           const resolution = hunk.resolution ?? localRes[`${file.path}#${i}`] ?? null;
           return (
             <div
+              id={hunkAnchor(file.path, i)}
               key={`${hunk.oldStart}:${hunk.oldLines}:${hunk.newStart}:${hunk.newLines}`}
               className={cn(
-                "border-t",
+                "scroll-mt-2 border-t transition-[background-color,box-shadow] duration-300",
+                highlightedHunks?.has(i) &&
+                  "relative z-10 bg-primary/10 shadow-[inset_0_0_0_2px_hsl(var(--primary))]",
                 resolution === "accept" && "border-l-2 border-l-ok",
                 resolution === "reject" && "border-l-2 border-l-destructive opacity-50",
               )}

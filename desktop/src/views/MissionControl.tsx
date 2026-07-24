@@ -34,7 +34,7 @@ import {
 } from "@/lib/sessionPermissions";
 import { latestContextUsage } from "@/lib/sessionUsage";
 import { elapsed } from "@/lib/status";
-import { taskLabel } from "@/lib/taskLabel";
+import type { StatusKind } from "@/lib/statusMeta";
 import {
   buildTaskGroupIndex,
   flattenTaskTree,
@@ -45,22 +45,22 @@ import {
   type TaskGroupStatus,
   type TaskTree,
 } from "@/lib/taskGroups";
+import { taskLabel } from "@/lib/taskLabel";
 import { toolDisplayTitle } from "@/lib/toolDisplay";
 import { cn } from "@/lib/utils";
 
 import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
 import { AgentBadge } from "../components/AgentBadge";
 import { AgentConfigBar } from "../components/AgentConfigBar";
-import { StatusBadge } from "../components/StatusBadge";
-import type { StatusKind } from "@/lib/statusMeta";
 import { Composer } from "../components/Composer";
 import type { FileLinkResolver } from "../components/Markdown";
-import { BufferedMarkdown, Markdown } from "../components/Markdown";
+import { BufferedMarkdown, CollapsibleMarkdown, Markdown } from "../components/Markdown";
+import { StatusBadge } from "../components/StatusBadge";
 import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { ThinkingBlock } from "../components/ThinkingBlock";
 import type { DaemonState } from "../daemon";
 import { daemon } from "../daemon";
-import type { CommandInfo, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
+import type { CommandInfo, EditHunk, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
 import { daemonQuery } from "../query";
 import { useUi } from "../store/ui";
 import { coalesceUpdates, streamKey } from "./missionControlStream";
@@ -695,8 +695,10 @@ export function StreamLine({
   resolved,
   resolveFilePath,
   onOpenFile,
+  onOpenFileDiff,
   project,
   thinkingActive,
+  textStreaming,
 }: {
   update: SessionUpdate;
   compact?: boolean;
@@ -706,10 +708,13 @@ export function StreamLine({
   resolved?: Record<string, string>;
   resolveFilePath?: FileLinkResolver;
   onOpenFile?: (path: string) => void;
+  onOpenFileDiff?: (path: string, hunks?: EditHunk[]) => void;
   /** Project root label retained after stripping the machine-specific prefix. */
   project?: string;
   /** True only for the thought block currently receiving streamed deltas. */
   thinkingActive?: boolean;
+  /** True only for the assistant text block currently receiving deltas. */
+  textStreaming?: boolean;
 }) {
   switch (update.kind) {
     case "user_message":
@@ -720,13 +725,19 @@ export function StreamLine({
             compact && "text-xs",
           )}
         >
-          <Markdown
-            className={compact ? "text-current" : undefined}
-            resolveFilePath={resolveFilePath}
-            onOpenFile={onOpenFile}
-          >
-            {compact ? `› ${update.text}` : update.text}
-          </Markdown>
+          {compact ? (
+            <Markdown
+              className="text-current"
+              resolveFilePath={resolveFilePath}
+              onOpenFile={onOpenFile}
+            >
+              {`› ${update.text}`}
+            </Markdown>
+          ) : (
+            <CollapsibleMarkdown resolveFilePath={resolveFilePath} onOpenFile={onOpenFile}>
+              {update.text}
+            </CollapsibleMarkdown>
+          )}
           {!!update.attachments?.length && (
             <div className="mt-1.5 flex flex-wrap gap-1">
               {withOccurrenceKeys(update.attachments, (attachment) =>
@@ -752,10 +763,14 @@ export function StreamLine({
         >
           {update.text}
         </Markdown>
-      ) : (
+      ) : textStreaming ? (
         <BufferedMarkdown resolveFilePath={resolveFilePath} onOpenFile={onOpenFile}>
           {update.text}
         </BufferedMarkdown>
+      ) : (
+        <Markdown resolveFilePath={resolveFilePath} onOpenFile={onOpenFile}>
+          {update.text}
+        </Markdown>
       );
     case "agent_thought":
       return compact ? (
@@ -819,7 +834,18 @@ export function StreamLine({
               {displayPath}
             </span>
           )}
-          {hasLineCounts && (
+          {hasLineCounts && filePath && onOpenFileDiff ? (
+            <button
+              type="button"
+              onClick={() => onOpenFileDiff(filePath, update.hunks)}
+              className="ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 tabular-nums hover:bg-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              aria-label={`Open diff for ${filePath}: ${update.additions ?? 0} lines added, ${update.deletions ?? 0} lines deleted`}
+              title={`Open diff for ${filePath}`}
+            >
+              <span className="text-ok">+{update.additions ?? 0}</span>
+              <span className="text-destructive">−{update.deletions ?? 0}</span>
+            </button>
+          ) : hasLineCounts ? (
             <span
               className="ml-auto inline-flex shrink-0 items-center gap-1 tabular-nums"
               aria-label={`${update.additions ?? 0} lines added, ${update.deletions ?? 0} lines deleted`}
@@ -827,7 +853,7 @@ export function StreamLine({
               <span className="text-ok">+{update.additions ?? 0}</span>
               <span className="text-destructive">−{update.deletions ?? 0}</span>
             </span>
-          )}
+          ) : null}
         </p>
       );
     case "permission_request":

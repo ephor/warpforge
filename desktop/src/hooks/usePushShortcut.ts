@@ -4,10 +4,7 @@ import { toast } from "sonner";
 import type { TaskInfo } from "@/protocol";
 import { useUi } from "@/store/ui";
 
-export function usePushShortcut(
-  tasks: TaskInfo[],
-  setPushOpen: (open: boolean) => void,
-) {
+export function usePushShortcut(tasks: TaskInfo[], setPushOpen: (open: boolean) => void) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.key.toLowerCase() !== "k") {

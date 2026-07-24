@@ -165,6 +165,7 @@ mod tests {
         let mut saw_running = false;
         let mut saw_agent_text = false;
         let mut saw_file_edit = false;
+        let mut saw_detailed_file_edit = false;
         let mut permission_request_id: Option<String> = None;
         let mut saw_turn_ended = false;
         let mut saw_needs_review = false;
@@ -190,9 +191,10 @@ mod tests {
                     update,
                 } if tid == task_id => match update {
                     wire::SessionUpdate::AgentText { .. } => saw_agent_text = true,
-                    wire::SessionUpdate::FileEdit { path, .. } => {
+                    wire::SessionUpdate::FileEdit { path, hunks, .. } => {
                         assert_eq!(path, "src/main.rs");
                         saw_file_edit = true;
+                        saw_detailed_file_edit |= !hunks.is_empty();
                     }
                     wire::SessionUpdate::PermissionRequest {
                         request_id,
@@ -227,6 +229,10 @@ mod tests {
         );
         assert!(saw_agent_text, "should stream agent text");
         assert!(saw_file_edit, "should report the file edit");
+        assert!(
+            saw_detailed_file_edit,
+            "should preserve ACP diff hunks in the session stream"
+        );
         assert!(
             permission_request_id.is_some(),
             "should surface a permission request"

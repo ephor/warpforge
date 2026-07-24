@@ -132,7 +132,7 @@ function AgentConfigSelect({
 }) {
   const cur =
     currentValue !== undefined
-      ? opt.options.find((o) => o.value === currentValue)?.name ?? currentValue
+      ? (opt.options.find((o) => o.value === currentValue)?.name ?? currentValue)
       : "Default";
 
   const pick = (value: string | undefined) => {

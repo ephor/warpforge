@@ -13,8 +13,10 @@ import {
 import { Button } from "@/components/ui/button";
 
 import { daemon } from "../../daemon";
-import type { FileDiff, HunkResolution, TaskDiff } from "../../protocol";
-import { FileDiffView, fileAnchor } from "./FileDiffView";
+import type { EditHunk, FileDiff, HunkResolution, TaskDiff } from "../../protocol";
+import { fileAnchor, hunkAnchor } from "./diffAnchors";
+import { matchingHunkIndexes } from "./editHunkMatch";
+import { FileDiffView } from "./FileDiffView";
 import { useSplitFileQueries } from "./useTaskQueries";
 
 const MergeDiff = lazy(async () => ({
@@ -51,7 +53,7 @@ function EmptyChangesState({ onOpenFiles }: { onOpenFiles: () => void }) {
 }
 
 export interface DiffWorkspaceHandle {
-  scrollToFile: (path: string) => void;
+  scrollToFile: (path: string, editHunks?: EditHunk[]) => void;
 }
 
 interface Props {
@@ -73,6 +75,11 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
   const unifiedScrollParent = useRef<HTMLDivElement>(null);
   const splitScrollParent = useRef<HTMLDivElement>(null);
   const [splitRange, setSplitRange] = useState({ start: 0, end: -1 });
+  const [highlightedEdit, setHighlightedEdit] = useState<{
+    path: string;
+    hunks: ReadonlySet<number>;
+  } | null>(null);
+  const highlightTimerRef = useRef<number | null>(null);
   const files = diff?.files ?? EMPTY_DIFF_FILES;
 
   const unifiedVirtualizer = useVirtualizer({
@@ -102,18 +109,47 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
 
   const splitFileQueries = useSplitFileQueries(taskId, files, diffView === "split", splitRange);
 
+  useEffect(
+    () => () => {
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+    },
+    [],
+  );
+
   useImperativeHandle(
     ref,
     () => ({
-      scrollToFile(path) {
+      scrollToFile(path, editHunks = []) {
         const index = files.findIndex((file) => file.path === path);
         if (index < 0) return;
+        const matchingHunks =
+          editHunks.length > 0 ? matchingHunkIndexes(files[index].hunks, editHunks) : [];
+        if (highlightTimerRef.current !== null) {
+          window.clearTimeout(highlightTimerRef.current);
+        }
+        setHighlightedEdit(
+          matchingHunks.length > 0 ? { hunks: new Set(matchingHunks), path } : null,
+        );
+        if (matchingHunks.length > 0) {
+          highlightTimerRef.current = window.setTimeout(() => {
+            setHighlightedEdit(null);
+            highlightTimerRef.current = null;
+          }, 2400);
+        }
         const virtualizer = diffView === "unified" ? unifiedVirtualizer : splitVirtualizer;
         virtualizer.scrollToIndex(index, { align: "start" });
         requestAnimationFrame(() => {
-          document.getElementById(fileAnchor(path))?.scrollIntoView({
-            behavior: "smooth",
-            block: "start",
+          requestAnimationFrame(() => {
+            const anchor =
+              diffView === "unified" && matchingHunks.length > 0
+                ? hunkAnchor(path, matchingHunks[0])
+                : fileAnchor(path);
+            document.getElementById(anchor)?.scrollIntoView({
+              behavior: "smooth",
+              block: "start",
+            });
           });
         });
       },
@@ -145,6 +181,9 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
                     localRes={localRes}
                     onResolve={onResolve}
                     onSendToChat={onSendToChat}
+                    highlightedHunks={
+                      highlightedEdit?.path === file.path ? highlightedEdit.hunks : undefined
+                    }
                   />
                 </div>
               );

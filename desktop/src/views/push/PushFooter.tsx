@@ -1,9 +1,4 @@
-import {
-  ChevronDown,
-  GitPullRequestArrow,
-  Loader2,
-  Upload,
-} from "lucide-react";
+import { ChevronDown, GitPullRequestArrow, Loader2, Upload } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -49,12 +44,7 @@ export function PushFooter({
         )}
       </div>
       <div className="ml-auto flex items-center gap-3">
-        <Button
-          type="button"
-          variant="outline"
-          disabled={Boolean(pushing)}
-          onClick={onCancel}
-        >
+        <Button type="button" variant="outline" disabled={Boolean(pushing)} onClick={onCancel}>
           Cancel
         </Button>
         <Button
@@ -72,10 +62,7 @@ export function PushFooter({
             type="button"
             className="rounded-r-none px-4"
             disabled={
-              !info?.commits.length ||
-              loading ||
-              Boolean(pushing) ||
-              Boolean(repositoryOperation)
+              !info?.commits.length || loading || Boolean(pushing) || Boolean(repositoryOperation)
             }
             onClick={() => onPush(false)}
           >
@@ -91,10 +78,7 @@ export function PushFooter({
             size="icon"
             className="rounded-l-none border-l border-primary-foreground/20"
             disabled={
-              !info?.commits.length ||
-              loading ||
-              Boolean(pushing) ||
-              Boolean(repositoryOperation)
+              !info?.commits.length || loading || Boolean(pushing) || Boolean(repositoryOperation)
             }
             aria-label="Push options"
             aria-expanded={menuOpen}
@@ -110,9 +94,7 @@ export function PushFooter({
                 onClick={() => onPush(true)}
               >
                 <span className="block font-medium">Force Push</span>
-                <span className="block text-xs text-muted-foreground">
-                  Uses force-with-lease
-                </span>
+                <span className="block text-xs text-muted-foreground">Uses force-with-lease</span>
               </button>
             </div>
           )}
