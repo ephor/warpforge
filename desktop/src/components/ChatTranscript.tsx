@@ -43,7 +43,7 @@ import { ChatComposer } from "./ChatComposer";
 import type { ComposerHandle } from "./Composer";
 import { MessageActions } from "./MessageActions";
 
-const CHAT_DRAW_DISTANCE_PX = 600;
+const CHAT_DRAW_DISTANCE_PX = 250;
 const CHAT_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: { dataChange: true, itemLayout: true, layout: true },
@@ -255,7 +255,7 @@ const TranscriptListItem = memo(
 
 function renderTranscriptItem({ item }: { item: TranscriptListRow }) {
   return (
-    <div className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip pb-3">
+    <div key={item.id} className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip pb-3">
       <TranscriptListItem row={item} />
     </div>
   );
@@ -448,6 +448,7 @@ export function ChatTranscript({
             getItemType={transcriptRowType}
             itemsAreEqual={transcriptRowsAreEqual}
             renderItem={renderTranscriptItem}
+            recycleItems
             drawDistance={CHAT_DRAW_DISTANCE_PX}
             estimatedItemSize={90}
             initialScrollAtEnd

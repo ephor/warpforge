@@ -1,7 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { scan } from "react-scan";
 import { Toaster } from "sonner";
 
 import App from "./App";
@@ -14,10 +13,11 @@ import "./globals.css";
 
 const reactScanEnabled = import.meta.env.DEV && import.meta.env.VITE_REACT_SCAN === "true";
 
-scan({
-  enabled: reactScanEnabled,
-  showToolbar: reactScanEnabled,
-});
+if (reactScanEnabled) {
+  void import("react-scan").then(({ scan }) => {
+    scan({ enabled: true, showToolbar: true });
+  });
+}
 
 void daemon.connect().catch(() => {
   /* Reconnect loop takes over */
