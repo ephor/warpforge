@@ -59,9 +59,7 @@ export function AgentLogo({
       style={{ backgroundColor: color }}
       aria-hidden
     >
-      <span className="text-[8px] font-bold leading-none text-white">
-        {initials(displayName)}
-      </span>
+      <span className="text-[8px] font-bold leading-none text-white">{initials(displayName)}</span>
     </span>
   );
 }

@@ -1,12 +1,6 @@
 import type { TaskStatus } from "@/protocol";
 
-export type StatusKind =
-  | TaskStatus
-  | "permission"
-  | "pending"
-  | "complete"
-  | "failed"
-  | "skipped";
+export type StatusKind = TaskStatus | "permission" | "pending" | "complete" | "failed" | "skipped";
 
 type Tone = "ok" | "warn" | "destructive" | "neutral";
 type Glyph = "dot" | "ring" | "clock" | "check" | "minus";

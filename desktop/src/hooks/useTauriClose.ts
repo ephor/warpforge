@@ -49,8 +49,7 @@ export function useTauriClose() {
 
           try {
             await daemon.stopRuntime();
-          } catch {
-          }
+          } catch {}
 
           allowClose = true;
           await appWindow.close();

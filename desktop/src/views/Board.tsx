@@ -24,7 +24,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { elapsed } from "@/lib/status";
-import { taskLabel } from "@/lib/taskLabel";
 import type { TaskTree } from "@/lib/taskGroups";
 import {
   buildTaskForest,
@@ -33,6 +32,7 @@ import {
   treeLane,
   treeMatches,
 } from "@/lib/taskGroups";
+import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
 import type { OrchNodeInfo, Snapshot, TaskInfo, TaskStatus } from "../protocol";

@@ -14,6 +14,127 @@ use warpforge_protocol as wire;
 
 use super::task::{Task, TaskStatus};
 
+/// Keep projected desktop state bounded like t3code's thread projector. Raw
+/// rows stay durable in SQLite for agent resume/replay.
+const MAX_SESSION_SNAPSHOT_UPDATES: usize = 2_000;
+const SNAPSHOT_TRIM_HEADROOM: usize = 256;
+
+fn append_snapshot_update(output: &mut Vec<wire::SessionUpdate>, update: wire::SessionUpdate) {
+    match update {
+        wire::SessionUpdate::AgentText { text } => {
+            if let Some(wire::SessionUpdate::AgentText { text: previous }) = output.last_mut() {
+                previous.push_str(&text);
+            } else {
+                output.push(wire::SessionUpdate::AgentText { text });
+            }
+        }
+        wire::SessionUpdate::AgentThought { text } => {
+            if let Some(wire::SessionUpdate::AgentThought { text: previous }) = output.last_mut() {
+                previous.push_str(&text);
+            } else {
+                output.push(wire::SessionUpdate::AgentThought { text });
+            }
+        }
+        wire::SessionUpdate::ToolCall {
+            tool_call_id,
+            title,
+            status,
+            started_at,
+            tool_kind,
+            content,
+        } => {
+            let existing = output.iter_mut().rev().find(|candidate| {
+                matches!(
+                    candidate,
+                    wire::SessionUpdate::ToolCall {
+                        tool_call_id: candidate_id,
+                        ..
+                    } if candidate_id == &tool_call_id
+                )
+            });
+            if let Some(wire::SessionUpdate::ToolCall {
+                title: previous_title,
+                status: previous_status,
+                started_at: previous_started_at,
+                tool_kind: previous_kind,
+                content: previous_content,
+                ..
+            }) = existing
+            {
+                if !title.is_empty() && title != tool_call_id {
+                    *previous_title = title;
+                }
+                *previous_status = status;
+                if previous_started_at.is_none() {
+                    *previous_started_at = started_at;
+                }
+                if !tool_kind.is_empty() {
+                    *previous_kind = tool_kind;
+                }
+                if content.is_some() {
+                    *previous_content = content;
+                }
+            } else {
+                output.push(wire::SessionUpdate::ToolCall {
+                    tool_call_id,
+                    title,
+                    status,
+                    started_at,
+                    tool_kind,
+                    content,
+                });
+            }
+        }
+        wire::SessionUpdate::FileEdit {
+            path,
+            tool_call_id: Some(tool_call_id),
+            additions,
+            deletions,
+            hunks,
+        } => {
+            let existing = output.iter_mut().rev().find(|candidate| {
+                matches!(
+                    candidate,
+                    wire::SessionUpdate::FileEdit {
+                        tool_call_id: Some(candidate_id),
+                        ..
+                    } if candidate_id == &tool_call_id
+                )
+            });
+            if let Some(wire::SessionUpdate::FileEdit {
+                path: previous_path,
+                additions: previous_additions,
+                deletions: previous_deletions,
+                hunks: previous_hunks,
+                ..
+            }) = existing
+            {
+                if !path.is_empty() {
+                    *previous_path = path;
+                }
+                if additions.is_some() {
+                    *previous_additions = additions;
+                }
+                if deletions.is_some() {
+                    *previous_deletions = deletions;
+                }
+                if !hunks.is_empty() {
+                    *previous_hunks = hunks;
+                }
+            } else {
+                output.push(wire::SessionUpdate::FileEdit {
+                    path,
+                    tool_call_id: Some(tool_call_id),
+                    additions,
+                    deletions,
+                    hunks,
+                });
+            }
+        }
+        update => output.push(update),
+    }
+}
+
 fn db_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -322,7 +443,9 @@ impl Store {
         }
     }
 
-    /// Load all persisted session updates grouped by task id, in insertion order.
+    /// Load persisted histories as semantic rows. Raw ACP text chunks and
+    /// repeated tool lifecycle frames remain in SQLite for replay fidelity but
+    /// are folded before building the desktop snapshot.
     pub fn load_all_session_updates(&self) -> Result<HashMap<String, Vec<wire::SessionUpdate>>> {
         let mut stmt = self
             .conn
@@ -333,7 +456,18 @@ impl Store {
         })?;
         for row in rows.filter_map(|r| r.ok()) {
             if let Ok(update) = serde_json::from_str::<wire::SessionUpdate>(&row.1) {
-                map.entry(row.0).or_default().push(update);
+                let output = map.entry(row.0).or_default();
+                append_snapshot_update(output, update);
+                if output.len() > MAX_SESSION_SNAPSHOT_UPDATES + SNAPSHOT_TRIM_HEADROOM {
+                    let overflow = output.len() - MAX_SESSION_SNAPSHOT_UPDATES;
+                    output.drain(..overflow);
+                }
+            }
+        }
+        for updates in map.values_mut() {
+            if updates.len() > MAX_SESSION_SNAPSHOT_UPDATES {
+                let overflow = updates.len() - MAX_SESSION_SNAPSHOT_UPDATES;
+                updates.drain(..overflow);
             }
         }
         Ok(map)
@@ -382,5 +516,58 @@ mod tests {
         assert_eq!(loaded[0].session_id.as_deref(), Some("sess-1"));
         assert_eq!(loaded[0].tags, vec!["x".to_string()]);
         assert_eq!(loaded[0].config_options, task.config_options);
+    }
+
+    #[test]
+    fn snapshot_history_coalesces_transport_chunks_but_raw_history_remains() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        for text in ["Hel", "lo", "!"] {
+            store
+                .save_session_update(
+                    "task-1",
+                    &wire::SessionUpdate::AgentText { text: text.into() },
+                )
+                .unwrap();
+        }
+
+        let raw = store.load_session_updates("task-1").unwrap();
+        assert_eq!(raw.len(), 3);
+        let snapshot = store.load_all_session_updates().unwrap();
+        assert_eq!(
+            snapshot["task-1"],
+            vec![wire::SessionUpdate::AgentText {
+                text: "Hello!".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn snapshot_history_is_bounded_without_deleting_raw_history() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        for index in 0..MAX_SESSION_SNAPSHOT_UPDATES + 5 {
+            store
+                .save_session_update(
+                    "task-1",
+                    &wire::SessionUpdate::UserMessage {
+                        text: format!("prompt-{index}"),
+                        attachments: vec![],
+                    },
+                )
+                .unwrap();
+        }
+
+        assert_eq!(
+            store.load_session_updates("task-1").unwrap().len(),
+            MAX_SESSION_SNAPSHOT_UPDATES + 5
+        );
+        let snapshot = store.load_all_session_updates().unwrap();
+        assert_eq!(snapshot["task-1"].len(), MAX_SESSION_SNAPSHOT_UPDATES);
+        assert_eq!(
+            snapshot["task-1"].first(),
+            Some(&wire::SessionUpdate::UserMessage {
+                text: "prompt-5".into(),
+                attachments: vec![],
+            })
+        );
     }
 }

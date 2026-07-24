@@ -1,10 +1,13 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { SessionUpdate } from "../protocol";
+import type { EditHunk, SessionUpdate } from "../protocol";
 import { StreamLine } from "./MissionControl";
 import { appendCoalesced, coalesceUpdates } from "./missionControlStream";
+
+afterEach(() => vi.restoreAllMocks());
 
 /** Reference incremental fold, mirroring ChatTranscript.useCoalesced. */
 function incrementalCoalesce(prefix: SessionUpdate[], tail: SessionUpdate[]) {
@@ -79,6 +82,67 @@ describe("file edit line", () => {
     expect(screen.getByText("warpforge/desktop/src/App.tsx")).toBeInTheDocument();
     expect(screen.queryByText("/Users/dev/warpforge/desktop/src/App.tsx")).not.toBeInTheDocument();
     expect(screen.getByLabelText("12 lines added, 3 lines deleted")).toBeInTheDocument();
+  });
+
+  it("opens the editor from the file name and the exact diff from the line counts", async () => {
+    const user = userEvent.setup();
+    const onOpenFile = vi.fn<(path: string) => void>();
+    const onOpenFileDiff = vi.fn<(path: string, hunks?: EditHunk[]) => void>();
+    const editHunks = [
+      {
+        lines: ["-old", "+new"],
+        newLines: 1,
+        newStart: 12,
+        oldLines: 1,
+        oldStart: 12,
+      },
+    ];
+    render(
+      createElement(StreamLine, {
+        update: {
+          kind: "file_edit",
+          path: "desktop/src/App.tsx",
+          additions: 6,
+          deletions: 2,
+          hunks: editHunks,
+        },
+        resolveFilePath: () => "desktop/src/App.tsx",
+        onOpenFile,
+        onOpenFileDiff,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "desktop/src/App.tsx" }));
+    expect(onOpenFile).toHaveBeenCalledWith("desktop/src/App.tsx");
+    expect(onOpenFileDiff).not.toHaveBeenCalled();
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open diff for desktop/src/App.tsx: 6 lines added, 2 lines deleted",
+      }),
+    );
+    expect(onOpenFileDiff).toHaveBeenCalledWith("desktop/src/App.tsx", editHunks);
+  });
+});
+
+describe("agent text streaming", () => {
+  it("polls only the active streaming message, not historical transcript rows", () => {
+    const interval = vi.spyOn(window, "setInterval");
+    const historical = render(
+      createElement(StreamLine, {
+        update: { kind: "agent_text", text: "Finished response" },
+      }),
+    );
+    expect(interval).not.toHaveBeenCalled();
+    historical.unmount();
+
+    render(
+      createElement(StreamLine, {
+        textStreaming: true,
+        update: { kind: "agent_text", text: "Streaming response" },
+      }),
+    );
+    expect(interval).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -1,4 +1,12 @@
-import { Circle, FolderTree, KanbanSquare, LayoutGrid, PanelLeft, Plus, Settings } from "lucide-react";
+import {
+  Circle,
+  FolderTree,
+  KanbanSquare,
+  LayoutGrid,
+  PanelLeft,
+  Plus,
+  Settings,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import UpdateControl from "@/components/UpdateControl";
@@ -121,11 +129,7 @@ export default function AppHeader({
             {connection === "connected" ? "daemon" : connection}
           </span>
           {connectionError && connection !== "connected" && (
-            <span
-              className="max-w-80 truncate text-warn"
-              role="status"
-              title={connectionError}
-            >
+            <span className="max-w-80 truncate text-warn" role="status" title={connectionError}>
               {connectionError}
             </span>
           )}

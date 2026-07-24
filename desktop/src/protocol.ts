@@ -296,6 +296,8 @@ export type SessionUpdate =
       tool_call_id?: string;
       additions?: number;
       deletions?: number;
+      /** Concrete per-operation hunks when the ACP agent supplied old/new text. */
+      hunks?: EditHunk[];
     }
   | {
       kind: "permission_request";
@@ -312,6 +314,15 @@ export type SessionUpdate =
 // ── Diff ────────────────────────────────────────────────────────────────────
 
 export type HunkResolution = "accept" | "reject";
+
+export interface EditHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  /** Changed lines only, prefixed with "+" or "-". */
+  lines: string[];
+}
 
 export interface TaskDiff {
   taskId: string;

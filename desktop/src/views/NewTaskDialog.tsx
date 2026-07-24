@@ -5,19 +5,14 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 
-import type { ComposerHandle } from "../components/Composer";
-import { Composer } from "../components/Composer";
 import { AgentBadge } from "../components/AgentBadge";
 import { AgentConfigBar } from "../components/AgentConfigBar";
+import type { ComposerHandle } from "../components/Composer";
+import { Composer } from "../components/Composer";
 import { TaskComposeBar } from "../components/TaskComposeBar";
 import { daemon } from "../daemon";
+import type { ExternalSession, ProjectFile, PromptSubmission, Snapshot } from "../protocol";
 import { daemonQuery } from "../query";
-import type {
-  ExternalSession,
-  ProjectFile,
-  PromptSubmission,
-  Snapshot,
-} from "../protocol";
 import { useUi } from "../store/ui";
 
 interface Props {
@@ -33,7 +28,13 @@ interface Props {
  * the underlying view state is preserved. Sending the first prompt
  * creates the task and closes the overlay.
  */
-export default function NewTaskDialog({ open, onOpenChange, snapshot, defaultProject, initialPrompt }: Props) {
+export default function NewTaskDialog({
+  open,
+  onOpenChange,
+  snapshot,
+  defaultProject,
+  initialPrompt,
+}: Props) {
   const openTask = useUi((s) => s.openTask);
   const autoNameTasks = useUi((s) => s.autoNameTasks);
   const textGenAgentId = useUi((s) => s.textGenAgentId);

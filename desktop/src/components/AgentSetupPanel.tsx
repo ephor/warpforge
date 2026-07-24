@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
-import { AgentLogo } from "./AgentLogo";
 import type { AgentConfig, DetectedAgent } from "../protocol";
+import { AgentLogo } from "./AgentLogo";
 
 interface Props {
   /** Pre-loaded agents (dialog path: pendingAgentSetup already resolved). */
@@ -49,8 +49,14 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
     () =>
       new Set(
         configured?.length
-          ? configured.reduce<string[]>((acc, a) => { if (a.enabled) acc.push(a.id); return acc; }, [])
-          : (detected ?? []).reduce<string[]>((acc, a) => { if (a.installed) acc.push(a.id); return acc; }, []),
+          ? configured.reduce<string[]>((acc, a) => {
+              if (a.enabled) acc.push(a.id);
+              return acc;
+            }, [])
+          : (detected ?? []).reduce<string[]>((acc, a) => {
+              if (a.installed) acc.push(a.id);
+              return acc;
+            }, []),
       ),
   );
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
@@ -72,7 +78,14 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
         if (cancelled) return;
         setAgents(list);
         if (!touched.current && !configured?.length) {
-          setEnabled(new Set(list.reduce<string[]>((acc, a) => { if (a.installed) acc.push(a.id); return acc; }, [])));
+          setEnabled(
+            new Set(
+              list.reduce<string[]>((acc, a) => {
+                if (a.installed) acc.push(a.id);
+                return acc;
+              }, []),
+            ),
+          );
         }
       })
       .catch((e) => {
@@ -243,7 +256,9 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
                   </p>
                 )}
                 {errors[agent.id] && (
-                  <p className="mt-0.5 font-mono text-[11px] text-destructive">{errors[agent.id]}</p>
+                  <p className="mt-0.5 font-mono text-[11px] text-destructive">
+                    {errors[agent.id]}
+                  </p>
                 )}
               </div>
               {agent.canManage && (!agent.installed || behind) && (

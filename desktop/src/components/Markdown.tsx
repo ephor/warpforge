@@ -141,6 +141,59 @@ export function Markdown({
 }
 
 const STREAM_MARKDOWN_INTERVAL_MS = 80;
+const MAX_COLLAPSED_MESSAGE_LENGTH = 600;
+const MAX_COLLAPSED_MESSAGE_LINES = 8;
+const COLLAPSED_MESSAGE_MASK =
+  "linear-gradient(to bottom, black calc(100% - 1.75rem), transparent)";
+
+/** Bounds historical message geometry while keeping the full text one click away. */
+export function CollapsibleMarkdown({
+  children,
+  className,
+  resolveFilePath,
+  onOpenFile,
+}: {
+  children: string;
+  className?: string;
+  resolveFilePath?: FileLinkResolver;
+  onOpenFile?: (path: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const collapsible =
+    children.length > MAX_COLLAPSED_MESSAGE_LENGTH ||
+    children.split("\n").length > MAX_COLLAPSED_MESSAGE_LINES;
+  const collapsed = collapsible && !expanded;
+
+  return (
+    <div>
+      <div
+        className={cn("relative", collapsed && "max-h-44 overflow-hidden")}
+        style={
+          collapsed
+            ? {
+                WebkitMaskImage: COLLAPSED_MESSAGE_MASK,
+                maskImage: COLLAPSED_MESSAGE_MASK,
+              }
+            : undefined
+        }
+      >
+        <Markdown className={className} resolveFilePath={resolveFilePath} onOpenFile={onOpenFile}>
+          {children}
+        </Markdown>
+      </div>
+      {collapsible && (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          className="mt-1.5 h-6 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {expanded ? "Show less" : "Show full message"}
+        </button>
+      )}
+    </div>
+  );
+}
 
 /**
  * Markdown for actively-streaming assistant text. ACP emits sub-word deltas;

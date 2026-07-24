@@ -1,11 +1,12 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDown, FileText } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getFileIconUrl } from "@/lib/fileIcon";
 import { cn } from "@/lib/utils";
 
 import type { ProjectFile } from "../../protocol";
+import { projectFileParentFolders } from "./projectFileTree";
 
 export interface ProjectTreeNode {
   name: string;
@@ -87,6 +88,7 @@ export function ProjectFilesPanel({
   const root = useMemo(() => buildProjectTree(files), [files]);
   const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
+  const lastRevealedFileRef = useRef<string | null>(null);
 
   const rows = useMemo(() => {
     const out: ProjectFlatRow[] = [];
@@ -100,6 +102,38 @@ export function ProjectFilesPanel({
     getScrollElement: () => scrollRef.current,
     overscan: 20,
   });
+
+  useEffect(() => {
+    if (!selected) return;
+    const parents = projectFileParentFolders(selected);
+    if (parents.length === 0) return;
+    setOpenFolders((previous) => {
+      const next = new Set(previous);
+      let changed = false;
+      for (const folder of parents) {
+        if (!next.has(folder)) {
+          next.add(folder);
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [selected]);
+
+  useEffect(() => {
+    if (!selected || lastRevealedFileRef.current === selected) {
+      return;
+    }
+    const index = rows.findIndex((row) => row.node.path === selected);
+    if (index < 0) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      virtualizer.scrollToIndex(index, { align: "auto" });
+      lastRevealedFileRef.current = selected;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [rows, selected, virtualizer]);
 
   const toggleFolder = useCallback((fk: string) => {
     setOpenFolders((prev) => {

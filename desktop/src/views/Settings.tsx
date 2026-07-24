@@ -1,10 +1,10 @@
 import { RotateCcw, X } from "lucide-react";
 import { useEffect, useSyncExternalStore } from "react";
 
-import { configRole } from "@/lib/configRole";
 import AgentSetupPanel from "@/components/AgentSetupPanel";
 import { Button } from "@/components/ui/button";
 import { daemon } from "@/daemon";
+import { configRole } from "@/lib/configRole";
 import { useUi } from "@/store/ui";
 
 // ── Helpers ──
@@ -16,9 +16,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
         <span className="mr-2 inline-block h-px w-3 bg-border" aria-hidden />
         {title}
       </h2>
-      <div className="overflow-hidden rounded-xl border border-border/80 bg-card">
-        {children}
-      </div>
+      <div className="overflow-hidden rounded-xl border border-border/80 bg-card">{children}</div>
     </section>
   );
 }
@@ -163,110 +161,110 @@ export default function SettingsView({ open, onOpenChange }: Props) {
         </header>
 
         <div className="flex flex-col gap-8">
-
-        {/* ── Appearance ── */}
-        <Section title="Appearance">
-          <SettingRow
-            title="UI font size"
-            description="Controls labels, chat prose, buttons, and all general chrome. Keyboard: Cmd/Ctrl +/−/0"
-            control={
-              <NumberInput value={fontSize} min={10} max={24} onChange={setFontSize} />
-            }
-          />
-          <SettingRow
-            title="Mono font size"
-            description="Controls code editor, diff views, and terminal output. Scales independently from UI font."
-            control={
-              <NumberInput value={monoFontSize} min={9} max={22} onChange={setMonoFontSize} />
-            }
-          />
-          <SettingRow
-            title="Reset font sizes"
-            description="Restore UI font to 14px and mono font to 13px."
-            control={
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-7 text-xs"
-                onClick={resetFontSizes}
-                disabled={!fontDirty}
-              >
-                Reset
-              </Button>
-            }
-          />
-        </Section>
-
-        {/* ── Agents ── */}
-        <Section title="Agents">
-          <div className="p-4">
-            <AgentSetupPanel />
-          </div>
-        </Section>
-
-        {/* ── Text generation ── */}
-        <Section title="Text generation">
-          <SettingRow
-            title="Auto-name tasks"
-            description="On task creation, ask the selected agent to generate a short title. Respects your agent and model picks above."
-            control={
-              <label htmlFor="auto-name-tasks" className="relative inline-flex cursor-pointer items-center">
-                <input
-                  id="auto-name-tasks"
-                  type="checkbox"
-                  className="peer sr-only"
-                  checked={autoNameTasks}
-                  onChange={(e) => setAutoNameTasks(e.target.checked)}
-                />
-                <div className="h-5 w-9 rounded-full bg-muted-foreground/30 transition-colors peer-checked:bg-foreground/80 after:absolute after:left-0.5 after:top-0.5 after:size-4 after:rounded-full after:bg-background after:transition-transform peer-checked:after:translate-x-4" />
-              </label>
-            }
-          />
-          <SettingRow
-            title="Agent for git text"
-            description="Drafts commit messages and PR descriptions from the diff, on demand. Used for both."
-            control={
-              <select
-                value={textGenAgentId ?? ""}
-                onChange={(e) => setTextGenAgentId(e.target.value || null)}
-                className="bg-deep-surface h-7 rounded-md border px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
-              >
-                <option value="">None</option>
-                {enabledAgents.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.displayName}
-                  </option>
-                ))}
-              </select>
-            }
-          />
-          {textGenAgentId && (
+          {/* ── Appearance ── */}
+          <Section title="Appearance">
             <SettingRow
-              title="Model"
-              description={
-                modelOption
-                  ? "Which model that agent uses for this. Agent default when unset."
-                  : "Model list appears once the agent has been started at least once, so Warpforge can read its options."
+              title="UI font size"
+              description="Controls labels, chat prose, buttons, and all general chrome. Keyboard: Cmd/Ctrl +/−/0"
+              control={<NumberInput value={fontSize} min={10} max={24} onChange={setFontSize} />}
+            />
+            <SettingRow
+              title="Mono font size"
+              description="Controls code editor, diff views, and terminal output. Scales independently from UI font."
+              control={
+                <NumberInput value={monoFontSize} min={9} max={22} onChange={setMonoFontSize} />
               }
+            />
+            <SettingRow
+              title="Reset font sizes"
+              description="Restore UI font to 14px and mono font to 13px."
+              control={
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  onClick={resetFontSizes}
+                  disabled={!fontDirty}
+                >
+                  Reset
+                </Button>
+              }
+            />
+          </Section>
+
+          {/* ── Agents ── */}
+          <Section title="Agents">
+            <div className="p-4">
+              <AgentSetupPanel />
+            </div>
+          </Section>
+
+          {/* ── Text generation ── */}
+          <Section title="Text generation">
+            <SettingRow
+              title="Auto-name tasks"
+              description="On task creation, ask the selected agent to generate a short title. Respects your agent and model picks above."
+              control={
+                <label
+                  htmlFor="auto-name-tasks"
+                  className="relative inline-flex cursor-pointer items-center"
+                >
+                  <input
+                    id="auto-name-tasks"
+                    type="checkbox"
+                    className="peer sr-only"
+                    checked={autoNameTasks}
+                    onChange={(e) => setAutoNameTasks(e.target.checked)}
+                  />
+                  <div className="h-5 w-9 rounded-full bg-muted-foreground/30 transition-colors peer-checked:bg-foreground/80 after:absolute after:left-0.5 after:top-0.5 after:size-4 after:rounded-full after:bg-background after:transition-transform peer-checked:after:translate-x-4" />
+                </label>
+              }
+            />
+            <SettingRow
+              title="Agent for git text"
+              description="Drafts commit messages and PR descriptions from the diff, on demand. Used for both."
               control={
                 <select
-                  value={textGenModel ?? ""}
-                  onChange={(e) => setTextGenModel(e.target.value || null)}
-                  disabled={!modelOption}
-                  className="bg-deep-surface h-7 max-w-56 rounded-md border px-2 text-xs outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                  value={textGenAgentId ?? ""}
+                  onChange={(e) => setTextGenAgentId(e.target.value || null)}
+                  className="bg-deep-surface h-7 rounded-md border px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
                 >
-                  <option value="">Agent default</option>
-                  {modelOption?.options.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.name}
+                  <option value="">None</option>
+                  {enabledAgents.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.displayName}
                     </option>
                   ))}
                 </select>
               }
             />
-          )}
-        </Section>
+            {textGenAgentId && (
+              <SettingRow
+                title="Model"
+                description={
+                  modelOption
+                    ? "Which model that agent uses for this. Agent default when unset."
+                    : "Model list appears once the agent has been started at least once, so Warpforge can read its options."
+                }
+                control={
+                  <select
+                    value={textGenModel ?? ""}
+                    onChange={(e) => setTextGenModel(e.target.value || null)}
+                    disabled={!modelOption}
+                    className="bg-deep-surface h-7 max-w-56 rounded-md border px-2 text-xs outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
+                  >
+                    <option value="">Agent default</option>
+                    {modelOption?.options.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.name}
+                      </option>
+                    ))}
+                  </select>
+                }
+              />
+            )}
+          </Section>
         </div>
       </div>
     </div>

@@ -2,8 +2,8 @@ import { GitBranch, GitMerge, Share2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-import { AgentBadge } from "./AgentBadge";
 import type { AgentConfig, ProjectInfo, ServiceInfo } from "../protocol";
+import { AgentBadge } from "./AgentBadge";
 
 interface TaskComposeBarProps {
   projects: ProjectInfo[];
@@ -49,7 +49,8 @@ export function TaskComposeBar({
   onOrchChatChange,
 }: TaskComposeBarProps) {
   const enabledAgents = agents.filter((a) => a.enabled);
-  const agentChoices = enabledAgents.length > 0 ? enabledAgents : [{ id: "claude", displayName: "Claude" }];
+  const agentChoices =
+    enabledAgents.length > 0 ? enabledAgents : [{ id: "claude", displayName: "Claude" }];
   const runningForProject = services.filter(
     (s) => s.project === project && s.status === "running" && s.allocatedPort > 0,
   );

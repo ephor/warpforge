@@ -140,7 +140,8 @@ export const useUi = create<UiState>()(
         set((s) => ({
           monoFontSize: clampMonoFontSize(s.monoFontSize + direction * FONT_SIZE_STEP),
         })),
-      resetFontSizes: () => set({ fontSize: DEFAULT_FONT_SIZE, monoFontSize: DEFAULT_MONO_FONT_SIZE }),
+      resetFontSizes: () =>
+        set({ fontSize: DEFAULT_FONT_SIZE, monoFontSize: DEFAULT_MONO_FONT_SIZE }),
       // Models are per-agent, so a stored pick is meaningless once the agent changes.
       setTextGenAgentId: (textGenAgentId) => set({ textGenAgentId, textGenModel: null }),
       setTextGenModel: (textGenModel) => set({ textGenModel }),

@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { Markdown } from "./Markdown";
+import { CollapsibleMarkdown, Markdown } from "./Markdown";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn<(url: string) => Promise<void>>(),
@@ -89,5 +89,30 @@ describe("Markdown links", () => {
 
     expect(onOpenFile).toHaveBeenCalledWith("src/main.rs");
     expect(window.open).not.toHaveBeenCalled();
+  });
+});
+
+describe("CollapsibleMarkdown", () => {
+  it("bounds long messages until the user expands them", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <CollapsibleMarkdown>{"Long message ".repeat(60)}</CollapsibleMarkdown>,
+    );
+
+    expect(container.querySelector(".max-h-44")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Show full message" }));
+
+    expect(container.querySelector(".max-h-44")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
+  it("does not add disclosure controls to short messages", () => {
+    render(<CollapsibleMarkdown>Short message</CollapsibleMarkdown>);
+
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 });

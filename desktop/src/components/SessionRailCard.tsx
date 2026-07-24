@@ -3,12 +3,12 @@ import { memo, useMemo } from "react";
 
 import { AgentBadge } from "@/components/AgentBadge";
 import { StatusBadge } from "@/components/StatusBadge";
-import { statusEdge } from "@/lib/statusMeta";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import type { PermissionUpdate } from "@/lib/sessionPermissions";
 import { latestSessionPreview } from "@/lib/sessionPreview";
 import { elapsed } from "@/lib/status";
+import { statusEdge } from "@/lib/statusMeta";
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 

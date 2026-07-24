@@ -37,7 +37,18 @@ function handle(msg) {
       kind: "edit",
       locations: [{ path: "src/main.rs" }],
     });
-    update({ sessionUpdate: "tool_call_update", toolCallId: "tc1", status: "completed" });
+    update({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "tc1",
+      status: "completed",
+      kind: "edit",
+      content: [{
+        type: "diff",
+        path: "src/main.rs",
+        oldText: "fn main() {\n    old();\n}\n",
+        newText: "fn main() {\n    new();\n}\n",
+      }],
+    });
     // Ask permission to run tests, then wait for the human's answer.
     send({
       jsonrpc: "2.0",

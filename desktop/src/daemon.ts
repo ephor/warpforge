@@ -7,6 +7,7 @@
  * daemon events onto the last snapshot.
  */
 
+import { appendCoalescedUpdate, coalesceUpdates } from "./lib/sessionStream";
 import { stampSessionHistoryStartTimes } from "./lib/sessionTiming";
 import type {
   AgentConfig,
@@ -310,7 +311,10 @@ export class DaemonClient {
     const updates = this.state.sessionUpdates[taskId] ?? [];
     const stamped = this.stampSessionUpdate(taskId, update);
     this.setState({
-      sessionUpdates: { ...this.state.sessionUpdates, [taskId]: [...updates, stamped] },
+      sessionUpdates: {
+        ...this.state.sessionUpdates,
+        [taskId]: appendCoalescedUpdate(updates, stamped),
+      },
     });
   }
 
@@ -326,7 +330,7 @@ export class DaemonClient {
     this.toolCallStarts.clear();
     return Object.fromEntries(
       Object.entries(histories).map(([taskId, updates]) => {
-        const stamped = stampSessionHistoryStartTimes(updates);
+        const stamped = stampSessionHistoryStartTimes(coalesceUpdates(updates));
         for (const update of stamped) {
           if (update.kind === "tool_call" && update.started_at !== undefined) {
             this.toolCallStarts.set(`${taskId}\0${update.tool_call_id}`, update.started_at);
@@ -666,14 +670,16 @@ export class DaemonClient {
         break;
       }
       case "session.update": {
-        // No cap: the snapshot loads the full persisted history unbounded, so
-        // Trimming here only chops long codex chats the moment a new update
-        // (e.g. a permission answer) arrives — inconsistent and lossy.
+        // Keep the full semantic history, but fold sub-word text chunks and
+        // repeated tool lifecycle frames instead of retaining transport noise.
         const { task_id, update } = ev.data;
         const existing = this.state.sessionUpdates[task_id] ?? [];
         const stamped = this.stampSessionUpdate(task_id, update);
         this.setState({
-          sessionUpdates: { ...this.state.sessionUpdates, [task_id]: [...existing, stamped] },
+          sessionUpdates: {
+            ...this.state.sessionUpdates,
+            [task_id]: appendCoalescedUpdate(existing, stamped),
+          },
         });
         break;
       }

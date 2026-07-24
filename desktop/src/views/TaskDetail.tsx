@@ -34,6 +34,7 @@ import { TaskMenu } from "../components/TaskMenu";
 import { daemon } from "../daemon";
 import type {
   CommandInfo,
+  EditHunk,
   FileDiff,
   HunkResolution,
   SessionUpdate,
@@ -115,6 +116,7 @@ const TaskConversation = memo(function TaskConversation(props: TaskConversationP
 
   return (
     <ChatTranscript
+      key={props.task.id}
       {...props}
       activity={activity}
       commands={commands}
@@ -126,6 +128,10 @@ const TaskConversation = memo(function TaskConversation(props: TaskConversationP
 
 export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpenPush }: Props) {
   const [localRes, setLocalRes] = useState<Record<string, HunkResolution>>({});
+  const [diffNavigation, setDiffNavigation] = useState<{
+    path: string;
+    hunks: EditHunk[];
+  } | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>({ kind: "changes" });
   const [openFileTabs, setOpenFileTabs] = useState<string[]>([]);
   const [commitExpanded, setCommitExpanded] = useState(false);
@@ -178,6 +184,7 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
 
   const composerRef = useRef<ComposerHandle>(null);
   const diffWorkspaceRef = useRef<DiffWorkspaceHandle>(null);
+  const handledDiffNavigationRef = useRef<typeof diffNavigation>(null);
   const editable = task.status !== "done";
   const activeFile = activeTab.kind === "file" ? activeTab.path : selectedFile;
 
@@ -199,22 +206,43 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
       setSelectedFile(path);
       setActiveTab({ kind: "file", path });
       setShowDiff(true);
-      setRightPanel("files");
     },
-    [setRightPanel, setShowDiff],
+    [setShowDiff],
   );
   const openDiffFile = useCallback(
-    (path: string) => {
+    (path: string, hunks: EditHunk[] = []) => {
       setSelectedFile(path);
       setActiveTab({ kind: "changes" });
       setShowDiff(true);
       setRightPanel("changes");
-      requestAnimationFrame(() => {
-        diffWorkspaceRef.current?.scrollToFile(path);
-      });
+      if (hunks.length > 0) {
+        setDiffView("unified");
+      }
+      setDiffNavigation({ hunks, path });
     },
-    [setRightPanel, setShowDiff],
+    [setDiffView, setRightPanel, setShowDiff],
   );
+
+  useEffect(() => {
+    if (
+      activeTab.kind !== "changes" ||
+      !diffNavigation ||
+      handledDiffNavigationRef.current === diffNavigation ||
+      (diffNavigation.hunks.length > 0 && diffView !== "unified") ||
+      !diff?.files.some((file) => file.path === diffNavigation.path)
+    ) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const workspace = diffWorkspaceRef.current;
+      if (!workspace) {
+        return;
+      }
+      workspace.scrollToFile(diffNavigation.path, diffNavigation.hunks);
+      handledDiffNavigationRef.current = diffNavigation;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeTab.kind, diff, diffNavigation, diffView]);
   const openChangesTab = useCallback(() => {
     setActiveTab({ kind: "changes" });
     setShowDiff(true);
@@ -418,6 +446,7 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
                   filesLoading={mentionFilesQuery.isLoading}
                   composerRef={composerRef}
                   onOpenFile={openFileTab}
+                  onOpenFileDiff={openDiffFile}
                   onOpenTask={onOpenTask}
                   resolveFilePath={resolveSessionFilePath}
                   task={task}
