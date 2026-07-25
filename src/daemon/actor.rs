@@ -59,6 +59,19 @@ fn config_fingerprint(project_path: &Path) -> ConfigFingerprint {
     std::fs::read(&path).ok().map(|contents| (path, contents))
 }
 
+/// Resolve the repo path a git operation should run against, in priority order:
+/// explicit `path_override` (view any worktree), the task's own `worktree`, then
+/// the project's main path.
+fn resolve_repo_path(
+    task: &Task,
+    path_override: Option<String>,
+    project_path: Option<String>,
+) -> Option<String> {
+    path_override
+        .or_else(|| task.worktree.clone())
+        .or(project_path)
+}
+
 /// Content-based, debounced observer for registered project configs.
 ///
 /// Resolving the active config path on each pass rather than tracking one inode
@@ -474,12 +487,14 @@ pub enum Command {
     /// Compute the task's working-tree diff (git).
     GetDiff {
         task_id: String,
+        path_override: Option<String>,
         reply: oneshot::Sender<wire::TaskDiff>,
     },
     /// Old (HEAD) + new (working-tree) text of one file.
     GetFileContents {
         task_id: String,
         path: String,
+        path_override: Option<String>,
         reply: oneshot::Sender<Option<wire::FileDoc>>,
     },
     /// List files in a task's project working tree.
@@ -487,6 +502,7 @@ pub enum Command {
         task_id: String,
         project: Option<String>,
         include_ignored: bool,
+        path_override: Option<String>,
         reply: oneshot::Sender<Vec<wire::ProjectFile>>,
     },
     /// Write new contents to a file in the task's working tree.
@@ -494,6 +510,7 @@ pub enum Command {
         task_id: String,
         path: String,
         content: String,
+        path_override: Option<String>,
     },
     /// Accept (keep) or reject (revert) a single hunk in the working tree.
     ResolveHunk {
@@ -501,6 +518,7 @@ pub enum Command {
         file: String,
         hunk_index: u32,
         resolution: wire::HunkResolution,
+        path_override: Option<String>,
     },
     /// Stage (optionally a subset of) files and commit them in the task's repo.
     GitCommit {
@@ -508,6 +526,7 @@ pub enum Command {
         message: String,
         files: Option<Vec<String>>,
         amend: bool,
+        path_override: Option<String>,
         reply: oneshot::Sender<Result<(), String>>,
     },
     /// Fetch + rebase the task's repo onto its upstream (autostash, rollback).
@@ -870,21 +889,28 @@ impl DaemonHandle {
         rx.await.unwrap_or_default()
     }
 
-    pub async fn diff(&self, task_id: &str) -> wire::TaskDiff {
+    pub async fn diff(&self, task_id: &str, path_override: Option<String>) -> wire::TaskDiff {
         let (tx, rx) = oneshot::channel();
         self.send(Command::GetDiff {
             task_id: task_id.to_string(),
+            path_override,
             reply: tx,
         })
         .await;
         rx.await.unwrap_or_default()
     }
 
-    pub async fn file_contents(&self, task_id: &str, path: &str) -> Option<wire::FileDoc> {
+    pub async fn file_contents(
+        &self,
+        task_id: &str,
+        path: &str,
+        path_override: Option<String>,
+    ) -> Option<wire::FileDoc> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::GetFileContents {
             task_id: task_id.to_string(),
             path: path.to_string(),
+            path_override,
             reply: tx,
         })
         .await;
@@ -896,12 +922,14 @@ impl DaemonHandle {
         task_id: &str,
         project: Option<String>,
         include_ignored: bool,
+        path_override: Option<String>,
     ) -> Vec<wire::ProjectFile> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::ListFiles {
             task_id: task_id.to_string(),
             project,
             include_ignored,
+            path_override,
             reply: tx,
         })
         .await;
@@ -914,6 +942,7 @@ impl DaemonHandle {
         message: &str,
         files: Option<Vec<String>>,
         amend: bool,
+        path_override: Option<String>,
     ) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::GitCommit {
@@ -921,6 +950,7 @@ impl DaemonHandle {
             message: message.to_string(),
             files,
             amend,
+            path_override,
             reply: tx,
         })
         .await;
@@ -1664,6 +1694,22 @@ impl Daemon {
             Update(oneshot::Sender<Vec<String>>),
         }
 
+        // Discover existing worktrees on startup.
+        for project in self.projects.clone() {
+            if let Some(path) = self.project_path(&project.name) {
+                let wt_mgr = self
+                    .worktrees
+                    .entry(project.name.clone())
+                    .or_insert_with(|| WorktreeManager::new(std::path::PathBuf::from(&path)));
+                if let Err(e) = wt_mgr.discover().await {
+                    eprintln!(
+                        "[daemon] worktree discover failed for {}: {e}",
+                        project.name
+                    );
+                }
+            }
+        }
+
         let mut config_poll = tokio::time::interval(CONFIG_POLL_INTERVAL);
         config_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -2167,13 +2213,17 @@ impl Daemon {
                 self.pending_wake.remove(&parent_task_id);
                 let _ = reply.send(results);
             }
-            Command::GetDiff { task_id, reply } => {
+            Command::GetDiff {
+                task_id,
+                path_override,
+                reply,
+            } => {
                 // Resolve the repo path (sync) before awaiting git, so no shared
                 // borrow of self is held across the await.
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                let repo = self.tasks.get(&task_id).and_then(|t| {
+                    let pp = self.project_path(&t.project);
+                    resolve_repo_path(t, path_override, pp)
+                });
                 let (files, branch) = match repo {
                     Some(path) => (
                         super::diff::working_diff(&path).await.unwrap_or_default(),
@@ -2190,12 +2240,13 @@ impl Daemon {
             Command::GetFileContents {
                 task_id,
                 path,
+                path_override,
                 reply,
             } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                let repo = self.tasks.get(&task_id).and_then(|t| {
+                    let pp = self.project_path(&t.project);
+                    resolve_repo_path(t, path_override, pp)
+                });
                 let doc = match repo {
                     Some(p) => super::diff::file_doc(&p, &path).await.ok(),
                     None => None,
@@ -2206,12 +2257,17 @@ impl Daemon {
                 task_id,
                 project,
                 include_ignored,
+                path_override,
                 reply,
             } => {
                 let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project))
+                    .and_then(|t| {
+                        let pp = self.project_path(&t.project);
+                        resolve_repo_path(t, path_override.clone(), pp)
+                    })
+                    .or_else(|| path_override.clone())
                     .or_else(|| project.as_deref().and_then(|name| self.project_path(name)));
                 let files = match repo {
                     Some(p) => super::diff::list_files(&p, include_ignored)
@@ -2225,11 +2281,12 @@ impl Daemon {
                 task_id,
                 path,
                 content,
+                path_override,
             } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                let repo = self.tasks.get(&task_id).and_then(|t| {
+                    let pp = self.project_path(&t.project);
+                    resolve_repo_path(t, path_override, pp)
+                });
                 if let Some(p) = repo {
                     if super::diff::save_file(&p, &path, &content).is_ok() {
                         // Nudge clients so the diff/file list refetches.
@@ -2247,13 +2304,14 @@ impl Daemon {
                 file,
                 hunk_index,
                 resolution,
+                path_override,
             } => {
                 // accept keeps the change (no-op); only reject touches the tree.
                 if resolution == wire::HunkResolution::Reject {
-                    let repo = self
-                        .tasks
-                        .get(&task_id)
-                        .and_then(|t| self.project_path(&t.project));
+                    let repo = self.tasks.get(&task_id).and_then(|t| {
+                        let pp = self.project_path(&t.project);
+                        resolve_repo_path(t, path_override, pp)
+                    });
                     if let Some(path) = repo {
                         if super::diff::reject_hunk(&path, &file, hunk_index)
                             .await
@@ -2277,12 +2335,13 @@ impl Daemon {
                 message,
                 files,
                 amend,
+                path_override,
                 reply,
             } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                let repo = self.tasks.get(&task_id).and_then(|t| {
+                    let pp = self.project_path(&t.project);
+                    resolve_repo_path(t, path_override, pp)
+                });
                 let result = match repo {
                     Some(p) => super::diff::commit(&p, &message, files.as_deref(), amend)
                         .await
@@ -2579,7 +2638,15 @@ impl Daemon {
                 let _ = reply.send(result);
             }
             Command::ListWorktrees { project, reply } => {
-                let wts = if let Some(wt_mgr) = self.worktrees.get(&project) {
+                let path = self.project_path(&project);
+                let wts = if let Some(p) = path {
+                    let wt_mgr = self
+                        .worktrees
+                        .entry(project.clone())
+                        .or_insert_with(|| WorktreeManager::new(std::path::PathBuf::from(&p)));
+                    if wt_mgr.list().is_empty() {
+                        let _ = wt_mgr.discover().await;
+                    }
                     wt_mgr
                         .list()
                         .into_iter()

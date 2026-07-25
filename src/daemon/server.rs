@@ -439,8 +439,8 @@ async fn dispatch(
             let results = handle.read_inbox(&parent_task_id).await;
             Ok(json!({ "results": results }))
         }
-        DiffGet { task_id } => {
-            let diff = handle.diff(&task_id).await;
+        DiffGet { task_id, path } => {
+            let diff = handle.diff(&task_id, path).await;
             serde_json::to_value(diff).map_err(|e| wire::RpcError {
                 code: wire::ErrorCode::Internal,
                 message: e.to_string(),
@@ -451,6 +451,7 @@ async fn dispatch(
             file,
             hunk_index,
             resolution,
+            path,
         } => {
             handle
                 .send(Command::ResolveHunk {
@@ -458,11 +459,16 @@ async fn dispatch(
                     file,
                     hunk_index,
                     resolution,
+                    path_override: path,
                 })
                 .await;
             Ok(json!(null))
         }
-        FileContents { task_id, path } => match handle.file_contents(&task_id, &path).await {
+        FileContents {
+            task_id,
+            path,
+            repo_path,
+        } => match handle.file_contents(&task_id, &path, repo_path).await {
             Some(doc) => serde_json::to_value(doc).map_err(|e| wire::RpcError {
                 code: wire::ErrorCode::Internal,
                 message: e.to_string(),
@@ -476,8 +482,11 @@ async fn dispatch(
             task_id,
             project,
             include_ignored,
+            path,
         } => {
-            let files = handle.list_files(&task_id, project, include_ignored).await;
+            let files = handle
+                .list_files(&task_id, project, include_ignored, path)
+                .await;
             serde_json::to_value(files).map_err(|e| wire::RpcError {
                 code: wire::ErrorCode::Internal,
                 message: e.to_string(),
@@ -487,12 +496,14 @@ async fn dispatch(
             task_id,
             path,
             content,
+            repo_path,
         } => {
             handle
                 .send(Command::SaveFile {
                     task_id,
                     path,
                     content,
+                    path_override: repo_path,
                 })
                 .await;
             Ok(json!(null))
@@ -502,9 +513,10 @@ async fn dispatch(
             message,
             files,
             amend,
+            path,
         } => {
             handle
-                .git_commit(&task_id, &message, files, amend)
+                .git_commit(&task_id, &message, files, amend, path)
                 .await
                 .map_err(|e| wire::RpcError {
                     code: wire::ErrorCode::Internal,

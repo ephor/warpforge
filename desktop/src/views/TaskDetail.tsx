@@ -138,6 +138,7 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
   const diffView = useUi((s) => s.diffView);
   const setDiffView = useUi((s) => s.setDiffView);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [worktreePath, setWorktreePath] = useState<string | null>(null);
   const showChat = useUi((s) => s.showChat);
   const showDiff = useUi((s) => s.showDiff);
   const rightPanel = useUi((s) => s.rightPanel);
@@ -197,7 +198,7 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
     mentionFilesQuery,
     fileDoc,
     queryClient,
-  } = useTaskQueries(task.id, activeFile, activeTab, task.updatedAt);
+  } = useTaskQueries(task.id, activeFile, activeTab, task.updatedAt, worktreePath);
 
   const setView = (v: "unified" | "split") => setDiffView(v);
   const openFileTab = useCallback(
@@ -351,6 +352,8 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
           files={diff.files}
           selected={selectedFile}
           taskId={task.id}
+          worktreePath={worktreePath}
+          onWorktreeChange={setWorktreePath}
           commitExpanded={commitExpanded}
           onCommitExpandedChange={setCommitExpanded}
           onCommitted={() => {

@@ -9,6 +9,7 @@ import { daemon } from "../daemon";
 import type { FileDiff } from "../protocol";
 import { CommitBox } from "./changes/CommitBox";
 import { FileTreeRow } from "./changes/FileTreeRow";
+import { WorktreePicker } from "./changes/WorktreePicker";
 import {
   buildTree,
   collectFolderKeys,
@@ -39,6 +40,8 @@ export function ChangesRail({
   onCommitExpandedChange,
   onCommitted,
   onRefresh,
+  worktreePath,
+  onWorktreeChange,
 }: {
   project: string;
   files: FileDiff[];
@@ -49,6 +52,8 @@ export function ChangesRail({
   onCommitExpandedChange?: (expanded: boolean) => void;
   onCommitted: () => void;
   onRefresh: () => void;
+  worktreePath?: string | null;
+  onWorktreeChange?: (path: string | null) => void;
 }) {
   const allPaths = useMemo(() => files.map((f) => f.path), [files]);
   const filesByPath = useMemo(() => new Map(files.map((f) => [f.path, f])), [files]);
@@ -228,7 +233,15 @@ export function ChangesRail({
   return (
     <div className="flex h-full min-h-0 flex-col bg-card">
       <div className="flex h-11 items-center gap-2 border-b px-3 text-sm font-semibold">
-        <span className="min-w-0 flex-1 truncate">Changes</span>
+        <span className="shrink-0 truncate">Changes</span>
+        {onWorktreeChange && (
+          <WorktreePicker
+            project={project}
+            selectedPath={worktreePath ?? null}
+            onSelect={onWorktreeChange}
+          />
+        )}
+        <span className="min-w-0 flex-1" />
         <button
           type="button"
           aria-label="Refresh changes"

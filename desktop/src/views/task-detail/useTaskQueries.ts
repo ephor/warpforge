@@ -13,13 +13,14 @@ export function useTaskQueries(
   activeFile: string | null,
   activeTab: ActiveTab,
   updatedAt: number,
+  worktreePath?: string | null,
 ) {
   const queryClient = useQueryClient();
 
   const diffQuery = useQuery({
     placeholderData: keepPreviousData,
-    queryFn: daemonQuery<TaskDiff>("diff.get", { task_id: taskId }),
-    queryKey: ["diff", taskId],
+    queryFn: daemonQuery<TaskDiff>("diff.get", { path: worktreePath, task_id: taskId }),
+    queryKey: ["diff", taskId, worktreePath ?? null],
     refetchOnWindowFocus: "always",
   });
   const diff = diffQuery.data ?? null;
@@ -28,9 +29,10 @@ export function useTaskQueries(
     placeholderData: keepPreviousData,
     queryFn: daemonQuery<ProjectFile[]>("file.list", {
       include_ignored: true,
+      path: worktreePath,
       task_id: taskId,
     }),
-    queryKey: ["fileList", taskId, "all"],
+    queryKey: ["fileList", taskId, "all", worktreePath ?? null],
   });
   const projectFiles = Array.isArray(fileListQuery.data) ? fileListQuery.data : EMPTY_PROJECT_FILES;
   const fileListError = fileListQuery.error?.message ?? null;
@@ -51,8 +53,9 @@ export function useTaskQueries(
     queryFn: daemonQuery<FileDoc>("file.contents", {
       task_id: taskId,
       path: activeFile,
+      repoPath: worktreePath,
     }),
-    queryKey: ["fileContents", taskId, activeFile],
+    queryKey: ["fileContents", taskId, activeFile, worktreePath ?? null],
     refetchOnWindowFocus: "always",
   });
   const fileDoc = fileContentsEnabled ? (fileDocQuery.data ?? null) : null;

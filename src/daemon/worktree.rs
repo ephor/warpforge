@@ -186,61 +186,119 @@ impl WorktreeManager {
         self.worktrees.values().collect()
     }
 
-    /// Discover existing warpforge worktrees on disk (for recovery after
-    /// daemon restart).
+    /// Discover existing git worktrees for this repo (for recovery after
+    /// daemon restart). Uses `git worktree list --porcelain` so worktrees
+    /// created outside warpforge (e.g. under `/tmp`) are picked up too, not
+    /// just those under `.worktrees/`.
     pub async fn discover(&mut self) -> Result<()> {
-        let wt_root = self.base_repo.join(".worktrees");
-        if !wt_root.exists() {
+        let output = tokio::process::Command::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(&self.base_repo)
+            .output()
+            .await
+            .context("failed to run git worktree list")?;
+
+        if !output.status.success() {
+            // Not a git repo, or git unavailable — nothing to discover.
             return Ok(());
         }
 
-        let mut entries = tokio::fs::read_dir(&wt_root)
-            .await
-            .context("reading .worktrees directory")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
 
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
+        // Canonicalize the base repo path so we can reliably skip the main
+        // worktree (git reports absolute, symlink-resolved paths).
+        let base_canon = tokio::fs::canonicalize(&self.base_repo)
+            .await
+            .unwrap_or_else(|_| self.base_repo.clone());
+
+        // Blocks are separated by blank lines. Fields: `worktree <path>`,
+        // `HEAD <commit>`, `branch <ref>`, or bare `detached`.
+        for block in stdout.split("\n\n") {
+            let mut path: Option<PathBuf> = None;
+            let mut branch: Option<String> = None;
+            let mut detached = false;
+
+            for line in block.lines() {
+                if let Some(p) = line.strip_prefix("worktree ") {
+                    path = Some(PathBuf::from(p.trim()));
+                } else if let Some(b) = line.strip_prefix("branch ") {
+                    // e.g. `refs/heads/warpforge/task/t_abc` -> keep short name.
+                    let short = b.trim().strip_prefix("refs/heads/").unwrap_or(b.trim());
+                    branch = Some(short.to_string());
+                } else if line.trim() == "detached" {
+                    detached = true;
+                }
             }
-            let task_id = match path.file_name().and_then(|n| n.to_str()) {
-                Some(id) => id.to_string(),
+
+            let path = match path {
+                Some(p) => p,
                 None => continue,
             };
 
-            // Verify it's a valid git worktree.
-            let head = path.join(".git");
-            if !head.exists() {
+            // Skip the base repo's own worktree.
+            let path_canon = tokio::fs::canonicalize(&path)
+                .await
+                .unwrap_or_else(|_| path.clone());
+            if path_canon == base_canon {
                 continue;
             }
 
-            let branch = tokio::process::Command::new("git")
-                .args(["rev-parse", "--abbrev-ref", "HEAD"])
-                .current_dir(&path)
-                .output()
-                .await
-                .ok()
-                .and_then(|o| {
-                    if o.status.success() {
-                        String::from_utf8(o.stdout)
-                            .ok()
-                            .map(|s| s.trim().to_string())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| "unknown".to_string());
+            let branch = if detached {
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("detached");
+                format!("{name} (detached)")
+            } else {
+                branch.clone().unwrap_or_else(|| "unknown".to_string())
+            };
+
+            // Derive task_id + base_branch. Warpforge worktrees live under
+            // `.worktrees/<task_id>`; anything else is treated as external.
+            let (task_id, base_branch) = if is_warpforge_worktree(&path) {
+                let id = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| external_task_id(&path, &branch, detached));
+                (id, "main".to_string()) // best guess on discovery
+            } else if !detached {
+                // External worktree with a branch — key it by branch name.
+                (format!("external:{branch}"), "unknown".to_string())
+            } else {
+                (
+                    external_task_id(&path, &branch, detached),
+                    "unknown".to_string(),
+                )
+            };
 
             let wt = Worktree {
                 task_id: task_id.clone(),
                 path,
-                branch: branch.clone(),
-                base_branch: "main".to_string(), // best guess on discovery
+                branch,
+                base_branch,
             };
             self.worktrees.insert(task_id, wt);
         }
         Ok(())
     }
+}
+
+/// Whether `path` is a warpforge-managed worktree (lives under `.worktrees/`).
+fn is_warpforge_worktree(path: &Path) -> bool {
+    path.components().any(|c| c.as_os_str() == ".worktrees")
+}
+
+/// Stable `external:<hash>` id for a worktree with no warpforge task, hashing
+/// the path so the same worktree keeps the same id across daemon restarts.
+fn external_task_id(path: &Path, _branch: &str, _detached: bool) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    let hash = hasher.finish();
+    format!("external:{:08x}", hash & 0xffff_ffff)
 }
 
 #[derive(Debug)]

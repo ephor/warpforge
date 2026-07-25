@@ -285,18 +285,31 @@ pub enum Method {
 
     // ── Diff / review ──
     #[serde(rename = "diff.get")]
-    DiffGet { task_id: String },
+    DiffGet {
+        task_id: String,
+        /// Explicit repo path override (view any worktree). Falls back to the
+        /// task's worktree, then its project path.
+        #[serde(default)]
+        path: Option<String>,
+    },
     #[serde(rename = "diff.resolveHunk")]
     DiffResolveHunk {
         task_id: String,
         file: String,
         hunk_index: u32,
         resolution: HunkResolution,
+        #[serde(default)]
+        path: Option<String>,
     },
     /// Full old (HEAD) + new (working-tree) contents of one file — powers the
     /// editable side-by-side (CodeMirror merge) review.
     #[serde(rename = "file.contents")]
-    FileContents { task_id: String, path: String },
+    FileContents {
+        task_id: String,
+        path: String,
+        #[serde(default, rename = "repoPath")]
+        repo_path: Option<String>,
+    },
     /// List files in the task's project working tree.
     #[serde(rename = "file.list")]
     FileList {
@@ -308,6 +321,8 @@ pub enum Method {
         /// `@` picker does not — node_modules/target swamp it).
         #[serde(default)]
         include_ignored: bool,
+        #[serde(default)]
+        path: Option<String>,
     },
     /// Write new contents to a file in the task's working tree (in-review edit).
     #[serde(rename = "file.save")]
@@ -315,6 +330,8 @@ pub enum Method {
         task_id: String,
         path: String,
         content: String,
+        #[serde(default, rename = "repoPath")]
+        repo_path: Option<String>,
     },
     /// Stage files and commit them in the task's repo. `files=None` stages all
     /// changes; `amend` rewrites the previous commit.
@@ -326,6 +343,8 @@ pub enum Method {
         files: Option<Vec<String>>,
         #[serde(default)]
         amend: bool,
+        #[serde(default)]
+        path: Option<String>,
     },
     /// Pull the task's project repo up to its upstream (rebase + autostash).
     /// Any conflict rolls the working tree back to the exact prior state.
