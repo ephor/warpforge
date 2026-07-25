@@ -31,6 +31,16 @@ impl std::fmt::Display for AgentStatus {
     }
 }
 
+impl AgentStatus {
+    /// Whether this agent represents a terminal that is still live.
+    pub fn is_live_terminal(&self) -> bool {
+        matches!(
+            self,
+            AgentStatus::Spawning | AgentStatus::Running | AgentStatus::NeedsReview
+        )
+    }
+}
+
 #[allow(dead_code)]
 pub struct Agent {
     pub id: String,
@@ -66,6 +76,7 @@ pub enum AgentEvent {
     Data {
         id: String,
         needs_review: bool,
+        data: Vec<u8>,
     },
     Exit {
         id: String,
@@ -186,6 +197,7 @@ impl AgentManager {
                         let _ = event_tx.send(AgentEvent::Data {
                             id: agent_id.clone(),
                             needs_review,
+                            data: chunk.to_vec(),
                         });
                     }
                 }
@@ -248,7 +260,9 @@ impl AgentManager {
     /// fix: status transitions used to run only while the TUI drained events.)
     pub fn apply_event(&mut self, event: &AgentEvent) {
         match event {
-            AgentEvent::Data { id, needs_review } => {
+            AgentEvent::Data {
+                id, needs_review, ..
+            } => {
                 if let Some(agent) = self.agents.get_mut(id) {
                     if *needs_review && agent.status == AgentStatus::Running {
                         agent.status = AgentStatus::NeedsReview;
@@ -285,6 +299,14 @@ impl AgentManager {
         self.agents.values()
     }
 
+    /// Live terminals only. Completed agents remain retained for the current
+    /// client-session exit UX, but must not be resurrected by a fresh snapshot.
+    pub fn live(&self) -> impl Iterator<Item = &Agent> {
+        self.agents
+            .values()
+            .filter(|agent| agent.status.is_live_terminal())
+    }
+
     pub fn kill(&mut self, id: &str) {
         if let Some(mut agent) = self.agents.remove(id) {
             // Signal the child before dropping so the process actually dies
@@ -316,5 +338,19 @@ impl AgentManager {
         for id in ids {
             self.kill(&id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AgentStatus;
+
+    #[test]
+    fn fresh_snapshot_projection_excludes_exited_terminals() {
+        assert!(AgentStatus::Spawning.is_live_terminal());
+        assert!(AgentStatus::Running.is_live_terminal());
+        assert!(AgentStatus::NeedsReview.is_live_terminal());
+        assert!(!AgentStatus::Completed.is_live_terminal());
+        assert!(!AgentStatus::Failed.is_live_terminal());
     }
 }

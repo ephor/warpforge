@@ -52,6 +52,7 @@ export interface ComposerAttachment {
 }
 export interface ComposerHandle {
   attachDiff: (file: FileDiffType, formattedContent: string) => void;
+  appendDraft: (text: string) => void;
   submit: () => void;
 }
 const EMPTY_COMMANDS: CommandInfo[] = [];
@@ -149,6 +150,19 @@ export const Composer = forwardRef<
           },
         ]);
         textRef.current?.focus();
+      },
+      appendDraft(text) {
+        setValue((prev) => {
+          const sep = prev.length > 0 ? "\n\n" : "";
+          return `${prev}${sep}${text}`;
+        });
+        requestAnimationFrame(() => {
+          const el = textRef.current;
+          if (!el) return;
+          el.focus();
+          const pos = el.value.length;
+          el.setSelectionRange(pos, pos);
+        });
       },
       submit() {
         sendActionRef.current();

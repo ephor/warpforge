@@ -66,6 +66,11 @@ export type DaemonEvent =
       event: "terminal.screen";
       data: { terminal_id: string; screen: TerminalScreen };
     }
+  | { event: "terminal.spawned"; data: TerminalInfo }
+  | {
+      event: "terminal.data";
+      data: { terminal_id: string; data_b64: string };
+    }
   | { event: "terminal.exited"; data: { terminal_id: string; code: number } }
   // ── Orchestration ──
   | {

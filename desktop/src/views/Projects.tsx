@@ -9,10 +9,12 @@ import {
   Send,
   Share2,
   Square,
+  SquareTerminal,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { AgentBadge } from "@/components/AgentBadge";
+import { RuntimePanel } from "@/components/RuntimePanel";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,11 +22,18 @@ import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { elapsed, pfBadge, serviceBadge } from "@/lib/status";
 import { taskLabel } from "@/lib/taskLabel";
+import { disposeTerminalWorkspace } from "@/lib/terminalWorkspace";
+import { cn } from "@/lib/utils";
+import { useUi } from "@/store/ui";
 
 import { daemon } from "../daemon";
 import type { PortForwardInfo, ServiceInfo, Snapshot } from "../protocol";
 import AddProjectDialog from "./AddProjectDialog";
 import { ProjectList } from "./projects/ProjectList";
+import {
+  type ProjectLiveCounts,
+  RemoveProjectDialog,
+} from "./projects/RemoveProjectDialog";
 
 interface Props {
   snapshot: Snapshot;
@@ -38,6 +47,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [hoveredProject, setHoveredProject] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [removeProject, setRemoveProject] = useState<string | null>(null);
 
   const onRowMouseEnter = useCallback((name: string) => setHoveredProject(name), []);
   const onRowMouseLeave = useCallback(() => setHoveredProject(null), []);
@@ -45,6 +55,9 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
   const project =
     snapshot.projects.find((p) => p.name === selected) ?? snapshot.projects[0] ?? null;
   const projectName = project?.name ?? "";
+  const runtimeOpen = useUi((state) => state.runtimeOpenByProject[projectName] ?? false);
+  const setRuntimeOpen = useUi((state) => state.setRuntimeOpen);
+  const clearRuntimeOpen = useUi((state) => state.clearRuntimeOpen);
   const services = useMemo(
     () => snapshot.services.filter((s) => s.project === projectName),
     [snapshot.services, projectName],
@@ -56,6 +69,10 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
   const projectTasks = useMemo(
     () => snapshot.tasks.filter((t) => t.project === projectName),
     [snapshot.tasks, projectName],
+  );
+  const projectTerminals = useMemo(
+    () => snapshot.terminals.filter((terminal) => terminal.project === projectName),
+    [snapshot.terminals, projectName],
   );
   const running = useMemo(
     () => services.filter((s) => s.status === "running" && s.allocatedPort > 0),
@@ -70,6 +87,47 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
     }
     return map;
   }, [snapshot.services]);
+  const terminalCountsByProject = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const terminal of snapshot.terminals) {
+      map.set(terminal.project, (map.get(terminal.project) ?? 0) + 1);
+    }
+    return map;
+  }, [snapshot.terminals]);
+  const removeLiveCounts = useMemo<ProjectLiveCounts>(() => {
+    if (!removeProject) return { services: 0, portforwards: 0, terminals: 0 };
+    return {
+      services: snapshot.services.filter(
+        (service) =>
+          service.project === removeProject &&
+          (service.status === "running" || service.status === "starting"),
+      ).length,
+      portforwards: snapshot.portforwards.filter(
+        (forward) =>
+          forward.project === removeProject &&
+          (forward.status === "active" ||
+            forward.status === "starting" ||
+            forward.status === "restarting"),
+      ).length,
+      terminals: snapshot.terminals.filter((terminal) => terminal.project === removeProject).length,
+    };
+  }, [removeProject, snapshot.portforwards, snapshot.services, snapshot.terminals]);
+
+  const confirmProjectRemoval = useCallback(async () => {
+    if (!removeProject) return;
+    const remainingProjects = snapshot.projects.filter((item) => item.name !== removeProject);
+    await daemon.removeProject(removeProject, true);
+    disposeTerminalWorkspace(removeProject);
+    clearRuntimeOpen(removeProject);
+    setOpenMenu(null);
+    setRemoveProject(null);
+    setSelected((current) => {
+      if (current !== removeProject && remainingProjects.some((item) => item.name === current)) {
+        return current;
+      }
+      return remainingProjects[0]?.name ?? "";
+    });
+  }, [clearRuntimeOpen, removeProject, snapshot.projects]);
 
   if (!project) {
     return (
@@ -98,12 +156,14 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
         selected={project.name}
         onSelect={setSelected}
         runningByProject={runningByProject}
+        terminalCountsByProject={terminalCountsByProject}
         hoveredProject={hoveredProject}
         onRowMouseEnter={onRowMouseEnter}
         onRowMouseLeave={onRowMouseLeave}
         openMenu={openMenu}
         onMenuOpenChange={setOpenMenu}
         onAddProject={() => setShowAddDialog(true)}
+        onRemoveProject={setRemoveProject}
       />
 
       <ScrollArea className="min-h-0">
@@ -118,7 +178,42 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
                 </span>
               </p>
             </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              aria-label={`Toggle ${project.name} Runtime`}
+              aria-pressed={runtimeOpen}
+              onClick={() => setRuntimeOpen(project.name, !runtimeOpen)}
+              className={cn(
+                "ml-auto h-7 gap-1.5 px-2 text-xs",
+                runtimeOpen && "border-primary/30 bg-primary/10 text-foreground",
+              )}
+            >
+              <SquareTerminal className="size-3.5" />
+              Runtime
+              {projectTerminals.length > 0 && (
+                <span
+                  className="tnum rounded bg-primary/15 px-1 text-[10px] text-primary"
+                  aria-label={`${projectTerminals.length} active terminal${projectTerminals.length === 1 ? "" : "s"}`}
+                >
+                  {projectTerminals.length}
+                </span>
+              )}
+            </Button>
           </div>
+
+          {runtimeOpen && (
+            <Card className="h-[360px] min-h-[320px] max-h-[380px] w-full overflow-hidden rounded-md border-border/80 bg-card shadow-none">
+              <RuntimePanel
+                key={project.name}
+                project={project.name}
+                services={services}
+                portforwards={pfs}
+                initialTab={projectTerminals.length > 0 ? "terminal" : "services"}
+              />
+            </Card>
+          )}
 
           <Card className="overflow-hidden rounded-md border-border/80 bg-card shadow-none">
             <div className="flex h-9 items-center gap-2 border-b border-border/80 px-3 text-xs font-medium text-muted-foreground">
@@ -278,6 +373,12 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
         open={showAddDialog}
         onOpenChange={setShowAddDialog}
         onAdded={onProjectAdded}
+      />
+      <RemoveProjectDialog
+        project={removeProject}
+        liveCounts={removeLiveCounts}
+        onCancel={() => setRemoveProject(null)}
+        onConfirm={confirmProjectRemoval}
       />
     </div>
   );

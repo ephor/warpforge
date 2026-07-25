@@ -621,7 +621,8 @@ pub enum Command {
     /// Remove a project from the registry and broadcast the update.
     RemoveProject {
         name: String,
-        reply: oneshot::Sender<Result<(), String>>,
+        stop_resources: bool,
+        reply: oneshot::Sender<Result<(), ProjectRemovalError>>,
     },
     Shutdown {
         reply: oneshot::Sender<()>,
@@ -694,9 +695,87 @@ pub enum Event {
         terminal_id: String,
         screen: wire::TerminalScreen,
     },
+    /// A new terminal was spawned. Wire clients use this to add TerminalInfo to
+    /// their snapshot projection. Internal-only info (parser handle) stays on
+    /// AgentSpawned for the in-process TUI.
+    TerminalSpawned {
+        info: wire::TerminalInfo,
+    },
+    /// Raw PTY output bytes (base64) for terminal-emulator clients.
+    TerminalData {
+        terminal_id: String,
+        data_b64: String,
+    },
     /// Orchestration pipeline event (plan created, node dispatched, etc.)
     #[allow(clippy::enum_variant_names)]
     OrchestrationEvent(crate::orchestration::OrchEvent),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectRemovalError {
+    Conflict(String),
+    NotFound(String),
+    Internal(String),
+}
+
+impl std::fmt::Display for ProjectRemovalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Conflict(message) | Self::NotFound(message) | Self::Internal(message) => {
+                f.write_str(message)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ProjectLiveResources {
+    services: usize,
+    portforwards: usize,
+    terminals: usize,
+}
+
+impl ProjectLiveResources {
+    fn any(&self) -> bool {
+        self.services + self.portforwards + self.terminals > 0
+    }
+
+    fn conflict_message(&self, project: &str) -> String {
+        let mut counts = Vec::new();
+        if self.services > 0 {
+            counts.push(format!(
+                "{} live service{}",
+                self.services,
+                plural(self.services)
+            ));
+        }
+        if self.portforwards > 0 {
+            counts.push(format!(
+                "{} live port-forward{}",
+                self.portforwards,
+                plural(self.portforwards)
+            ));
+        }
+        if self.terminals > 0 {
+            counts.push(format!(
+                "{} live terminal{}",
+                self.terminals,
+                plural(self.terminals)
+            ));
+        }
+        format!(
+            "Project \"{project}\" has {}; retry project.remove with stop_resources=true to stop them and remove the registration",
+            counts.join(", ")
+        )
+    }
+}
+
+fn plural(count: usize) -> &'static str {
+    if count == 1 {
+        ""
+    } else {
+        "s"
+    }
 }
 
 /// Cloneable handle clients use to talk to the daemon.
@@ -1016,14 +1095,21 @@ impl DaemonHandle {
     }
 
     /// Remove a project from the registry and broadcast to clients.
-    pub async fn remove_project(&self, name: &str) -> Result<(), String> {
+    pub async fn remove_project(
+        &self,
+        name: &str,
+        stop_resources: bool,
+    ) -> Result<(), ProjectRemovalError> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::RemoveProject {
             name: name.to_string(),
+            stop_resources,
             reply: tx,
         })
         .await;
-        rx.await.unwrap_or(Err("daemon dropped reply".into()))
+        rx.await.unwrap_or(Err(ProjectRemovalError::Internal(
+            "daemon dropped project removal reply".into(),
+        )))
     }
 
     /// Ask the daemon to tear down (stop services, port-forwards, agents) and
@@ -1508,7 +1594,7 @@ impl Daemon {
 
         let terminals = self
             .agents
-            .all()
+            .live()
             .map(|a| {
                 let (cols, rows) = a.dims();
                 wire::TerminalInfo {
@@ -1652,9 +1738,14 @@ impl Daemon {
     }
 
     fn handle_agent_event(&mut self, ev: AgentEvent) {
+        let known_agent = match &ev {
+            AgentEvent::Data { id, .. } | AgentEvent::Exit { id, .. } => {
+                self.agents.get(id).is_some()
+            }
+        };
         self.agents.apply_event(&ev);
         match ev {
-            AgentEvent::Data { id, .. } => {
+            AgentEvent::Data { id, data, .. } => {
                 if let Some(agent) = self.agents.get(&id) {
                     self.emit(Event::AgentStatus {
                         id: id.clone(),
@@ -1664,13 +1755,21 @@ impl Daemon {
                     if let Ok(parser) = agent.screen.lock() {
                         let screen = wireconv::terminal_screen(&parser);
                         self.emit(Event::TerminalScreen {
-                            terminal_id: id,
+                            terminal_id: id.clone(),
                             screen,
                         });
                     }
+                    // Raw PTY bytes for terminal-emulator clients (xterm.js).
+                    use base64::Engine;
+                    let data_b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                    self.emit(Event::TerminalData {
+                        terminal_id: id,
+                        data_b64,
+                    });
                 }
             }
-            AgentEvent::Exit { id, .. } => self.emit(Event::AgentExited { id }),
+            AgentEvent::Exit { id, .. } if known_agent => self.emit(Event::AgentExited { id }),
+            AgentEvent::Exit { .. } => {}
         }
     }
 
@@ -1797,8 +1896,12 @@ impl Daemon {
                 let result = self.add_project(&path, name.as_deref()).await;
                 let _ = reply.send(result);
             }
-            Command::RemoveProject { name, reply } => {
-                let result = self.remove_project(&name).await;
+            Command::RemoveProject {
+                name,
+                stop_resources,
+                reply,
+            } => {
+                let result = self.remove_project(&name, stop_resources).await;
                 let _ = reply.send(result);
             }
             Command::Shutdown { .. } => unreachable!(
@@ -1953,6 +2056,17 @@ impl Daemon {
                             id: id.clone(),
                             project: project.clone(),
                             screen: Arc::clone(&agent.screen),
+                        });
+                        let (cols, rows) = agent.dims();
+                        self.emit(Event::TerminalSpawned {
+                            info: wire::TerminalInfo {
+                                id: id.clone(),
+                                project: project.clone(),
+                                command: agent.command.clone(),
+                                started_at: agent.started_at,
+                                cols,
+                                rows,
+                            },
                         });
                     }
                 }
@@ -2856,9 +2970,107 @@ impl Daemon {
         Ok(entry)
     }
 
-    /// Remove a project from the registry, in-memory list, and broadcast.
-    async fn remove_project(&mut self, name: &str) -> Result<(), String> {
-        crate::registry::remove_project(name).map_err(|e| format!("registry: {e}"))?;
+    /// Stop and forget all project-owned runtime resources, then unregister the
+    /// project. The actor serializes this operation so starts cannot interleave.
+    async fn remove_project(
+        &mut self,
+        name: &str,
+        stop_resources: bool,
+    ) -> Result<(), ProjectRemovalError> {
+        let Some(project_index) = self
+            .projects
+            .iter()
+            .position(|project| project.name == name)
+        else {
+            return Err(ProjectRemovalError::NotFound(format!(
+                "Project \"{name}\" is not registered"
+            )));
+        };
+
+        let live = ProjectLiveResources {
+            services: self
+                .services
+                .list_for_project(name)
+                .iter()
+                .filter(|service| {
+                    matches!(
+                        service.status,
+                        ServiceStatus::Starting | ServiceStatus::Running
+                    )
+                })
+                .count(),
+            portforwards: self
+                .portforwards
+                .list_for_project(name)
+                .iter()
+                .filter(|forward| {
+                    matches!(
+                        forward.status,
+                        PfStatus::Starting | PfStatus::Active | PfStatus::Restarting
+                    )
+                })
+                .count(),
+            terminals: self
+                .agents
+                .list_for_project(name)
+                .iter()
+                .filter(|agent| agent.status.is_live_terminal())
+                .count(),
+        };
+        if live.any() && !stop_resources {
+            return Err(ProjectRemovalError::Conflict(live.conflict_message(name)));
+        }
+
+        let service_names: Vec<String> = self
+            .services
+            .list_for_project(name)
+            .into_iter()
+            .map(|service| service.name.clone())
+            .collect();
+        for service in service_names {
+            self.services
+                .remove(name, &service)
+                .await
+                .map_err(|error| {
+                    ProjectRemovalError::Internal(format!(
+                        "Failed to stop service \"{service}\" for project \"{name}\": {error}"
+                    ))
+                })?;
+        }
+
+        let portforward_names: Vec<String> = self
+            .portforwards
+            .list_for_project(name)
+            .into_iter()
+            .map(|forward| forward.name.clone())
+            .collect();
+        for forward in portforward_names {
+            self.portforwards.remove(name, &forward);
+        }
+
+        // The range sweep can affect an untracked listener, so reserve it for
+        // an explicitly authorized teardown rather than an unforced removal
+        // whose known resources are already stopped.
+        if stop_resources {
+            kill_listeners_in_ranges(&[crate::ports::port_range(project_index)]).await;
+        }
+
+        let terminal_ids: Vec<String> = self
+            .agents
+            .list_for_project(name)
+            .into_iter()
+            .map(|agent| agent.id.clone())
+            .collect();
+        for id in terminal_ids {
+            self.agents.kill(&id);
+            self.emit(Event::AgentExited { id });
+        }
+
+        crate::registry::remove_project(name).map_err(|error| {
+            ProjectRemovalError::Internal(format!(
+                "Resources were stopped, but project registration removal failed: {error}"
+            ))
+        })?;
 
         self.projects.retain(|p| p.name != name);
         self.config_observer.untrack(name);
@@ -3616,4 +3828,117 @@ fn default_policies() -> PolicyRegistry {
     // CostBudget disabled by default (max=∞). Enable via config when needed.
     // WorktreeGuard enabled per-task in start_session, not globally.
     reg
+}
+
+#[cfg(test)]
+mod project_removal_tests {
+    use super::*;
+    use crate::registry::ProjectEntry;
+
+    fn demo_project() -> ProjectEntry {
+        ProjectEntry {
+            name: "project-removal-test".into(),
+            path: ".".into(),
+            added_at: "0".into(),
+        }
+    }
+
+    #[test]
+    fn resource_guard_message_is_actionable_and_reports_live_counts() {
+        let live = ProjectLiveResources {
+            services: 2,
+            portforwards: 1,
+            terminals: 3,
+        };
+
+        assert!(live.any());
+        assert_eq!(
+            live.conflict_message("demo"),
+            "Project \"demo\" has 2 live services, 1 live port-forward, 3 live terminals; retry project.remove with stop_resources=true to stop them and remove the registration"
+        );
+    }
+
+    #[test]
+    fn stopped_project_state_does_not_require_force() {
+        assert!(!ProjectLiveResources::default().any());
+    }
+
+    #[tokio::test]
+    async fn live_terminal_blocks_unforced_project_removal() {
+        let handle = Daemon::spawn(vec![demo_project()], None);
+        let terminal_id = handle
+            .spawn_agent("project-removal-test", "sleep 30", "guard test", 80, 24)
+            .await
+            .unwrap();
+
+        let error = handle
+            .remove_project("project-removal-test", false)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ProjectRemovalError::Conflict(_)));
+        assert!(handle
+            .snapshot()
+            .await
+            .terminals
+            .iter()
+            .any(|terminal| terminal.id == terminal_id));
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn task_archive_and_delete_do_not_kill_project_terminal() {
+        let handle = Daemon::spawn(vec![demo_project()], None);
+        let terminal_id = handle
+            .spawn_agent(
+                "project-removal-test",
+                "sleep 30",
+                "task lifecycle test",
+                80,
+                24,
+            )
+            .await
+            .unwrap();
+        let archived_task = handle
+            .create_task(
+                "project-removal-test",
+                "archive me",
+                "codex",
+                Vec::new(),
+                false,
+                false,
+                None,
+                Vec::new(),
+                None,
+                HashMap::new(),
+            )
+            .await;
+        let deleted_task = handle
+            .create_task(
+                "project-removal-test",
+                "delete me",
+                "codex",
+                Vec::new(),
+                false,
+                false,
+                None,
+                Vec::new(),
+                None,
+                HashMap::new(),
+            )
+            .await;
+
+        handle
+            .send(Command::ArchiveTask { id: archived_task })
+            .await;
+        handle.send(Command::DeleteTask { id: deleted_task }).await;
+
+        assert!(handle
+            .snapshot()
+            .await
+            .terminals
+            .iter()
+            .any(|terminal| terminal.id == terminal_id));
+        handle.shutdown().await;
+    }
 }

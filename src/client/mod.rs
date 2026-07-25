@@ -382,6 +382,8 @@ fn apply_event(state: &Arc<Mutex<ClientState>>, ev: wire::Event) {
                 screen: Some(screen),
             }),
         },
+        // Raw PTY bytes — TUI uses screen snapshots, so this is a no-op here.
+        wire::Event::TerminalData { .. } => {}
         wire::Event::TerminalExited { terminal_id, .. } => {
             s.agents.items.retain(|t| t.id != terminal_id);
         }

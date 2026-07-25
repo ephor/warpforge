@@ -144,7 +144,7 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
   const setShowDiff = useUi((s) => s.setShowDiff);
   const toggleChat = useUi((s) => s.toggleChat);
   const setRightPanel = useUi((s) => s.setRightPanel);
-  const runtimeOpen = useUi((s) => s.runtimeOpen);
+  const runtimeOpen = useUi((s) => s.runtimeOpenByProject[task.project] ?? false);
   const compactLayout = useMediaQuery("(max-width: 1199px)");
   const pinnedTaskIds = useUi((s) => s.pinnedTaskIds);
   const setPinnedTaskIds = useUi((s) => s.setPinnedTaskIds);
@@ -296,6 +296,9 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
   const openProjectFiles = useCallback(() => setRightPanel("files"), [setRightPanel]);
   const sendDiffToChat = useCallback((file: FileDiff) => {
     composerRef.current?.attachDiff(file, formatFileDiffAsMessage(file));
+  }, []);
+  const appendLogsToChat = useCallback((text: string) => {
+    composerRef.current?.appendDraft(text);
   }, []);
   const diffError = diffQuery.error?.message ?? resolveHunkMut.error?.message ?? null;
 
@@ -609,6 +612,7 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
                           project={task.project}
                           services={services}
                           portforwards={portforwards}
+                          onAppendToChat={appendLogsToChat}
                         />
                       </ResizablePanel>
                     </>
