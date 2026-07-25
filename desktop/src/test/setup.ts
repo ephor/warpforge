@@ -32,3 +32,13 @@ Object.defineProperty(globalThis, "crypto", {
   writable: true,
 });
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+class MockResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+Object.defineProperty(globalThis, "ResizeObserver", {
+  value: MockResizeObserver,
+  writable: true,
+});

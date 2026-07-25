@@ -203,4 +203,96 @@ describe("DaemonClient connection state", () => {
     ]);
     expect(client.getState().snapshot.portforwards[0].name).toBe("db");
   });
+
+  it("projects project removal across all project-owned runtime state", () => {
+    const client = new DaemonClient();
+    client.enableDemoMode({
+      snapshot: {
+        projects: [
+          {
+            agentTemplates: {},
+            declaredServices: ["web"],
+            name: "demo",
+            path: "/demo",
+            portRange: [4000, 4099],
+          },
+          {
+            agentTemplates: {},
+            declaredServices: [],
+            name: "other",
+            path: "/other",
+            portRange: [4100, 4199],
+          },
+        ],
+        services: [
+          {
+            allocatedPort: 4000,
+            command: "bun dev",
+            logSeq: 0,
+            name: "web",
+            originalPort: 3000,
+            project: "demo",
+            status: "running",
+          },
+        ],
+        portforwards: [
+          {
+            localPort: 5432,
+            logSeq: 0,
+            name: "db",
+            namespace: "dev",
+            pod: "postgres",
+            project: "demo",
+            remotePort: 5432,
+            status: "active",
+          },
+        ],
+        tasks: [],
+        terminals: [
+          {
+            cols: 80,
+            command: "sh",
+            id: "terminal-1",
+            project: "demo",
+            rows: 24,
+            startedAt: 1,
+          },
+        ],
+      },
+      sessionUpdates: {},
+      diffFor: (taskId) => ({ files: [], taskId }),
+      fileDocFor: (path) => ({ newText: "", oldText: "", path, status: "modified" }),
+    });
+    client.demoEvent({
+      event: "service.log",
+      data: { line: "ready", project: "demo", seq: 1, service: "web" },
+    });
+    client.demoEvent({
+      event: "portforward.log",
+      data: { line: "forwarding", name: "db", project: "demo", seq: 1 },
+    });
+
+    client.demoEvent({ event: "project.removed", data: { name: "demo" } });
+
+    expect(client.getState().snapshot).toMatchObject({
+      portforwards: [],
+      projects: [{ name: "other" }],
+      services: [],
+      terminals: [],
+    });
+    expect(client.getState().serviceLogs).toEqual({});
+    expect(client.getState().portforwardLogs).toEqual({});
+  });
+
+  it("sends explicit project resource teardown authorization", async () => {
+    const client = new DaemonClient();
+    const request = vi.spyOn(client, "request").mockResolvedValue(null);
+
+    await client.removeProject("demo", true);
+
+    expect(request).toHaveBeenCalledWith("project.remove", {
+      name: "demo",
+      stop_resources: true,
+    });
+  });
 });

@@ -141,9 +141,8 @@ pub fn task_info(t: &Task) -> wire::TaskInfo {
 
 /// Translate an internal event to a wire event, if it has one.
 ///
-/// PTY-agent events are intentionally omitted for now: the desktop client works
-/// through ACP task sessions, not the legacy terminal agents. Stage 3 adds
-/// serialized `TerminalScreen` events for the TUI-over-socket case.
+/// Terminal events (screen snapshots + raw data bytes) are forwarded for both
+/// the TUI-over-socket client and the desktop client.
 pub fn to_wire(ev: &Event) -> Option<wire::Event> {
     match ev {
         Event::ServiceStatus {
@@ -199,6 +198,14 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
         } => Some(wire::Event::TerminalScreen {
             terminal_id: terminal_id.clone(),
             screen: screen.clone(),
+        }),
+        Event::TerminalSpawned { info } => Some(wire::Event::TerminalSpawned(info.clone())),
+        Event::TerminalData {
+            terminal_id,
+            data_b64,
+        } => Some(wire::Event::TerminalData {
+            terminal_id: terminal_id.clone(),
+            data_b64: data_b64.clone(),
         }),
         Event::AgentExited { id } => Some(wire::Event::TerminalExited {
             terminal_id: id.clone(),

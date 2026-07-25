@@ -23,7 +23,12 @@ const task: TaskInfo = {
 
 describe("TaskDetailActions", () => {
   beforeEach(() => {
-    useUi.setState({ rightPanel: null, runtimeOpen: false, showChat: true, showDiff: true });
+    useUi.setState({
+      rightPanel: null,
+      runtimeOpenByProject: {},
+      showChat: true,
+      showDiff: true,
+    });
   });
 
   it("contains tool-window controls without task lifecycle actions", () => {
@@ -45,5 +50,17 @@ describe("TaskDetailActions", () => {
   it("keeps Terminal available when the project has no runtime targets yet", () => {
     render(<TaskDetailActions task={task} />);
     expect(screen.getByRole("button", { name: "Terminal" })).toBeInTheDocument();
+  });
+
+  it("toggles Runtime only for the task project", () => {
+    useUi.setState({ runtimeOpenByProject: { "other-project": true } });
+    render(<TaskDetailActions task={task} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
+
+    expect(useUi.getState().runtimeOpenByProject).toEqual({
+      "other-project": true,
+      warpforge: true,
+    });
   });
 });

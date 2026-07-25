@@ -27,6 +27,14 @@ fn default_true() -> bool {
     true
 }
 
+fn default_terminal_cols() -> u16 {
+    80
+}
+
+fn default_terminal_rows() -> u16 {
+    24
+}
+
 // ─── Envelope ────────────────────────────────────────────────────────────────
 
 /// A client → daemon frame.
@@ -98,7 +106,13 @@ pub enum Method {
     #[serde(rename = "project.add")]
     ProjectAdd { path: String, name: Option<String> },
     #[serde(rename = "project.remove")]
-    ProjectRemove { name: String },
+    ProjectRemove {
+        name: String,
+        /// Explicitly authorize stopping live project resources before removal.
+        /// Defaults to false so older clients fail safely when resources exist.
+        #[serde(default)]
+        stop_resources: bool,
+    },
 
     // ── Runtime lifecycle ──
     /// Stop all running dev services and port-forwards without shutting down
@@ -360,7 +374,14 @@ pub enum Method {
 
     // ── Raw terminal agents (legacy PTY sessions, kept for the TUI) ──
     #[serde(rename = "terminal.spawn")]
-    TerminalSpawn { project: String, command: String },
+    TerminalSpawn {
+        project: String,
+        command: String,
+        #[serde(default = "default_terminal_cols")]
+        cols: u16,
+        #[serde(default = "default_terminal_rows")]
+        rows: u16,
+    },
     #[serde(rename = "terminal.input")]
     TerminalInput {
         terminal_id: String,
@@ -537,6 +558,19 @@ pub enum Event {
     TerminalScreen {
         terminal_id: String,
         screen: TerminalScreen,
+    },
+    /// A new terminal was spawned. Additive: clients add this TerminalInfo to
+    /// their snapshot.terminals projection. The terminal stays in the snapshot
+    /// until a `terminal.exited` event removes it.
+    #[serde(rename = "terminal.spawned")]
+    TerminalSpawned(TerminalInfo),
+    /// Raw PTY output bytes (base64). Additive with terminal.screen — clients
+    /// that render via a terminal emulator (xterm.js) use this instead of the
+    /// rendered screen spans. Bounded to the <=4096-byte read chunk.
+    #[serde(rename = "terminal.data")]
+    TerminalData {
+        terminal_id: String,
+        data_b64: String,
     },
     #[serde(rename = "terminal.exited")]
     TerminalExited { terminal_id: String, code: i32 },
@@ -1515,5 +1549,53 @@ mod tests {
         assert!(json.contains(r#""event":"project.configChanged""#));
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn terminal_spawn_defaults_cols_rows_when_omitted() {
+        let old: Request = serde_json::from_str(
+            r#"{"id":1,"method":"terminal.spawn","params":{"project":"p","command":"sh"}}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(old.method, Method::TerminalSpawn { cols, rows, .. } if cols == 80 && rows == 24)
+        );
+    }
+
+    #[test]
+    fn terminal_spawn_uses_provided_cols_rows() {
+        let req: Request = serde_json::from_str(
+            r#"{"id":1,"method":"terminal.spawn","params":{"project":"p","command":"sh","cols":120,"rows":40}}"#,
+        )
+        .unwrap();
+        assert!(
+            matches!(req.method, Method::TerminalSpawn { cols, rows, .. } if cols == 120 && rows == 40)
+        );
+    }
+
+    #[test]
+    fn project_remove_defaults_to_safe_resource_guard() {
+        let old: Request =
+            serde_json::from_str(r#"{"id":1,"method":"project.remove","params":{"name":"demo"}}"#)
+                .unwrap();
+        assert!(matches!(
+            old.method,
+            Method::ProjectRemove {
+                name,
+                stop_resources: false
+            } if name == "demo"
+        ));
+
+        let authorized: Request = serde_json::from_str(
+            r#"{"id":2,"method":"project.remove","params":{"name":"demo","stop_resources":true}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            authorized.method,
+            Method::ProjectRemove {
+                stop_resources: true,
+                ..
+            }
+        ));
     }
 }

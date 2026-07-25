@@ -52,7 +52,7 @@ interface UiState extends SettingsState {
   showDiff: boolean;
   diffView: DiffView;
   rightPanel: RightPanel;
-  runtimeOpen: boolean;
+  runtimeOpenByProject: Record<string, boolean>;
   pinnedTaskIds: string[];
 
   setView: (v: View) => void;
@@ -66,8 +66,9 @@ interface UiState extends SettingsState {
   setShowDiff: (open: boolean) => void;
   setDiffView: (v: DiffView) => void;
   setRightPanel: (panel: RightPanel) => void;
-  toggleRuntime: () => void;
-  setRuntimeOpen: (open: boolean) => void;
+  toggleRuntime: (project: string) => void;
+  setRuntimeOpen: (project: string, open: boolean) => void;
+  clearRuntimeOpen: (project: string) => void;
   togglePinnedTask: (id: string) => void;
   setPinnedTaskIds: (ids: string[]) => void;
 }
@@ -93,7 +94,7 @@ export const useUi = create<UiState>()(
       showDiff: true,
       diffView: "split",
       rightPanel: null,
-      runtimeOpen: false,
+      runtimeOpenByProject: {},
       pinnedTaskIds: [],
       fontSize: DEFAULT_FONT_SIZE,
       monoFontSize: DEFAULT_MONO_FONT_SIZE,
@@ -103,8 +104,8 @@ export const useUi = create<UiState>()(
 
       setView: (view) => set({ openTaskId: null, view }),
       // Contextual task tools must not leak from one task into the next.
-      // Layout preferences (chat/workspace visibility and diff style) remain persisted.
-      openTask: (openTaskId) => set({ openTaskId, rightPanel: null, runtimeOpen: false }),
+      // Project-scoped Runtime visibility and other layout preferences remain persisted.
+      openTask: (openTaskId) => set({ openTaskId, rightPanel: null }),
       toggleAttention: () => set((s) => ({ attentionOpen: !s.attentionOpen })),
       setAttentionOpen: (attentionOpen) => set({ attentionOpen }),
       focusAttentionTask: (attentionTargetId) =>
@@ -121,8 +122,26 @@ export const useUi = create<UiState>()(
       setShowDiff: (showDiff) => set((s) => (!showDiff && !s.showChat ? s : { showDiff })),
       setDiffView: (diffView) => set({ diffView }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
-      toggleRuntime: () => set((s) => ({ runtimeOpen: !s.runtimeOpen })),
-      setRuntimeOpen: (runtimeOpen) => set({ runtimeOpen }),
+      toggleRuntime: (project) =>
+        set((s) => ({
+          runtimeOpenByProject: {
+            ...s.runtimeOpenByProject,
+            [project]: !s.runtimeOpenByProject[project],
+          },
+        })),
+      setRuntimeOpen: (project, open) =>
+        set((s) => ({
+          runtimeOpenByProject: {
+            ...s.runtimeOpenByProject,
+            [project]: open,
+          },
+        })),
+      clearRuntimeOpen: (project) =>
+        set((s) => {
+          const runtimeOpenByProject = { ...s.runtimeOpenByProject };
+          delete runtimeOpenByProject[project];
+          return { runtimeOpenByProject };
+        }),
       setPinnedTaskIds: (pinnedTaskIds) => set({ pinnedTaskIds }),
       togglePinnedTask: (id) =>
         set((s) => ({
@@ -156,7 +175,6 @@ export const useUi = create<UiState>()(
         attentionTargetNonce: _attentionTargetNonce,
         repositoryOperation: _repositoryOperation,
         rightPanel: _rightPanel,
-        runtimeOpen: _runtimeOpen,
         ...rest
       }) => rest,
     },

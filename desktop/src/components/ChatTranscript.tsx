@@ -255,7 +255,7 @@ const TranscriptListItem = memo(
 
 function renderTranscriptItem({ item }: { item: TranscriptListRow }) {
   return (
-    <div key={item.id} className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip pb-3">
+    <div key={item.id} className="mx-auto w-full min-w-0 overflow-x-clip pb-3">
       <TranscriptListItem row={item} />
     </div>
   );

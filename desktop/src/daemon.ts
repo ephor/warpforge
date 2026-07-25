@@ -46,10 +46,14 @@ export interface DaemonState {
 
 const MAX_SERVICE_LOGS = 1000;
 const MAX_PORTFORWARD_LOGS = 500;
+const MAX_TERMINAL_BUFFER_BYTES = 64 * 1024;
+const MAX_TERMINAL_BUFFER_GLOBAL_BYTES = 512 * 1024;
+const TERMINAL_BUFFER_TTL_MS = 30_000;
 export const DAEMON_PROTOCOL_VERSION = 1;
 
 type Listener = () => void;
 type EventListener = (event: DaemonEvent) => void;
+export type TerminalDataListener = (data: Uint8Array) => void;
 
 export class DaemonClient {
   private ws: WebSocket | null = null;
@@ -65,6 +69,11 @@ export class DaemonClient {
   private reconnectSuspended = false;
   private handshake: DaemonHandshake | null = null;
   private toolCallStarts = new Map<string, number>();
+  private terminalDataSubscribers = new Map<string, Set<TerminalDataListener>>();
+  private terminalDataBuffers = new Map<
+    string,
+    { chunks: Array<{ data: Uint8Array; ts: number }>; bytes: number }
+  >();
   private state: DaemonState = {
     connection: "disconnected",
     connectionError: null,
@@ -85,6 +94,89 @@ export class DaemonClient {
     return () => this.eventListeners.delete(fn);
   };
   getState = (): DaemonState => this.state;
+
+  subscribeTerminalData(terminalId: string, listener: TerminalDataListener): () => void {
+    let subs = this.terminalDataSubscribers.get(terminalId);
+    if (!subs) {
+      subs = new Set();
+      this.terminalDataSubscribers.set(terminalId, subs);
+    }
+    subs.add(listener);
+    const buf = this.terminalDataBuffers.get(terminalId);
+    if (buf) {
+      for (const chunk of buf.chunks) listener(chunk.data);
+      this.terminalDataBuffers.delete(terminalId);
+    }
+    return () => {
+      const s = this.terminalDataSubscribers.get(terminalId);
+      if (s) {
+        s.delete(listener);
+        if (s.size === 0) this.terminalDataSubscribers.delete(terminalId);
+      }
+    };
+  }
+
+  clearTerminalBuffer(terminalId: string) {
+    this.terminalDataBuffers.delete(terminalId);
+  }
+
+  private deliverTerminalData(terminalId: string, data: Uint8Array) {
+    const subs = this.terminalDataSubscribers.get(terminalId);
+    if (subs && subs.size > 0) {
+      for (const listener of subs) listener(data);
+      return;
+    }
+    let buf = this.terminalDataBuffers.get(terminalId);
+    if (!buf) {
+      buf = { chunks: [], bytes: 0 };
+      this.terminalDataBuffers.set(terminalId, buf);
+    }
+    const now = Date.now();
+    buf.chunks.push({ data, ts: now });
+    buf.bytes += data.length;
+    while (buf.chunks.length > 1 && buf.bytes > MAX_TERMINAL_BUFFER_BYTES) {
+      const dropped = buf.chunks.shift()!;
+      buf.bytes -= dropped.data.length;
+    }
+    this.pruneGlobalTerminalBuffers(now);
+  }
+
+  private pruneGlobalTerminalBuffers(now: number) {
+    let globalBytes = 0;
+    for (const buf of this.terminalDataBuffers.values()) globalBytes += buf.bytes;
+    while (globalBytes > MAX_TERMINAL_BUFFER_GLOBAL_BYTES) {
+      let oldestKey: string | null = null;
+      let oldestTs = Infinity;
+      for (const [key, buf] of this.terminalDataBuffers.entries()) {
+        if (buf.chunks.length > 0 && buf.chunks[0].ts < oldestTs) {
+          oldestTs = buf.chunks[0].ts;
+          oldestKey = key;
+        }
+      }
+      if (!oldestKey) break;
+      const ob = this.terminalDataBuffers.get(oldestKey)!;
+      if (ob.chunks.length === 0) break;
+      if (now - ob.chunks[0].ts > TERMINAL_BUFFER_TTL_MS || ob.chunks.length > 1) {
+        const dropped = ob.chunks.shift()!;
+        ob.bytes -= dropped.data.length;
+        globalBytes -= dropped.data.length;
+        if (ob.chunks.length === 0) {
+          this.terminalDataBuffers.delete(oldestKey);
+        }
+      } else {
+        break;
+      }
+    }
+    for (const [key, buf] of this.terminalDataBuffers.entries()) {
+      while (buf.chunks.length > 0 && now - buf.chunks[0].ts > TERMINAL_BUFFER_TTL_MS) {
+        const dropped = buf.chunks.shift()!;
+        buf.bytes -= dropped.data.length;
+      }
+      if (buf.chunks.length === 0) {
+        this.terminalDataBuffers.delete(key);
+      }
+    }
+  }
 
   private setState(patch: Partial<DaemonState>) {
     this.state = { ...this.state, ...patch };
@@ -217,6 +309,7 @@ export class DaemonClient {
     });
     this.pending.forEach((p) => p.reject(new Error("daemon disconnected")));
     this.pending.clear();
+    this.terminalDataBuffers.clear();
     if (this.reconnectSuspended || this.reconnectTimer !== null) {
       return;
     }
@@ -526,6 +619,41 @@ export class DaemonClient {
         }
         return Promise.resolve({ graphs });
       }
+      case "terminal.spawn": {
+        const id = `t${Math.random().toString(36).slice(2, 10)}`;
+        // Synthesize a TerminalInfo entry so the workspace sees it.
+        this.applyEvent({
+          event: "state.snapshot",
+          data: {
+            ...this.state.snapshot,
+            terminals: [
+              ...this.state.snapshot.terminals,
+              {
+                cols: Number(p.cols) || 80,
+                command: 'exec "${SHELL:-/bin/sh}" -l',
+                id,
+                project: String(p.project),
+                rows: Number(p.rows) || 24,
+                startedAt: nowSecs(),
+              },
+            ],
+          },
+        });
+        // Emit a fake prompt via terminal.data.
+        setTimeout(() => {
+          const prompt = "$ ";
+          const b64 = bytesToBase64(new TextEncoder().encode(prompt));
+          this.applyEvent({
+            event: "terminal.data",
+            data: { data_b64: b64, terminal_id: id },
+          });
+        }, 50);
+        return Promise.resolve({ terminalId: id });
+      }
+      case "terminal.input":
+      case "terminal.resize":
+      case "terminal.kill":
+        return Promise.resolve({});
       default:
         return Promise.resolve({});
     }
@@ -577,11 +705,31 @@ export class DaemonClient {
         });
         break;
       case "project.removed":
+        for (const terminal of snap.terminals) {
+          if (terminal.project === ev.data.name) {
+            this.clearTerminalBuffer(terminal.id);
+          }
+        }
         this.setState({
           snapshot: {
             ...snap,
             projects: snap.projects.filter((p) => p.name !== ev.data.name),
+            services: snap.services.filter((service) => service.project !== ev.data.name),
+            portforwards: snap.portforwards.filter(
+              (portforward) => portforward.project !== ev.data.name,
+            ),
+            terminals: snap.terminals.filter((terminal) => terminal.project !== ev.data.name),
           },
+          serviceLogs: Object.fromEntries(
+            Object.entries(this.state.serviceLogs).filter(
+              ([key]) => !key.startsWith(`${ev.data.name}/`),
+            ),
+          ),
+          portforwardLogs: Object.fromEntries(
+            Object.entries(this.state.portforwardLogs).filter(
+              ([key]) => !key.startsWith(`${ev.data.name}/`),
+            ),
+          ),
         });
         break;
       case "project.configChanged": {
@@ -706,10 +854,31 @@ export class DaemonClient {
           snapshot: { ...snap, agents: ev.data.agents },
         });
         break;
-      // High-frequency events with no retained state yet.
+      // Screen snapshots consumed by TUI clients; desktop uses terminal.data.
       case "terminal.screen":
-      case "terminal.exited":
         break;
+      case "terminal.spawned": {
+        const info = ev.data;
+        const exists = snap.terminals.some((t) => t.id === info.id);
+        if (!exists) {
+          this.setState({ snapshot: { ...snap, terminals: [...snap.terminals, info] } });
+        }
+        break;
+      }
+      case "terminal.data": {
+        const bytes = base64ToBytes(ev.data.data_b64);
+        if (bytes.length > 0) this.deliverTerminalData(ev.data.terminal_id, bytes);
+        break;
+      }
+      case "terminal.exited": {
+        const { terminal_id } = ev.data;
+        this.clearTerminalBuffer(terminal_id);
+        const remaining = snap.terminals.filter((t) => t.id !== terminal_id);
+        if (remaining.length !== snap.terminals.length) {
+          this.setState({ snapshot: { ...snap, terminals: remaining } });
+        }
+        break;
+      }
       // ── Orchestration events: update parent task's orchestrationGraph ──
       case "orchestration.nodeDispatched":
       case "orchestration.nodeCompleted":
@@ -835,9 +1004,9 @@ export class DaemonClient {
     return lines;
   }
 
-  /** Remove a project from the registry. */
-  async removeProject(name: string): Promise<void> {
-    await this.request("project.remove", { name });
+  /** Remove a project registration, optionally authorizing resource teardown. */
+  async removeProject(name: string, stopResources = false): Promise<void> {
+    await this.request("project.remove", { name, stop_resources: stopResources });
   }
 
   /** List resumable claude/codex sessions on disk for a project's cwd. */
@@ -891,6 +1060,41 @@ export class DaemonClient {
     const result = await this.request("orchestrate.saveConfig", { config });
     return (result as { ok?: boolean })?.ok ?? false;
   }
+
+  // ── Terminal PTY RPCs ──
+
+  async spawnTerminal(
+    project: string,
+    cols: number,
+    rows: number,
+  ): Promise<string> {
+    const result = await this.request("terminal.spawn", {
+      project,
+      command: 'exec "${SHELL:-/bin/sh}" -l',
+      cols,
+      rows,
+    });
+    return (result as { terminalId?: string })?.terminalId ?? "";
+  }
+
+  sendTerminalInput(terminalId: string, data: Uint8Array) {
+    this.request("terminal.input", {
+      terminal_id: terminalId,
+      data_b64: bytesToBase64(data),
+    }).catch(() => {});
+  }
+
+  resizeTerminal(terminalId: string, cols: number, rows: number) {
+    this.request("terminal.resize", {
+      terminal_id: terminalId,
+      cols,
+      rows,
+    }).catch(() => {});
+  }
+
+  async killTerminal(terminalId: string): Promise<void> {
+    await this.request("terminal.kill", { terminal_id: terminalId });
+  }
 }
 
 /**
@@ -933,6 +1137,24 @@ function connectionErrorMessage(error: unknown): string {
     return `${message}. Stop the running daemon and relaunch Warpforge.`;
   }
   return message || "Could not connect to the daemon. Warpforge will keep retrying.";
+}
+
+export function base64ToBytes(b64: string): Uint8Array {
+  if (!b64) return new Uint8Array(0);
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+export function bytesToBase64(data: Uint8Array): string {
+  if (data.length === 0) return "";
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < data.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, Array.from(data.subarray(i, i + CHUNK)));
+  }
+  return btoa(binary);
 }
 
 export const daemon = new DaemonClient();

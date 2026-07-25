@@ -1,4 +1,12 @@
-import { EllipsisVertical, FolderGit2, Pencil, Plus, Radio, Trash2 } from "lucide-react";
+import {
+  EllipsisVertical,
+  FolderGit2,
+  Pencil,
+  Plus,
+  Radio,
+  SquareTerminal,
+  Trash2,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -13,7 +21,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 
-import { daemon } from "../../daemon";
 import type { Snapshot } from "../../protocol";
 
 interface ProjectListProps {
@@ -21,12 +28,14 @@ interface ProjectListProps {
   selected: string;
   onSelect: (name: string) => void;
   runningByProject: Map<string, number>;
+  terminalCountsByProject: Map<string, number>;
   hoveredProject: string | null;
   onRowMouseEnter: (name: string) => void;
   onRowMouseLeave: () => void;
   openMenu: string | null;
   onMenuOpenChange: (name: string | null) => void;
   onAddProject: () => void;
+  onRemoveProject: (name: string) => void;
 }
 
 export function ProjectList({
@@ -34,12 +43,14 @@ export function ProjectList({
   selected,
   onSelect,
   runningByProject,
+  terminalCountsByProject,
   hoveredProject,
   onRowMouseEnter,
   onRowMouseLeave,
   openMenu,
   onMenuOpenChange,
   onAddProject,
+  onRemoveProject,
 }: ProjectListProps) {
   return (
     <Card className="flex min-h-0 flex-col rounded-md border-border/80 bg-card shadow-none">
@@ -52,6 +63,7 @@ export function ProjectList({
           {projects.map((p) => {
             const active = p.name === selected;
             const up = runningByProject.get(p.name) ?? 0;
+            const terminalCount = terminalCountsByProject.get(p.name) ?? 0;
             return (
               <div
                 key={p.name}
@@ -65,14 +77,27 @@ export function ProjectList({
                 <button
                   type="button"
                   onClick={() => onSelect(p.name)}
+                  aria-label={`Select project ${p.name}`}
                   className="flex flex-1 items-center gap-2 text-left"
                 >
                   <FolderGit2 className="size-4 text-muted-foreground" />
                   <span className="flex-1 truncate">{p.name}</span>
                   {up > 0 && (
-                    <span className="tnum flex items-center gap-1 text-xs text-ok">
+                    <span
+                      className="tnum flex items-center gap-1 text-xs text-ok"
+                      aria-label={`${up} running service${up === 1 ? "" : "s"}`}
+                    >
                       <Radio className="size-3" />
                       {up}
+                    </span>
+                  )}
+                  {terminalCount > 0 && (
+                    <span
+                      className="tnum flex items-center gap-1 text-xs text-primary"
+                      aria-label={`${terminalCount} active terminal${terminalCount === 1 ? "" : "s"}`}
+                    >
+                      <SquareTerminal className="size-3" />
+                      {terminalCount}
                     </span>
                   )}
                 </button>
@@ -100,11 +125,12 @@ export function ProjectList({
                       <DropdownMenuItem
                         className="text-destructive focus:text-destructive"
                         onClick={() => {
-                          void daemon.removeProject(p.name);
+                          onMenuOpenChange(null);
+                          onRemoveProject(p.name);
                         }}
                       >
                         <Trash2 className="size-4" />
-                        Delete
+                        Remove project
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
