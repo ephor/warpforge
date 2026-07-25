@@ -69,19 +69,21 @@ mod tests {
 
         // The TaskCreated event carries a task whose session_id is None and
         // whose session identifier is NOT the task id — they are separate.
-        let ev = timeout(Duration::from_secs(1), events.recv())
-            .await
-            .expect("event within 1s")
-            .expect("event");
-        match ev {
-            Event::TaskCreated(task) => {
-                assert_eq!(task.id, id);
-                assert_eq!(task.session_id, None);
-                assert_eq!(task.status, TaskStatus::Queued);
-                assert_eq!(task.prompt, "fix the bug");
+        // Startup config discovery can emit a ProjectConfigChanged first, so
+        // skip anything that isn't the TaskCreated we're asserting on.
+        let task = loop {
+            let ev = timeout(Duration::from_secs(1), events.recv())
+                .await
+                .expect("event within 1s")
+                .expect("event");
+            if let Event::TaskCreated(task) = ev {
+                break task;
             }
-            _ => panic!("expected TaskCreated"),
-        }
+        };
+        assert_eq!(task.id, id);
+        assert_eq!(task.session_id, None);
+        assert_eq!(task.status, TaskStatus::Queued);
+        assert_eq!(task.prompt, "fix the bug");
 
         let tasks = daemon.tasks().await;
         assert_eq!(tasks.len(), 1);
