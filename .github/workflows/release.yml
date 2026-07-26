@@ -413,6 +413,32 @@ jobs:
         run: |
           mkdir release-assets
           gh release download "$RELEASE_TAG" --dir release-assets
+
+          # Draft assets use authenticated API URLs until publication. Resolve
+          # those IDs to their real asset names and write the stable tagged
+          # download URLs that installed apps can use after publication.
+          release_json="$(gh api "repos/$GH_REPO/releases/$RELEASE_ID")"
+          asset_names="$(
+            jq -c '[.assets[] | {key: (.id | tostring), value: .name}] | from_entries' \
+              <<<"$release_json"
+          )"
+          canonical_base="https://github.com/$GH_REPO/releases/download/$RELEASE_TAG"
+          jq --arg base "$canonical_base" --argjson names "$asset_names" '
+            .platforms |= with_entries(
+              .value.url |= (
+                if test("^https://api.github.com/.*/releases/assets/[0-9]+$")
+                then capture("/assets/(?<id>[0-9]+)$").id as $id
+                  | $base + "/" + (
+                      $names[$id]
+                      // error("latest.json references unknown release asset id \($id)")
+                    )
+                else .
+                end
+              )
+            )
+          ' release-assets/latest.json > release-assets/latest.normalized.json
+          mv release-assets/latest.normalized.json release-assets/latest.json
+
           test -f release-assets/latest.json
           test -f release-assets/warpforge-aarch64-apple-darwin.tar.gz
           if [ "$INCLUDE_WINDOWS" = true ]; then
@@ -451,6 +477,7 @@ jobs:
             test -f "release-assets/$asset.sig" || { echo "Missing updater signature: $asset.sig" >&2; exit 1; }
           done
           cd release-assets
+          gh release upload "$RELEASE_TAG" latest.json --clobber
           sha256sum -- * > SHA256SUMS
           gh release upload "$RELEASE_TAG" SHA256SUMS --clobber
           test "$(gh api "repos/$GH_REPO/releases/$RELEASE_ID" --jq .draft)" = true
