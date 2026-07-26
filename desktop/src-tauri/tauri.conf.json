@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Warpforge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "dev.warpforge.desktop",
   "build": {
     "beforeDevCommand": "bun scripts/stage-sidecar.mjs --profile debug --no-target && bun run dev",
@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*"
+      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*"
     }
   },
   "bundle": {

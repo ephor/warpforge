@@ -44,6 +44,15 @@ const updaterPublicKey =
   process.env.TAURI_UPDATER_PUBLIC_KEY?.trim() ||
   tauriConfig.plugins?.updater?.pubkey?.trim();
 
+function cspDirectiveSources(csp, directiveName) {
+  if (typeof csp !== "string") return [];
+  const directive = csp
+    .split(";")
+    .map((value) => value.trim().split(/\s+/))
+    .find(([name]) => name === directiveName);
+  return directive?.slice(1) ?? [];
+}
+
 function cargoVersion(metadata, name) {
   const pkg = metadata.packages.find((candidate) => candidate.name === name);
   if (!pkg) throw new Error(`Cargo package not found: ${name}`);
@@ -94,6 +103,17 @@ const releaseConfiguration = [
   [
     "the frontend updater dependency is locked",
     desktopLock.includes('"@tauri-apps/plugin-updater":'),
+  ],
+  [
+    "the packaged image CSP permits only local assets, Vite data URLs, and attachment blob URLs",
+    (() => {
+      const sources = cspDirectiveSources(tauriConfig.app?.security?.csp, "img-src");
+      const expectedSources = new Set(["'self'", "data:", "blob:"]);
+      return (
+        sources.length === expectedSources.size &&
+        sources.every((source) => expectedSources.has(source))
+      );
+    })(),
   ],
 ];
 

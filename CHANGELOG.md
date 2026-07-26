@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2]
+
+- Fixes file-type icons and attachment previews in packaged desktop builds by
+  allowing only the local, inlined, and object-URL image sources the app uses.
+- Adds a release preflight check so an incompatible image content security
+  policy cannot reach another packaged release.
+
 ## [0.1.1]
 
 - Fixes the macOS application bundle and DMG to display the Warpforge icon
