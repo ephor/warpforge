@@ -19,7 +19,6 @@ secrets in that environment:
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (only when the key has a password)
 - `APPLE_CERTIFICATE`
 - `APPLE_CERTIFICATE_PASSWORD`
-- `APPLE_SIGNING_IDENTITY`
 - `APPLE_API_ISSUER`
 - `APPLE_API_KEY`
 - `APPLE_API_PRIVATE_KEY`
@@ -27,7 +26,14 @@ secrets in that environment:
 Set the updater public key as the repository Actions variable
 `TAURI_UPDATER_PUBLIC_KEY`. It is public by design and is injected into the
 Tauri configuration at build time. The corresponding updater private key and
-all Apple credentials remain protected environment secrets.
+all Apple credentials remain protected environment secrets. The
+`APPLE_CERTIFICATE` value must be the base64-encoded `.p12` export of a
+Developer ID Application certificate and its private key. Tauri imports it into
+a temporary keychain and derives the signing identity automatically. Create a
+Team Key (not an Individual Key) under App Store Connect **Users and Access →
+Integrations → App Store Connect API**: store its Issuer ID as
+`APPLE_API_ISSUER`, its Key ID as `APPLE_API_KEY`, and the complete, unmodified
+contents of the one-time-download `.p8` file as `APPLE_API_PRIVATE_KEY`.
 
 Back up the updater private key and its password in a separate secure vault.
 Every installed app trusts that key; losing it prevents those installations

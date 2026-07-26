@@ -144,27 +144,18 @@ jobs:
     runs-on: ubuntu-22.04
     environment: release
     steps:
-      - name: Require updater and macOS signing credentials
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+      - name: Require updater signing credentials
         env:
           TAURI_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
           TAURI_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_KEY_ID: ${{ secrets.APPLE_API_KEY }}
-          APPLE_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
         run: |
           test -n "$TAURI_PUBLIC_KEY" || { echo "Missing repository variable TAURI_UPDATER_PUBLIC_KEY" >&2; exit 1; }
           CONFIGURED_PUBLIC_KEY="$(node -p "require('./desktop/src-tauri/tauri.conf.json').plugins.updater.pubkey")"
           test "$TAURI_PUBLIC_KEY" = "$CONFIGURED_PUBLIC_KEY" || { echo "TAURI_UPDATER_PUBLIC_KEY does not match tauri.conf.json" >&2; exit 1; }
           test -n "$TAURI_KEY" || { echo "Missing TAURI_SIGNING_PRIVATE_KEY" >&2; exit 1; }
-          test -n "$APPLE_CERT" || { echo "Missing APPLE_CERTIFICATE" >&2; exit 1; }
-          test -n "$APPLE_CERT_PASSWORD" || { echo "Missing APPLE_CERTIFICATE_PASSWORD" >&2; exit 1; }
-          test -n "$APPLE_IDENTITY" || { echo "Missing APPLE_SIGNING_IDENTITY" >&2; exit 1; }
-          test -n "$APPLE_ISSUER" || { echo "Missing APPLE_API_ISSUER" >&2; exit 1; }
-          test -n "$APPLE_KEY_ID" || { echo "Missing APPLE_API_KEY" >&2; exit 1; }
-          test -n "$APPLE_PRIVATE_KEY" || { echo "Missing APPLE_API_PRIVATE_KEY" >&2; exit 1; }
 
   prepare-release:
     name: Create draft
@@ -242,16 +233,40 @@ jobs:
             patchelf
       - run: bun install --frozen-lockfile
         working-directory: desktop
-      - name: Prepare App Store Connect private key
+      - name: Validate Apple credentials and prepare App Store Connect private key
         if: runner.os == 'macOS'
         shell: bash
         env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
         run: |
-          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          test -n "$APPLE_CERTIFICATE" || { echo "Missing APPLE_CERTIFICATE" >&2; exit 1; }
+          test -n "$APPLE_CERTIFICATE_PASSWORD" || { echo "Missing APPLE_CERTIFICATE_PASSWORD" >&2; exit 1; }
+          test -n "$APPLE_API_ISSUER" || { echo "Missing APPLE_API_ISSUER" >&2; exit 1; }
+          test -n "$APPLE_API_KEY" || { echo "Missing APPLE_API_KEY" >&2; exit 1; }
+          test -n "$APPLE_API_PRIVATE_KEY" || { echo "Missing APPLE_API_PRIVATE_KEY" >&2; exit 1; }
+
+          key_path="$RUNNER_TEMP/AuthKey.p8"
           printf '%s' "$APPLE_API_PRIVATE_KEY" > "$key_path"
           chmod 600 "$key_path"
+
+          first_line="$(sed -n '1p' "$key_path" | tr -d '\r')"
+          last_line="$(awk 'NF { line = $0 } END { sub(/\r$/, "", line); print line }' "$key_path")"
+          test "$first_line" = "-----BEGIN PRIVATE KEY-----" &&
+            test "$last_line" = "-----END PRIVATE KEY-----" &&
+            test "$(grep -c '^-----BEGIN PRIVATE KEY-----' "$key_path")" -eq 1 &&
+            test "$(grep -c '^-----END PRIVATE KEY-----' "$key_path")" -eq 1 || {
+              echo "APPLE_API_PRIVATE_KEY is not a complete PKCS#8 PEM private key" >&2
+              exit 1
+            }
+          openssl pkey -in "$key_path" -noout >/dev/null 2>&1 || {
+            echo "APPLE_API_PRIVATE_KEY could not be parsed as a private key" >&2
+            exit 1
+          }
+
           echo "APPLE_API_KEY_PATH=$key_path" >> "$GITHUB_ENV"
       # v1 pinned to an immutable commit; updater metadata is release-critical.
       - uses: tauri-apps/tauri-action@944946e3e4cac6603d1fe8f514171e9ecd3c78aa
@@ -261,7 +276,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ matrix.macos && secrets.APPLE_CERTIFICATE || '' }}
           APPLE_CERTIFICATE_PASSWORD: ${{ matrix.macos && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ matrix.macos && secrets.APPLE_SIGNING_IDENTITY || '' }}
           APPLE_API_ISSUER: ${{ matrix.macos && secrets.APPLE_API_ISSUER || '' }}
           APPLE_API_KEY: ${{ matrix.macos && secrets.APPLE_API_KEY || '' }}
         with:
@@ -273,6 +287,47 @@ jobs:
           uploadUpdaterSignatures: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
+      - name: Verify macOS Developer ID signature and notarization
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          bundle_root="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          shopt -s nullglob
+          app_paths=("$bundle_root"/macos/*.app)
+          dmg_paths=("$bundle_root"/dmg/*.dmg)
+          test "${#app_paths[@]}" -eq 1 || {
+            echo "Expected exactly one macOS app bundle under $bundle_root/macos" >&2
+            exit 1
+          }
+          test "${#dmg_paths[@]}" -eq 1 || {
+            echo "Expected exactly one DMG under $bundle_root/dmg" >&2
+            exit 1
+          }
+          app_path="${app_paths[0]}"
+          dmg_path="${dmg_paths[0]}"
+
+          verify_developer_id_authority() {
+            local artifact="$1"
+            local signature_info
+            signature_info="$(codesign -d --verbose=4 "$artifact" 2>&1)"
+            grep -q '^Authority=Developer ID Application:' <<<"$signature_info" || {
+              echo "Developer ID Application authority not found on $artifact" >&2
+              exit 1
+            }
+          }
+
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          verify_developer_id_authority "$app_path"
+          xcrun stapler validate "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+
+          codesign --verify --strict --verbose=2 "$dmg_path"
+          verify_developer_id_authority "$dmg_path"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+      - name: Clean up App Store Connect private key
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/AuthKey.p8"
 
   cli:
     name: CLI ${{ matrix.target }}
