@@ -126,14 +126,17 @@ jobs:
           INCLUDE_LINUX: ${{ inputs.include_linux_x64 }}
         run: |
           desktop='{"include":[{"label":"macOS arm64","os":"macos-14","target":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin","macos":true}]}'
-          cli='{"include":[{"os":"macos-14","target":"aarch64-apple-darwin","cross":false},{"os":"ubuntu-22.04","target":"aarch64-unknown-linux-gnu","cross":true}]}'
+          cli='{"include":[{"os":"macos-14","target":"aarch64-apple-darwin","cross":false}]}'
           if [ "$INCLUDE_WINDOWS" = true ]; then
             desktop="$(jq -c '.include += [{"label":"Windows x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","args":"--target x86_64-pc-windows-msvc --bundles nsis","macos":false}]' <<<"$desktop")"
             cli="$(jq -c '.include += [{"os":"windows-latest","target":"x86_64-pc-windows-msvc","cross":false}]' <<<"$cli")"
           fi
           if [ "$INCLUDE_LINUX" = true ]; then
             desktop="$(jq -c '.include += [{"label":"Linux x64","os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","args":"--target x86_64-unknown-linux-gnu --bundles appimage,deb","macos":false}]' <<<"$desktop")"
-            cli="$(jq -c '.include += [{"os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","cross":false}]' <<<"$cli")"
+            cli="$(jq -c '.include += [
+              {"os":"ubuntu-22.04","target":"aarch64-unknown-linux-gnu","cross":true},
+              {"os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","cross":false}
+            ]' <<<"$cli")"
           fi
           echo "desktop_matrix=$desktop" >> "$GITHUB_OUTPUT"
           echo "cli_matrix=$cli" >> "$GITHUB_OUTPUT"
@@ -292,9 +295,14 @@ jobs:
           uploadUpdaterSignatures: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
-      - name: Verify macOS Developer ID signature and notarization
+      - name: Notarize and verify final macOS artifacts
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.version }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: |
           bundle_root="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
           shopt -s nullglob
@@ -326,9 +334,20 @@ jobs:
           xcrun stapler validate "$app_path"
           spctl --assess --type execute --verbose=4 "$app_path"
 
+          # Tauri notarizes the app before creating the DMG. Submit the final
+          # disk image separately, staple its ticket, then replace the
+          # previously uploaded unstapled asset in the draft.
+          xcrun notarytool submit "$dmg_path" \
+            --key "$APPLE_API_KEY_PATH" \
+            --key-id "$APPLE_API_KEY" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$dmg_path"
           codesign --verify --strict --verbose=2 "$dmg_path"
           verify_developer_id_authority "$dmg_path"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+          gh release upload "$RELEASE_TAG" "$dmg_path" --clobber
       - name: Clean up App Store Connect private key
         if: always() && runner.os == 'macOS'
         shell: bash
@@ -396,11 +415,11 @@ jobs:
           gh release download "$RELEASE_TAG" --dir release-assets
           test -f release-assets/latest.json
           test -f release-assets/warpforge-aarch64-apple-darwin.tar.gz
-          test -f release-assets/warpforge-aarch64-unknown-linux-gnu.tar.gz
           if [ "$INCLUDE_WINDOWS" = true ]; then
             test -f release-assets/warpforge-x86_64-pc-windows-msvc.tar.gz
           fi
           if [ "$INCLUDE_LINUX" = true ]; then
+            test -f release-assets/warpforge-aarch64-unknown-linux-gnu.tar.gz
             test -f release-assets/warpforge-x86_64-unknown-linux-gnu.tar.gz
           fi
           jq -e --arg version "${RELEASE_TAG#v}" '.version == $version' release-assets/latest.json

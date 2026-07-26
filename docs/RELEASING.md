@@ -106,7 +106,7 @@ Leave both preview toggles disabled for the normal macOS Apple Silicon release:
 
 - `include_windows_x64` adds Windows x64 NSIS desktop and CLI artifacts.
 - `include_linux_x64` adds Linux x64 AppImage, Debian package, and CLI
-  artifacts.
+  artifacts, plus the Linux arm64 CLI archive.
 
 The release environment approval gates access to signing credentials. After
 approval, the workflow:
@@ -115,8 +115,8 @@ approval, the workflow:
   formatting, tests, lint, and type checks;
 - builds the desktop app with its matching daemon bundled as a sidecar;
 - signs/notarizes the macOS app and signs every updater artifact;
-- builds the CLI archives, including the existing Linux arm64 archive used by
-  the shell installer;
+- builds the CLI archives for the selected platforms; the normal macOS release
+  does not depend on unvalidated Linux cross-compilation;
 - creates or refreshes the exact GitHub Release draft;
 - verifies `latest.json`, immutable tagged asset URLs, signatures, expected
   platform entries, and uploads `SHA256SUMS`.
