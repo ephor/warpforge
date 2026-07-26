@@ -136,6 +136,10 @@ pub fn task_info(t: &Task) -> wire::TaskInfo {
         worktree: t.worktree.clone(),
         orchestration_graph: t.orchestration_graph.clone(),
         parent_task_id: t.parent_task_id.clone(),
+        settled_override: t.settled_override,
+        settled_at: t.settled_at,
+        snoozed_until: t.snoozed_until,
+        snoozed_at: t.snoozed_at,
     }
 }
 

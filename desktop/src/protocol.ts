@@ -196,6 +196,14 @@ export interface TaskInfo {
   orchestrationGraph?: OrchGraphInfo | null;
   /** Task that spawned this sub-agent through the orchestrator MCP. */
   parentTaskId?: string | null;
+  /** Explicit settle override (true = settled, false = not settled). */
+  settledOverride?: boolean | null;
+  /** Unix seconds when the task was last settled. */
+  settledAt?: number | null;
+  /** Unix seconds until which the task is snoozed. */
+  snoozedUntil?: number | null;
+  /** Unix seconds when the current snooze was set. */
+  snoozedAt?: number | null;
 }
 
 export interface ConfigChoice {
