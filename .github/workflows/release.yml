@@ -173,7 +173,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.version }}
         run: |
-          if release_json="$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" 2>/dev/null)"; then
+          if release_id="$(gh release view "$RELEASE_TAG" --json databaseId --jq .databaseId 2>/dev/null)"; then
+            release_json="$(gh api "repos/$GH_REPO/releases/$release_id")"
             draft="$(jq -r .draft <<<"$release_json")"
             test "$draft" = true || { echo "Release $RELEASE_TAG is already published" >&2; exit 1; }
 
@@ -183,9 +184,13 @@ jobs:
               gh api --method DELETE "repos/$GH_REPO/releases/assets/$asset_id"
             done
           else
-            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes \
-              --title "Warpforge ${RELEASE_TAG#v}"
-            release_json="$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG")"
+            release_json="$(
+              gh api --method POST "repos/$GH_REPO/releases" \
+                -f tag_name="$RELEASE_TAG" \
+                -f name="Warpforge ${RELEASE_TAG#v}" \
+                -F draft=true \
+                -F generate_release_notes=true
+            )"
           fi
           echo "release_id=$(jq -r .id <<<"$release_json")" >> "$GITHUB_OUTPUT"
 
@@ -383,6 +388,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.version }}
+          RELEASE_ID: ${{ needs.prepare-release.outputs.release_id }}
           INCLUDE_WINDOWS: ${{ inputs.include_windows_x64 }}
           INCLUDE_LINUX: ${{ inputs.include_linux_x64 }}
         run: |
@@ -428,6 +434,6 @@ jobs:
           cd release-assets
           sha256sum -- * > SHA256SUMS
           gh release upload "$RELEASE_TAG" SHA256SUMS --clobber
-          test "$(gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" --jq .draft)" = true
+          test "$(gh api "repos/$GH_REPO/releases/$RELEASE_ID" --jq .draft)" = true
           echo "Draft verified. Install and update-test these assets before publishing:"
           gh release view "$RELEASE_TAG" --json url --jq .url
