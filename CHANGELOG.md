@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1]
+
+- Fixes the macOS application bundle and DMG to display the Warpforge icon
+  instead of the generic application placeholder.
+- Fixes Claude Code, Codex, OpenCode, and Qwen logos in packaged desktop builds.
+- Explains when the published update feed is not available before the first
+  signed desktop release instead of exposing a low-level manifest error.
+
 ## [0.1.0]
 
 - Introduces the Warpforge desktop app: a local meta-harness for running projects, services, and coding agents from one workspace.

@@ -1,9 +1,11 @@
+import { useState } from "react";
+
 import { cn } from "@/lib/utils";
 
-import claudeLogo from "../assets/app-logos/claude-ai-icon.svg";
-import codexLogo from "../assets/app-logos/codex_dark.svg";
-import opencodeLogo from "../assets/app-logos/opencode-dark.svg";
-import qwenLogo from "../assets/app-logos/qwen_dark.svg";
+import claudeLogo from "../assets/app-logos/claude-ai-icon.svg?no-inline";
+import codexLogo from "../assets/app-logos/codex_dark.svg?no-inline";
+import opencodeLogo from "../assets/app-logos/opencode-dark.svg?no-inline";
+import qwenLogo from "../assets/app-logos/qwen_dark.svg?no-inline";
 
 const AGENT_SVGS: Record<string, string> = {
   claude: claudeLogo,
@@ -39,13 +41,15 @@ export function AgentLogo({
   className?: string;
 }) {
   const svg = AGENT_SVGS[agentId];
-  if (svg) {
+  const [failedSvg, setFailedSvg] = useState<string | null>(null);
+  if (svg && failedSvg !== svg) {
     return (
       <img
         src={svg}
         alt=""
         className={cn("size-4 shrink-0 rounded-sm object-contain", className)}
         aria-hidden
+        onError={() => setFailedSvg(svg)}
       />
     );
   }

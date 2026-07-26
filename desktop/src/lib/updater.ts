@@ -73,7 +73,7 @@ export class DesktopUpdater {
         });
       }
     } catch (error) {
-      this.setState({ error: messageOf(error), status: "error" });
+      this.setState({ error: checkErrorMessage(error), status: "error" });
     }
     return this.state;
   }
@@ -139,5 +139,13 @@ export class DesktopUpdater {
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+const checkErrorMessage = (error: unknown) => {
+  const message = messageOf(error);
+  if (message.includes("Could not fetch a valid release JSON from the remote")) {
+    return "The published update feed is not available yet. This is expected before the first signed desktop release is published; try again later.";
+  }
+  return message;
+};
 
 export const updater = new DesktopUpdater();
