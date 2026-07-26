@@ -225,6 +225,23 @@ pub enum Method {
     #[serde(rename = "task.listWorktrees")]
     TaskListWorktrees { project: String },
 
+    // ── Lifecycle (settle/snooze visibility overlay) ──
+    /// Mark a task as settled (user acknowledged, hide from attention).
+    /// Rejected while the task is Running or has pending permission requests.
+    #[serde(rename = "task.settle")]
+    TaskSettle { task_id: String },
+    /// Clear the settled state (make the task visible again).
+    #[serde(rename = "task.unsettle")]
+    TaskUnsettle { task_id: String },
+    /// Snooze a task until the given Unix timestamp (hide from attention).
+    /// Rejected while the task has pending permission requests. Running tasks
+    /// may be snoozed.
+    #[serde(rename = "task.snooze")]
+    TaskSnooze { task_id: String, until: u64 },
+    /// Clear the snooze state (make the task visible again).
+    #[serde(rename = "task.unsnooze")]
+    TaskUnsnooze { task_id: String },
+
     // ── External agent sessions (claude/codex on-disk session stores) ──
     /// List agent sessions found on disk for a project's working directory.
     /// Returns `{ sessions: ExternalSession[] }`.
@@ -729,6 +746,20 @@ pub struct TaskInfo {
     /// on the wire lets clients present the child in its parent's context.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_task_id: Option<String>,
+    /// Explicit settle override (true = settled, false = not settled).
+    /// `None` = derive from execution status only (no manual override).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_override: Option<bool>,
+    /// Unix seconds when the task was last settled. `None` = never settled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_at: Option<u64>,
+    /// Unix seconds until which the task is snoozed (hidden from attention).
+    /// `None` = not snoozed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snoozed_until: Option<u64>,
+    /// Unix seconds when the current snooze was set. `None` = not snoozed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snoozed_at: Option<u64>,
 }
 
 /// Board columns. `Interrupted` covers sessions whose live ACP handle was lost

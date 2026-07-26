@@ -4,16 +4,18 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Card } from "@/components/ui/card";
 import {
-  latestPendingPermission,
-  prunePermissionCache,
-  type PermissionUpdate,
-} from "@/lib/sessionPermissions";
+  STATUS_LABEL,
+  STATUS_RANK,
+  buildAttentionQueue,
+  selectRailTasks,
+} from "@/lib/attentionRail";
+import { type PermissionUpdate } from "@/lib/sessionPermissions";
 import type { StatusKind } from "@/lib/statusMeta";
 import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/lib/taskGroups";
 import { cn } from "@/lib/utils";
 
 import type { DaemonState } from "../daemon";
-import type { TaskInfo, TaskStatus } from "../protocol";
+import type { TaskInfo } from "../protocol";
 import { useUi } from "../store/ui";
 import { AgentBadge } from "./AgentBadge";
 import {
@@ -31,34 +33,6 @@ import { StatusBadge } from "./StatusBadge";
  * virtualizer, keeping the mounted tree bounded during busy sessions.
  */
 
-interface AttentionItem {
-  task: TaskInfo;
-  reason: string;
-  priority: number;
-  permission?: PermissionUpdate;
-}
-
-function buildAttentionQueue(
-  tasks: TaskInfo[],
-  sessionUpdates: DaemonState["sessionUpdates"],
-): AttentionItem[] {
-  const items: AttentionItem[] = [];
-  prunePermissionCache(new Set(tasks.map((task) => task.id)));
-  for (const task of tasks) {
-    const permission = latestPendingPermission(task.id, sessionUpdates[task.id]);
-    if (permission) {
-      items.push({ permission, priority: 0, reason: permission.title, task });
-    } else if (task.status === "needs_review") {
-      items.push({ priority: 1, reason: "finished — review changes", task });
-    } else if (task.status === "blocked") {
-      items.push({ priority: 2, reason: task.blockedReason ?? "blocked", task });
-    } else if (task.status === "interrupted") {
-      items.push({ priority: 3, reason: "session lost on daemon restart", task });
-    }
-  }
-  return items.sort((a, b) => a.priority - b.priority || b.task.updatedAt - a.task.updatedAt);
-}
-
 interface GroupInfo {
   key: string;
   label: string;
@@ -68,26 +42,6 @@ interface GroupInfo {
 type RailRow =
   | { key: string; kind: "group"; group: GroupInfo; count: number }
   | { key: string; kind: "task"; task: TaskInfo };
-
-const STATUS_RANK: Record<TaskStatus, number> = {
-  needs_review: 1,
-  blocked: 2,
-  interrupted: 3,
-  running: 4,
-  idle: 5,
-  queued: 6,
-  done: 7,
-};
-
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  needs_review: "Needs review",
-  blocked: "Blocked",
-  interrupted: "Interrupted",
-  running: "Running",
-  idle: "Idle",
-  queued: "Queued",
-  done: "Done",
-};
 
 function statusGroup(task: TaskInfo, permission: PermissionUpdate | undefined): GroupInfo {
   if (permission) {
@@ -122,7 +76,7 @@ function AttentionRail({ state, onOpenTask }: Props) {
   const setPinnedTaskIds = useUi((store) => store.setPinnedTaskIds);
   const attentionTargetId = useUi((store) => store.attentionTargetId);
   const attentionTargetNonce = useUi((store) => store.attentionTargetNonce);
-  const [sort, setSort] = useState<SortMode>("updated");
+  const [sort, setSort] = useState<SortMode>("created");
   const [group, setGroup] = useState<GroupMode>("none");
   const [filter, setFilter] = useState<FilterMode>("all");
   const [query, setQuery] = useState("");
@@ -151,46 +105,10 @@ function AttentionRail({ state, onOpenTask }: Props) {
   );
   const effectiveGroup: GroupMode = sort === "status" || sort === "project" ? sort : group;
 
-  const tasks = useMemo(() => {
-    const normalizedQuery = query.trim().toLocaleLowerCase();
-    const result = state.snapshot.tasks.filter((task) => {
-      if (task.status === "done") {
-        return false;
-      }
-      if (filter === "attention" && !attentionById.has(task.id)) {
-        return false;
-      }
-      if (filter === "running" && task.status !== "running") {
-        return false;
-      }
-      return (
-        !normalizedQuery ||
-        task.prompt.toLocaleLowerCase().includes(normalizedQuery) ||
-        task.project.toLocaleLowerCase().includes(normalizedQuery)
-      );
-    });
-
-    return result.sort((a, b) => {
-      if (sort === "created") {
-        return b.createdAt - a.createdAt;
-      }
-      if (sort === "project") {
-        return a.project.localeCompare(b.project) || b.updatedAt - a.updatedAt;
-      }
-      if (sort === "status") {
-        const aGroup = statusGroup(a, attentionById.get(a.id)?.permission);
-        const bGroup = statusGroup(b, attentionById.get(b.id)?.permission);
-        return aGroup.rank - bGroup.rank || b.updatedAt - a.updatedAt;
-      }
-      const updatedDifference = b.updatedAt - a.updatedAt;
-      if (updatedDifference !== 0) {
-        return updatedDifference;
-      }
-      const aStatusRank = statusGroup(a, attentionById.get(a.id)?.permission).rank;
-      const bStatusRank = statusGroup(b, attentionById.get(b.id)?.permission).rank;
-      return aStatusRank - bStatusRank || a.id.localeCompare(b.id);
-    });
-  }, [attentionById, filter, query, sort, state.snapshot.tasks]);
+  const tasks = useMemo(
+    () => selectRailTasks(state.snapshot.tasks, attentionById, filter, query, sort),
+    [attentionById, filter, query, sort, state.snapshot.tasks],
+  );
 
   const rows = useMemo(() => {
     if (effectiveGroup === "none") {

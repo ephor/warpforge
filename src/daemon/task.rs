@@ -68,6 +68,15 @@ pub struct Task {
     /// id of that orchestrator task. Its result is delivered back into the
     /// parent's inbox on completion.
     pub parent_task_id: Option<String>,
+    /// Explicit settle override (true = settled, false = not settled).
+    /// `None` = derive from execution status only.
+    pub settled_override: Option<bool>,
+    /// Unix seconds when the task was last settled.
+    pub settled_at: Option<u64>,
+    /// Unix seconds until which the task is snoozed.
+    pub snoozed_until: Option<u64>,
+    /// Unix seconds when the current snooze was set.
+    pub snoozed_at: Option<u64>,
 }
 
 impl Task {
@@ -91,6 +100,10 @@ impl Task {
             worktree: None,
             orchestration_graph: None,
             parent_task_id: None,
+            settled_override: None,
+            settled_at: None,
+            snoozed_until: None,
+            snoozed_at: None,
         }
     }
 

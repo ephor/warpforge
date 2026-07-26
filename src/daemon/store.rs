@@ -219,6 +219,11 @@ impl Store {
             [],
         );
         let _ = conn.execute("ALTER TABLE agents ADD COLUMN last_model TEXT", []);
+        // Migration: lifecycle fields for settle/snooze visibility overlay.
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN settled_override INTEGER", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN settled_at INTEGER", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN snoozed_until INTEGER", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN snoozed_at INTEGER", []);
         Ok(Self { conn })
     }
 
@@ -230,8 +235,8 @@ impl Store {
             INSERT INTO tasks
                 (id, session_id, project, prompt, agent, status, tags, title,
                  created_at, updated_at, files_changed, blocked_reason, config_options, worktree,
-                 parent_task_id)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                 parent_task_id, settled_override, settled_at, snoozed_until, snoozed_at)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
             ON CONFLICT(id) DO UPDATE SET
                 session_id=excluded.session_id,
                 status=excluded.status,
@@ -241,7 +246,11 @@ impl Store {
                 files_changed=excluded.files_changed,
                 blocked_reason=excluded.blocked_reason,
                 config_options=excluded.config_options,
-                worktree=excluded.worktree
+                worktree=excluded.worktree,
+                settled_override=excluded.settled_override,
+                settled_at=excluded.settled_at,
+                snoozed_until=excluded.snoozed_until,
+                snoozed_at=excluded.snoozed_at
             "#,
             rusqlite::params![
                 task.id,
@@ -259,6 +268,10 @@ impl Store {
                 config_options,
                 task.worktree,
                 task.parent_task_id,
+                task.settled_override,
+                task.settled_at,
+                task.snoozed_until,
+                task.snoozed_at,
             ],
         )?;
         Ok(())
@@ -272,7 +285,8 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, project, prompt, agent, status, tags, \
              created_at, updated_at, files_changed, blocked_reason, config_options, worktree, \
-             parent_task_id, title FROM tasks",
+             parent_task_id, title, settled_override, settled_at, snoozed_until, snoozed_at \
+             FROM tasks",
         )?;
         let rows = stmt.query_map([], |row| {
             let tags_json: String = row.get(6)?;
@@ -299,6 +313,10 @@ impl Store {
                 worktree: row.get(12)?,
                 orchestration_graph: None,
                 parent_task_id: row.get(13)?,
+                settled_override: row.get::<_, Option<i64>>(15)?.map(|v| v != 0),
+                settled_at: row.get::<_, Option<u64>>(16)?,
+                snoozed_until: row.get::<_, Option<u64>>(17)?,
+                snoozed_at: row.get::<_, Option<u64>>(18)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -569,5 +587,92 @@ mod tests {
                 attachments: vec![],
             })
         );
+    }
+
+    #[test]
+    fn lifecycle_fields_null_default_roundtrip() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        let task = Task::new("demo", "do a thing", "claude", vec![]);
+        store.upsert_task(&task).unwrap();
+
+        let loaded = store.load_tasks().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].settled_override, None);
+        assert_eq!(loaded[0].settled_at, None);
+        assert_eq!(loaded[0].snoozed_until, None);
+        assert_eq!(loaded[0].snoozed_at, None);
+    }
+
+    #[test]
+    fn lifecycle_fields_non_null_roundtrip() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        let mut task = Task::new("demo", "do a thing", "claude", vec![]);
+        task.settled_override = Some(true);
+        task.settled_at = Some(1_700_000_000);
+        task.snoozed_until = Some(1_700_001_000);
+        task.snoozed_at = Some(1_700_000_500);
+        store.upsert_task(&task).unwrap();
+
+        let loaded = store.load_tasks().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].settled_override, Some(true));
+        assert_eq!(loaded[0].settled_at, Some(1_700_000_000));
+        assert_eq!(loaded[0].snoozed_until, Some(1_700_001_000));
+        assert_eq!(loaded[0].snoozed_at, Some(1_700_000_500));
+    }
+
+    #[test]
+    fn lifecycle_fields_settled_override_false_roundtrip() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        let mut task = Task::new("demo", "do a thing", "claude", vec![]);
+        task.settled_override = Some(false);
+        store.upsert_task(&task).unwrap();
+
+        let loaded = store.load_tasks().unwrap();
+        assert_eq!(loaded[0].settled_override, Some(false));
+    }
+
+    #[test]
+    fn pre_lifecycle_schema_migration_loads_null() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("warpforge.db");
+        {
+            let pre = Connection::open(&db_path).unwrap();
+            pre.execute_batch(
+                r#"
+                CREATE TABLE tasks (
+                    id              TEXT PRIMARY KEY,
+                    session_id      TEXT,
+                    project         TEXT NOT NULL,
+                    prompt          TEXT NOT NULL,
+                    agent           TEXT NOT NULL,
+                    status          TEXT NOT NULL,
+                    tags            TEXT NOT NULL,
+                    title           TEXT NOT NULL DEFAULT '',
+                    created_at      INTEGER NOT NULL,
+                    updated_at      INTEGER NOT NULL,
+                    files_changed   INTEGER NOT NULL,
+                    blocked_reason  TEXT,
+                    config_options  TEXT NOT NULL DEFAULT '[]',
+                    worktree        TEXT,
+                    parent_task_id  TEXT
+                );
+                INSERT INTO tasks (id, session_id, project, prompt, agent, status, tags, title,
+                                   created_at, updated_at, files_changed, blocked_reason, config_options)
+                VALUES ('old-1', NULL, 'proj', 'prompt', 'claude', 'idle', '[]', 'Old task',
+                        1700000000, 1700000001, 0, NULL, '[]');
+                "#,
+            )
+            .unwrap();
+        }
+
+        let store = Store::open_at(&db_path).unwrap();
+        let loaded = store.load_tasks().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "old-1");
+        assert_eq!(loaded[0].settled_override, None);
+        assert_eq!(loaded[0].settled_at, None);
+        assert_eq!(loaded[0].snoozed_until, None);
+        assert_eq!(loaded[0].snoozed_at, None);
     }
 }
