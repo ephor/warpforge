@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { useUi } from "./ui";
+import {
+  clampSidebarWidth,
+  SIDEBAR_WIDTH_DEFAULT,
+  SIDEBAR_WIDTH_MAX,
+  SIDEBAR_WIDTH_MIN,
+  useUi,
+} from "./ui";
 
 describe("task-detail UI state", () => {
   beforeEach(() => {
@@ -76,5 +82,55 @@ describe("task-detail UI state", () => {
 
     useUi.getState().setRepositoryOperation(null);
     expect(useUi.getState().repositoryOperation).toBeNull();
+  });
+});
+
+describe("sidebar width state", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useUi.setState({
+      sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
+    });
+  });
+
+  it("uses a conservative default width", () => {
+    expect(useUi.getState().sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
+  });
+
+  it("clamps sidebar width to min/max", () => {
+    useUi.getState().setSidebarWidth(100);
+    expect(useUi.getState().sidebarWidth).toBe(SIDEBAR_WIDTH_MIN);
+
+    useUi.getState().setSidebarWidth(999);
+    expect(useUi.getState().sidebarWidth).toBe(SIDEBAR_WIDTH_MAX);
+
+    useUi.getState().setSidebarWidth(350);
+    expect(useUi.getState().sidebarWidth).toBe(350);
+  });
+
+  it("handles malformed width values", () => {
+    useUi.getState().setSidebarWidth(NaN);
+    expect(useUi.getState().sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
+
+    useUi.getState().setSidebarWidth(Infinity);
+    expect(useUi.getState().sidebarWidth).toBe(SIDEBAR_WIDTH_DEFAULT);
+  });
+
+  it("clampSidebarWidth handles non-number inputs", () => {
+    expect(clampSidebarWidth(undefined)).toBe(SIDEBAR_WIDTH_DEFAULT);
+    expect(clampSidebarWidth("300")).toBe(SIDEBAR_WIDTH_DEFAULT);
+    expect(clampSidebarWidth(null)).toBe(SIDEBAR_WIDTH_DEFAULT);
+    expect(clampSidebarWidth(300)).toBe(300);
+  });
+
+  it("rehydrates persisted sidebar width", async () => {
+    useUi.getState().setSidebarWidth(400);
+
+    const stored = localStorage.getItem("wf-ui");
+    useUi.setState({ sidebarWidth: SIDEBAR_WIDTH_DEFAULT });
+    if (stored) localStorage.setItem("wf-ui", stored);
+    await useUi.persist.rehydrate();
+
+    expect(useUi.getState().sidebarWidth).toBe(400);
   });
 });

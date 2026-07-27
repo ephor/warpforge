@@ -50,7 +50,7 @@ import { toolDisplayTitle } from "@/lib/toolDisplay";
 import { cn } from "@/lib/utils";
 
 import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
-import { AgentBadge } from "../components/AgentBadge";
+import { AgentAvatarGroup } from "../components/AgentAvatar";
 import { AgentConfigBar } from "../components/AgentConfigBar";
 import { Composer } from "../components/Composer";
 import type { FileLinkResolver } from "../components/Markdown";
@@ -180,6 +180,10 @@ const FocusGroupPane = memo(function FocusGroupPane({
   onFocus,
 }: FocusGroupPaneProps) {
   const members = useMemo(() => flattenTaskTree(tree), [tree]);
+  const childAgents = useMemo(
+    () => [...new Set(tree.children.map((c) => c.task.agent))],
+    [tree.children],
+  );
   const [selectedId, setSelectedId] = useState(() =>
     resolveGroupTaskId(tree, null, attentionTargetId),
   );
@@ -213,6 +217,7 @@ const FocusGroupPane = memo(function FocusGroupPane({
       tree={tree}
       selectedId={selectedTask.id}
       groupStatus={status}
+      childAgents={childAgents}
       onSelect={handleSelect}
       onUnpin={handleUnpin}
       onOpen={handleOpen}
@@ -250,6 +255,7 @@ function FocusPane({
   tree,
   selectedId,
   groupStatus,
+  childAgents,
   onSelect,
   onUnpin,
   onOpen,
@@ -261,6 +267,7 @@ function FocusPane({
   tree: TaskTree;
   selectedId: string;
   groupStatus: TaskGroupStatus;
+  childAgents?: string[];
   onSelect: (id: string) => void;
   onUnpin: () => void;
   onOpen: () => void;
@@ -340,7 +347,7 @@ function FocusPane({
           <StatusBadge status={groupStatusKind(groupStatus)} activity={activity} size="xs" />
           <span className="min-w-0 truncate font-semibold text-foreground/90">{task.project}</span>
           <span className="ml-auto flex shrink-0 items-center gap-2">
-            <AgentBadge agentId={task.agent} size="xs" />
+            <AgentAvatarGroup agentId={task.agent} childAgents={childAgents} />
             <span aria-hidden className="h-1 w-1 rounded-full bg-muted-foreground/40" />
             <span className="tnum">{elapsed(task.updatedAt)}</span>
           </span>

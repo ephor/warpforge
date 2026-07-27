@@ -1,12 +1,6 @@
-import { Search } from "lucide-react";
+import { ArrowUpDown, Group, Search } from "lucide-react";
 
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 export type SortMode = "updated" | "created" | "status" | "project";
@@ -35,8 +29,8 @@ export function RailFilterBar({
   setFilter,
 }: RailFilterBarProps) {
   return (
-    <div className="space-y-1.5 border-y border-border/80 bg-secondary/10 p-2">
-      <label className="flex h-7 items-center gap-2 rounded border border-border/80 bg-deep-surface px-2 text-muted-foreground focus-within:ring-1 focus-within:ring-ring">
+    <div className="space-y-1.5 border-y border-border/70 bg-background px-2 py-1.5">
+      <label className="flex h-8 items-center gap-2 rounded-md bg-secondary/35 px-2.5 text-muted-foreground transition-colors focus-within:bg-secondary/55 focus-within:ring-1 focus-within:ring-ring">
         <Search className="size-3.5 shrink-0" />
         <input
           aria-label="Search sessions"
@@ -48,10 +42,29 @@ export function RailFilterBar({
         />
       </label>
 
-      <div className="grid grid-cols-2 gap-1.5">
+      <div className="flex items-center gap-1.5">
+        <div className="grid min-w-0 flex-1 grid-cols-3 rounded-md bg-secondary/20 p-0.5">
+          {(["running", "attention", "all"] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={cn(
+                "rounded px-1.5 py-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground",
+                filter === value && "bg-secondary text-foreground shadow-sm",
+              )}
+              onClick={() => setFilter(value)}
+            >
+              {value === "attention" ? "Needs you" : value === "running" ? "Working" : "All"}
+            </button>
+          ))}
+        </div>
         <Select value={sort} onValueChange={(value) => setSort(value as SortMode)}>
-          <SelectTrigger aria-label="Sort sessions" className="h-7 rounded px-2 text-xs">
-            <SelectValue />
+          <SelectTrigger
+            aria-label="Sort sessions"
+            className="size-7 shrink-0 justify-center rounded-md border-0 bg-secondary/30 p-0 text-muted-foreground hover:bg-secondary/60 hover:text-foreground [&>svg:last-child]:hidden"
+            title="Sort sessions"
+          >
+            <ArrowUpDown className="size-3.5" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="updated">Recently updated</SelectItem>
@@ -61,8 +74,12 @@ export function RailFilterBar({
           </SelectContent>
         </Select>
         <Select value={effectiveGroup} onValueChange={handleGroupChange}>
-          <SelectTrigger aria-label="Group sessions" className="h-7 rounded px-2 text-xs">
-            <SelectValue />
+          <SelectTrigger
+            aria-label="Group sessions"
+            className="size-7 shrink-0 justify-center rounded-md border-0 bg-secondary/30 p-0 text-muted-foreground hover:bg-secondary/60 hover:text-foreground [&>svg:last-child]:hidden"
+            title="Group sessions"
+          >
+            <Group className="size-3.5" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="none">No grouping</SelectItem>
@@ -71,22 +88,6 @@ export function RailFilterBar({
             <SelectItem value="status">By status</SelectItem>
           </SelectContent>
         </Select>
-      </div>
-
-      <div className="grid grid-cols-3 rounded border border-border/50 bg-deep-surface p-0.5">
-        {(["attention", "running", "all"] as const).map((value) => (
-          <button
-            key={value}
-            type="button"
-            className={cn(
-              "rounded px-1.5 py-1 text-[11px] capitalize text-muted-foreground transition-colors",
-              filter === value && "bg-secondary text-foreground",
-            )}
-            onClick={() => setFilter(value)}
-          >
-            {value === "attention" ? "Needs you" : value}
-          </button>
-        ))}
       </div>
     </div>
   );

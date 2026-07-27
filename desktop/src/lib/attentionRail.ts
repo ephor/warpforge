@@ -92,9 +92,7 @@ export function selectRailTasks(
     }
     if (sort === "project") {
       return (
-        a.project.localeCompare(b.project) ||
-        b.updatedAt - a.updatedAt ||
-        a.id.localeCompare(b.id)
+        a.project.localeCompare(b.project) || b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)
       );
     }
     if (sort === "status") {
@@ -145,6 +143,16 @@ export function partitionRailTasks(
   for (const task of tasks) {
     if (task.status === "done") continue;
 
+    if (isValidSnooze(task) && task.snoozedUntil! > nowSeconds) {
+      snoozed.push(task);
+      continue;
+    }
+
+    if (task.settledOverride === true) {
+      settled.push(task);
+      continue;
+    }
+
     if (attentionById.has(task.id)) {
       needsYou.push(task);
       if (isValidSnooze(task) && task.snoozedUntil! <= nowSeconds) {
@@ -153,19 +161,9 @@ export function partitionRailTasks(
       continue;
     }
 
-    if (isValidSnooze(task) && task.snoozedUntil! > nowSeconds) {
-      snoozed.push(task);
-      continue;
-    }
-
     if (isValidSnooze(task) && task.snoozedUntil! <= nowSeconds) {
       wokeIds.push(task.id);
       working.push(task);
-      continue;
-    }
-
-    if (task.settledOverride === true) {
-      settled.push(task);
       continue;
     }
 

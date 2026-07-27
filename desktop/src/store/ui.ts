@@ -19,6 +19,15 @@ const FONT_SIZE_MAX = 24;
 const MONO_FONT_SIZE_MIN = 9;
 const MONO_FONT_SIZE_MAX = 22;
 
+export const SIDEBAR_WIDTH_DEFAULT = 340;
+export const SIDEBAR_WIDTH_MIN = 260;
+export const SIDEBAR_WIDTH_MAX = 480;
+
+export function clampSidebarWidth(v: unknown): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return SIDEBAR_WIDTH_DEFAULT;
+  return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, Math.round(v)));
+}
+
 export interface SettingsState {
   fontSize: number;
   monoFontSize: number;
@@ -54,6 +63,7 @@ interface UiState extends SettingsState {
   rightPanel: RightPanel;
   runtimeOpenByProject: Record<string, boolean>;
   pinnedTaskIds: string[];
+  sidebarWidth: number;
 
   setView: (v: View) => void;
   openTask: (id: string | null) => void;
@@ -71,6 +81,7 @@ interface UiState extends SettingsState {
   clearRuntimeOpen: (project: string) => void;
   togglePinnedTask: (id: string) => void;
   setPinnedTaskIds: (ids: string[]) => void;
+  setSidebarWidth: (w: number) => void;
 }
 
 function clampFontSize(v: number): number {
@@ -96,6 +107,7 @@ export const useUi = create<UiState>()(
       rightPanel: null,
       runtimeOpenByProject: {},
       pinnedTaskIds: [],
+      sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
       fontSize: DEFAULT_FONT_SIZE,
       monoFontSize: DEFAULT_MONO_FONT_SIZE,
       textGenAgentId: null,
@@ -149,6 +161,7 @@ export const useUi = create<UiState>()(
             ? s.pinnedTaskIds.filter((x) => x !== id)
             : [...s.pinnedTaskIds, id],
         })),
+      setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: clampSidebarWidth(sidebarWidth) }),
 
       // ── Font size settings ──
       setFontSize: (fontSize) => set({ fontSize: clampFontSize(fontSize) }),
@@ -168,6 +181,21 @@ export const useUi = create<UiState>()(
     }),
     {
       name: "wf-ui",
+      version: 1,
+      migrate: (persisted: unknown, version: number) => {
+        if (
+          version === 0 &&
+          persisted &&
+          typeof persisted === "object" &&
+          "sidebarWidth" in persisted
+        ) {
+          const p = persisted as Record<string, unknown>;
+          if (p.sidebarWidth !== undefined) {
+            return { ...p, sidebarWidth: clampSidebarWidth(p.sidebarWidth) };
+          }
+        }
+        return persisted as Record<string, unknown>;
+      },
       // OpenTaskId is session-only — a reload shouldn't force-open a stale task.
       partialize: ({
         openTaskId: _openTaskId,

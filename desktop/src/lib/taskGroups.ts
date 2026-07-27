@@ -19,11 +19,19 @@ export interface TaskGroupCounts {
   running: number;
 }
 
+export type TaskLifecycle = "active" | "later" | "handled";
+export type BoardLifecycleFilter = "all" | "attention" | "later" | "handled";
+
+export interface TaskLifecycleCounts {
+  handled: number;
+  later: number;
+}
+
 const lanePriority: Record<BoardLane, number> = {
-  active: 2,
+  active: 3,
   history: 0,
   queue: 1,
-  review: 3,
+  review: 2,
 };
 
 export function statusLane(status: TaskStatus): BoardLane {
@@ -37,6 +45,27 @@ export function statusLane(status: TaskStatus): BoardLane {
     return "queue";
   }
   return "history";
+}
+
+export function taskLifecycle(task: TaskInfo, nowSeconds: number): TaskLifecycle {
+  if (
+    typeof task.snoozedAt === "number" &&
+    Number.isFinite(task.snoozedAt) &&
+    task.snoozedAt > 0 &&
+    typeof task.snoozedUntil === "number" &&
+    Number.isFinite(task.snoozedUntil) &&
+    task.snoozedUntil > nowSeconds
+  ) {
+    return "later";
+  }
+  if (task.settledOverride === true) return "handled";
+  return "active";
+}
+
+export function taskNeedsAttention(task: TaskInfo): boolean {
+  return (
+    task.status === "needs_review" || task.status === "blocked" || task.status === "interrupted"
+  );
 }
 
 /**
@@ -167,6 +196,29 @@ export function taskGroupCounts(tree: TaskTree): TaskGroupCounts {
     );
 }
 
+export function taskLifecycleCounts(tree: TaskTree, nowSeconds: number): TaskLifecycleCounts {
+  return flattenTaskTree(tree).reduce<TaskLifecycleCounts>(
+    (counts, task) => {
+      const lifecycle = taskLifecycle(task, nowSeconds);
+      if (lifecycle === "later") counts.later += 1;
+      if (lifecycle === "handled") counts.handled += 1;
+      return counts;
+    },
+    { handled: 0, later: 0 },
+  );
+}
+
+export function treeMatchesLifecycle(
+  tree: TaskTree,
+  filter: BoardLifecycleFilter,
+  nowSeconds: number,
+): boolean {
+  if (filter === "all") return true;
+  const tasks = flattenTaskTree(tree);
+  if (filter === "attention") return tasks.some(taskNeedsAttention);
+  return tasks.some((task) => taskLifecycle(task, nowSeconds) === filter);
+}
+
 export type TaskGroupStatus = "blocked" | "permission" | "review" | "running" | TaskStatus;
 
 /** Human attention bubbles from descendants before ordinary activity. */
@@ -189,8 +241,9 @@ export function taskGroupStatus(
 /**
  * Place a whole orchestration group in its most urgent lane.
  *
- * Human-attention states from any descendant outrank ordinary root activity,
- * so a blocked or review-ready child cannot disappear inside the Active lane.
+ * Live execution from any member keeps the orchestration in Active. Review and
+ * blocked descendants remain visible in the group summary and attention filter
+ * without hiding work that is still running.
  */
 export function treeLane(tree: TaskTree): BoardLane {
   return flattenTaskTree(tree).reduce<BoardLane>((lane, task) => {
