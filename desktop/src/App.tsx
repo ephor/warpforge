@@ -203,12 +203,7 @@ export default function App() {
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
-        <div
-          className={cn(
-            "flex min-h-0 flex-1 overflow-hidden",
-            showPersistent ? "gap-0 p-0" : "p-2",
-          )}
-        >
+        <div className="flex min-h-0 flex-1 overflow-hidden p-2">
           {showPersistent && railMounted && (
             <>
               <aside
