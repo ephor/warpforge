@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
-import { AgentBadge } from "@/components/AgentBadge";
+import { AgentAvatarGroup } from "@/components/AgentAvatar";
 import { RuntimePanel } from "@/components/RuntimePanel";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { elapsed, pfBadge, serviceBadge } from "@/lib/status";
+import { buildTaskForest, flattenTaskTree, type TaskTree } from "@/lib/taskGroups";
 import { taskLabel } from "@/lib/taskLabel";
 import { disposeTerminalWorkspace } from "@/lib/terminalWorkspace";
 import { cn } from "@/lib/utils";
@@ -30,10 +31,7 @@ import { daemon } from "../daemon";
 import type { PortForwardInfo, ServiceInfo, Snapshot } from "../protocol";
 import AddProjectDialog from "./AddProjectDialog";
 import { ProjectList } from "./projects/ProjectList";
-import {
-  type ProjectLiveCounts,
-  RemoveProjectDialog,
-} from "./projects/RemoveProjectDialog";
+import { type ProjectLiveCounts, RemoveProjectDialog } from "./projects/RemoveProjectDialog";
 
 interface Props {
   snapshot: Snapshot;
@@ -70,6 +68,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
     () => snapshot.tasks.filter((t) => t.project === projectName),
     [snapshot.tasks, projectName],
   );
+  const projectTaskForest = useMemo(() => buildTaskForest(projectTasks), [projectTasks]);
   const projectTerminals = useMemo(
     () => snapshot.terminals.filter((terminal) => terminal.project === projectName),
     [snapshot.terminals, projectName],
@@ -343,27 +342,12 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onProjectAdd
               Tasks
             </div>
             <div className="divide-y">
-              {projectTasks.length === 0 && (
+              {projectTaskForest.length === 0 && (
                 <div className="px-3 py-4 text-sm text-muted-foreground">No tasks yet.</div>
               )}
-              {projectTasks.map((t) => {
-                return (
-                  <button
-                    type="button"
-                    key={t.id}
-                    onClick={() => onOpenTask(t.id)}
-                    className="flex min-h-9 w-full items-center gap-3 px-3 py-1.5 text-left hover:bg-secondary/40"
-                  >
-                    <StatusBadge status={t.status} />
-                    <span className="flex-1 truncate text-sm">{taskLabel(t)}</span>
-                    <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                      <AgentBadge agentId={t.agent} className="text-muted-foreground" />
-                      <span aria-hidden className="h-1 w-1 rounded-full bg-muted-foreground/40" />
-                      <span className="tnum">{elapsed(t.createdAt)}</span>
-                    </span>
-                  </button>
-                );
-              })}
+              {projectTaskForest.map((tree) => (
+                <TaskRow key={tree.task.id} tree={tree} onOpenTask={onOpenTask} />
+              ))}
             </div>
           </Card>
         </div>
@@ -643,6 +627,93 @@ function PortForwardRow({
               {logs.length === 0 ? "no logs yet" : logText}
             </pre>
           </ScrollArea>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TaskRow({ tree, onOpenTask }: { tree: TaskTree; onOpenTask: (id: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const hasChildren = tree.children.length > 0;
+  const descendants = flattenTaskTree(tree).slice(1);
+  const descendantAgents = [...new Set(descendants.map((d) => d.agent))];
+  const statusCounts = {
+    blocked: descendants.filter((d) => d.status === "blocked").length,
+    running: descendants.filter((d) => d.status === "running").length,
+    review: descendants.filter((d) => d.status === "needs_review").length,
+    done: descendants.filter((d) => d.status === "done").length,
+  };
+
+  return (
+    <div>
+      <div className="flex min-h-9 w-full items-center gap-2 px-3 py-1.5 hover:bg-secondary/40">
+        <button
+          type="button"
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }}
+          aria-label={open ? "Collapse agents" : "Expand agents"}
+        >
+          {hasChildren ? (
+            open ? (
+              <ChevronDown className="size-3.5" />
+            ) : (
+              <ChevronRight className="size-3.5" />
+            )
+          ) : (
+            <span className="size-3.5" />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => onOpenTask(tree.task.id)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <StatusBadge status={tree.task.status} />
+          <span className="flex-1 truncate text-sm">{taskLabel(tree.task)}</span>
+        </button>
+        <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+          {hasChildren && (
+            <button
+              type="button"
+              className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen((v) => !v);
+              }}
+              aria-label={open ? "Collapse agents" : "Expand agents"}
+            >
+              {descendants.length}
+              <span className="flex items-center gap-1">
+                {statusCounts.blocked > 0 && (
+                  <span className="text-destructive">{statusCounts.blocked}b</span>
+                )}
+                {statusCounts.running > 0 && (
+                  <span className="text-ok">{statusCounts.running}r</span>
+                )}
+                {statusCounts.review > 0 && (
+                  <span className="text-warn">{statusCounts.review}w</span>
+                )}
+                {statusCounts.done > 0 && <span>{statusCounts.done}d</span>}
+              </span>
+            </button>
+          )}
+          <AgentAvatarGroup
+            agentId={tree.task.agent}
+            childAgents={hasChildren ? descendantAgents : undefined}
+          />
+          <span aria-hidden className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+          <span className="tnum">{elapsed(tree.task.createdAt)}</span>
+        </span>
+      </div>
+      {open && hasChildren && (
+        <div className="border-l-2 border-primary/20 ml-5">
+          {tree.children.map((child) => (
+            <TaskRow key={child.task.id} tree={child} onOpenTask={onOpenTask} />
+          ))}
         </div>
       )}
     </div>

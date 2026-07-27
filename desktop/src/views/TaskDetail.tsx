@@ -415,17 +415,24 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
           )}
         >
           {showChat && (
-            <ResizablePanel id="chat" order={1} defaultSize={showDiff ? 42 : 100} minSize={28}>
+            <ResizablePanel
+              id="chat"
+              order={1}
+              defaultSize={showDiff ? 42 : runtimeOpen ? 50 : 100}
+              minSize={28}
+            >
               <Card
                 className={cn(
                   "flex h-full min-h-0 w-full flex-col overflow-hidden border-transparent bg-transparent shadow-none",
-                  !showDiff && "mx-auto max-w-[1100px]",
+                  !showDiff && !runtimeOpen && "mx-auto max-w-[1100px]",
                 )}
               >
                 <div
                   className={cn(
                     "flex h-10 items-center gap-2 bg-card/95 px-4",
-                    showDiff ? "border-b border-border/80" : "rounded-md border border-border/80",
+                    showDiff || runtimeOpen
+                      ? "border-b border-border/80"
+                      : "rounded-md border border-border/80",
                   )}
                 >
                   <div className="min-w-0 flex-1 truncate text-sm font-semibold">Conversation</div>
@@ -620,6 +627,22 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
                 </ResizablePanelGroup>
               </Card>
             </ResizablePanel>
+          )}
+
+          {showChat && !showDiff && runtimeOpen && (
+            <>
+              <ResizableHandle />
+              <ResizablePanel id="runtime" order={2} defaultSize={50} minSize={20} maxSize={70}>
+                <Card className="flex h-full min-h-0 flex-col overflow-hidden border-border/80 bg-card/95 shadow-[0_0_0_1px_rgba(255,255,255,0.01)]">
+                  <RuntimePanel
+                    project={task.project}
+                    services={services}
+                    portforwards={portforwards}
+                    onAppendToChat={appendLogsToChat}
+                  />
+                </Card>
+              </ResizablePanel>
+            </>
           )}
 
           {rightRailOpen && !compactLayout && (

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import AppHeader from "@/components/AppHeader";
@@ -8,7 +8,9 @@ import BootstrapWizard from "@/components/BootstrapWizard";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { daemon } from "@/daemon";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useUi } from "@/store/ui";
+import { SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX } from "@/store/ui";
 
 import { useDaemonEvents } from "./hooks/useDaemonEvents";
 import { useFontScaling } from "./hooks/useFontScaling";
@@ -46,6 +48,89 @@ const getConnection = () => daemon.getState().connection;
 const getConnectionError = () => daemon.getState().connectionError;
 const getPendingAgentSetup = () => daemon.getState().pendingAgentSetup;
 
+const SIDEBAR_RESIZE_STEP = 10;
+
+function SidebarResizeHandle({
+  width,
+  onWidthChange,
+}: {
+  width: number;
+  onWidthChange: (w: number) => void;
+}) {
+  const startXRef = useRef(0);
+  const startWidthRef = useRef(0);
+
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      startXRef.current = e.clientX;
+      startWidthRef.current = width;
+
+      const handleMouseMove = (ev: MouseEvent) => {
+        const delta = ev.clientX - startXRef.current;
+        onWidthChange(startWidthRef.current + delta);
+      };
+      const handleMouseUp = () => {
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      };
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+    },
+    [width, onWidthChange],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      let next: number;
+      switch (e.key) {
+        case "ArrowLeft":
+          e.preventDefault();
+          next = width - SIDEBAR_RESIZE_STEP;
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          next = width + SIDEBAR_RESIZE_STEP;
+          break;
+        case "Home":
+          e.preventDefault();
+          next = SIDEBAR_WIDTH_MIN;
+          break;
+        case "End":
+          e.preventDefault();
+          next = SIDEBAR_WIDTH_MAX;
+          break;
+        default:
+          return;
+      }
+      onWidthChange(next);
+    },
+    [width, onWidthChange],
+  );
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-valuemin={SIDEBAR_WIDTH_MIN}
+      aria-valuemax={SIDEBAR_WIDTH_MAX}
+      aria-valuenow={width}
+      aria-label="Resize sidebar"
+      tabIndex={0}
+      onMouseDown={handleMouseDown}
+      onKeyDown={handleKeyDown}
+      data-testid="sidebar-resize-handle"
+      className="group flex w-1 shrink-0 cursor-col-resize items-center justify-center hover:bg-primary/15 focus-visible:bg-primary/15 focus-visible:outline-none"
+    >
+      <div className="h-full w-px bg-border/70 transition-colors group-hover:bg-primary/60 group-focus-visible:bg-primary/60" />
+    </div>
+  );
+}
+
 export default function App() {
   const snapshot = useSyncExternalStore(daemon.subscribe, getSnapshot);
   const connection = useSyncExternalStore(daemon.subscribe, getConnection);
@@ -58,6 +143,10 @@ export default function App() {
   const attentionOpen = useUi((s) => s.attentionOpen);
   const toggleAttention = useUi((s) => s.toggleAttention);
   const setAttentionOpen = useUi((s) => s.setAttentionOpen);
+  const sidebarWidth = useUi((s) => s.sidebarWidth);
+  const setSidebarWidth = useUi((s) => s.setSidebarWidth);
+  const isWide = useMediaQuery("(min-width: 1024px)");
+  const showPersistent = isWide && attentionOpen;
   const [newTaskProject, setNewTaskProject] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
@@ -73,9 +162,9 @@ export default function App() {
   const handleOpenTask = useCallback(
     (id: string) => {
       setOpenTaskId(id);
-      setAttentionOpen(false);
+      if (!isWide) setAttentionOpen(false);
     },
-    [setAttentionOpen, setOpenTaskId],
+    [isWide, setAttentionOpen, setOpenTaskId],
   );
 
   const openTask = snapshot.tasks.find((t) => t.id === openTaskId) ?? null;
@@ -114,7 +203,24 @@ export default function App() {
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
-        <div className="flex min-h-0 flex-1 gap-2 overflow-hidden p-2">
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 overflow-hidden",
+            showPersistent ? "gap-0 p-0" : "p-2",
+          )}
+        >
+          {showPersistent && railMounted && (
+            <>
+              <aside
+                style={{ width: sidebarWidth, minWidth: sidebarWidth, maxWidth: sidebarWidth }}
+                className="flex shrink-0 flex-col overflow-hidden"
+                data-testid="persistent-sidebar"
+              >
+                <LiveAttentionRail onOpenTask={handleOpenTask} />
+              </aside>
+              <SidebarResizeHandle width={sidebarWidth} onWidthChange={setSidebarWidth} />
+            </>
+          )}
           <main className="min-h-0 flex-1 overflow-hidden">
             <ErrorBoundary>
               {openTask ? (
@@ -151,30 +257,32 @@ export default function App() {
           </main>
         </div>
 
-        <div
-          className={cn(
-            "absolute bottom-0 left-0 right-0 top-11 z-20",
-            attentionOpen ? "pointer-events-auto" : "pointer-events-none",
-          )}
-        >
-          <button
-            type="button"
-            aria-label="Close sessions rail"
-            className="absolute inset-0 cursor-default"
-            disabled={!attentionOpen}
-            onClick={toggleAttention}
-          />
+        {!isWide && (
           <div
-            aria-hidden={!attentionOpen}
-            inert={!attentionOpen}
             className={cn(
-              "absolute bottom-0 left-0 top-0 w-[340px] transition-transform duration-300 ease-in-out",
-              attentionOpen ? "translate-x-0" : "-translate-x-full",
+              "absolute bottom-0 left-0 right-0 top-11 z-20",
+              attentionOpen ? "pointer-events-auto" : "pointer-events-none",
             )}
           >
-            {railMounted && <LiveAttentionRail onOpenTask={handleOpenTask} />}
+            <button
+              type="button"
+              aria-label="Close sessions rail"
+              className="absolute inset-0 cursor-default"
+              disabled={!attentionOpen}
+              onClick={toggleAttention}
+            />
+            <div
+              aria-hidden={!attentionOpen}
+              inert={!attentionOpen}
+              className={cn(
+                "absolute bottom-0 left-0 top-0 w-[340px] transition-transform duration-300 ease-in-out",
+                attentionOpen ? "translate-x-0" : "-translate-x-full",
+              )}
+            >
+              {railMounted && <LiveAttentionRail onOpenTask={handleOpenTask} />}
+            </div>
           </div>
-        </div>
+        )}
 
         {pushOpen && <PushDialog open onOpenChange={setPushOpen} task={openTask} />}
         {newTaskOpen && (

@@ -1,14 +1,17 @@
 import {
+  AlarmClock,
   ArrowDown,
   ArrowUp,
+  CheckCheck,
   ChevronDown,
   ChevronRight,
   GitBranch,
   Plus,
   Workflow,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { AgentAvatarGroup } from "@/components/AgentAvatar";
 import { AgentBadge } from "@/components/AgentBadge";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
@@ -24,12 +27,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { elapsed } from "@/lib/status";
-import type { TaskTree } from "@/lib/taskGroups";
+import type { BoardLifecycleFilter, TaskTree } from "@/lib/taskGroups";
 import {
   buildTaskForest,
   flattenTaskTree,
   taskGroupCounts,
+  taskLifecycle,
+  taskLifecycleCounts,
+  taskNeedsAttention,
   treeLane,
+  treeMatchesLifecycle,
   treeMatches,
 } from "@/lib/taskGroups";
 import { taskLabel } from "@/lib/taskLabel";
@@ -52,10 +59,17 @@ interface Props {
 export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
   const [project, setProject] = useState("all");
   const [agent, setAgent] = useState("all");
+  const [lifecycle, setLifecycle] = useState<BoardLifecycleFilter>("all");
+  const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   // Local priority ordering for the queue (daemon would persist this).
   const [order, setOrder] = useState<string[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowSeconds(Math.floor(Date.now() / 1000)), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const agents = useMemo(
     () => [...new Set(snapshot.tasks.map((t) => t.agent))].sort(),
@@ -68,10 +82,28 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
     [project, agent],
   );
   const tasks = useMemo(() => snapshot.tasks.filter(match), [snapshot.tasks, match]);
-  const forest = useMemo(
+  const matchingForest = useMemo(
     () => buildTaskForest(snapshot.tasks).filter((tree) => treeMatches(tree, match)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [snapshot.tasks, project, agent],
+  );
+  const forest = useMemo(
+    () => matchingForest.filter((tree) => treeMatchesLifecycle(tree, lifecycle, nowSeconds)),
+    [lifecycle, matchingForest, nowSeconds],
+  );
+  const lifecycleCounts = useMemo(
+    () =>
+      tasks.reduce(
+        (counts, task) => {
+          const taskState = taskLifecycle(task, nowSeconds);
+          if (taskState === "later") counts.later += 1;
+          if (taskState === "handled") counts.handled += 1;
+          if (taskNeedsAttention(task)) counts.attention += 1;
+          return counts;
+        },
+        { attention: 0, handled: 0, later: 0 },
+      ),
+    [nowSeconds, tasks],
   );
 
   const byStatus = useMemo(() => {
@@ -135,7 +167,7 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
   );
 
   const toggleGroup = (id: string) => {
-    setCollapsedGroups((prev) => {
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
         next.delete(id);
@@ -175,6 +207,33 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
             ))}
           </SelectContent>
         </Select>
+        <div
+          className="flex h-7 items-center rounded border border-border/80 bg-card/80 p-0.5"
+          aria-label="Filter board by attention state"
+        >
+          {(
+            [
+              ["all", "All", tasks.length],
+              ["attention", "Needs attention", lifecycleCounts.attention],
+              ["later", "Later", lifecycleCounts.later],
+              ["handled", "Handled", lifecycleCounts.handled],
+            ] as const
+          ).map(([value, label, count]) => (
+            <button
+              key={value}
+              type="button"
+              className={cn(
+                "flex h-6 items-center gap-1 rounded px-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground",
+                lifecycle === value && "bg-secondary text-foreground",
+              )}
+              aria-pressed={lifecycle === value}
+              onClick={() => setLifecycle(value)}
+            >
+              {label}
+              {value !== "all" && <span className="tnum opacity-70">{count}</span>}
+            </button>
+          ))}
+        </div>
         <Button size="sm" className="ml-auto h-7" onClick={() => onNewTask()}>
           <Plus className="size-3.5" />
           New task
@@ -196,8 +255,9 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
                       key={tree.task.id}
                       tree={tree}
                       onOpenTask={onOpenTask}
-                      collapsed={collapsedGroups.has(tree.task.id)}
+                      collapsed={!expandedGroups.has(tree.task.id)}
                       onToggle={() => toggleGroup(tree.task.id)}
+                      nowSeconds={nowSeconds}
                     />
                   );
                 }
@@ -212,6 +272,7 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
                     onOpen={() => onOpenTask(tree.task.id)}
                     onUp={() => move(tree.task.id, -1)}
                     onDown={() => move(tree.task.id, 1)}
+                    nowSeconds={nowSeconds}
                   />
                 );
               })}
@@ -228,8 +289,9 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
                     key={tree.task.id}
                     tree={tree}
                     onOpenTask={onOpenTask}
-                    collapsed={collapsedGroups.has(tree.task.id)}
+                    collapsed={!expandedGroups.has(tree.task.id)}
                     onToggle={() => toggleGroup(tree.task.id)}
+                    nowSeconds={nowSeconds}
                   />
                 ) : (
                   <TaskCard
@@ -238,6 +300,7 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
                     onOpen={() => onOpenTask(tree.task.id)}
                     expanded={expanded.has(tree.task.id)}
                     onToggleExpand={() => toggleExpanded(tree.task.id)}
+                    nowSeconds={nowSeconds}
                   />
                 ),
               )}
@@ -254,8 +317,9 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
                     key={tree.task.id}
                     tree={tree}
                     onOpenTask={onOpenTask}
-                    collapsed={collapsedGroups.has(tree.task.id)}
+                    collapsed={!expandedGroups.has(tree.task.id)}
                     onToggle={() => toggleGroup(tree.task.id)}
+                    nowSeconds={nowSeconds}
                   />
                 ) : (
                   <TaskCard
@@ -264,6 +328,7 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
                     onOpen={() => onOpenTask(tree.task.id)}
                     expanded={expanded.has(tree.task.id)}
                     onToggleExpand={() => toggleExpanded(tree.task.id)}
+                    nowSeconds={nowSeconds}
                   />
                 ),
               )}
@@ -280,9 +345,10 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
                     key={tree.task.id}
                     tree={tree}
                     onOpenTask={onOpenTask}
-                    collapsed={collapsedGroups.has(tree.task.id)}
+                    collapsed={!expandedGroups.has(tree.task.id)}
                     onToggle={() => toggleGroup(tree.task.id)}
                     muted
+                    nowSeconds={nowSeconds}
                   />
                 ) : (
                   <TaskCard
@@ -292,6 +358,7 @@ export default function Board({ snapshot, onOpenTask, onNewTask }: Props) {
                     muted
                     expanded={expanded.has(tree.task.id)}
                     onToggleExpand={() => toggleExpanded(tree.task.id)}
+                    nowSeconds={nowSeconds}
                   />
                 ),
               )}
@@ -347,15 +414,19 @@ function TaskGroupCard({
   collapsed,
   onToggle,
   muted,
+  nowSeconds,
 }: {
   tree: TaskTree;
   onOpenTask: (id: string) => void;
   collapsed: boolean;
   onToggle: () => void;
   muted?: boolean;
+  nowSeconds: number;
 }) {
   const descendants = flattenTaskTree(tree).slice(1);
   const counts = taskGroupCounts(tree);
+  const lifecycleCounts = taskLifecycleCounts(tree, nowSeconds);
+  const childAgents = [...new Set(descendants.map((d) => d.agent))];
 
   return (
     <div className={cn(muted && "opacity-70")}>
@@ -365,6 +436,8 @@ function TaskGroupCard({
           onOpen={() => onOpenTask(tree.task.id)}
           hideOrchAccordion
           flattenBottom
+          nowSeconds={nowSeconds}
+          childAgents={childAgents}
         />
         <button
           type="button"
@@ -383,6 +456,10 @@ function TaskGroupCard({
             {counts.running > 0 && <span className="text-ok">{counts.running} running</span>}
             {counts.review > 0 && <span className="text-warn">{counts.review} review</span>}
             {counts.done > 0 && <span>{counts.done} done</span>}
+            {lifecycleCounts.later > 0 && (
+              <span className="text-blue-500">{lifecycleCounts.later} later</span>
+            )}
+            {lifecycleCounts.handled > 0 && <span>{lifecycleCounts.handled} handled</span>}
           </span>
         </button>
       </div>
@@ -390,7 +467,12 @@ function TaskGroupCard({
       {!collapsed && (
         <div className="ml-3 mr-2 flex flex-col border-l-2 border-primary/30 pl-2 pt-1.5">
           {tree.children.map((child) => (
-            <ChildTaskRow key={child.task.id} tree={child} onOpenTask={onOpenTask} />
+            <ChildTaskRow
+              key={child.task.id}
+              tree={child}
+              onOpenTask={onOpenTask}
+              nowSeconds={nowSeconds}
+            />
           ))}
         </div>
       )}
@@ -398,7 +480,15 @@ function TaskGroupCard({
   );
 }
 
-function ChildTaskRow({ tree, onOpenTask }: { tree: TaskTree; onOpenTask: (id: string) => void }) {
+function ChildTaskRow({
+  tree,
+  onOpenTask,
+  nowSeconds,
+}: {
+  tree: TaskTree;
+  onOpenTask: (id: string) => void;
+  nowSeconds: number;
+}) {
   return (
     <div className="relative border-b border-border/50 py-1.5 last:border-b-0">
       <span className="absolute -left-2.5 top-3.5 h-px w-2 bg-primary/30" />
@@ -409,6 +499,7 @@ function ChildTaskRow({ tree, onOpenTask }: { tree: TaskTree; onOpenTask: (id: s
       >
         <div className="flex min-w-0 items-center gap-1.5 text-xs">
           <StatusBadge status={tree.task.status} size="xs" className="shrink-0" />
+          <LifecycleBadge task={tree.task} nowSeconds={nowSeconds} />
           <span className="min-w-0 flex-1 truncate text-foreground">{taskLabel(tree.task)}</span>
         </div>
         <div className="mt-1 flex items-center gap-1.5 pl-0.5 text-[10px] text-muted-foreground">
@@ -420,7 +511,12 @@ function ChildTaskRow({ tree, onOpenTask }: { tree: TaskTree; onOpenTask: (id: s
       {tree.children.length > 0 && (
         <div className="ml-2 mt-1 border-l border-primary/20 pl-2">
           {tree.children.map((child) => (
-            <ChildTaskRow key={child.task.id} tree={child} onOpenTask={onOpenTask} />
+            <ChildTaskRow
+              key={child.task.id}
+              tree={child}
+              onOpenTask={onOpenTask}
+              nowSeconds={nowSeconds}
+            />
           ))}
         </div>
       )}
@@ -436,6 +532,8 @@ function TaskCard({
   onToggleExpand,
   hideOrchAccordion,
   flattenBottom,
+  nowSeconds,
+  childAgents,
 }: {
   task: TaskInfo;
   onOpen: () => void;
@@ -444,6 +542,8 @@ function TaskCard({
   onToggleExpand?: () => void;
   hideOrchAccordion?: boolean;
   flattenBottom?: boolean;
+  nowSeconds: number;
+  childAgents?: string[];
 }) {
   const nodes = task.orchestrationGraph?.nodes;
   const hasAccordion = !hideOrchAccordion && nodes && nodes.length > 0;
@@ -461,12 +561,14 @@ function TaskCard({
         <button type="button" className="w-full cursor-pointer text-left" onClick={onOpen}>
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <StatusBadge status={task.status} size="xs" />
+            <LifecycleBadge task={task} nowSeconds={nowSeconds} />
             <span className="min-w-0 truncate font-semibold text-foreground">{task.project}</span>
-            {task.worktree && <GitBranch className="ml-auto size-3 shrink-0 text-primary" />}
-            <AgentBadge
-              agentId={task.agent}
-              className={cn("shrink-0", task.worktree ? undefined : "ml-auto")}
-            />
+            {task.worktree && <GitBranch className="size-3 shrink-0 text-primary" />}
+            <div
+              className={cn("flex shrink-0 items-center", task.worktree ? undefined : "ml-auto")}
+            >
+              <AgentAvatarGroup agentId={task.agent} childAgents={childAgents} />
+            </div>
             <span aria-hidden className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
             <span className="tnum shrink-0">
               {task.status === "done" ? `${elapsed(task.updatedAt)} ago` : elapsed(task.createdAt)}
@@ -532,6 +634,7 @@ function QueueCard({
   onOpen,
   onUp,
   onDown,
+  nowSeconds,
 }: {
   task: TaskInfo;
   rank: number;
@@ -540,6 +643,7 @@ function QueueCard({
   onOpen: () => void;
   onUp: () => void;
   onDown: () => void;
+  nowSeconds: number;
 }) {
   return (
     <Card className="flex gap-2 bg-background/35 p-2">
@@ -566,9 +670,10 @@ function QueueCard({
       </div>
       <button type="button" className="min-w-0 flex-1 text-left" onClick={onOpen}>
         <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+          <LifecycleBadge task={task} nowSeconds={nowSeconds} />
           <span className="min-w-0 truncate font-semibold text-foreground">{task.project}</span>
           <span aria-hidden className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
-          <AgentBadge agentId={task.agent} className="shrink-0" />
+          <AgentAvatarGroup agentId={task.agent} />
         </div>
         <p className="my-1 line-clamp-2 text-sm">{taskLabel(task)}</p>
         <div className="flex flex-wrap gap-1">
@@ -580,6 +685,27 @@ function QueueCard({
         </div>
       </button>
     </Card>
+  );
+}
+
+function LifecycleBadge({ task, nowSeconds }: { task: TaskInfo; nowSeconds: number }) {
+  const lifecycle = taskLifecycle(task, nowSeconds);
+  if (lifecycle === "active") return null;
+
+  if (lifecycle === "later") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-500/12 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 dark:text-blue-400">
+        <AlarmClock className="size-2.5" />
+        Later
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+      <CheckCheck className="size-2.5" />
+      Handled
+    </span>
   );
 }
 

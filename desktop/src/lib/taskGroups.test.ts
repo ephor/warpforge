@@ -45,14 +45,14 @@ describe("task orchestration groups", () => {
     expect(forest[1].children.map((tree) => tree.task.id)).toStrictEqual(["child-2", "child-1"]);
   });
 
-  it("keeps a review child attached and promotes the group to review", () => {
+  it("keeps a review child attached while live work keeps the group active", () => {
     const [group] = buildTaskForest([
       task("orchestrator", "idle"),
       task("finished-child", "needs_review", "orchestrator"),
       task("working-child", "running", "orchestrator"),
     ]);
 
-    expect(treeLane(group)).toBe("review");
+    expect(treeLane(group)).toBe("active");
     expect(flattenTaskTree(group).map((item) => item.id)).toStrictEqual([
       "orchestrator",
       "finished-child",
@@ -81,7 +81,7 @@ describe("task orchestration groups", () => {
     expect(forest[0].children[0].children[0].task.id).toBe("grandchild");
   });
 
-  it("promotes group to the most urgent lane among descendants", () => {
+  it("keeps live groups active and uses review when no member is active", () => {
     // All children done → history lane
     const [allDone] = buildTaskForest([
       task("p", "done"),
@@ -98,13 +98,21 @@ describe("task orchestration groups", () => {
     ]);
     expect(treeLane(oneRunning)).toBe("active");
 
-    // One child blocked → review lane (highest priority)
+    // A blocked child remains summarized while another member is still active.
     const [oneBlocked] = buildTaskForest([
       task("p", "running"),
       task("c1", "running", "p"),
       task("c2", "blocked", "p"),
     ]);
-    expect(treeLane(oneBlocked)).toBe("review");
+    expect(treeLane(oneBlocked)).toBe("active");
+
+    // Once nobody is active, the blocked child places the group in review.
+    const [blockedOnly] = buildTaskForest([
+      task("p", "done"),
+      task("c1", "done", "p"),
+      task("c2", "blocked", "p"),
+    ]);
+    expect(treeLane(blockedOnly)).toBe("review");
   });
 
   it("handles empty task list", () => {

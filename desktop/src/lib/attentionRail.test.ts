@@ -11,10 +11,7 @@ import {
   type AttentionItem,
 } from "./attentionRail";
 
-function task(
-  id: string,
-  overrides: Partial<TaskInfo> & { status?: TaskStatus } = {},
-): TaskInfo {
+function task(id: string, overrides: Partial<TaskInfo> & { status?: TaskStatus } = {}): TaskInfo {
   return {
     agent: "codex",
     blockedReason: null,
@@ -93,12 +90,7 @@ describe("buildAttentionQueue", () => {
 
 describe("selectRailTasks", () => {
   const attention = (ids: string[]): Map<string, AttentionItem> =>
-    new Map(
-      ids.map((id) => [
-        id,
-        { priority: 1, reason: "test", task: task(id) },
-      ]),
-    );
+    new Map(ids.map((id) => [id, { priority: 1, reason: "test", task: task(id) }]));
 
   it("removes done tasks", () => {
     const tasks = [task("a"), task("b", { status: "done" })];
@@ -126,8 +118,12 @@ describe("selectRailTasks", () => {
       task("b", { project: "frontend" }),
       task("c", { prompt: "other", project: "backend" }),
     ];
-    expect(selectRailTasks(tasks, new Map(), "all", "login", "created").map((t) => t.id)).toStrictEqual(["a"]);
-    expect(selectRailTasks(tasks, new Map(), "all", "frontend", "created").map((t) => t.id)).toStrictEqual(["b"]);
+    expect(
+      selectRailTasks(tasks, new Map(), "all", "login", "created").map((t) => t.id),
+    ).toStrictEqual(["a"]);
+    expect(
+      selectRailTasks(tasks, new Map(), "all", "frontend", "created").map((t) => t.id),
+    ).toStrictEqual(["b"]);
     expect(selectRailTasks(tasks, new Map(), "all", "zzz", "created")).toStrictEqual([]);
   });
 
@@ -158,10 +154,7 @@ describe("selectRailTasks", () => {
   });
 
   it("updated sort still responds to updatedAt changes", () => {
-    const tasks = [
-      task("a", { updatedAt: 1 }),
-      task("b", { updatedAt: 10 }),
-    ];
+    const tasks = [task("a", { updatedAt: 1 }), task("b", { updatedAt: 10 })];
     expect(selectRailTasks(tasks, new Map(), "all", "", "updated").map((t) => t.id)).toStrictEqual([
       "b",
       "a",
@@ -227,10 +220,7 @@ describe("partitionRailTasks", () => {
     new Map(ids.map((id) => [id, { priority: 1, reason: "test", task: task(id) }]));
 
   it("excludes done tasks from all shelves", () => {
-    const tasks = [
-      task("a", { status: "done" }),
-      task("b", { status: "idle" }),
-    ];
+    const tasks = [task("a", { status: "done" }), task("b", { status: "idle" })];
     const result = partitionRailTasks(tasks, new Map(), now);
     expect(result.needsYou.map((t) => t.id)).toStrictEqual([]);
     expect(result.working.map((t) => t.id)).toStrictEqual(["b"]);
@@ -238,18 +228,18 @@ describe("partitionRailTasks", () => {
     expect(result.settled.map((t) => t.id)).toStrictEqual([]);
   });
 
-  it("attention wins over snooze", () => {
+  it("an explicit future reminder wins over automatic attention", () => {
     const tasks = [task("a", { snoozedUntil: 2000, snoozedAt: 500 })];
     const result = partitionRailTasks(tasks, att(["a"]), now);
-    expect(result.needsYou.map((t) => t.id)).toStrictEqual(["a"]);
-    expect(result.snoozed.map((t) => t.id)).toStrictEqual([]);
+    expect(result.needsYou.map((t) => t.id)).toStrictEqual([]);
+    expect(result.snoozed.map((t) => t.id)).toStrictEqual(["a"]);
   });
 
-  it("attention wins over settled", () => {
+  it("an explicit handled choice wins over automatic attention", () => {
     const tasks = [task("a", { settledOverride: true, settledAt: 500 })];
     const result = partitionRailTasks(tasks, att(["a"]), now);
-    expect(result.needsYou.map((t) => t.id)).toStrictEqual(["a"]);
-    expect(result.settled.map((t) => t.id)).toStrictEqual([]);
+    expect(result.needsYou.map((t) => t.id)).toStrictEqual([]);
+    expect(result.settled.map((t) => t.id)).toStrictEqual(["a"]);
   });
 
   it("valid future snooze beats settled", () => {
