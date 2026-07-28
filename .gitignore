@@ -1,5 +1,11 @@
 # Rust build artifacts
 target/
+
+# Node tooling (changesets lives at the repository root)
+node_modules/
+
+# Working state written by the changesets release action
+.changeset/prerelease.json
 desktop/src-tauri/binaries/*
 !desktop/src-tauri/binaries/.gitkeep
 
