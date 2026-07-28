@@ -1,0 +1,107 @@
+name: Version release
+
+# Consumes the changesets merged into main: bumps the root package.json,
+# regenerates CHANGELOG.md, propagates the version to every Rust, Tauri, and
+# desktop manifest, and pushes the immutable vX.Y.Z tag that the "Draft
+# release" workflow builds from. It never builds, signs, or publishes anything.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Bump version and tag
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      # check-release-version.mjs reads the manifests through `cargo metadata`.
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bun install --frozen-lockfile
+      - name: Refuse to version a dirty or diverged checkout
+        run: |
+          test -z "$(git status --porcelain)" || {
+            echo "checkout is not clean before versioning" >&2
+            git status --porcelain >&2
+            exit 1
+          }
+          git fetch origin main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || {
+            echo "main moved while this run started; rerun the workflow" >&2
+            exit 1
+          }
+      - name: Record the version being released from
+        id: before
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      # The fork applies `changeset version` directly on main instead of the
+      # upstream "Version Packages" pull request. `tag` and `github-release`
+      # are disabled because Warpforge releases from a single product-wide
+      # vX.Y.Z tag, not per-package or date-based tags.
+      - name: Apply changesets
+        id: changesets
+        uses: edenlabllc/changesets-action@a065d25c2b5411d0c10a9fb238686ca94926b29e # v1
+        with:
+          mode: stable
+          prepare-script: node scripts/sync-version.mjs
+          commit: true
+          tag: false
+          github-release: false
+          comment: false
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Report that there was nothing to release
+        if: steps.changesets.outputs.upgraded != 'true'
+        run: |
+          {
+            echo "### No release"
+            echo
+            echo "No pending changesets, so the version was left at" \
+              "\`${{ steps.before.outputs.version }}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify the versioned commit
+        if: steps.changesets.outputs.upgraded == 'true'
+        id: release
+        env:
+          PREVIOUS_VERSION: ${{ steps.before.outputs.version }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "$version" != "$PREVIOUS_VERSION" || {
+            echo "changesets reported an upgrade but the version did not change" >&2
+            exit 1
+          }
+          bun scripts/check-release-version.mjs "v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Push the immutable release tag
+        if: steps.changesets.outputs.upgraded == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: v${{ steps.release.outputs.version }}
+        run: |
+          git fetch origin --tags
+          if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
+            echo "tag already exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          git tag -a "$RELEASE_TAG" -m "Warpforge $RELEASE_TAG"
+          git push origin "refs/tags/$RELEASE_TAG"
+          {
+            echo "### Tagged \`$RELEASE_TAG\`"
+            echo
+            echo "Run **Draft release** with \`$RELEASE_TAG\` to build," \
+              "sign, and stage the assets, then smoke-test the draft before" \
+              "publishing it."
+          } >> "$GITHUB_STEP_SUMMARY"

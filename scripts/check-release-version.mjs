@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -37,6 +37,7 @@ function cargoMetadata(manifestPath) {
 
 const rootMetadata = cargoMetadata("Cargo.toml");
 const desktopMetadata = cargoMetadata("desktop/src-tauri/Cargo.toml");
+const rootPackage = json("package.json");
 const desktopPackage = json("desktop/package.json");
 const desktopLock = readFileSync(resolve(root, "desktop/bun.lock"), "utf8");
 const tauriConfig = json("desktop/src-tauri/tauri.conf.json");
@@ -60,6 +61,7 @@ function cargoVersion(metadata, name) {
 }
 
 const versions = new Map([
+  ["package.json (Changesets source of truth)", rootPackage.version],
   ["Cargo.toml (warpforge)", cargoVersion(rootMetadata, "warpforge")],
   [
     "crates/warpforge-protocol/Cargo.toml",
@@ -105,6 +107,12 @@ const releaseConfiguration = [
     desktopLock.includes('"@tauri-apps/plugin-updater":'),
   ],
   [
+    "every changeset has been consumed by the version bump",
+    readdirSync(resolve(root, ".changeset")).every(
+      (entry) => !entry.endsWith(".md") || entry === "README.md",
+    ),
+  ],
+  [
     "the packaged image CSP permits only local assets, Vite data URLs, and attachment blob URLs",
     (() => {
       const sources = cspDirectiveSources(tauriConfig.app?.security?.csp, "img-src");
@@ -131,14 +139,19 @@ try {
 }
 
 const escapedVersion = expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Changesets writes `## X.Y.Z`; releases predating it used `## [X.Y.Z]`.
 const changelogMatches = changelog
-  ? [...changelog.matchAll(new RegExp(`^## \\[${escapedVersion}\\](?:\\s|$)`, "gm"))]
+  ? [
+      ...changelog.matchAll(
+        new RegExp(`^## \\[?${escapedVersion}\\]?(?:\\s|$)`, "gm"),
+      ),
+    ]
   : [];
 
 if (changelog && changelogMatches.length !== 1) {
   console.error(
     `${changelogMatches.length === 0 ? "missing" : "duplicate"}: ` +
-      `CHANGELOG.md heading \"## [${expected}]\"`,
+      `CHANGELOG.md heading \"## ${expected}\"`,
   );
   valid = false;
 }

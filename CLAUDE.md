@@ -169,3 +169,7 @@ Run the fast CI checks locally — CI rejects on these and it's avoidable:
 A pre-commit hook (`.githooks/pre-commit`, enabled via
 `git config core.hooksPath .githooks`) runs these; do not rely on it — run them
 yourself before committing, and never `--no-verify` to dodge a real failure.
+
+User-facing changes also need a changeset (`bun run changeset` at the repo
+root). Never hand-edit versions or `CHANGELOG.md` — the **Version release**
+workflow owns both. See `docs/RELEASING.md`.
