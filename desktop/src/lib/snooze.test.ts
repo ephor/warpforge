@@ -8,13 +8,7 @@ import {
   snoozeTomorrowMorning,
 } from "./snooze";
 
-function localMs(
-  year: number,
-  month: number,
-  day: number,
-  hours: number,
-  minutes: number,
-): number {
+function localMs(year: number, month: number, day: number, hours: number, minutes: number): number {
   return new Date(year, month, day, hours, minutes, 0, 0).getTime();
 }
 

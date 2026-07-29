@@ -18,6 +18,16 @@ function attentionToastTitle(status: TaskStatus): string {
   return "Session interrupted";
 }
 
+/** The barrier a pipeline is parked at, or null when it needs nothing. */
+function waitingKind(task: TaskInfo): "question" | "limit" | null {
+  const kind = task.workflowRun?.waiting?.kind;
+  return kind === "question" || kind === "limit" ? kind : null;
+}
+
+function workflowToastTitle(kind: "question" | "limit"): string {
+  return kind === "question" ? "Pipeline needs your answer" : "Pipeline is out of review rounds";
+}
+
 export function useDaemonEvents() {
   const seenPermissionIds = useRef(new Set<string>());
   const notificationsReady = useRef(false);
@@ -38,6 +48,34 @@ export function useDaemonEvents() {
       const ui = useUi.getState();
       ui.openTask(taskId);
       ui.setAttentionOpen(false);
+    };
+    const notifyWorkflowWaiting = (task: TaskInfo, kind: "question" | "limit") => {
+      const toastId = `attention:workflow:${task.id}:${kind}`;
+      const question = task.workflowRun?.waiting?.question;
+      toast.custom(
+        (sonnerId) => (
+          <AttentionToast
+            title={workflowToastTitle(kind)}
+            identity={`${task.project} · ${task.workflowRun?.workflowName ?? "workflow"}`}
+            summary={attentionToastSummary(question || task.prompt)}
+            onDismiss={() => toast.dismiss(sonnerId)}
+            onOpen={() => {
+              openInChat(task.id);
+              toast.dismiss(sonnerId);
+            }}
+          />
+        ),
+        {
+          action: null,
+          cancel: null,
+          description: null,
+          duration: 10_000,
+          icon: null,
+          id: toastId,
+          richColors: false,
+          unstyled: true,
+        },
+      );
     };
     const notifyTask = (task: TaskInfo) => {
       const toastId = `attention:${task.id}:${task.status}`;
@@ -138,9 +176,19 @@ export function useDaemonEvents() {
       }
 
       if (event.event === "task.updated") {
-        const previous = daemon
+        const previousTask = daemon
           .getState()
-          .snapshot.tasks.find((task) => task.id === event.data.id)?.status;
+          .snapshot.tasks.find((task) => task.id === event.data.id);
+        const previous = previousTask?.status;
+        // A pipeline parking on the user is an attention state the coarse task
+        // status cannot express (it stays Idle), so it needs its own toast.
+        const wasWaiting = previousTask ? waitingKind(previousTask) : null;
+        const nowWaiting = waitingKind(event.data);
+        if (nowWaiting && nowWaiting !== wasWaiting) {
+          notifyWorkflowWaiting(event.data, nowWaiting);
+        } else if (!nowWaiting && wasWaiting) {
+          toast.dismiss(`attention:workflow:${event.data.id}:${wasWaiting}`);
+        }
         if (ATTENTION_STATUS.has(event.data.status) && previous !== event.data.status) {
           if (previous && ATTENTION_STATUS.has(previous)) {
             toast.dismiss(`attention:${event.data.id}:${previous}`);

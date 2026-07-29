@@ -200,8 +200,9 @@ describe("workflow conversation events", () => {
 
     expect(screen.getByText("Implement completed")).toBeInTheDocument();
     expect(screen.getByText(/Implemented the parser/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open implement agent session" }))
-      .toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Open implement agent session" }),
+    ).toBeInTheDocument();
   });
 });
 

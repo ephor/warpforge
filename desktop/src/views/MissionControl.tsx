@@ -58,9 +58,11 @@ import { BufferedMarkdown, CollapsibleMarkdown, Markdown } from "../components/M
 import { StatusBadge } from "../components/StatusBadge";
 import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { ThinkingBlock } from "../components/ThinkingBlock";
+import { WorkflowControls } from "../components/WorkflowControls";
 import { WorkflowEventLine } from "../components/WorkflowEventLine";
 import type { DaemonState } from "../daemon";
 import { daemon } from "../daemon";
+import { useWorkflowSend } from "../hooks/useWorkflowSend";
 import type { CommandInfo, EditHunk, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
 import { daemonQuery } from "../query";
 import { useUi } from "../store/ui";
@@ -294,6 +296,8 @@ function FocusPane({
   const capability = [...updates].reverse().find((update) => update.kind === "prompt_capabilities");
   const imageSupported = capability?.kind === "prompt_capabilities" ? capability.image : false;
   const activity = sessionActivity(task, stream);
+  const workflowSend = useWorkflowSend(task);
+  const openTask = useUi((s) => s.openTask);
 
   return (
     <Card
@@ -428,6 +432,7 @@ function FocusPane({
               update={u}
               taskId={task.id}
               resolved={resolved}
+              onOpenTask={openTask}
               compact
             />
           ))}
@@ -436,6 +441,7 @@ function FocusPane({
       </ScrollArea>
 
       <div className="border-t border-border/80">
+        {task.workflowRun && <WorkflowControls task={task} />}
         <Composer
           compact
           commands={commands}
@@ -443,9 +449,11 @@ function FocusPane({
           files={projectFiles}
           filesLoading={fileListQuery.isLoading}
           imageSupported={imageSupported}
-          disabled={task.status === "done"}
-          placeholder="Steer this session..."
+          disabled={task.status === "done" || workflowSend.disabled}
+          placeholder={workflowSend.placeholder ?? "Steer this session..."}
           onSend={async (submission) => {
+            // A workflow parent has no session — route to the pipeline instead.
+            if (await workflowSend.send(submission)) return;
             await daemon.request("session.prompt", { task_id: task.id, ...submission });
           }}
           toolbar={
@@ -558,11 +566,14 @@ function PinnedStreamLine({
   compact,
   taskId,
   resolved,
+  onOpenTask,
 }: {
   update: SessionUpdate;
   compact?: boolean;
   taskId?: string;
   resolved?: Record<string, string>;
+  /** Lets a workflow stage card in a tile open that stage's session. */
+  onOpenTask?: (id: string) => void;
 }) {
   if (update.kind === "agent_text" || update.kind === "agent_thought") {
     return (
@@ -576,10 +587,15 @@ function PinnedStreamLine({
       </div>
     );
   }
-  if (update.kind === "user_message") {
-    return <StreamLine update={update} compact={compact} taskId={taskId} resolved={resolved} />;
-  }
-  return <StreamLine update={update} compact={compact} taskId={taskId} resolved={resolved} />;
+  return (
+    <StreamLine
+      update={update}
+      compact={compact}
+      taskId={taskId}
+      resolved={resolved}
+      onOpenTask={onOpenTask}
+    />
+  );
 }
 
 /** Shared renderer for one session-stream update. `compact` = focus pane
@@ -784,9 +800,7 @@ export function StreamLine({
         </Markdown>
       );
     case "workflow_event":
-      return (
-        <WorkflowEventLine update={update} compact={compact} onOpenTask={onOpenTask} />
-      );
+      return <WorkflowEventLine update={update} compact={compact} onOpenTask={onOpenTask} />;
     case "agent_thought":
       return compact ? (
         <Markdown

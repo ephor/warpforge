@@ -75,7 +75,7 @@ describe("WorkflowControls", () => {
     );
     expect(screen.getByText(/open findings: 2 high/)).toBeInTheDocument();
     expect(screen.getByText("Review limit reached")).toBeInTheDocument();
-    expect(screen.getByText(/guidance typed below/i)).toBeInTheDocument();
+    expect(screen.getByText(/type it below and press Send/i)).toBeInTheDocument();
     // Pausing makes no sense while a decision is pending.
     expect(screen.queryByRole("button", { name: /pause/i })).not.toBeInTheDocument();
 
@@ -126,6 +126,22 @@ describe("WorkflowControls", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /finish for review/i })).toBeEnabled(),
     );
+  });
+
+  it("hides Pause while a stage question is pending — the daemon rejects it", async () => {
+    render(
+      <WorkflowControls
+        task={task({ stage: "plan", waiting: { kind: "question", question: "which db?" } })}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /pause/i })).not.toBeInTheDocument();
+    expect(workflowPause).not.toHaveBeenCalled();
+  });
+
+  it("shows a queued pause as progress instead of an idle button", () => {
+    render(<WorkflowControls task={task({ pauseRequested: true })} />);
+    const button = screen.getByRole("button", { name: /pausing/i });
+    expect(button).toBeDisabled();
   });
 
   it("drops the controls once the pipeline is finished", () => {

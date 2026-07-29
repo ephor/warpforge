@@ -103,8 +103,10 @@ async fn main() -> Result<()> {
             let config_file = config::find_config_file(std::path::Path::new(&entry.path));
             if !config_file.exists() {
                 match config::generate_workspace_yaml(std::path::Path::new(&entry.path)) {
-                    Ok(_) => println!("Created .warpforge.yaml — edit it to configure services"),
-                    Err(e) => println!("Note: could not create .warpforge.yaml: {}", e),
+                    Ok(_) => println!(
+                        "Created .warpforge/workspace.yaml — edit it to configure services"
+                    ),
+                    Err(e) => println!("Note: could not create .warpforge/workspace.yaml: {}", e),
                 }
             }
         }
@@ -155,7 +157,7 @@ async fn main() -> Result<()> {
 
 /// Interactive CLI bootstrap: register the project, ask a few runtime
 /// questions, run a config-gen task on the daemon, then review + write the
-/// proposed `.warpforge.yaml`. The daemon owns the repo scan, prompt building,
+/// proposed workspace config. The daemon owns the repo scan, prompt building,
 /// and validation (see `bootstrap.*` RPCs); this only drives the flow.
 async fn run_bootstrap(path: &str) -> Result<()> {
     use std::io::{self, Write};
@@ -251,7 +253,7 @@ async fn run_bootstrap(path: &str) -> Result<()> {
         .unwrap_or_default();
     let yaml = bootstrap::extract_yaml_from_response(&response);
 
-    println!("\n── Proposed .warpforge.yaml ──\n{yaml}\n──────────────────────────────");
+    println!("\n── Proposed workspace config ──\n{yaml}\n───────────────────────────────");
     match bootstrap::validate_config_yaml(&yaml) {
         Ok((_, issues)) => {
             for issue in &issues {

@@ -260,7 +260,12 @@ const SessionRailCard = memo(function SessionRailCard({
         </p>
       )}
       {reason && (
-        <p className="pointer-events-none relative z-10 mt-1 truncate text-xs text-muted-foreground">
+        // `reason` can now be free-form agent text (a pipeline's question), so
+        // it needs a tooltip when truncated.
+        <p
+          title={reason}
+          className="pointer-events-none relative z-10 mt-1 truncate text-xs text-muted-foreground"
+        >
           {reason}
         </p>
       )}

@@ -155,7 +155,12 @@ export class TerminalWorkspace {
     return label;
   }
 
-  private attachTerminal(info: { id: string; project: string; command: string; startedAt: number }) {
+  private attachTerminal(info: {
+    id: string;
+    project: string;
+    command: string;
+    startedAt: number;
+  }) {
     if (this.entries.has(info.id)) return;
     if (this.exitedTombstones.has(info.id)) return;
     const controller = new TerminalController({ terminalId: info.id, project: info.project });
@@ -183,7 +188,10 @@ export class TerminalWorkspace {
   private getTerminalSignature(): string {
     const snap = daemon.getState().snapshot;
     const projectTerminals = snap.terminals.filter((t) => t.project === this.project);
-    return projectTerminals.map((t) => t.id).sort().join(",");
+    return projectTerminals
+      .map((t) => t.id)
+      .sort()
+      .join(",");
   }
 
   private reconcileFromSnapshot() {

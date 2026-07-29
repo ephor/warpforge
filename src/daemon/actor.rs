@@ -585,6 +585,8 @@ pub enum Command {
         workflow: String,
         attachments: Vec<wire::PromptAttachment>,
         default_model: Option<String>,
+        include_runtime_context: bool,
+        config_overrides: std::collections::HashMap<String, String>,
         reply: oneshot::Sender<Result<String, String>>,
     },
     /// Soft-pause a workflow pipeline at its next stage barrier.
@@ -2436,6 +2438,8 @@ impl Daemon {
                 workflow,
                 attachments,
                 default_model,
+                include_runtime_context,
+                config_overrides,
                 reply,
             } => {
                 let result = self
@@ -2448,6 +2452,8 @@ impl Daemon {
                         workflow,
                         attachments,
                         default_model,
+                        include_runtime_context,
+                        config_overrides,
                     )
                     .await;
                 let _ = reply.send(result);
@@ -2802,7 +2808,13 @@ impl Daemon {
                         None => Ok(()),
                     };
                     self.pending_permissions.cleanup_task(&id);
-                    if let Some(task) = self.tasks.get_mut(&id) {
+                    // A finished pipeline's parent keeps its terminal status:
+                    // cancelling it must not rewrite NeedsReview back to Idle.
+                    let finished_workflow = self
+                        .workflow_runs
+                        .get(&id)
+                        .is_some_and(|run| !run.is_active());
+                    if let Some(task) = self.tasks.get_mut(&id).filter(|_| !finished_workflow) {
                         task.set_status(TaskStatus::Idle);
                         let updated = task.clone();
                         self.persist(&updated);
@@ -3397,7 +3409,7 @@ impl Daemon {
         let entry =
             crate::registry::add_project(path, name).map_err(|e| format!("registry: {e}"))?;
 
-        // Generate .warpforge.yaml if none exists.
+        // Generate the workspace config if none exists.
         let config_file = crate::config::find_config_file(std::path::Path::new(&entry.path));
         if !config_file.exists() {
             crate::config::generate_workspace_yaml(std::path::Path::new(&entry.path)).ok();
@@ -4365,6 +4377,38 @@ impl Daemon {
             .map(|run| run.parent_id.clone())
     }
 
+    /// Deliver a follow-up into an existing stage session. Returns false when
+    /// the session is gone — checking `is_alive()` matters because
+    /// `AcpHandle::prompt` succeeds even for a dead child (its channel belongs
+    /// to the driver task, which outlives the process), and a prompt sent into
+    /// a corpse simply vanishes.
+    fn workflow_followup(&mut self, child_id: &str, text: String) -> bool {
+        let delivered = self
+            .sessions
+            .get(child_id)
+            .filter(|handle| handle.is_alive())
+            .map(|handle| {
+                handle
+                    .prompt(super::prompt::PreparedPrompt {
+                        content: vec![super::prompt::PromptContent::Text(text.clone())],
+                        summaries: vec![],
+                        has_images: false,
+                    })
+                    .is_ok()
+            })
+            .unwrap_or(false);
+        if delivered {
+            self.emit_session(
+                child_id,
+                wire::SessionUpdate::UserMessage {
+                    text,
+                    attachments: vec![],
+                },
+            );
+        }
+        delivered
+    }
+
     /// Append one durable, independently rendered workflow entry to the
     /// parent's Conversation. Structured events deliberately do not use
     /// AgentText: transport coalescing is correct for streamed agent chunks,
@@ -4488,13 +4532,25 @@ impl Daemon {
         workflow_id: String,
         attachments: Vec<wire::PromptAttachment>,
         default_model: Option<String>,
+        include_runtime_context: bool,
+        config_overrides: HashMap<String, String>,
     ) -> Result<String, String> {
         let path = self
             .project_path(&project)
             .ok_or_else(|| format!("unknown project '{project}'"))?;
+        if self.store.is_none() {
+            // Stage results are read back out of the persisted transcript, so
+            // without a store every stage would look like it produced nothing.
+            return Err(
+                "workflows need the local database, which failed to open — check \
+                 ~/.warpforge and restart the daemon"
+                    .to_string(),
+            );
+        }
         let loaded =
             crate::workflow_config::load_workflow(std::path::Path::new(&path), &workflow_id)
                 .ok_or_else(|| format!("unknown workflow `{workflow_id}`"))?;
+        let warnings = loaded.warnings.clone();
         let spec = loaded
             .spec
             .map_err(|e| format!("workflow `{workflow_id}` is invalid: {e}"))?;
@@ -4532,16 +4588,29 @@ impl Daemon {
             agent,
             resolved_model,
             attachments,
+            include_runtime_context,
+            config_overrides,
         );
         self.workflow_event(
             &parent_id,
             wire::WorkflowEventKind::WorkflowStarted,
             format!("Workflow started: {}", run.spec.name),
-            Some(format!(
-                "**Stages:** {}  \n**Review limit:** {} round(s)",
-                run.spec.stage_summary().join(" → "),
-                run.effective_max_rounds(),
-            )),
+            Some({
+                let mut detail = format!(
+                    "**Stages:** {}  \n**Review limit:** {} round(s)",
+                    run.spec.stage_summary().join(" → "),
+                    run.effective_max_rounds(),
+                );
+                // Warnings are otherwise only visible as a picker tooltip, so a
+                // clamped limit or an ignored key would silently shape the run.
+                if !warnings.is_empty() {
+                    detail.push_str("\n\n**Workflow file warnings:**\n");
+                    for warning in &warnings {
+                        detail.push_str(&format!("- {warning}\n"));
+                    }
+                }
+                detail
+            }),
             None,
             Vec::new(),
             wire::WorkflowEventTone::Info,
@@ -4637,29 +4706,7 @@ impl Daemon {
                     if reuse_sessions {
                         if let Some(prior_id) = run.prior_review_children.get(&index).cloned() {
                             let followup = workflow::build_rereview_prompt(&ctx);
-                            let delivered = self
-                                .sessions
-                                .get(&prior_id)
-                                .map(|handle| {
-                                    handle
-                                        .prompt(super::prompt::PreparedPrompt {
-                                            content: vec![super::prompt::PromptContent::Text(
-                                                followup.clone(),
-                                            )],
-                                            summaries: vec![],
-                                            has_images: false,
-                                        })
-                                        .is_ok()
-                                })
-                                .unwrap_or(false);
-                            if delivered {
-                                self.emit_session(
-                                    &prior_id,
-                                    wire::SessionUpdate::UserMessage {
-                                        text: followup,
-                                        attachments: vec![],
-                                    },
-                                );
+                            if self.workflow_followup(&prior_id, followup) {
                                 // The child was parked Done after its verdict;
                                 // the generic mark_task_running refuses Done
                                 // tasks, so flip it explicitly.
@@ -4684,7 +4731,7 @@ impl Daemon {
                         }
                     }
                     let prompt = workflow::build_reviewer_prompt(&run.spec, index, &ctx);
-                    let child_id = self.workflow_spawn_child(
+                    let spawned = self.workflow_spawn_child(
                         &run.project,
                         parent_id,
                         &agent,
@@ -4693,10 +4740,24 @@ impl Daemon {
                         worktree.clone(),
                         format!("review · {parent_title}"),
                         Vec::new(),
+                        run.include_runtime_context,
+                        run.config_overrides.clone(),
                     );
-                    run.review_pending.insert(child_id.clone(), index);
-                    run.active_children.insert(child_id.clone(), stage);
+                    // A reviewer whose session never started is recorded as a
+                    // failed node and excluded, exactly like one that dies
+                    // mid-review — it must not sit in `review_pending` waiting
+                    // for a TurnEnded that can never arrive.
+                    let (child_id, started) = match spawned {
+                        Ok(id) => (id, true),
+                        Err(id) => (id, false),
+                    };
                     run.record_stage(stage, &child_id, &agent, format!("{label}, {round_label}"));
+                    if started {
+                        run.review_pending.insert(child_id.clone(), index);
+                        run.active_children.insert(child_id.clone(), stage);
+                    } else {
+                        run.set_record_status(&child_id, wire::OrchNodeStatus::Failed);
+                    }
                     event_agents.push(wire::WorkflowEventAgent {
                         task_id: child_id,
                         label,
@@ -4737,7 +4798,7 @@ impl Daemon {
                     StageKind::Fix => workflow::build_fix_prompt(&run.spec, &ctx),
                     StageKind::Review => unreachable!(),
                 };
-                let child_id = self.workflow_spawn_child(
+                let spawned = self.workflow_spawn_child(
                     &run.project,
                     parent_id,
                     &agent,
@@ -4746,13 +4807,45 @@ impl Daemon {
                     worktree.clone(),
                     format!("{} · {parent_title}", stage.label()),
                     attachments,
+                    run.include_runtime_context,
+                    run.config_overrides.clone(),
                 );
-                run.active_children.insert(child_id.clone(), stage);
                 let label = match stage {
                     StageKind::Fix => format!("{} (round {})", stage.label(), run.round),
                     _ => stage.label().to_string(),
                 };
-                run.record_stage(stage, &child_id, &agent, label.clone());
+                let child_id = match spawned {
+                    Ok(id) => {
+                        run.active_children.insert(id.clone(), stage);
+                        run.record_stage(stage, &id, &agent, label.clone());
+                        id
+                    }
+                    Err(id) => {
+                        // No session means no TurnEnded will ever arrive, so
+                        // fail the pipeline here instead of hanging in
+                        // "running" until the user cancels.
+                        run.record_stage(stage, &id, &agent, label.clone());
+                        run.set_record_status(&id, wire::OrchNodeStatus::Failed);
+                        let reason = self
+                            .tasks
+                            .get(&id)
+                            .and_then(|t| t.blocked_reason.clone())
+                            .unwrap_or_else(|| {
+                                "the agent session could not be started".to_string()
+                            });
+                        self.workflow_runs.insert(parent_id.to_string(), run);
+                        let _ = self
+                            .workflow_finalize(
+                                parent_id,
+                                WorkflowOutcome::Error(format!(
+                                    "stage {} could not start: {reason}",
+                                    stage.label()
+                                )),
+                            )
+                            .await;
+                        return;
+                    }
+                };
                 self.workflow_event(
                     parent_id,
                     wire::WorkflowEventKind::StageStarted,
@@ -4777,6 +4870,7 @@ impl Daemon {
     /// directory (its worktree when isolated) but are NOT registered in the
     /// worktree manager — the parent owns the worktree's lifecycle.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::result_large_err)]
     fn workflow_spawn_child(
         &mut self,
         project: &str,
@@ -4787,7 +4881,9 @@ impl Daemon {
         worktree: Option<String>,
         title: String,
         attachments: Vec<wire::PromptAttachment>,
-    ) -> String {
+        include_runtime_context: bool,
+        config_overrides: HashMap<String, String>,
+    ) -> Result<String, String> {
         let mut task = Task::new(project, &prompt, agent, vec!["workflow-stage".to_string()]);
         task.parent_task_id = Some(parent_id.to_string());
         task.worktree = worktree;
@@ -4801,13 +4897,21 @@ impl Daemon {
             project,
             agent,
             &prompt,
-            false,
+            include_runtime_context,
             None,
             attachments,
             model,
-            HashMap::new(),
+            config_overrides,
         );
-        child_id
+        // `start_session` reports prompt-preparation and spawn failures by
+        // blocking the child task and inserting no handle. Without a session
+        // there is no TurnEnded to advance the pipeline, so the caller must
+        // learn about it here or the parent hangs in "running" forever.
+        if self.sessions.contains_key(&child_id) {
+            Ok(child_id)
+        } else {
+            Err(child_id)
+        }
     }
 
     /// A stage child's turn ended (or its session died). Advance the pipeline.
@@ -4870,7 +4974,7 @@ impl Daemon {
                             &parent_id,
                             wire::WorkflowEventKind::AgentOutput,
                             format!("{} needs your input", stage.title()),
-                            Some(workflow::clip_summary(&output)),
+                            Some(workflow::display_output(&output)),
                             Some(stage),
                             event_agent.into_iter().collect(),
                             wire::WorkflowEventTone::Warning,
@@ -4901,7 +5005,7 @@ impl Daemon {
                             &parent_id,
                             wire::WorkflowEventKind::AgentOutput,
                             format!("{} completed", stage.title()),
-                            Some(workflow::clip_summary(&output)),
+                            Some(workflow::display_output(&output)),
                             Some(stage),
                             event_agent.into_iter().collect(),
                             wire::WorkflowEventTone::Success,
@@ -5042,7 +5146,7 @@ impl Daemon {
                             Verdict::RequestChanges => "changes requested",
                         },
                     ),
-                    Some(workflow::clip_summary(&output)),
+                    Some(workflow::display_output(&output)),
                     Some(StageKind::Review),
                     event_agent.into_iter().collect(),
                     match verdict {
@@ -5077,7 +5181,7 @@ impl Daemon {
                     parent_id,
                     wire::WorkflowEventKind::AgentOutput,
                     format!("{label}: invalid review response"),
-                    Some(workflow::clip_summary(&output)),
+                    Some(workflow::display_output(&output)),
                     Some(StageKind::Review),
                     event_agent.into_iter().collect(),
                     wire::WorkflowEventTone::Warning,
@@ -5086,29 +5190,7 @@ impl Daemon {
                 if *asked < workflow::MAX_VERDICT_REASKS {
                     *asked += 1;
                     let reask = workflow::reask_verdict_prompt(&reason);
-                    let delivered = self
-                        .sessions
-                        .get(child_id)
-                        .map(|handle| {
-                            handle
-                                .prompt(super::prompt::PreparedPrompt {
-                                    content: vec![super::prompt::PromptContent::Text(
-                                        reask.clone(),
-                                    )],
-                                    summaries: vec![],
-                                    has_images: false,
-                                })
-                                .is_ok()
-                        })
-                        .unwrap_or(false);
-                    if delivered {
-                        self.emit_session(
-                            child_id,
-                            wire::SessionUpdate::UserMessage {
-                                text: reask,
-                                attachments: vec![],
-                            },
-                        );
+                    if self.workflow_followup(child_id, reask) {
                         self.mark_task_running(child_id);
                         self.workflow_timeline(
                             parent_id,
@@ -5120,14 +5202,48 @@ impl Daemon {
                     // Dead session: fall through to the failure path.
                 }
                 self.workflow_runs.insert(parent_id.to_string(), run);
-                let _ = self
-                    .workflow_finalize(
-                        parent_id,
-                        WorkflowOutcome::Error(format!(
-                            "{label} returned no parseable verdict after a retry ({reason})"
-                        )),
-                    )
-                    .await;
+                // Treat a reviewer that cannot produce a parseable verdict the
+                // same way as one whose process died: abstain from this round.
+                // Failing the whole pipeline because one agent wrote prose
+                // twice would throw away a complete implementation.
+                self.workflow_event(
+                    parent_id,
+                    wire::WorkflowEventKind::AgentOutput,
+                    format!("{label} abstained"),
+                    Some(format!(
+                        "No parseable verdict after a retry ({reason}) — excluded from this \
+                         round's verdict."
+                    )),
+                    Some(StageKind::Review),
+                    Vec::new(),
+                    wire::WorkflowEventTone::Warning,
+                );
+                let Some(mut run) = self.workflow_runs.remove(parent_id) else {
+                    return;
+                };
+                run.review_pending.remove(child_id);
+                run.active_children.remove(child_id);
+                run.reasked.remove(child_id);
+                run.set_record_status(child_id, wire::OrchNodeStatus::Failed);
+                self.workflow_set_child_status(child_id, TaskStatus::Idle);
+                if run.review_pending.is_empty() {
+                    if run.review_collected.is_empty() {
+                        self.workflow_runs.insert(parent_id.to_string(), run);
+                        let _ = self
+                            .workflow_finalize(
+                                parent_id,
+                                WorkflowOutcome::Error(
+                                    "no reviewer produced a usable verdict".to_string(),
+                                ),
+                            )
+                            .await;
+                    } else {
+                        self.workflow_merge_reviews(parent_id, run).await;
+                    }
+                } else {
+                    self.workflow_sync(&run);
+                    self.workflow_runs.insert(parent_id.to_string(), run);
+                }
             }
         }
     }
@@ -5276,7 +5392,7 @@ impl Daemon {
         // Signal every parallel reviewer before awaiting any one of them.
         let mut stop_error = None;
         for handle in handles {
-            if let Err(error) = handle.wait_for_exit().await {
+            if let Err(error) = handle.wait_for_exit_within(super::acp::STOP_GRACE).await {
                 stop_error.get_or_insert(error);
             }
         }
@@ -5354,7 +5470,16 @@ impl Daemon {
         }
         self.workflow_sync(&run);
         self.workflow_runs.insert(parent_id.to_string(), run);
-        stop_result
+        // The state transition succeeded even if a stage process was slow to
+        // die; surfacing teardown trouble as the RPC's error would make a
+        // completed decision look rejected.
+        if let Err(error) = stop_result {
+            self.workflow_timeline(
+                parent_id,
+                format!("Note: a stage agent did not shut down cleanly ({error})."),
+            );
+        }
+        Ok(())
     }
 
     /// A stage child task was cancelled or deleted out from under the run.
@@ -5444,27 +5569,7 @@ impl Daemon {
                 attachments: vec![],
             },
         );
-        let delivered = self
-            .sessions
-            .get(&child)
-            .map(|handle| {
-                handle
-                    .prompt(super::prompt::PreparedPrompt {
-                        content: vec![super::prompt::PromptContent::Text(message.clone())],
-                        summaries: vec![],
-                        has_images: false,
-                    })
-                    .is_ok()
-            })
-            .unwrap_or(false);
-        if delivered {
-            self.emit_session(
-                &child,
-                wire::SessionUpdate::UserMessage {
-                    text: message,
-                    attachments: vec![],
-                },
-            );
+        if self.workflow_followup(&child, message.clone()) {
             self.mark_task_running(&child);
             if let Some(run) = self.workflow_runs.get_mut(parent_id) {
                 run.state = RunState::Running { stage };
@@ -5539,6 +5644,11 @@ impl Daemon {
                     let run = self.workflow_runs.get_mut(parent_id).unwrap();
                     run.extra_rounds += granted;
                     run.pending_guidance = guidance;
+                    // Asking for more rounds supersedes a pause requested
+                    // while the last review was still running; otherwise the
+                    // next stage would park immediately after we just said
+                    // "continuing with a fix".
+                    run.pause_requested = false;
                 }
                 self.workflow_timeline(
                     parent_id,
@@ -5572,7 +5682,20 @@ impl Daemon {
             .unwrap_or_default();
         for (task_id, json) in rows {
             let Ok(mut run) = serde_json::from_str::<WorkflowRun>(&json) else {
+                // Leaving the row in place would re-fail on every start while
+                // the parent sits with no pipeline state and therefore no
+                // pause/resume/stop controls. Say so, once, and move on.
                 eprintln!("[daemon] dropping unreadable workflow run for task {task_id}");
+                if let Some(store) = &self.store {
+                    let _ = store.delete_workflow_run(&task_id);
+                }
+                if let Some(task) = self.tasks.get_mut(&task_id) {
+                    task.blocked_reason =
+                        Some("workflow state could not be restored after an upgrade".to_string());
+                    task.set_status(TaskStatus::Blocked);
+                    let updated = task.clone();
+                    self.persist(&updated);
+                }
                 continue;
             };
             if !self.tasks.contains_key(&task_id) {
@@ -5589,7 +5712,22 @@ impl Daemon {
                     run.active_children.clear();
                     run.review_pending.clear();
                     run.review_collected.clear();
+                    // Re-running a review re-increments `round` on spawn, so
+                    // give the interrupted round back — otherwise a restart
+                    // during round 2 of 2 resumes as "round 3/2" and lands
+                    // straight on the limit decision.
+                    if stage == StageKind::Review {
+                        run.round = run.round.saturating_sub(1);
+                    }
                     run.state = RunState::Paused { next: stage };
+                    // The working copy may hold half-applied edits from the
+                    // killed attempt; the re-run has to know that.
+                    run.pending_guidance = Some(
+                        "A previous attempt of this stage was interrupted by a daemon restart. \
+                         The working copy may already contain its partial changes — inspect the \
+                         current diff before assuming you are starting from scratch."
+                            .to_string(),
+                    );
                     self.workflow_timeline(
                         &task_id,
                         format!(

@@ -35,16 +35,15 @@ implement:
     {{plan}}
 
 review:
-  max_rounds: 2 # review ⇄ fix iterations before asking you what to do
+  max_rounds: 2 # review rounds; a fix runs between them, so 2 = one fix attempt
   on_limit: ask # ask | finish — behaviour when the limit is hit
   # reask: same_session # same_session | fresh — repeat rounds follow up in the
   #   same reviewer session (it verifies its own findings); `fresh` spawns new
   #   reviewers each round, with last round's findings included for verification.
-  context: [prompt, plan, implementer_summary, diff]
   reviewers:
     - # agent: claude
       # model: claude-opus-5
-      # focus: correctness and edge cases
+      # focus: correctness and edge cases  # only used if you delete `prompt` below
       prompt: |
         You are a code reviewer in workflow round {{round}}/{{max_rounds}}.
         Review the implementation against the task and approved plan. Do not

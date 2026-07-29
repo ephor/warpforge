@@ -134,7 +134,29 @@ impl AcpHandle {
     /// hard-stop operation.
     pub async fn cancel_and_wait(&self) -> Result<(), String> {
         self.cancel();
-        self.wait_for_exit().await
+        self.wait_for_exit_within(STOP_GRACE).await
+    }
+
+    /// False once the process monitor has reaped the ACP child. `prompt()` is
+    /// NOT a liveness test — its channel belongs to the driver task, which
+    /// outlives the child — so anything that must know whether an agent is
+    /// still there has to ask this.
+    pub fn is_alive(&self) -> bool {
+        matches!(*self.exit_rx.borrow(), ChildState::Running)
+    }
+
+    /// Wait for the process monitor's post-`child.wait()` notification, giving
+    /// up after `timeout`. The bound matters: callers await this inline in the
+    /// daemon actor, so an unkillable child (D-state on a stuck mount) would
+    /// otherwise freeze every project's RPCs and events, not just this task.
+    pub async fn wait_for_exit_within(&self, timeout: std::time::Duration) -> Result<(), String> {
+        match tokio::time::timeout(timeout, self.wait_for_exit()).await {
+            Ok(result) => result,
+            Err(_) => Err(format!(
+                "agent process did not exit within {}s of being killed",
+                timeout.as_secs()
+            )),
+        }
     }
 
     /// Wait for the process monitor's post-`child.wait()` notification.
@@ -214,6 +236,9 @@ impl FailureReporter {
     }
 }
 
+/// How long a caller waits for a killed ACP child to be reaped before giving
+/// up. Bounded so a stuck child cannot stall the single-threaded daemon actor.
+pub const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 const STDERR_LINE_BYTES: usize = 512;
 const STDERR_TOTAL_BYTES: usize = 4096;
 

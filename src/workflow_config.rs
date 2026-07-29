@@ -66,9 +66,18 @@ pub struct ReviewConfig {
     /// How repeat review rounds are staffed after a fix.
     #[serde(default)]
     pub reask: ReaskMode,
+    // These collections carry `serde(default)` because a `WorkflowSpec` is
+    // persisted inside a running pipeline's snapshot: a field that is required
+    // on load turns every in-flight run unreadable after an upgrade.
+    #[serde(default)]
     pub context: Vec<ReviewContextItem>,
     /// Always 1..=MAX_REVIEWERS entries; defaults to one all-`None` reviewer.
+    #[serde(default)]
     pub reviewers: Vec<ReviewerConfig>,
+    /// True when the YAML set `context` explicitly. Only drives the warning
+    /// that the key is inert alongside custom reviewer prompts.
+    #[serde(default, skip_serializing)]
+    pub context_was_set: bool,
 }
 
 /// Who reviews repeat rounds after a fix.
@@ -166,12 +175,34 @@ where
     Ok(Some(value.unwrap_or_default()))
 }
 
+/// Like [`nullable`], but `false` means "this stage is off". Deleting the key
+/// is the canonical way to disable planning; `plan: false` is the obvious
+/// guess, so accept it instead of failing with a type error.
+fn nullable_or_false<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Toggle<T> {
+        Off(bool),
+        On(T),
+    }
+    match Option::<Toggle<T>>::deserialize(deserializer)? {
+        None => Ok(Some(T::default())),
+        Some(Toggle::Off(false)) => Ok(None),
+        Some(Toggle::Off(true)) => Ok(Some(T::default())),
+        Some(Toggle::On(value)) => Ok(Some(value)),
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct RawWorkflow {
     version: Option<u64>,
     name: Option<String>,
     description: Option<String>,
-    #[serde(default, deserialize_with = "nullable")]
+    #[serde(default, deserialize_with = "nullable_or_false")]
     plan: Option<RawStage>,
     #[serde(default, deserialize_with = "nullable")]
     implement: Option<RawStage>,
@@ -222,7 +253,10 @@ pub fn parse_workflow(id: &str, yaml: &str) -> (Result<WorkflowSpec, String>, Ve
         );
     }
     collect_unknown_keys(&value, &mut warnings);
-    let raw: RawWorkflow = match serde_yaml::from_value(value) {
+    // Deserialize from the source text, not the `Value` above: only `from_str`
+    // reports the offending key path plus line and column, and that message is
+    // what the picker shows as the reason a workflow is rejected.
+    let raw: RawWorkflow = match serde_yaml::from_str(yaml) {
         Ok(raw) => raw,
         Err(e) => return (Err(format!("invalid workflow: {e}")), warnings),
     };
@@ -305,19 +339,60 @@ fn build_spec(
     let fix = raw.fix.map(stage_config).unwrap_or_default();
     let review = build_review(raw.review.unwrap_or_default(), warnings)?;
 
+    // A placeholder this workflow can never populate renders as an empty
+    // section, so scope the allow-lists: `{{plan}}` needs a plan stage and
+    // `{{focus}}` needs that reviewer to define one.
+    let has_plan = plan.is_some();
+    let allow = |vars: &[&'static str], _focus: bool| -> Vec<&'static str> {
+        vars.iter()
+            .copied()
+            .filter(|name| match *name {
+                "plan" => has_plan,
+                _ => true,
+            })
+            .collect()
+    };
     validate_prompt(
         plan.as_ref().and_then(|s| s.prompt.as_deref()),
         "plan",
-        VARS_PLAN,
+        &allow(VARS_PLAN, false),
     )?;
-    validate_prompt(implement.prompt.as_deref(), "implement", VARS_IMPLEMENT)?;
-    validate_prompt(fix.prompt.as_deref(), "fix", VARS_FIX)?;
+    validate_prompt(
+        implement.prompt.as_deref(),
+        "implement",
+        &allow(VARS_IMPLEMENT, false),
+    )?;
+    validate_prompt(fix.prompt.as_deref(), "fix", &allow(VARS_FIX, false))?;
     for (i, reviewer) in review.reviewers.iter().enumerate() {
         validate_prompt(
             reviewer.prompt.as_deref(),
             &format!("review.reviewers[{i}]"),
-            VARS_REVIEW,
+            &allow(VARS_REVIEW, reviewer.focus.is_some()),
         )?;
+    }
+    // `context` and `focus` only shape the BUILT-IN reviewer prompt: a custom
+    // prompt renders its own context. Silently ignoring them is the most
+    // confusing possible outcome for the first edit a user makes.
+    if review.reviewers.iter().all(|r| r.prompt.is_some()) {
+        if review.context_was_set {
+            warnings.push(
+                "review.context is ignored because every reviewer defines its own `prompt` — a \
+                 custom prompt decides what context it includes"
+                    .to_string(),
+            );
+        }
+        for (i, reviewer) in review.reviewers.iter().enumerate() {
+            let uses_focus = reviewer
+                .prompt
+                .as_deref()
+                .is_some_and(|p| extract_placeholders(p).iter().any(|v| v == "focus"));
+            if reviewer.focus.is_some() && !uses_focus {
+                warnings.push(format!(
+                    "review.reviewers[{i}].focus is ignored because that reviewer's `prompt` \
+                     never uses {{{{focus}}}}"
+                ));
+            }
+        }
     }
 
     Ok(WorkflowSpec {
@@ -343,6 +418,7 @@ fn stage_config(raw: RawStage) -> StageConfig {
 }
 
 fn build_review(raw: RawReview, warnings: &mut Vec<String>) -> Result<ReviewConfig, String> {
+    let context_was_set = raw.context.is_some();
     let mut max_rounds = raw.max_rounds.unwrap_or(DEFAULT_MAX_ROUNDS);
     if max_rounds == 0 {
         return Err("review.max_rounds must be at least 1".to_string());
@@ -434,6 +510,7 @@ fn build_review(raw: RawReview, warnings: &mut Vec<String>) -> Result<ReviewConf
         reask,
         context,
         reviewers,
+        context_was_set,
     })
 }
 
@@ -463,7 +540,11 @@ pub const VARS_FIX: &[&str] = &[
     "max_rounds",
 ];
 
-fn validate_prompt(prompt: Option<&str>, stage: &str, allowed: &[&str]) -> Result<(), String> {
+fn validate_prompt(
+    prompt: Option<&str>,
+    stage: &str,
+    allowed: &[&'static str],
+) -> Result<(), String> {
     let Some(prompt) = prompt else {
         return Ok(());
     };
@@ -807,6 +888,51 @@ fix:
         // Reviewer prompts may use the review variable set, including {{focus}}.
         let yaml = "name: X\nreview:\n  reviewers:\n    - prompt: \"{{focus}}: check {{diff}}\"\n";
         assert!(parse_workflow("test", yaml).0.is_ok());
+        // {{plan}} is rejected when the workflow has no planning stage — it
+        // would render an empty section instead of a plan.
+        let err = parse_err("name: X\nimplement:\n  prompt: \"Plan: {{plan}}\"\n");
+        assert!(err.contains("{{plan}}"), "{err}");
+        assert!(parse_workflow(
+            "test",
+            "name: X\nplan: {}\nimplement:\n  prompt: \"Plan: {{plan}}\"\n"
+        )
+        .0
+        .is_ok());
+    }
+
+    #[test]
+    fn inert_reviewer_knobs_warn() {
+        // `context` and `focus` only shape the built-in reviewer prompt, so
+        // setting them next to a custom prompt must not pass silently.
+        let (spec, warnings) = parse_workflow(
+            "test",
+            "name: X\nreview:\n  context: [prompt]\n  reviewers:\n    - focus: security\n      prompt: \"check it\"\n",
+        );
+        assert!(spec.is_ok());
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("review.context is ignored")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("focus is ignored") && w.contains("{{focus}}")),
+            "{warnings:?}"
+        );
+        // A custom prompt that actually uses {{focus}} draws no warning.
+        let (_, warnings) = parse_workflow(
+            "test",
+            "name: X\nreview:\n  reviewers:\n    - focus: security\n      prompt: \"{{focus}}\"\n",
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn plan_false_disables_the_stage() {
+        assert!(parse_ok("name: X\nplan: false\n").0.plan.is_none());
+        assert!(parse_ok("name: X\nplan: true\n").0.plan.is_some());
     }
 
     #[test]
