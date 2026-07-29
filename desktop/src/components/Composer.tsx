@@ -1,4 +1,4 @@
-import { ImagePlus, Send, Square } from "lucide-react";
+import { ImagePlus, Loader2, Send, Square } from "lucide-react";
 import {
   forwardRef,
   memo,
@@ -62,7 +62,7 @@ export const Composer = forwardRef<
   ComposerHandle,
   {
     onSend: (submission: PromptSubmission) => void | Promise<void>;
-    onCancel?: () => void;
+    onCancel?: () => void | Promise<void>;
     commands?: CommandInfo[];
     files?: ProjectFile[];
     filesLoading?: boolean;
@@ -102,6 +102,7 @@ export const Composer = forwardRef<
     const [diffs, setDiffs] = useState<ComposerAttachment[]>([]);
     const [images, setImages] = useState<ImageAttachmentDraft[]>([]);
     const [sending, setSending] = useState(false);
+    const [stopping, setStopping] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [dragging, setDragging] = useState(false);
     const textRef = useRef<HTMLTextAreaElement>(null);
@@ -231,6 +232,19 @@ export const Composer = forwardRef<
         setError(cause instanceof Error ? cause.message : "Message could not be sent.");
       } finally {
         setSending(false);
+      }
+    }
+
+    async function stop() {
+      if (!onCancel || stopping) return;
+      setStopping(true);
+      setError(null);
+      try {
+        await onCancel();
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Task could not be stopped.");
+      } finally {
+        setStopping(false);
       }
     }
 
@@ -405,9 +419,10 @@ export const Composer = forwardRef<
             {!hideSendButton && (
               <ComposerActionButton
                 action={action}
-                disabled={action === "send" && !canSend}
+                disabled={(action === "send" && !canSend) || stopping}
                 sendActionRef={sendActionRef}
-                onStop={onCancel}
+                onStop={() => void stop()}
+                stopping={stopping}
               />
             )}
           </div>
@@ -422,25 +437,33 @@ const ComposerActionButton = memo(function ComposerActionButton({
   disabled,
   sendActionRef,
   onStop,
+  stopping,
 }: {
   action: "send" | "stop";
   disabled: boolean;
   sendActionRef: React.RefObject<() => void>;
   onStop?: () => void;
+  stopping: boolean;
 }) {
-  const stopping = action === "stop";
+  const stopAction = action === "stop";
 
   return (
     <Button
       type="button"
       size="icon"
-      variant={stopping ? "destructive" : "default"}
-      aria-label={stopping ? "Stop" : "Send"}
+      variant={stopAction ? "destructive" : "default"}
+      aria-label={stopping ? "Stopping" : stopAction ? "Stop" : "Send"}
       className="size-6 shrink-0"
-      onClick={stopping ? onStop : () => sendActionRef.current?.()}
+      onClick={stopAction ? onStop : () => sendActionRef.current?.()}
       disabled={disabled}
     >
-      {stopping ? <Square className="size-3 fill-current" /> : <Send className="size-3" />}
+      {stopping ? (
+        <Loader2 className="size-3 animate-spin" />
+      ) : stopAction ? (
+        <Square className="size-3 fill-current" />
+      ) : (
+        <Send className="size-3" />
+      )}
     </Button>
   );
 });

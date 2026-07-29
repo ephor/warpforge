@@ -58,7 +58,9 @@ export const ChatComposer = memo(
     // whole pipeline, so the composer's stop button stays the terminal
     // "kill it" affordance next to WorkflowControls' soft pause.
     const onCancel = useCallback(
-      () => void daemon.request("task.cancel", { task_id: task.id }),
+      async () => {
+        await daemon.request("task.cancel", { task_id: task.id });
+      },
       [task.id],
     );
 

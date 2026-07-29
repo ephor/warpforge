@@ -60,4 +60,47 @@ describe("TaskAgentSwitcher", () => {
 
     expect(onOpenTask).not.toHaveBeenCalled();
   });
+
+  it("labels a workflow root and its stage sessions explicitly", async () => {
+    const user = userEvent.setup();
+    const root = {
+      ...task("root", "codex", "running"),
+      orchestrationGraph: {
+        goal: "Implement + review loop",
+        id: "root",
+        nodes: [
+          {
+            agent: "codex",
+            id: "implement",
+            kind: "implement" as const,
+            status: "running" as const,
+            taskId: "child",
+          },
+        ],
+      },
+      workflowRun: {
+        maxRounds: 2,
+        round: 0,
+        stage: "implement" as const,
+        workflowId: "review-loop",
+        workflowName: "Implement + review loop",
+      },
+    };
+    const [tree] = buildTaskForest([root, task("child", "codex", "running", "root")]);
+
+    render(
+      <TaskAgentSwitcher
+        tree={tree}
+        currentTaskId="root"
+        onOpenTask={vi.fn<(id: string) => void>()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /current: workflow/i })).toHaveTextContent(
+      "Stages 1",
+    );
+    await user.click(screen.getByRole("button", { name: /current: workflow/i }));
+    expect(await screen.findByRole("menuitem", { name: /implement · codex: running/i }))
+      .toBeInTheDocument();
+  });
 });

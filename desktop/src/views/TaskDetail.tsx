@@ -372,7 +372,7 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
         <p className="p-3 text-sm text-muted-foreground">Loading changes…</p>
       )
     ) : rightPanel === "subtasks" ? (
-      <SubtasksRail task={task} />
+      <SubtasksRail task={task} onOpenTask={onOpenTask} />
     ) : (
       <ProjectFilesPanel
         files={projectFiles}

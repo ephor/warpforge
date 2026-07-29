@@ -146,6 +146,65 @@ describe("agent text streaming", () => {
   });
 });
 
+describe("workflow conversation events", () => {
+  it("renders a persistent inline agent card and opens its child session", async () => {
+    const user = userEvent.setup();
+    const onOpenTask = vi.fn<(id: string) => void>();
+    render(
+      createElement(StreamLine, {
+        onOpenTask,
+        update: {
+          agents: [
+            {
+              agent: "codex",
+              label: "implement",
+              model: "gpt-5.6-sol",
+              taskId: "t_impl",
+            },
+          ],
+          event: "stage_started",
+          kind: "workflow_event",
+          stage: "implement",
+          title: "Implement started",
+          tone: "running",
+        },
+      }),
+    );
+
+    expect(screen.getByText("Implement started")).toBeInTheDocument();
+    expect(screen.getByText("gpt-5.6-sol")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open implement agent session" }));
+    expect(onOpenTask).toHaveBeenCalledWith("t_impl");
+  });
+
+  it("renders an agent summary as the next independent history entry", () => {
+    render(
+      createElement(StreamLine, {
+        update: {
+          agents: [
+            {
+              agent: "codex",
+              label: "implement",
+              taskId: "t_impl",
+            },
+          ],
+          detail: "Implemented the parser and ran **all tests**.",
+          event: "agent_output",
+          kind: "workflow_event",
+          stage: "implement",
+          title: "Implement completed",
+          tone: "success",
+        },
+      }),
+    );
+
+    expect(screen.getByText("Implement completed")).toBeInTheDocument();
+    expect(screen.getByText(/Implemented the parser/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open implement agent session" }))
+      .toBeInTheDocument();
+  });
+});
+
 describe("incremental coalescing", () => {
   const stream: SessionUpdate[] = [
     { kind: "user_message", text: "hi" },

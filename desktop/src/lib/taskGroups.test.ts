@@ -11,6 +11,7 @@ import {
   resolveGroupTaskId,
   setTaskGroupPinned,
   taskGroupStatus,
+  taskNeedsAttention,
   treeLane,
   treeMatches,
 } from "./taskGroups";
@@ -118,6 +119,21 @@ describe("task orchestration groups", () => {
   it("handles empty task list", () => {
     const forest = buildTaskForest([]);
     expect(forest).toStrictEqual([]);
+  });
+
+  it("treats a workflow waiting for a decision as attention while its task is idle", () => {
+    const workflow = task("workflow", "idle");
+    workflow.workflowRun = {
+      maxRounds: 2,
+      round: 2,
+      stage: "review",
+      verdict: "request_changes",
+      waiting: { kind: "limit", question: "open findings: 1 medium" },
+      workflowId: "review-loop",
+      workflowName: "Review loop",
+    };
+
+    expect(taskNeedsAttention(workflow)).toBeTruthy();
   });
 
   it("handles self-referencing parent (cycle to self)", () => {

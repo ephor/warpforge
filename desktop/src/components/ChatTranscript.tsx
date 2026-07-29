@@ -182,6 +182,7 @@ const TranscriptRow = memo(function TranscriptRow({
         resolveFilePath={resolveFilePath}
         onOpenFile={onOpenFile}
         onOpenFileDiff={onOpenFileDiff}
+        onOpenTask={onOpenTask}
         project={project}
       />
       {messageText && (

@@ -327,7 +327,7 @@ mod tests {
             .await;
         let mut events = daemon.subscribe();
 
-        daemon.send(Command::CancelTask { id: id.clone() }).await;
+        daemon.cancel_task(&id).await.expect("cancel accepted");
 
         timeout(Duration::from_secs(1), async {
             loop {
@@ -680,6 +680,108 @@ mod tests {
         assert!(graph.nodes.iter().all(|n| n.task_id.is_some()));
         assert_eq!(graph.nodes[0].kind, wire::OrchNodeKind::Implement);
         assert_eq!(graph.nodes[2].kind, wire::OrchNodeKind::Fix);
+
+        // The parent conversation is a useful workflow narrative, not just a
+        // sequence of opaque/coalesced stage transitions. Agent cards and
+        // results remain independent, ordered history entries.
+        let snapshot = daemon.snapshot().await;
+        let workflow_events: Vec<_> = snapshot.session_history[&parent_id]
+            .iter()
+            .filter(|update| matches!(update, wire::SessionUpdate::WorkflowEvent { .. }))
+            .collect();
+        assert!(matches!(
+            workflow_events.first(),
+            Some(wire::SessionUpdate::WorkflowEvent {
+                event: wire::WorkflowEventKind::WorkflowStarted,
+                ..
+            })
+        ));
+        let implement_started = workflow_events
+            .iter()
+            .position(|update| {
+                matches!(
+                    update,
+                    wire::SessionUpdate::WorkflowEvent {
+                        event: wire::WorkflowEventKind::StageStarted,
+                        stage: Some(wire::WorkflowStage::Implement),
+                        agents,
+                        ..
+                    } if agents.len() == 1
+                )
+            })
+            .unwrap();
+        let implement_summary = workflow_events
+            .iter()
+            .position(|update| {
+                matches!(
+                    update,
+                    wire::SessionUpdate::WorkflowEvent {
+                        event: wire::WorkflowEventKind::AgentOutput,
+                        detail: Some(detail),
+                        ..
+                    } if detail.contains("IMPL-DONE: implemented the change.")
+                )
+            })
+            .unwrap();
+        let first_review = workflow_events
+            .iter()
+            .position(|update| {
+                matches!(
+                    update,
+                    wire::SessionUpdate::WorkflowEvent {
+                        event: wire::WorkflowEventKind::StageStarted,
+                        stage: Some(wire::WorkflowStage::Review),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let finding = workflow_events
+            .iter()
+            .position(|update| {
+                matches!(
+                    update,
+                    wire::SessionUpdate::WorkflowEvent {
+                        event: wire::WorkflowEventKind::ReviewResult,
+                        detail: Some(detail),
+                        ..
+                    } if detail.contains("bug here")
+                )
+            })
+            .unwrap();
+        let fix_summary = workflow_events
+            .iter()
+            .position(|update| {
+                matches!(
+                    update,
+                    wire::SessionUpdate::WorkflowEvent {
+                        event: wire::WorkflowEventKind::AgentOutput,
+                        detail: Some(detail),
+                        ..
+                    } if detail.contains("FIX-DONE: addressed the findings.")
+                )
+            })
+            .unwrap();
+        assert!(implement_started < implement_summary);
+        assert!(implement_summary < first_review);
+        assert!(first_review < finding);
+        assert!(finding < fix_summary);
+        assert!(workflow_events.iter().any(|update| matches!(
+            update,
+            wire::SessionUpdate::WorkflowEvent {
+                event: wire::WorkflowEventKind::ReviewResult,
+                title,
+                ..
+            } if title.contains("approved")
+        )));
+        assert!(
+            snapshot
+                .tasks
+                .iter()
+                .filter(|task| task.parent_task_id.as_deref() == Some(&parent_id))
+                .all(|task| task.status == wire::TaskStatus::Done),
+            "consumed workflow stages should be terminal, not idle/needs-review"
+        );
     }
 
     #[tokio::test]
@@ -707,9 +809,17 @@ mod tests {
                 .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Question)
         })
         .await;
+        assert_eq!(waiting.status, TaskStatus::Idle);
         let question = waiting.workflow_run.unwrap().waiting.unwrap();
         assert_eq!(question.question.as_deref(), Some("Which database?"));
         assert_eq!(question.stage, Some(wire::WorkflowStage::Plan));
+        let asking_child = daemon
+            .tasks()
+            .await
+            .into_iter()
+            .find(|task| task.parent_task_id.as_deref() == Some(&parent_id))
+            .expect("asking plan stage");
+        assert_eq!(asking_child.status, TaskStatus::Idle);
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         daemon
@@ -750,13 +860,23 @@ mod tests {
         let mut events = daemon.subscribe();
         let parent_id = create_workflow_task(&daemon, &lead).await;
 
-        wait_for_parent(&mut events, &parent_id, "limit decision", |t| {
+        let waiting = wait_for_parent(&mut events, &parent_id, "limit decision", |t| {
             t.workflow_run
                 .as_ref()
                 .and_then(|w| w.waiting.as_ref())
                 .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Limit)
         })
         .await;
+        assert_eq!(waiting.status, TaskStatus::Idle);
+        assert!(
+            daemon
+                .tasks()
+                .await
+                .iter()
+                .filter(|task| task.parent_task_id.as_deref() == Some(&parent_id))
+                .all(|task| task.status == TaskStatus::Done),
+            "every stage has completed when the review-limit decision is shown"
+        );
 
         // A pause is invalid while waiting on a decision.
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -820,13 +940,14 @@ mod tests {
             .await;
         rx.await.unwrap().expect("pause accepted while running");
 
-        wait_for_parent(&mut events, &parent_id, "paused at barrier", |t| {
+        let paused = wait_for_parent(&mut events, &parent_id, "paused at barrier", |t| {
             t.workflow_run
                 .as_ref()
                 .and_then(|w| w.waiting.as_ref())
                 .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Paused)
         })
         .await;
+        assert_eq!(paused.status, TaskStatus::Idle);
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         daemon
@@ -845,6 +966,71 @@ mod tests {
         })
         .await;
         assert_eq!(done.status, TaskStatus::NeedsReview);
+    }
+
+    #[tokio::test]
+    async fn workflow_parent_cancel_stops_the_active_stage_before_acknowledging() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: Cancel flow\n");
+        let pid_path = dir.path().join("cancel.pid");
+        let lead = format!(
+            "echo $$ > {}; exec {}",
+            pid_path.display(),
+            wf_agent(&dir, "cancel.state", "slow-impl")
+        );
+        let daemon = Daemon::spawn(
+            projects,
+            Store::open_at(std::path::Path::new(":memory:")).ok(),
+        );
+        let parent_id = create_workflow_task(&daemon, &lead).await;
+
+        let pid = timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(pid) = std::fs::read_to_string(&pid_path) {
+                    let pid = pid.trim();
+                    if pid.parse::<u32>().is_ok() {
+                        break pid.to_string();
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("active stage should write its process id");
+
+        daemon
+            .cancel_task(&parent_id)
+            .await
+            .expect("workflow cancellation acknowledged");
+
+        let process_alive = tokio::process::Command::new("kill")
+            .args(["-0", &pid])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .is_ok_and(|status| status.success());
+        assert!(
+            !process_alive,
+            "task.cancel acknowledged before ACP process {pid} exited"
+        );
+
+        let tasks = daemon.tasks().await;
+        let parent = tasks.iter().find(|task| task.id == parent_id).unwrap();
+        assert_eq!(parent.status, TaskStatus::Interrupted);
+        assert_eq!(
+            parent.workflow_run.as_ref().map(|run| run.stage),
+            Some(wire::WorkflowStage::Failed)
+        );
+        let child = tasks
+            .iter()
+            .find(|task| task.parent_task_id.as_deref() == Some(&parent_id))
+            .expect("active workflow stage");
+        assert_eq!(child.status, TaskStatus::Interrupted);
+        assert_eq!(
+            parent.orchestration_graph.as_ref().unwrap().nodes[0].status,
+            wire::OrchNodeStatus::Skipped
+        );
     }
 
     /// A daemon restart mid-stage parks the pipeline at its last barrier as
@@ -889,7 +1075,7 @@ mod tests {
         })
         .await
         .expect("restored run should be paused at the implement barrier");
-        assert_eq!(restored.status, TaskStatus::Running);
+        assert_eq!(restored.status, TaskStatus::Idle);
         assert_eq!(
             restored.workflow_run.unwrap().stage,
             wire::WorkflowStage::Implement

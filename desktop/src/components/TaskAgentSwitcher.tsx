@@ -28,7 +28,26 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
   const members = useMemo(() => flattenTaskTree(tree), [tree]);
   const currentIndex = members.findIndex((member) => member.id === currentTaskId);
   const current = members[currentIndex] ?? tree.task;
-  const currentLabel = currentIndex === 0 ? "Lead" : agentDisplayName(current.agent);
+  const workflow = Boolean(tree.task.workflowRun);
+  const stageByTaskId = useMemo(
+    () => {
+      const result = new Map<string, string>();
+      for (const node of tree.task.orchestrationGraph?.nodes ?? []) {
+        if (node.taskId) result.set(node.taskId, node.id);
+      }
+      return result;
+    },
+    [tree.task.orchestrationGraph?.nodes],
+  );
+  const memberLabel = useCallback(
+    (member: (typeof members)[number], index: number) => {
+      if (index === 0) return workflow ? "Workflow" : "Lead";
+      const stage = stageByTaskId.get(member.id);
+      return stage ? `${stage} · ${agentDisplayName(member.agent)}` : agentDisplayName(member.agent);
+    },
+    [stageByTaskId, workflow],
+  );
+  const currentLabel = memberLabel(current, currentIndex);
   const handleSelect = useCallback(
     (id: string) => {
       if (id !== currentTaskId) onOpenTask(id);
@@ -48,12 +67,14 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
           className="flex h-7 shrink-0 items-center gap-1.5 rounded px-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
         >
           <Users className="size-3.5 text-primary" />
-          <span>Agents {members.length - 1}</span>
+          <span>{workflow ? "Stages" : "Agents"} {members.length - 1}</span>
           <span className="text-border">·</span>
           {currentIndex === 0 ? (
-            <span className="max-w-24 truncate text-foreground">Lead</span>
+            <span className="max-w-24 truncate text-foreground">
+              {workflow ? "Workflow" : "Lead"}
+            </span>
           ) : (
-            <AgentBadge agentId={current.agent} className="max-w-28 text-foreground" />
+            <span className="max-w-40 truncate text-foreground">{currentLabel}</span>
           )}
           <ChevronDown className="size-3 opacity-60" />
         </button>
@@ -61,7 +82,8 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
       <DropdownMenuContent align="end" className="w-72">
         {members.map((member, index) => {
           const selected = member.id === currentTaskId;
-          const label = index === 0 ? "Lead" : agentDisplayName(member.agent);
+          const label = memberLabel(member, index);
+          const stage = stageByTaskId.get(member.id);
           return (
             <DropdownMenuItem
               key={member.id}
@@ -72,9 +94,14 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-2">
                   {index === 0 ? (
-                    <span className="font-medium text-foreground">Lead</span>
+                    <span className="font-medium text-foreground">
+                      {workflow ? "Workflow" : "Lead"}
+                    </span>
                   ) : (
-                    <AgentBadge agentId={member.agent} className="font-medium text-foreground" />
+                    <>
+                      {stage && <span className="font-medium text-foreground">{stage}</span>}
+                      <AgentBadge agentId={member.agent} className="font-medium text-foreground" />
+                    </>
                   )}
                   <StatusBadge status={member.status} size="xs" />
                 </span>

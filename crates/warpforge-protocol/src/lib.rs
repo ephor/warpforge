@@ -843,6 +843,38 @@ pub struct SessionUsageCost {
     pub currency: String,
 }
 
+/// One agent session referenced by an inline workflow timeline event.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowEventAgent {
+    pub task_id: String,
+    pub label: String,
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowEventKind {
+    WorkflowStarted,
+    StageStarted,
+    AgentOutput,
+    ReviewResult,
+    Status,
+    WorkflowFinished,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowEventTone {
+    Info,
+    Running,
+    Success,
+    Warning,
+    Error,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionUpdate {
@@ -859,6 +891,20 @@ pub enum SessionUpdate {
     },
     AgentText {
         text: String,
+    },
+    /// A durable, independently rendered entry in a workflow parent's
+    /// Conversation timeline. Unlike streamed AgentText chunks these records
+    /// never coalesce, and agent references remain clickable after completion.
+    WorkflowEvent {
+        event: WorkflowEventKind,
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stage: Option<WorkflowStage>,
+        #[serde(default)]
+        agents: Vec<WorkflowEventAgent>,
+        tone: WorkflowEventTone,
     },
     AgentThought {
         text: String,
@@ -1557,6 +1603,7 @@ mod tests {
                 attachments: vec![],
                 default_model: Some("opus".into()),
                 config_overrides: Default::default(),
+                workflow: None,
             },
         };
         let json = serde_json::to_value(&req).unwrap();
@@ -1644,6 +1691,32 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<SessionUpdate>(value).unwrap(),
             detailed_file_edit
+        );
+    }
+
+    #[test]
+    fn workflow_event_keeps_agent_links_as_distinct_wire_records() {
+        let update = SessionUpdate::WorkflowEvent {
+            event: WorkflowEventKind::StageStarted,
+            title: "Implement started".into(),
+            detail: None,
+            stage: Some(WorkflowStage::Implement),
+            agents: vec![WorkflowEventAgent {
+                task_id: "t_impl".into(),
+                label: "implement".into(),
+                agent: "codex".into(),
+                model: Some("gpt-5.6-sol".into()),
+            }],
+            tone: WorkflowEventTone::Running,
+        };
+        let value = serde_json::to_value(&update).unwrap();
+        assert_eq!(value["kind"], "workflow_event");
+        assert_eq!(value["event"], "stage_started");
+        assert_eq!(value["stage"], "implement");
+        assert_eq!(value["agents"][0]["taskId"], "t_impl");
+        assert_eq!(
+            serde_json::from_value::<SessionUpdate>(value).unwrap(),
+            update
         );
     }
 

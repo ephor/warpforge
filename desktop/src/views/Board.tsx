@@ -27,7 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { stageLabel } from "@/components/WorkflowControls";
+import { workflowStageLabel } from "@/lib/workflow";
 import { elapsed } from "@/lib/status";
 import type { BoardLifecycleFilter, TaskTree } from "@/lib/taskGroups";
 import {
@@ -729,7 +729,7 @@ function WorkflowBadge({ task }: { task: TaskInfo }) {
         ? "needs answer"
         : waiting?.kind === "paused"
           ? "paused"
-          : stageLabel(run.stage);
+          : workflowStageLabel(run.stage);
   return (
     <span
       title={`${run.workflowName}${run.round > 0 ? ` — round ${run.round}/${run.maxRounds}` : ""}`}
