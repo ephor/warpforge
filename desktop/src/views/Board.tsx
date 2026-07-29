@@ -7,6 +7,7 @@ import {
   ChevronRight,
   GitBranch,
   Plus,
+  Route,
   Workflow,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -26,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { stageLabel } from "@/components/WorkflowControls";
 import { elapsed } from "@/lib/status";
 import type { BoardLifecycleFilter, TaskTree } from "@/lib/taskGroups";
 import {
@@ -562,6 +564,7 @@ function TaskCard({
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <StatusBadge status={task.status} size="xs" />
             <LifecycleBadge task={task} nowSeconds={nowSeconds} />
+            <WorkflowBadge task={task} />
             <span className="min-w-0 truncate font-semibold text-foreground">{task.project}</span>
             {task.worktree && <GitBranch className="size-3 shrink-0 text-primary" />}
             <div
@@ -705,6 +708,45 @@ function LifecycleBadge({ task, nowSeconds }: { task: TaskInfo; nowSeconds: numb
     <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
       <CheckCheck className="size-2.5" />
       Handled
+    </span>
+  );
+}
+
+/**
+ * Pipeline stage pill for workflow parent tasks. Amber while the pipeline
+ * waits on the user (a question or an exhausted review limit), muted
+ * otherwise — the surrounding StatusBadge already carries run/done state.
+ */
+function WorkflowBadge({ task }: { task: TaskInfo }) {
+  const run = task.workflowRun;
+  if (!run || run.stage === "done" || run.stage === "failed") return null;
+  const waiting = run.waiting ?? null;
+  const needsUser = !!waiting && waiting.kind !== "paused";
+  const label =
+    waiting?.kind === "limit"
+      ? "review limit"
+      : waiting?.kind === "question"
+        ? "needs answer"
+        : waiting?.kind === "paused"
+          ? "paused"
+          : stageLabel(run.stage);
+  return (
+    <span
+      title={`${run.workflowName}${run.round > 0 ? ` — round ${run.round}/${run.maxRounds}` : ""}`}
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+        needsUser
+          ? "bg-amber-500/12 text-amber-600 dark:text-amber-400"
+          : "bg-primary/10 text-primary",
+      )}
+    >
+      <Route className="size-2.5" />
+      {label}
+      {run.round > 0 && !needsUser && (
+        <span className="tnum opacity-70">
+          {run.round}/{run.maxRounds}
+        </span>
+      )}
     </span>
   );
 }

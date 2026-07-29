@@ -53,6 +53,20 @@ describe("taskStatusRank", () => {
   });
 });
 
+function waitingRun(
+  kind: "question" | "limit" | "paused",
+  question?: string,
+): NonNullable<TaskInfo["workflowRun"]> {
+  return {
+    maxRounds: 2,
+    round: 1,
+    stage: "review",
+    waiting: { kind, question },
+    workflowId: "wf",
+    workflowName: "Review loop",
+  };
+}
+
 describe("buildAttentionQueue", () => {
   it("orders permission > review > blocked > interrupted", () => {
     const tasks = [
@@ -85,6 +99,46 @@ describe("buildAttentionQueue", () => {
 
   it("returns an empty array for empty input", () => {
     expect(buildAttentionQueue([], {})).toStrictEqual([]);
+  });
+});
+
+describe("buildAttentionQueue — workflow pipelines", () => {
+  it("queues a pipeline waiting on a question, using the question as the reason", () => {
+    const t = task("wf", { status: "running", workflowRun: waitingRun("question", "Which db?") });
+    const [item] = buildAttentionQueue([t], {});
+    expect(item.reason).toBe("Which db?");
+    expect(item.task.id).toBe("wf");
+  });
+
+  it("queues an exhausted review limit with its findings summary", () => {
+    const t = task("wf", {
+      status: "running",
+      workflowRun: waitingRun("limit", "open findings: 2 high"),
+    });
+    const [item] = buildAttentionQueue([t], {});
+    expect(item.reason).toBe("review limit reached — open findings: 2 high");
+  });
+
+  it("leaves a user-initiated pause out of the queue", () => {
+    const t = task("wf", { status: "running", workflowRun: waitingRun("paused") });
+    expect(buildAttentionQueue([t], {})).toEqual([]);
+  });
+
+  it("ranks a waiting pipeline under a permission but above needs_review", () => {
+    const tasks = [
+      task("review", { status: "needs_review" }),
+      task("wf", { status: "running", workflowRun: waitingRun("question", "?") }),
+      task("perm", { status: "running" }),
+    ];
+    const queue = buildAttentionQueue(tasks, { perm: [permUpdate()] });
+    expect(queue.map((i) => i.task.id)).toEqual(["perm", "wf", "review"]);
+  });
+
+  it("still reports a pending permission on a workflow stage child", () => {
+    const t = task("wf", { status: "running", workflowRun: waitingRun("question", "?") });
+    const [item] = buildAttentionQueue([t], { wf: [permUpdate("p", "Write file?")] });
+    expect(item.reason).toBe("Write file?");
+    expect(item.permission).toBeDefined();
   });
 });
 
