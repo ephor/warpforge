@@ -1,0 +1,17 @@
+# Built-in workflow: plan → implement → review ⇄ fix.
+#
+# Copy this file into <project>/.warpforge/workflows/ (or use "Copy to
+# project" in the New Task dialog) to customize it. Every key except `name`
+# is optional — omitted stages fall back to the lead agent picked in the
+# dialog and to the built-in stage prompts.
+version: 1
+name: Plan + review loop
+description: Plan first, then implement and loop reviews and fixes until approved.
+
+plan: {} # presence of this key enables the planning stage (a bare `plan:` works too)
+#   agent: claude
+#   model: claude-opus-5
+
+review:
+  max_rounds: 2 # review ⇄ fix iterations before asking you what to do
+  on_limit: ask # ask | finish — behaviour when the limit is hit
