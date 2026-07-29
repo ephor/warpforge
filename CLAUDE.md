@@ -12,7 +12,7 @@ Workspace orchestrator with TUI and desktop interfaces. Manages multiple dev pro
 - **PTY:** `portable-pty` — real TTY for spawned agents
 - **Terminal emulation:** `vt100` crate — parses ANSI into screen buffer
 - **CLI:** `clap` derive API
-- **Config:** `.workspace.yaml` per project (serde_yaml), registry in `~/.warpforge/projects.json`
+- **Config:** `.warpforge/workspace.yaml` per project (serde_yaml; legacy root-level `.warpforge.yaml` / `.wf.yaml` / `.workspace.yaml` still load), registry in `~/.warpforge/projects.json`
 - **Port isolation:** each project gets 100-port range (4000+), `${svc.port}` interpolation in env vars
 - **Daemon IPC:** WebSocket JSON-RPC (port 61814)
 
@@ -40,7 +40,8 @@ main.rs          — CLI entry (clap), subcommands: add, remove, list, ui
 app.rs           — TUI event loop (tokio::select), AppState, InputMode (Navigate/Terminal), key handling
 agent.rs         — AgentManager: PTY spawn via portable-pty, vt100 parser, input/output channels
 service.rs       — ServiceManager: sh -c spawn, stdout/stderr log capture, process-group kill, port allocation
-config.rs        — .workspace.yaml parsing + auto-detect (package.json scripts, docker-compose)
+config.rs        — workspace config parsing + auto-detect (package.json scripts, docker-compose)
+workflow_config.rs — .warpforge/workflows/*.yaml templates: schema, validation, prompt rendering
 registry.rs      — ~/.warpforge/projects.json CRUD
 ports.rs         — Port range allocation (4000+), ${svc.port} env interpolation
 tui/
@@ -54,6 +55,9 @@ tui/
 - WebSocket server (port 61814) that desktop/TUI connect to
 - Manages agents, services, port-forwards, tasks, git operations
 - Key files: server.rs, actor.rs, task.rs, agents.rs, diff.rs
+- **workflow.rs** — deterministic workflow pipeline: run state, stage prompts,
+  agent protocols. Actor glue is the workflow block at the end of actor.rs.
+  Templates are parsed by `src/workflow_config.rs`; see `docs/adr/0001`.
 
 **Desktop source (`desktop/src/`):**
 ```
@@ -112,6 +116,10 @@ lib/                  — Utilities (38 files: sessionActivity, sessionTiming, e
 - **Agent setup:** detect/install agents (Claude, Codex), bootstrap wizard
 - **UI state:** Zustand store with localStorage persistence (panels, toggles, view)
 - **Orchestration:** planner → workers → reviewers pipeline (daemon-driven)
+- **Workflows:** pick a configured pipeline (`.warpforge/workflows/*.yaml`) in
+  New Task; the daemon runs `plan? → implement → review ⇄ fix` as child tasks,
+  asks you at barriers (stage question, review limit), and supports
+  pause/resume. See `docs/adr/0001-workflow-pipelines.md` before changing it.
 
 ### Known Issues / TODO
 
@@ -122,6 +130,11 @@ lib/                  — Utilities (38 files: sessionActivity, sessionTiming, e
 - No state persistence between separate warpforge processes
 
 ### Key Design Decisions
+
+**Read `docs/adr/` before changing a subsystem it covers.** Those records hold
+the rejected alternatives and the invariants that are not visible in the code —
+each entry's *Invariants* section lists mistakes already made once. Add a new
+numbered record when you make a decision a future reader could not infer.
 
 - **Ratatui + vt100** for terminal-in-terminal: native cell-by-cell rendering with zero translation layer. Previous TypeScript/OpenTUI attempt couldn't render ANSI properly.
 - **vt100 + TerminalPane:** Agent PTY output → `vt100::Parser::process()` → `Screen` → iterate cells with colors/attributes → write directly to ratatui `Buffer`. Cursor rendered via `Modifier::REVERSED`.
