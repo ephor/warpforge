@@ -418,7 +418,32 @@ async fn dispatch(
             attachments,
             default_model,
             config_overrides,
+            workflow,
         } => {
+            if let Some(workflow) = workflow {
+                let (tx, rx) = oneshot::channel();
+                handle
+                    .send(Command::CreateWorkflowTask {
+                        project,
+                        prompt,
+                        agent,
+                        tags,
+                        worktree,
+                        workflow,
+                        attachments,
+                        default_model,
+                        reply: tx,
+                    })
+                    .await;
+                let id = rx
+                    .await
+                    .unwrap_or_else(|_| Err("daemon closed".into()))
+                    .map_err(|e| wire::RpcError {
+                        code: wire::ErrorCode::InvalidRequest,
+                        message: e,
+                    })?;
+                return Ok(json!({ "taskId": id }));
+            }
             let id = handle
                 .create_task(
                     &project,
@@ -850,6 +875,40 @@ async fn dispatch(
                 })?;
             Ok(json!({ "path": target.to_string_lossy() }))
         }
+        WorkflowPause { task } => {
+            workflow_control(handle, |reply| Command::WorkflowPause { task, reply }).await
+        }
+        WorkflowResume { task, note } => {
+            workflow_control(handle, |reply| Command::WorkflowResume {
+                task,
+                note,
+                reply,
+            })
+            .await
+        }
+        WorkflowReply { task, message } => {
+            workflow_control(handle, |reply| Command::WorkflowReply {
+                task,
+                message,
+                reply,
+            })
+            .await
+        }
+        WorkflowDecide {
+            task,
+            decision,
+            rounds,
+            note,
+        } => {
+            workflow_control(handle, |reply| Command::WorkflowDecide {
+                task,
+                decision,
+                rounds,
+                note,
+                reply,
+            })
+            .await
+        }
         ProjectAdd { path, name } => {
             let entry = handle
                 .add_project(&path, name.as_deref())
@@ -949,6 +1008,24 @@ fn validate_issues(yaml: &str) -> Vec<serde_json::Value> {
             .collect(),
         Err(e) => vec![json!({ "severity": "error", "message": e })],
     }
+}
+
+/// Send a workflow control command and map its `Result<(), String>` reply to
+/// an RPC response (`null` on success, `InvalidRequest` with the reason
+/// otherwise — e.g. the pipeline is not in the state the control expects).
+async fn workflow_control(
+    handle: &DaemonHandle,
+    build: impl FnOnce(oneshot::Sender<Result<(), String>>) -> Command,
+) -> Result<serde_json::Value, wire::RpcError> {
+    let (tx, rx) = oneshot::channel();
+    handle.send(build(tx)).await;
+    rx.await
+        .unwrap_or_else(|_| Err("daemon closed".into()))
+        .map_err(|e| wire::RpcError {
+            code: wire::ErrorCode::InvalidRequest,
+            message: e,
+        })?;
+    Ok(json!(null))
 }
 
 /// Wire form of one workflow definition for the New Task picker.

@@ -35,6 +35,9 @@ use super::acp::{spawn_acp_session, AcpHandle, AcpUpdate, PolicyCheck};
 use super::store::Store;
 use super::task::{Task, TaskStatus};
 use super::wire as wireconv;
+use super::workflow::{
+    self, RunState, StageKind, StageSignal, Verdict, WorkflowOutcome, WorkflowRun,
+};
 use super::worktree::WorktreeManager;
 use crate::policies::builtins::{BlastRadiusPolicy, SpawnBoundsPolicy};
 use crate::policies::registry::PolicyRegistry;
@@ -568,6 +571,45 @@ pub enum Command {
         /// config-option id; applied via `session/setConfigOption` after model.
         config_overrides: std::collections::HashMap<String, String>,
         reply: oneshot::Sender<String>,
+    },
+    /// Create a workflow-pipeline parent task and start its first stage.
+    /// Unlike `CreateTask` the parent gets no agent session of its own — the
+    /// daemon drives stages as child tasks.
+    CreateWorkflowTask {
+        project: String,
+        prompt: String,
+        agent: String,
+        tags: Vec<String>,
+        worktree: bool,
+        workflow: String,
+        attachments: Vec<wire::PromptAttachment>,
+        default_model: Option<String>,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
+    /// Soft-pause a workflow pipeline at its next stage barrier.
+    WorkflowPause {
+        task: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Resume a paused workflow pipeline.
+    WorkflowResume {
+        task: String,
+        note: Option<String>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Answer a workflow stage's pending `need_user_input` question.
+    WorkflowReply {
+        task: String,
+        message: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Decide what an out-of-rounds workflow pipeline does next.
+    WorkflowDecide {
+        task: String,
+        decision: wire::WorkflowDecision,
+        rounds: Option<u32>,
+        note: Option<String>,
+        reply: oneshot::Sender<Result<(), String>>,
     },
     /// Drain an orchestrator task's inbox of finished sub-agent results.
     ReadInbox {
@@ -1495,6 +1537,9 @@ pub struct Daemon {
     pending_wake: std::collections::HashSet<String>,
     /// Stable first-seen timestamps for streamed frames of the same tool call.
     tool_call_starts: HashMap<(String, String), u64>,
+    /// Deterministic workflow pipelines keyed by parent task id. Finished runs
+    /// stay in the map so their state remains visible on the board.
+    workflow_runs: HashMap<String, WorkflowRun>,
 }
 
 impl Daemon {
@@ -1596,6 +1641,7 @@ impl Daemon {
             orchestrator_inbox: HashMap::new(),
             pending_wake: std::collections::HashSet::new(),
             tool_call_starts,
+            workflow_runs: HashMap::new(),
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -1629,6 +1675,9 @@ impl Daemon {
         let mut daemon = daemon;
         daemon.orch_tx = Some(orch_cmd_tx);
         daemon.orch_event_rx = None; // receiver moved to forwarder task
+                                     // Bring persisted workflow pipelines back: barrier states as-is,
+                                     // mid-stage runs paused at their last barrier.
+        daemon.restore_workflow_runs();
 
         tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx, acp_rx, policy_rx));
 
@@ -1893,7 +1942,7 @@ impl Daemon {
                 Some(ev) = agent_rx.recv() => self.handle_agent_event(ev),
                 Some(ev) = service_rx.recv() => self.handle_service_event(ev),
                 Some(ev) = pf_rx.recv() => self.handle_pf_event(ev),
-                Some((task_id, update)) = acp_rx.recv() => self.handle_acp_update(task_id, update),
+                Some((task_id, update)) = acp_rx.recv() => self.handle_acp_update(task_id, update).await,
                 Some(check) = policy_rx.recv() => self.handle_policy_check(check).await,
                 _ = config_poll.tick() => self.handle_config_changes().await,
             }
@@ -2363,6 +2412,53 @@ impl Daemon {
                     config_overrides,
                 );
             }
+            Command::CreateWorkflowTask {
+                project,
+                prompt,
+                agent,
+                tags,
+                worktree,
+                workflow,
+                attachments,
+                default_model,
+                reply,
+            } => {
+                let result = self
+                    .workflow_create(
+                        project,
+                        prompt,
+                        agent,
+                        tags,
+                        worktree,
+                        workflow,
+                        attachments,
+                        default_model,
+                    )
+                    .await;
+                let _ = reply.send(result);
+            }
+            Command::WorkflowPause { task, reply } => {
+                let _ = reply.send(self.workflow_pause(&task));
+            }
+            Command::WorkflowResume { task, note, reply } => {
+                let _ = reply.send(self.workflow_resume(&task, note).await);
+            }
+            Command::WorkflowReply {
+                task,
+                message,
+                reply,
+            } => {
+                let _ = reply.send(self.workflow_reply(&task, message).await);
+            }
+            Command::WorkflowDecide {
+                task,
+                decision,
+                rounds,
+                note,
+                reply,
+            } => {
+                let _ = reply.send(self.workflow_decide(&task, decision, rounds, note).await);
+            }
             Command::ReadInbox {
                 parent_task_id,
                 reply,
@@ -2682,18 +2778,30 @@ impl Daemon {
                 }
             }
             Command::CancelTask { id } => {
-                if let Some(handle) = self.sessions.remove(&id) {
-                    handle.cancel();
-                }
-                self.pending_permissions.cleanup_task(&id);
-                if let Some(task) = self.tasks.get_mut(&id) {
-                    task.set_status(TaskStatus::Idle);
-                    let updated = task.clone();
-                    self.persist(&updated);
-                    self.emit(Event::TaskUpdated(updated));
+                if self.workflow_is_active(&id) {
+                    // Stopping a workflow parent stops the whole pipeline.
+                    self.workflow_finalize(&id, WorkflowOutcome::Stopped).await;
+                } else {
+                    if let Some(handle) = self.sessions.remove(&id) {
+                        handle.cancel();
+                    }
+                    self.pending_permissions.cleanup_task(&id);
+                    if let Some(task) = self.tasks.get_mut(&id) {
+                        task.set_status(TaskStatus::Idle);
+                        let updated = task.clone();
+                        self.persist(&updated);
+                        self.emit(Event::TaskUpdated(updated));
+                    }
+                    // Cancelling a stage child mid-run fails that stage.
+                    self.workflow_child_gone(&id).await;
                 }
             }
             Command::ArchiveTask { id } => {
+                // Archiving a live workflow parent stops the pipeline first so
+                // no orphaned stage sessions keep running behind a Done task.
+                if self.workflow_is_active(&id) {
+                    self.workflow_finalize(&id, WorkflowOutcome::Stopped).await;
+                }
                 // Collect children that reference this task as parent so we
                 // can archive them together with the leader.
                 let child_ids: Vec<String> = self
@@ -2722,6 +2830,14 @@ impl Daemon {
                 }
             }
             Command::DeleteTask { id } => {
+                if self.workflow_is_active(&id) {
+                    self.workflow_finalize(&id, WorkflowOutcome::Stopped).await;
+                }
+                if self.workflow_runs.remove(&id).is_some() {
+                    if let Some(store) = &self.store {
+                        let _ = store.delete_workflow_run(&id);
+                    }
+                }
                 if let Some(handle) = self.sessions.remove(&id) {
                     handle.cancel();
                 }
@@ -2742,7 +2858,9 @@ impl Daemon {
                     if let Some(store) = &self.store {
                         let _ = store.delete_task(&id);
                     }
-                    self.emit(Event::TaskRemoved { id });
+                    self.emit(Event::TaskRemoved { id: id.clone() });
+                    // Deleting a stage child mid-run fails that stage.
+                    self.workflow_child_gone(&id).await;
                 }
             }
             Command::SetTaskTitle { id, title } => {
@@ -3662,7 +3780,7 @@ impl Daemon {
         }
     }
 
-    fn handle_acp_update(&mut self, task_id: String, update: AcpUpdate) {
+    async fn handle_acp_update(&mut self, task_id: String, update: AcpUpdate) {
         match update {
             AcpUpdate::SessionStarted { session_id } => {
                 if let Some(task) = self.tasks.get_mut(&task_id) {
@@ -3800,9 +3918,19 @@ impl Daemon {
                 }
                 let output = self.collect_agent_text(&task_id);
                 self.notify_orch_finished(&task_id, success, output.clone());
-                // Deliver to a parent if this was a sub-agent; and drain our own
-                // inbox if we are a parent that just went idle.
-                self.deliver_child_result(&task_id, success, output);
+                if self.workflow_child_of(&task_id).is_some() {
+                    // A workflow stage finished — advance the pipeline. Parse
+                    // only the latest turn's text: answered questions and
+                    // superseded verdicts from earlier turns must not count.
+                    // The legacy orchestrator inbox path does not apply here.
+                    let last_turn = self.collect_last_turn_text(&task_id);
+                    self.workflow_stage_finished(&task_id, success, last_turn)
+                        .await;
+                } else {
+                    // Deliver to a parent if this was a sub-agent; and drain our
+                    // own inbox if we are a parent that just went idle.
+                    self.deliver_child_result(&task_id, success, output);
+                }
                 // If we are an orchestrator whose sub-agents finished mid-turn,
                 // process them now that the turn is over.
                 if self.pending_wake.remove(&task_id) {
@@ -3829,7 +3957,11 @@ impl Daemon {
                     self.emit(Event::TaskUpdated(updated));
                 }
                 self.notify_orch_finished(&task_id, false, reason.clone());
-                self.deliver_child_result(&task_id, false, reason);
+                if self.workflow_child_of(&task_id).is_some() {
+                    self.workflow_stage_finished(&task_id, false, reason).await;
+                } else {
+                    self.deliver_child_result(&task_id, false, reason);
+                }
             }
         }
     }
@@ -3926,6 +4058,29 @@ impl Daemon {
             })
             .collect::<Vec<_>>()
             .join("")
+    }
+
+    /// Like [`collect_agent_text`], but only the text streamed since the last
+    /// user message — i.e. the output of the task's latest turn. The workflow
+    /// engine parses this: a `need_user_input` block answered two turns ago
+    /// must not be mistaken for a fresh question.
+    fn collect_last_turn_text(&self, task_id: &str) -> String {
+        let Some(updates) = self
+            .store
+            .as_ref()
+            .and_then(|s| s.load_session_updates(task_id).ok())
+        else {
+            return String::new();
+        };
+        let mut texts: Vec<String> = Vec::new();
+        for update in updates {
+            match update {
+                wire::SessionUpdate::UserMessage { .. } => texts.clear(),
+                wire::SessionUpdate::AgentText { text } => texts.push(text),
+                _ => {}
+            }
+        }
+        texts.join("")
     }
 
     /// Tell the orchestrator a dispatched task finished. No-op unless the task
@@ -4142,6 +4297,955 @@ impl Daemon {
     async fn handle_policy_check(&mut self, check: PolicyCheck) {
         let result = self.policies.evaluate_all(&check.ctx).await;
         let _ = check.reply.send(result);
+    }
+}
+
+// ─── Workflow pipeline engine (actor glue) ───────────────────────────────────
+//
+// The deterministic `plan? → implement → review ⇄ fix` pipeline. Pure logic
+// (state container, prompt building, verdict parsing, review merging) lives in
+// `daemon/workflow.rs`; these methods are the side-effectful glue: they spawn
+// stage child tasks, react to their turn ends, and narrate progress into the
+// parent task's transcript.
+//
+// Borrow discipline: methods that mutate a run *and* call `&mut self` helpers
+// temporarily remove the run from `workflow_runs` and re-insert it (the
+// take/put pattern). Every exit path must re-insert.
+impl Daemon {
+    fn workflow_is_active(&self, task_id: &str) -> bool {
+        self.workflow_runs
+            .get(task_id)
+            .is_some_and(WorkflowRun::is_active)
+    }
+
+    /// The parent task id of an *active* pipeline this child belongs to.
+    /// Searches the runs (not the tasks map) so it also works for tasks that
+    /// were just removed.
+    fn workflow_child_of(&self, child_id: &str) -> Option<String> {
+        self.workflow_runs
+            .values()
+            .find(|run| {
+                run.is_active()
+                    && (run.active_children.contains_key(child_id)
+                        || run.review_pending.contains_key(child_id))
+            })
+            .map(|run| run.parent_id.clone())
+    }
+
+    /// Append a narration line to the parent's transcript. The parent has no
+    /// agent session — these synthetic entries *are* its timeline.
+    fn workflow_timeline(&self, parent_id: &str, text: impl Into<String>) {
+        self.emit_session(
+            parent_id,
+            wire::SessionUpdate::AgentText { text: text.into() },
+        );
+    }
+
+    /// Sync the parent task's `workflow_run` + `orchestration_graph`
+    /// projections from the run, persist, and broadcast; also persist the run.
+    fn workflow_sync(&mut self, run: &WorkflowRun) {
+        if let Some(task) = self.tasks.get_mut(&run.parent_id) {
+            task.workflow_run = Some(run.wire_info());
+            task.orchestration_graph = Some(run.graph_info());
+            task.updated_at = super::task::now_secs();
+            let updated = task.clone();
+            self.persist(&updated);
+            self.emit(Event::TaskUpdated(updated));
+        }
+        if let Some(store) = &self.store {
+            if let Ok(json) = serde_json::to_string(run) {
+                let _ = store.save_workflow_run(&run.parent_id, &json);
+            }
+        }
+    }
+
+    /// `CreateWorkflowTask`: validate the workflow, create the parent task
+    /// (without an agent session), and start the first stage.
+    #[allow(clippy::too_many_arguments)]
+    async fn workflow_create(
+        &mut self,
+        project: String,
+        prompt: String,
+        agent: String,
+        tags: Vec<String>,
+        use_worktree: bool,
+        workflow_id: String,
+        attachments: Vec<wire::PromptAttachment>,
+        default_model: Option<String>,
+    ) -> Result<String, String> {
+        let path = self
+            .project_path(&project)
+            .ok_or_else(|| format!("unknown project '{project}'"))?;
+        let loaded =
+            crate::workflow_config::load_workflow(std::path::Path::new(&path), &workflow_id)
+                .ok_or_else(|| format!("unknown workflow `{workflow_id}`"))?;
+        let spec = loaded
+            .spec
+            .map_err(|e| format!("workflow `{workflow_id}` is invalid: {e}"))?;
+
+        let mut tags = tags;
+        tags.push(format!("workflow:{workflow_id}"));
+        let mut task = Task::new(&project, &prompt, &agent, tags);
+        if use_worktree {
+            let wt_mgr = self
+                .worktrees
+                .entry(project.clone())
+                .or_insert_with(|| WorktreeManager::new(std::path::PathBuf::from(&path)));
+            match wt_mgr.create(&task.id, None).await {
+                Ok(wt) => task.worktree = Some(wt.path.to_string_lossy().to_string()),
+                Err(e) => eprintln!("[daemon] worktree creation failed: {e}"),
+            }
+        }
+        // The parent is "running" for the whole life of the pipeline.
+        task.set_status(TaskStatus::Running);
+        let resolved_model = default_model.or_else(|| {
+            self.configured_agents
+                .iter()
+                .find(|a| a.id == agent)
+                .and_then(|a| a.last_model.clone())
+        });
+        let parent_id = task.id.clone();
+        self.tasks.insert(parent_id.clone(), task.clone());
+        self.persist(&task);
+        self.emit(Event::TaskCreated(task));
+
+        let run = WorkflowRun::new(
+            parent_id.clone(),
+            project,
+            spec,
+            agent,
+            resolved_model,
+            attachments,
+        );
+        self.workflow_timeline(
+            &parent_id,
+            format!(
+                "Workflow **{}** started (stages: {}; up to {} review rounds).",
+                run.spec.name,
+                run.spec.stage_summary().join(" → "),
+                run.effective_max_rounds(),
+            ),
+        );
+        let first = run.first_stage();
+        self.workflow_runs.insert(parent_id.clone(), run);
+        self.workflow_spawn_stage(&parent_id, first).await;
+        Ok(parent_id)
+    }
+
+    /// Spawn the child task(s) for a stage and mark the run as running it.
+    async fn workflow_spawn_stage(&mut self, parent_id: &str, stage: StageKind) {
+        let Some(mut run) = self.workflow_runs.remove(parent_id) else {
+            return;
+        };
+        let Some(parent) = self.tasks.get(parent_id) else {
+            self.workflow_runs.insert(parent_id.to_string(), run);
+            return;
+        };
+        let parent_prompt = parent.prompt.clone();
+        let parent_title = parent.title.clone();
+        let worktree = parent.worktree.clone();
+        let project = run.project.clone();
+
+        if stage == StageKind::Review {
+            run.round += 1;
+        }
+        let guidance = match stage {
+            StageKind::Review => None,
+            _ => run.take_guidance(),
+        };
+        // Review and fix stages see the current working-copy diff.
+        let diff = match stage {
+            StageKind::Review | StageKind::Fix => {
+                let dir = worktree.clone().or_else(|| self.project_path(&project));
+                match dir {
+                    Some(dir) => match super::diff::working_diff(&dir).await {
+                        Ok(files) => Some(workflow::format_diff(&files)),
+                        Err(e) => Some(format!("(diff unavailable: {e})")),
+                    },
+                    None => None,
+                }
+            }
+            _ => None,
+        };
+        let ctx = workflow::PromptCtx {
+            task_prompt: parent_prompt,
+            plan: run.plan_output.clone(),
+            implementer_summary: run.last_summary.as_deref().map(workflow::clip_summary),
+            diff,
+            findings: match stage {
+                StageKind::Fix => Some(workflow::format_findings(&run.open_findings)),
+                _ => None,
+            },
+            round: run.round,
+            max_rounds: run.effective_max_rounds(),
+            guidance,
+        };
+        // The dialog's attachments ride along with the very first stage only.
+        let attachments = if run.history.is_empty() {
+            std::mem::take(&mut run.attachments)
+        } else {
+            Vec::new()
+        };
+
+        run.state = RunState::Running { stage };
+        match stage {
+            StageKind::Review => {
+                run.review_pending.clear();
+                run.review_collected.clear();
+                run.reasked.clear();
+                let round_label = format!("round {}/{}", run.round, run.effective_max_rounds());
+                for index in 0..run.spec.review.reviewers.len() {
+                    let (agent, model) = run.stage_agent(stage, Some(index));
+                    let prompt = workflow::build_reviewer_prompt(&run.spec, index, &ctx);
+                    let label = run.reviewer_label(index);
+                    let child_id = self.workflow_spawn_child(
+                        &run.project,
+                        parent_id,
+                        &agent,
+                        model,
+                        prompt,
+                        worktree.clone(),
+                        format!("review · {parent_title}"),
+                        Vec::new(),
+                    );
+                    run.review_pending.insert(child_id.clone(), index);
+                    run.active_children.insert(child_id.clone(), stage);
+                    run.record_stage(stage, &child_id, &agent, format!("{label}, {round_label}"));
+                }
+                self.workflow_timeline(
+                    parent_id,
+                    format!(
+                        "Review {round_label} started — {} reviewer(s) running.",
+                        run.review_pending.len()
+                    ),
+                );
+            }
+            _ => {
+                let (agent, model) = run.stage_agent(stage, None);
+                let prompt = match stage {
+                    StageKind::Plan => workflow::build_plan_prompt(&run.spec, &ctx),
+                    StageKind::Implement => workflow::build_implement_prompt(&run.spec, &ctx),
+                    StageKind::Fix => workflow::build_fix_prompt(&run.spec, &ctx),
+                    StageKind::Review => unreachable!(),
+                };
+                let child_id = self.workflow_spawn_child(
+                    &run.project,
+                    parent_id,
+                    &agent,
+                    model.clone(),
+                    prompt,
+                    worktree.clone(),
+                    format!("{} · {parent_title}", stage.label()),
+                    attachments,
+                );
+                run.active_children.insert(child_id.clone(), stage);
+                let label = match stage {
+                    StageKind::Fix => format!("{} (round {})", stage.label(), run.round),
+                    _ => stage.label().to_string(),
+                };
+                run.record_stage(stage, &child_id, &agent, label);
+                self.workflow_timeline(
+                    parent_id,
+                    format!(
+                        "Stage **{}** started — {agent}{}.",
+                        stage.label(),
+                        model.map(|m| format!(" ({m})")).unwrap_or_default()
+                    ),
+                );
+            }
+        }
+        self.workflow_sync(&run);
+        self.workflow_runs.insert(parent_id.to_string(), run);
+    }
+
+    /// Create and start one stage child task. Children run in the parent's
+    /// directory (its worktree when isolated) but are NOT registered in the
+    /// worktree manager — the parent owns the worktree's lifecycle.
+    #[allow(clippy::too_many_arguments)]
+    fn workflow_spawn_child(
+        &mut self,
+        project: &str,
+        parent_id: &str,
+        agent: &str,
+        model: Option<String>,
+        prompt: String,
+        worktree: Option<String>,
+        title: String,
+        attachments: Vec<wire::PromptAttachment>,
+    ) -> String {
+        let mut task = Task::new(project, &prompt, agent, vec!["workflow-stage".to_string()]);
+        task.parent_task_id = Some(parent_id.to_string());
+        task.worktree = worktree;
+        task.title = title;
+        let child_id = task.id.clone();
+        self.tasks.insert(child_id.clone(), task.clone());
+        self.persist(&task);
+        self.emit(Event::TaskCreated(task));
+        self.start_session(
+            &child_id,
+            project,
+            agent,
+            &prompt,
+            false,
+            None,
+            attachments,
+            model,
+            HashMap::new(),
+        );
+        child_id
+    }
+
+    /// A stage child's turn ended (or its session died). Advance the pipeline.
+    async fn workflow_stage_finished(&mut self, child_id: &str, success: bool, output: String) {
+        let Some(parent_id) = self.workflow_child_of(child_id) else {
+            return;
+        };
+        let Some(mut run) = self.workflow_runs.remove(&parent_id) else {
+            return;
+        };
+        let stage = match run.active_children.get(child_id) {
+            Some(stage) => *stage,
+            None => {
+                self.workflow_runs.insert(parent_id.clone(), run);
+                return;
+            }
+        };
+        // Only a running stage advances the pipeline: a turn that ends while
+        // we await a reply is the answered child continuing, handled below.
+        let running_stage = matches!(run.state, RunState::Running { stage: s } if s == stage);
+        let awaiting_this_child =
+            matches!(&run.state, RunState::AwaitingReply { child, .. } if child == child_id);
+        if !running_stage && !awaiting_this_child {
+            self.workflow_runs.insert(parent_id.clone(), run);
+            return;
+        }
+
+        if !success {
+            self.workflow_child_failed(&parent_id, run, child_id, stage)
+                .await;
+            return;
+        }
+
+        match stage {
+            StageKind::Review => {
+                self.workflow_review_finished(&parent_id, run, child_id, output)
+                    .await;
+            }
+            StageKind::Plan | StageKind::Implement | StageKind::Fix => {
+                match workflow::parse_stage_signal(&output) {
+                    StageSignal::Question(question) => {
+                        run.state = RunState::AwaitingReply {
+                            stage,
+                            child: child_id.to_string(),
+                            question: question.clone(),
+                        };
+                        self.workflow_timeline(
+                            &parent_id,
+                            format!(
+                                "Stage **{}** needs your input:\n\n> {question}\n\nAnswer in this chat to continue.",
+                                stage.label()
+                            ),
+                        );
+                        self.workflow_sync(&run);
+                        self.workflow_runs.insert(parent_id.clone(), run);
+                    }
+                    StageSignal::Output => {
+                        run.active_children.remove(child_id);
+                        run.set_record_status(child_id, wire::OrchNodeStatus::Complete);
+                        match stage {
+                            StageKind::Plan => run.plan_output = Some(output),
+                            _ => run.last_summary = Some(output),
+                        }
+                        self.workflow_timeline(
+                            &parent_id,
+                            format!("Stage **{}** finished.", stage.label()),
+                        );
+                        let next = stage.successor().unwrap_or(StageKind::Review);
+                        self.workflow_runs.insert(parent_id.clone(), run);
+                        self.workflow_advance(&parent_id, next).await;
+                    }
+                }
+            }
+        }
+    }
+
+    /// A non-review stage child failed, or a reviewer died. Reviewers are
+    /// excluded from the verdict; any other stage failure fails the pipeline.
+    async fn workflow_child_failed(
+        &mut self,
+        parent_id: &str,
+        mut run: WorkflowRun,
+        child_id: &str,
+        stage: StageKind,
+    ) {
+        run.set_record_status(child_id, wire::OrchNodeStatus::Failed);
+        if stage == StageKind::Review {
+            let index = run.review_pending.remove(child_id);
+            run.active_children.remove(child_id);
+            run.reasked.remove(child_id);
+            let label = index
+                .map(|i| run.reviewer_label(i))
+                .unwrap_or_else(|| "reviewer".to_string());
+            self.workflow_timeline(
+                parent_id,
+                format!("{label} failed — excluded from this round's verdict."),
+            );
+            if run.review_pending.is_empty() {
+                if run.review_collected.is_empty() {
+                    self.workflow_runs.insert(parent_id.to_string(), run);
+                    self.workflow_finalize(
+                        parent_id,
+                        WorkflowOutcome::Error("all reviewers failed".to_string()),
+                    )
+                    .await;
+                } else {
+                    self.workflow_merge_reviews(parent_id, run).await;
+                }
+            } else {
+                self.workflow_sync(&run);
+                self.workflow_runs.insert(parent_id.to_string(), run);
+            }
+            return;
+        }
+        let reason = self
+            .tasks
+            .get(child_id)
+            .and_then(|t| t.blocked_reason.clone())
+            .unwrap_or_else(|| "agent session ended unexpectedly".to_string());
+        self.workflow_runs.insert(parent_id.to_string(), run);
+        self.workflow_finalize(
+            parent_id,
+            WorkflowOutcome::Error(format!("stage {} failed: {reason}", stage.label())),
+        )
+        .await;
+    }
+
+    /// One reviewer's turn ended: parse its verdict, re-ask once on garbage,
+    /// and merge the round when every reviewer has resolved.
+    async fn workflow_review_finished(
+        &mut self,
+        parent_id: &str,
+        mut run: WorkflowRun,
+        child_id: &str,
+        output: String,
+    ) {
+        let Some(index) = run.review_pending.get(child_id).copied() else {
+            self.workflow_runs.insert(parent_id.to_string(), run);
+            return;
+        };
+        let label = run.reviewer_label(index);
+        match workflow::parse_review_verdict(&output, &label) {
+            Ok((verdict, findings)) => {
+                run.review_pending.remove(child_id);
+                run.active_children.remove(child_id);
+                run.set_record_status(child_id, wire::OrchNodeStatus::Complete);
+                run.review_collected.push((index, verdict, findings));
+                if run.review_pending.is_empty() {
+                    self.workflow_merge_reviews(parent_id, run).await;
+                } else {
+                    self.workflow_sync(&run);
+                    self.workflow_runs.insert(parent_id.to_string(), run);
+                }
+            }
+            Err(reason) => {
+                let asked = run.reasked.entry(child_id.to_string()).or_insert(0);
+                if *asked < workflow::MAX_VERDICT_REASKS {
+                    *asked += 1;
+                    let reask = workflow::reask_verdict_prompt(&reason);
+                    let delivered = self
+                        .sessions
+                        .get(child_id)
+                        .map(|handle| {
+                            handle
+                                .prompt(super::prompt::PreparedPrompt {
+                                    content: vec![super::prompt::PromptContent::Text(
+                                        reask.clone(),
+                                    )],
+                                    summaries: vec![],
+                                    has_images: false,
+                                })
+                                .is_ok()
+                        })
+                        .unwrap_or(false);
+                    if delivered {
+                        self.emit_session(
+                            child_id,
+                            wire::SessionUpdate::UserMessage {
+                                text: reask,
+                                attachments: vec![],
+                            },
+                        );
+                        self.mark_task_running(child_id);
+                        self.workflow_timeline(
+                            parent_id,
+                            format!("{label} returned no parseable verdict — asking again."),
+                        );
+                        self.workflow_runs.insert(parent_id.to_string(), run);
+                        return;
+                    }
+                    // Dead session: fall through to the failure path.
+                }
+                self.workflow_runs.insert(parent_id.to_string(), run);
+                self.workflow_finalize(
+                    parent_id,
+                    WorkflowOutcome::Error(format!(
+                        "{label} returned no parseable verdict after a retry ({reason})"
+                    )),
+                )
+                .await;
+            }
+        }
+    }
+
+    /// All reviewers of a round resolved: merge, then approve / fix / limit.
+    async fn workflow_merge_reviews(&mut self, parent_id: &str, mut run: WorkflowRun) {
+        let (verdict, findings) = workflow::merge_reviews(&run.review_collected);
+        run.review_collected.clear();
+        run.last_verdict = Some(verdict);
+        let (to_fix, low): (Vec<_>, Vec<_>) =
+            findings.into_iter().partition(|f| f.severity.goes_to_fix());
+        run.deferred_findings.extend(low);
+        match verdict {
+            Verdict::Approve => {
+                self.workflow_timeline(
+                    parent_id,
+                    format!("Review round {}: **approved**.", run.round),
+                );
+                run.open_findings.clear();
+                self.workflow_runs.insert(parent_id.to_string(), run);
+                self.workflow_finalize(parent_id, WorkflowOutcome::Success { limit_hit: false })
+                    .await;
+            }
+            Verdict::RequestChanges if to_fix.is_empty() => {
+                // Changes requested but every finding is low-severity — there
+                // is nothing for the fixer to do. Finish with notes.
+                self.workflow_timeline(
+                    parent_id,
+                    format!(
+                        "Review round {}: changes requested, but only low-severity notes remain — finishing.",
+                        run.round
+                    ),
+                );
+                run.open_findings.clear();
+                self.workflow_runs.insert(parent_id.to_string(), run);
+                self.workflow_finalize(parent_id, WorkflowOutcome::Success { limit_hit: false })
+                    .await;
+            }
+            Verdict::RequestChanges => {
+                run.open_findings = to_fix;
+                self.workflow_timeline(
+                    parent_id,
+                    format!(
+                        "Review round {}: **changes requested** — {}.\n\n{}",
+                        run.round,
+                        workflow::summarize_findings(&run.open_findings),
+                        workflow::format_findings(&run.open_findings),
+                    ),
+                );
+                if run.round < run.effective_max_rounds() {
+                    self.workflow_runs.insert(parent_id.to_string(), run);
+                    self.workflow_advance(parent_id, StageKind::Fix).await;
+                } else {
+                    match run.spec.review.on_limit {
+                        crate::workflow_config::OnLimit::Ask => {
+                            run.state = RunState::AwaitingLimitDecision;
+                            self.workflow_timeline(
+                                parent_id,
+                                format!(
+                                    "Review limit reached ({} rounds) with {}. What next — extend \
+                                     the rounds, finish as is, or stop? You can add guidance for \
+                                     the next fix attempt.",
+                                    run.effective_max_rounds(),
+                                    workflow::summarize_findings(&run.open_findings),
+                                ),
+                            );
+                            self.workflow_sync(&run);
+                            self.workflow_runs.insert(parent_id.to_string(), run);
+                        }
+                        crate::workflow_config::OnLimit::Finish => {
+                            self.workflow_runs.insert(parent_id.to_string(), run);
+                            self.workflow_finalize(
+                                parent_id,
+                                WorkflowOutcome::Success { limit_hit: true },
+                            )
+                            .await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Stage barrier: honour a pending pause request, otherwise start `next`.
+    async fn workflow_advance(&mut self, parent_id: &str, next: StageKind) {
+        let paused = {
+            let Some(run) = self.workflow_runs.get_mut(parent_id) else {
+                return;
+            };
+            if run.pause_requested {
+                run.pause_requested = false;
+                run.state = RunState::Paused { next };
+                true
+            } else {
+                false
+            }
+        };
+        if paused {
+            self.workflow_timeline(
+                parent_id,
+                format!(
+                    "Paused before stage **{}**. Resume to continue; you can add guidance.",
+                    next.label()
+                ),
+            );
+            let run = self.workflow_runs.get(parent_id).cloned();
+            if let Some(run) = run {
+                self.workflow_sync(&run);
+            }
+        } else {
+            self.workflow_spawn_stage(parent_id, next).await;
+        }
+    }
+
+    /// Kill any still-running stage children (their sessions), Idle them.
+    fn workflow_stop_children(&mut self, run: &mut WorkflowRun) {
+        let children: Vec<String> = run.active_children.keys().cloned().collect();
+        for child_id in children {
+            if let Some(handle) = self.sessions.remove(&child_id) {
+                handle.cancel();
+            }
+            self.pending_permissions.cleanup_task(&child_id);
+            run.set_record_status(&child_id, wire::OrchNodeStatus::Skipped);
+            if let Some(task) = self.tasks.get_mut(&child_id) {
+                if task.status == TaskStatus::Running || task.status == TaskStatus::Queued {
+                    task.set_status(TaskStatus::Idle);
+                    let updated = task.clone();
+                    self.persist(&updated);
+                    self.emit(Event::TaskUpdated(updated));
+                }
+            }
+        }
+        run.active_children.clear();
+        run.review_pending.clear();
+    }
+
+    /// End the pipeline: stop children, write the summary, set the parent's
+    /// final status.
+    async fn workflow_finalize(&mut self, parent_id: &str, outcome: WorkflowOutcome) {
+        let Some(mut run) = self.workflow_runs.remove(parent_id) else {
+            return;
+        };
+        if !run.is_active() {
+            self.workflow_runs.insert(parent_id.to_string(), run);
+            return;
+        }
+        self.workflow_stop_children(&mut run);
+
+        let mut summary = String::new();
+        let rounds_used = run.round;
+        match &outcome {
+            WorkflowOutcome::Success { limit_hit } => {
+                run.state = RunState::Done;
+                summary.push_str(&format!(
+                    "Workflow **{}** finished after {rounds_used} review round(s).",
+                    run.spec.name
+                ));
+                if *limit_hit {
+                    summary.push_str(&format!(
+                        "\n\n⚠ Review limit reached with unresolved findings:\n{}",
+                        workflow::format_findings(&run.open_findings)
+                    ));
+                }
+                if !run.deferred_findings.is_empty() {
+                    summary.push_str(&format!(
+                        "\n\nLow-severity notes from review (not auto-fixed):\n{}",
+                        workflow::format_findings(&run.deferred_findings)
+                    ));
+                }
+                summary.push_str("\n\nReview the changes and commit when ready.");
+            }
+            WorkflowOutcome::Stopped => {
+                run.state = RunState::Failed;
+                summary.push_str(&format!("Workflow **{}** stopped.", run.spec.name));
+            }
+            WorkflowOutcome::Error(reason) => {
+                run.state = RunState::Failed;
+                summary.push_str(&format!(
+                    "Workflow **{}** failed: {reason}. Changes made so far remain in the \
+                     working copy.",
+                    run.spec.name
+                ));
+            }
+        }
+        self.workflow_timeline(parent_id, summary);
+
+        if let Some(task) = self.tasks.get_mut(parent_id) {
+            match &outcome {
+                WorkflowOutcome::Success { .. } => task.set_status(TaskStatus::NeedsReview),
+                WorkflowOutcome::Stopped => task.set_status(TaskStatus::Interrupted),
+                WorkflowOutcome::Error(reason) => {
+                    task.blocked_reason = Some(reason.clone());
+                    task.set_status(TaskStatus::Blocked);
+                }
+            }
+        }
+        self.workflow_sync(&run);
+        self.workflow_runs.insert(parent_id.to_string(), run);
+    }
+
+    /// A stage child task was cancelled or deleted out from under the run.
+    async fn workflow_child_gone(&mut self, child_id: &str) {
+        if self.workflow_child_of(child_id).is_some() {
+            self.workflow_stage_finished(child_id, false, String::new())
+                .await;
+        }
+    }
+
+    // ── User-facing controls (workflow.pause / resume / reply / decide) ──
+
+    fn workflow_pause(&mut self, parent_id: &str) -> Result<(), String> {
+        let Some(run) = self.workflow_runs.get_mut(parent_id) else {
+            return Err("no workflow pipeline on this task".to_string());
+        };
+        match run.state {
+            RunState::Running { .. } => {
+                if run.pause_requested {
+                    return Err("pause already requested".to_string());
+                }
+                run.pause_requested = true;
+                self.workflow_timeline(
+                    parent_id,
+                    "Pause requested — takes effect when the current stage finishes its turn.",
+                );
+                let run = self.workflow_runs.get(parent_id).cloned();
+                if let Some(run) = run {
+                    self.workflow_sync(&run);
+                }
+                Ok(())
+            }
+            RunState::Paused { .. } => Err("already paused".to_string()),
+            RunState::AwaitingReply { .. } | RunState::AwaitingLimitDecision => {
+                Err("the pipeline is already waiting for your input".to_string())
+            }
+            RunState::Done | RunState::Failed => Err("the pipeline has finished".to_string()),
+        }
+    }
+
+    async fn workflow_resume(
+        &mut self,
+        parent_id: &str,
+        note: Option<String>,
+    ) -> Result<(), String> {
+        let next = {
+            let Some(run) = self.workflow_runs.get_mut(parent_id) else {
+                return Err("no workflow pipeline on this task".to_string());
+            };
+            let RunState::Paused { next } = run.state else {
+                return Err("the pipeline is not paused".to_string());
+            };
+            run.pause_requested = false;
+            if let Some(note) = note.filter(|n| !n.trim().is_empty()) {
+                self.emit_session(
+                    parent_id,
+                    wire::SessionUpdate::UserMessage {
+                        text: note.clone(),
+                        attachments: vec![],
+                    },
+                );
+                let run = self.workflow_runs.get_mut(parent_id).unwrap();
+                run.pending_guidance = Some(note);
+            }
+            next
+        };
+        self.workflow_timeline(parent_id, "Resumed.");
+        self.workflow_spawn_stage(parent_id, next).await;
+        Ok(())
+    }
+
+    async fn workflow_reply(&mut self, parent_id: &str, message: String) -> Result<(), String> {
+        let (stage, child) = {
+            let Some(run) = self.workflow_runs.get(parent_id) else {
+                return Err("no workflow pipeline on this task".to_string());
+            };
+            match &run.state {
+                RunState::AwaitingReply { stage, child, .. } => (*stage, child.clone()),
+                _ => return Err("the pipeline is not waiting for an answer".to_string()),
+            }
+        };
+        // Show the user's answer in the parent timeline either way.
+        self.emit_session(
+            parent_id,
+            wire::SessionUpdate::UserMessage {
+                text: message.clone(),
+                attachments: vec![],
+            },
+        );
+        let delivered = self
+            .sessions
+            .get(&child)
+            .map(|handle| {
+                handle
+                    .prompt(super::prompt::PreparedPrompt {
+                        content: vec![super::prompt::PromptContent::Text(message.clone())],
+                        summaries: vec![],
+                        has_images: false,
+                    })
+                    .is_ok()
+            })
+            .unwrap_or(false);
+        if delivered {
+            self.emit_session(
+                &child,
+                wire::SessionUpdate::UserMessage {
+                    text: message,
+                    attachments: vec![],
+                },
+            );
+            self.mark_task_running(&child);
+            if let Some(run) = self.workflow_runs.get_mut(parent_id) {
+                run.state = RunState::Running { stage };
+            }
+            self.workflow_timeline(
+                parent_id,
+                format!("Answer delivered — stage **{}** continues.", stage.label()),
+            );
+            let run = self.workflow_runs.get(parent_id).cloned();
+            if let Some(run) = run {
+                self.workflow_sync(&run);
+            }
+        } else {
+            // The asking session is gone (daemon restarted, agent died). Re-run
+            // the stage with the question + answer as guidance instead.
+            let question = {
+                let run = self.workflow_runs.get_mut(parent_id).unwrap();
+                let question = match &run.state {
+                    RunState::AwaitingReply { question, .. } => question.clone(),
+                    _ => String::new(),
+                };
+                run.active_children.remove(&child);
+                run.set_record_status(&child, wire::OrchNodeStatus::Skipped);
+                run.pending_guidance = Some(format!(
+                    "The previous attempt of this stage asked:\n> {question}\n\nUser's answer:\n{message}"
+                ));
+                question
+            };
+            let _ = question;
+            self.workflow_timeline(
+                parent_id,
+                format!(
+                    "The asking session is no longer alive — re-running stage **{}** with your \
+                     answer as guidance.",
+                    stage.label()
+                ),
+            );
+            self.workflow_spawn_stage(parent_id, stage).await;
+        }
+        Ok(())
+    }
+
+    async fn workflow_decide(
+        &mut self,
+        parent_id: &str,
+        decision: wire::WorkflowDecision,
+        rounds: Option<u32>,
+        note: Option<String>,
+    ) -> Result<(), String> {
+        {
+            let Some(run) = self.workflow_runs.get(parent_id) else {
+                return Err("no workflow pipeline on this task".to_string());
+            };
+            if run.state != RunState::AwaitingLimitDecision {
+                return Err("the pipeline is not waiting for a limit decision".to_string());
+            }
+        }
+        match decision {
+            wire::WorkflowDecision::Extend => {
+                let granted = rounds.unwrap_or(1).clamp(1, workflow::MAX_EXTEND_ROUNDS);
+                {
+                    let run = self.workflow_runs.get_mut(parent_id).unwrap();
+                    run.extra_rounds += granted;
+                    run.pending_guidance = note.filter(|n| !n.trim().is_empty());
+                }
+                self.workflow_timeline(
+                    parent_id,
+                    format!("You granted {granted} more review round(s) — continuing with a fix."),
+                );
+                self.workflow_advance(parent_id, StageKind::Fix).await;
+                Ok(())
+            }
+            wire::WorkflowDecision::Finish => {
+                self.workflow_timeline(parent_id, "You chose to finish with the open findings.");
+                self.workflow_finalize(parent_id, WorkflowOutcome::Success { limit_hit: true })
+                    .await;
+                Ok(())
+            }
+            wire::WorkflowDecision::Stop => {
+                self.workflow_finalize(parent_id, WorkflowOutcome::Stopped)
+                    .await;
+                Ok(())
+            }
+        }
+    }
+
+    /// Restore persisted runs after a daemon restart. Barrier states survive
+    /// as-is; a run caught mid-stage converts to `Paused` at its last barrier
+    /// (resume re-runs the interrupted stage from scratch).
+    fn restore_workflow_runs(&mut self) {
+        let rows = self
+            .store
+            .as_ref()
+            .and_then(|s| s.load_workflow_runs().ok())
+            .unwrap_or_default();
+        for (task_id, json) in rows {
+            let Ok(mut run) = serde_json::from_str::<WorkflowRun>(&json) else {
+                eprintln!("[daemon] dropping unreadable workflow run for task {task_id}");
+                continue;
+            };
+            if !self.tasks.contains_key(&task_id) {
+                continue;
+            }
+            if run.is_active() {
+                if let RunState::Running { stage } = run.state {
+                    // Sessions died with the previous daemon: park at the
+                    // barrier before the interrupted stage.
+                    let children: Vec<String> = run.active_children.keys().cloned().collect();
+                    for child in &children {
+                        run.set_record_status(child, wire::OrchNodeStatus::Failed);
+                    }
+                    run.active_children.clear();
+                    run.review_pending.clear();
+                    run.review_collected.clear();
+                    run.state = RunState::Paused { next: stage };
+                    self.workflow_timeline(
+                        &task_id,
+                        format!(
+                            "Daemon restarted while stage **{}** was running. The pipeline is \
+                             paused — resume to re-run that stage.",
+                            stage.label()
+                        ),
+                    );
+                }
+                // The store normalizes Running → Interrupted on load; a live
+                // pipeline parent is Running again (its waiting state, if any,
+                // is carried by workflow_run).
+                if let Some(task) = self.tasks.get_mut(&task_id) {
+                    task.blocked_reason = None;
+                    task.set_status(TaskStatus::Running);
+                }
+            }
+            if let Some(task) = self.tasks.get_mut(&task_id) {
+                task.workflow_run = Some(run.wire_info());
+                task.orchestration_graph = Some(run.graph_info());
+                let updated = task.clone();
+                self.persist(&updated);
+            }
+            if let Some(store) = &self.store {
+                if let Ok(json) = serde_json::to_string(&run) {
+                    let _ = store.save_workflow_run(&task_id, &json);
+                }
+            }
+            self.workflow_runs.insert(task_id, run);
+        }
     }
 }
 

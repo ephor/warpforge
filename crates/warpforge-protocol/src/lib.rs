@@ -205,6 +205,13 @@ pub enum Method {
         /// after the model. Unknown option ids are logged and skipped.
         #[serde(default)]
         config_overrides: HashMap<String, String>,
+        /// When set, run this task as a deterministic workflow pipeline: the
+        /// created task becomes the pipeline parent (no agent session of its
+        /// own) and the daemon drives plan? → implement → review ⇄ fix stages
+        /// as child tasks. The id comes from `workflow.list`. Mutually
+        /// exclusive with the orchestrator-chat mode.
+        #[serde(default)]
+        workflow: Option<String>,
     },
     #[serde(rename = "task.cancel")]
     TaskCancel { task_id: String },
@@ -443,6 +450,38 @@ pub enum Method {
     /// file. Returns `{ "path": … }`.
     #[serde(rename = "workflow.eject")]
     WorkflowEject { project: String, id: String },
+    /// Soft-pause a running workflow pipeline: the current stage finishes its
+    /// turn, the next stage does not start. Errors when the pipeline is not
+    /// in a pausable state (already waiting for the user, or finished).
+    #[serde(rename = "workflow.pause")]
+    WorkflowPause { task: String },
+    /// Resume a paused pipeline from its stage barrier. `note`, when set, is
+    /// delivered to the next stage as an extra "User guidance" block.
+    #[serde(rename = "workflow.resume")]
+    WorkflowResume {
+        task: String,
+        #[serde(default)]
+        note: Option<String>,
+    },
+    /// Answer a stage's pending `need_user_input` question. The message is
+    /// forwarded verbatim to the session that asked. Errors unless the
+    /// pipeline is waiting on a question.
+    #[serde(rename = "workflow.reply")]
+    WorkflowReply { task: String, message: String },
+    /// Decide what an out-of-rounds pipeline does next. Errors unless the
+    /// pipeline is waiting on a limit decision.
+    #[serde(rename = "workflow.decide")]
+    WorkflowDecide {
+        task: String,
+        decision: WorkflowDecision,
+        /// For `extend`: how many extra review ⇄ fix rounds to grant (1..=5,
+        /// default 1).
+        #[serde(default)]
+        rounds: Option<u32>,
+        /// Optional extra guidance delivered to the next fix stage.
+        #[serde(default)]
+        note: Option<String>,
+    },
 
     // ── Bootstrap wizard (desktop) ──
     /// Scan the repo, build the bootstrap prompt from the user's answers, and
@@ -758,6 +797,9 @@ pub struct TaskInfo {
     /// on the wire lets clients present the child in its parent's context.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_task_id: Option<String>,
+    /// Live workflow pipeline state for workflow parent tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_run: Option<WorkflowRunInfo>,
     /// Explicit settle override (true = settled, false = not settled).
     /// `None` = derive from execution status only (no manual override).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1315,6 +1357,8 @@ pub enum OrchNodeKind {
     Implement,
     Review,
     Merge,
+    /// Workflow-pipeline repair stage (fix findings from a review round).
+    Fix,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1361,6 +1405,85 @@ pub struct WorkflowMeta {
 pub enum WorkflowSource {
     Project,
     Builtin,
+}
+
+/// A `workflow.decide` choice after review rounds are exhausted.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkflowDecision {
+    /// Grant extra review ⇄ fix rounds and continue.
+    Extend,
+    /// Finish as NeedsReview with the open findings in the summary.
+    Finish,
+    /// Stop the pipeline (parent becomes Interrupted).
+    Stop,
+}
+
+/// Live state of a workflow pipeline, carried on the parent task and updated
+/// via `task.updated` events.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowRunInfo {
+    pub workflow_id: String,
+    pub workflow_name: String,
+    pub stage: WorkflowStage,
+    /// Current review round, 1-based; 0 until the first review starts.
+    pub round: u32,
+    /// Effective round limit: the YAML `max_rounds` plus user-granted
+    /// extensions.
+    pub max_rounds: u32,
+    /// Latest merged review verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<WorkflowVerdict>,
+    /// Present while the pipeline waits for the user — the parent composer
+    /// opens on this, and it drives the attention ("Needs you") rail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting: Option<WorkflowWaiting>,
+}
+
+/// Pipeline position for display.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowStage {
+    Plan,
+    Implement,
+    Review,
+    Fix,
+    Done,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowVerdict {
+    Approve,
+    RequestChanges,
+}
+
+/// Why a pipeline is suspended and what input unblocks it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowWaiting {
+    pub kind: WorkflowWaitKind,
+    /// Which stage asked (for `question`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<WorkflowStage>,
+    /// The question text (for `question`), or a short findings summary (for
+    /// `limit`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowWaitKind {
+    /// A stage asked `need_user_input` — answer with `workflow.reply`.
+    Question,
+    /// Review rounds exhausted with open findings — answer with
+    /// `workflow.decide`.
+    Limit,
+    /// Soft-paused — continue with `workflow.resume`.
+    Paused,
 }
 
 /// Orchestrator configuration DTO (wire format).

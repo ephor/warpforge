@@ -20,6 +20,7 @@ pub mod sessions;
 pub mod store;
 pub mod task;
 pub mod wire;
+pub mod workflow;
 pub mod worktree;
 
 #[allow(unused_imports)]
@@ -571,6 +572,346 @@ mod tests {
             duplicate_failures, 0,
             "failure must be notified exactly once"
         );
+    }
+
+    // ── Workflow pipeline engine ──
+
+    const WF_FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/mock-acp-workflow.mjs"
+    );
+
+    /// A tempdir project with one workflow file at
+    /// `.warpforge/workflows/test.yaml` and a registered `demo` project entry.
+    fn workflow_project(yaml: &str) -> (tempfile::TempDir, Vec<ProjectEntry>) {
+        let dir = tempfile::tempdir().unwrap();
+        let wf_dir = dir.path().join(".warpforge/workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        std::fs::write(wf_dir.join("test.yaml"), yaml).unwrap();
+        let projects = vec![ProjectEntry {
+            name: "demo".into(),
+            path: dir.path().to_string_lossy().into_owned(),
+            added_at: "0".into(),
+        }];
+        (dir, projects)
+    }
+
+    /// Scripted mock-agent command sharing `state` across stage processes.
+    fn wf_agent(dir: &tempfile::TempDir, state: &str, script: &str) -> String {
+        format!(
+            "node {WF_FIXTURE} {} {script}",
+            dir.path().join(state).display()
+        )
+    }
+
+    async fn create_workflow_task(daemon: &DaemonHandle, agent: &str) -> String {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::CreateWorkflowTask {
+                project: "demo".into(),
+                prompt: "do the thing".into(),
+                agent: agent.into(),
+                tags: vec![],
+                worktree: false,
+                workflow: "test".into(),
+                attachments: vec![],
+                default_model: None,
+                reply: tx,
+            })
+            .await;
+        rx.await.unwrap().expect("workflow task created")
+    }
+
+    /// Drive the event stream until the parent task satisfies `pred`.
+    async fn wait_for_parent(
+        events: &mut tokio::sync::broadcast::Receiver<Event>,
+        parent_id: &str,
+        what: &str,
+        pred: impl Fn(&Task) -> bool,
+    ) -> Task {
+        timeout(Duration::from_secs(20), async {
+            loop {
+                if let Ok(Event::TaskUpdated(task)) = events.recv().await {
+                    if task.id == parent_id && pred(&task) {
+                        break task;
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for: {what}"))
+    }
+
+    #[tokio::test]
+    async fn workflow_full_loop_reject_fix_approve() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: placeholder\n");
+        // Round 1 rejects with one high finding, round 2 approves.
+        let reviewer = wf_agent(&dir, "rev.state", "reject approve");
+        std::fs::write(
+            dir.path().join(".warpforge/workflows/test.yaml"),
+            format!(
+                "name: Test flow\nreview:\n  max_rounds: 2\n  reviewers:\n    - agent: {reviewer}\n"
+            ),
+        )
+        .unwrap();
+        let lead = wf_agent(&dir, "impl.state", "impl fix");
+
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(projects, store);
+        let mut events = daemon.subscribe();
+        let parent_id = create_workflow_task(&daemon, &lead).await;
+
+        let done = wait_for_parent(&mut events, &parent_id, "pipeline done", |t| {
+            t.workflow_run
+                .as_ref()
+                .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
+        })
+        .await;
+
+        assert_eq!(done.status, TaskStatus::NeedsReview);
+        let run = done.workflow_run.unwrap();
+        assert_eq!(run.round, 2, "reject → fix → approve takes two rounds");
+        assert_eq!(run.verdict, Some(wire::WorkflowVerdict::Approve));
+        assert!(run.waiting.is_none());
+        // Graph: implement, review r1, fix, review r2 — all with task ids.
+        let graph = done.orchestration_graph.unwrap();
+        assert_eq!(graph.nodes.len(), 4, "{:?}", graph.nodes);
+        assert!(graph.nodes.iter().all(|n| n.task_id.is_some()));
+        assert_eq!(graph.nodes[0].kind, wire::OrchNodeKind::Implement);
+        assert_eq!(graph.nodes[2].kind, wire::OrchNodeKind::Fix);
+    }
+
+    #[tokio::test]
+    async fn workflow_plan_question_reply_flow() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: placeholder\n");
+        let reviewer = wf_agent(&dir, "rev.state", "approve");
+        std::fs::write(
+            dir.path().join(".warpforge/workflows/test.yaml"),
+            format!("name: Q flow\nplan: {{}}\nreview:\n  reviewers:\n    - agent: {reviewer}\n"),
+        )
+        .unwrap();
+        // Plan turn 1 asks, the answered turn plans, then implement runs.
+        let lead = wf_agent(&dir, "lead.state", "question plan impl");
+
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(projects, store);
+        let mut events = daemon.subscribe();
+        let parent_id = create_workflow_task(&daemon, &lead).await;
+
+        let waiting = wait_for_parent(&mut events, &parent_id, "question", |t| {
+            t.workflow_run
+                .as_ref()
+                .and_then(|w| w.waiting.as_ref())
+                .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Question)
+        })
+        .await;
+        let question = waiting.workflow_run.unwrap().waiting.unwrap();
+        assert_eq!(question.question.as_deref(), Some("Which database?"));
+        assert_eq!(question.stage, Some(wire::WorkflowStage::Plan));
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::WorkflowReply {
+                task: parent_id.clone(),
+                message: "Postgres".into(),
+                reply: tx,
+            })
+            .await;
+        rx.await.unwrap().expect("reply accepted");
+
+        let done = wait_for_parent(&mut events, &parent_id, "pipeline done", |t| {
+            t.workflow_run
+                .as_ref()
+                .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
+        })
+        .await;
+        assert_eq!(done.status, TaskStatus::NeedsReview);
+        assert_eq!(done.workflow_run.unwrap().round, 1);
+    }
+
+    #[tokio::test]
+    async fn workflow_limit_asks_and_finishes_on_decision() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: placeholder\n");
+        let reviewer = wf_agent(&dir, "rev.state", "reject");
+        std::fs::write(
+            dir.path().join(".warpforge/workflows/test.yaml"),
+            format!(
+                "name: Limit flow\nreview:\n  max_rounds: 1\n  on_limit: ask\n  reviewers:\n    - agent: {reviewer}\n"
+            ),
+        )
+        .unwrap();
+        let lead = wf_agent(&dir, "impl.state", "impl fix");
+
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(projects, store);
+        let mut events = daemon.subscribe();
+        let parent_id = create_workflow_task(&daemon, &lead).await;
+
+        wait_for_parent(&mut events, &parent_id, "limit decision", |t| {
+            t.workflow_run
+                .as_ref()
+                .and_then(|w| w.waiting.as_ref())
+                .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Limit)
+        })
+        .await;
+
+        // A pause is invalid while waiting on a decision.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::WorkflowPause {
+                task: parent_id.clone(),
+                reply: tx,
+            })
+            .await;
+        assert!(rx.await.unwrap().is_err());
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::WorkflowDecide {
+                task: parent_id.clone(),
+                decision: wire::WorkflowDecision::Finish,
+                rounds: None,
+                note: None,
+                reply: tx,
+            })
+            .await;
+        rx.await.unwrap().expect("decision accepted");
+
+        let done = wait_for_parent(&mut events, &parent_id, "pipeline done", |t| {
+            t.workflow_run
+                .as_ref()
+                .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
+        })
+        .await;
+        assert_eq!(done.status, TaskStatus::NeedsReview);
+        assert_eq!(
+            done.workflow_run.unwrap().verdict,
+            Some(wire::WorkflowVerdict::RequestChanges)
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_pause_takes_effect_at_barrier_and_resumes() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: placeholder\n");
+        let reviewer = wf_agent(&dir, "rev.state", "approve");
+        std::fs::write(
+            dir.path().join(".warpforge/workflows/test.yaml"),
+            format!("name: Pause flow\nreview:\n  reviewers:\n    - agent: {reviewer}\n"),
+        )
+        .unwrap();
+        // The implement turn takes ~600ms — enough for the pause to land.
+        let lead = wf_agent(&dir, "impl.state", "slow-impl fix");
+
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(projects, store);
+        let mut events = daemon.subscribe();
+        let parent_id = create_workflow_task(&daemon, &lead).await;
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::WorkflowPause {
+                task: parent_id.clone(),
+                reply: tx,
+            })
+            .await;
+        rx.await.unwrap().expect("pause accepted while running");
+
+        wait_for_parent(&mut events, &parent_id, "paused at barrier", |t| {
+            t.workflow_run
+                .as_ref()
+                .and_then(|w| w.waiting.as_ref())
+                .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Paused)
+        })
+        .await;
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::WorkflowResume {
+                task: parent_id.clone(),
+                note: Some("carry on".into()),
+                reply: tx,
+            })
+            .await;
+        rx.await.unwrap().expect("resume accepted");
+
+        let done = wait_for_parent(&mut events, &parent_id, "pipeline done", |t| {
+            t.workflow_run
+                .as_ref()
+                .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
+        })
+        .await;
+        assert_eq!(done.status, TaskStatus::NeedsReview);
+    }
+
+    /// A daemon restart mid-stage parks the pipeline at its last barrier as
+    /// Paused; resume re-runs the interrupted stage and the run completes.
+    #[tokio::test]
+    async fn workflow_restart_converts_midstage_to_paused_and_resumes() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: placeholder\n");
+        let reviewer = wf_agent(&dir, "rev.state", "approve");
+        std::fs::write(
+            dir.path().join(".warpforge/workflows/test.yaml"),
+            format!("name: Restart flow\nreview:\n  reviewers:\n    - agent: {reviewer}\n"),
+        )
+        .unwrap();
+        // Attempt 1 of implement is slow and dies with the daemon; the re-run
+        // after restart pops the next behavior and completes quickly.
+        let lead = wf_agent(&dir, "impl.state", "slow-impl impl fix");
+        let db_path = dir.path().join("warpforge.db");
+
+        let daemon = Daemon::spawn(projects.clone(), Store::open_at(&db_path).ok());
+        let parent_id = create_workflow_task(&daemon, &lead).await;
+        // Shut down while the implement turn is still in flight (~600ms).
+        daemon.shutdown().await;
+
+        let daemon = Daemon::spawn(projects, Store::open_at(&db_path).ok());
+        let mut events = daemon.subscribe();
+        let restored = timeout(Duration::from_secs(5), async {
+            loop {
+                let tasks = daemon.tasks().await;
+                if let Some(task) = tasks.iter().find(|t| t.id == parent_id) {
+                    if task
+                        .workflow_run
+                        .as_ref()
+                        .and_then(|w| w.waiting.as_ref())
+                        .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Paused)
+                    {
+                        break task.clone();
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("restored run should be paused at the implement barrier");
+        assert_eq!(restored.status, TaskStatus::Running);
+        assert_eq!(
+            restored.workflow_run.unwrap().stage,
+            wire::WorkflowStage::Implement
+        );
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::WorkflowResume {
+                task: parent_id.clone(),
+                note: None,
+                reply: tx,
+            })
+            .await;
+        rx.await.unwrap().expect("resume accepted after restart");
+
+        let done = wait_for_parent(&mut events, &parent_id, "pipeline done", |t| {
+            t.workflow_run
+                .as_ref()
+                .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
+        })
+        .await;
+        assert_eq!(done.status, TaskStatus::NeedsReview);
     }
 
     /// Regression: when a stale ACP handle is in sessions and a prompt
