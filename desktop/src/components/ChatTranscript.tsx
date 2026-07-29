@@ -42,6 +42,7 @@ import { AgentActivityIndicator } from "./AgentActivityIndicator";
 import { ChatComposer } from "./ChatComposer";
 import type { ComposerHandle } from "./Composer";
 import { MessageActions } from "./MessageActions";
+import { WorkflowControls } from "./WorkflowControls";
 
 const CHAT_DRAW_DISTANCE_PX = 250;
 const CHAT_MAINTAIN_SCROLL_AT_END = {
@@ -486,6 +487,7 @@ export function ChatTranscript({
           <AgentActivityIndicator activity={activity} compact />
         </div>
       )}
+      {task.workflowRun && <WorkflowControls task={task} />}
       <ChatComposer
         ref={composerRef}
         commands={commands}

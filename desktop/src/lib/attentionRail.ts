@@ -49,8 +49,21 @@ export function buildAttentionQueue(
   prunePermissionCache(new Set(tasks.map((task) => task.id)));
   for (const task of tasks) {
     const perm = latestPendingPermission(task.id, sessionUpdates[task.id]);
+    const waiting = task.workflowRun?.waiting ?? null;
     if (perm) {
       items.push({ permission: perm, priority: 0, reason: perm.title, task });
+    } else if (waiting && waiting.kind !== "paused") {
+      // A pipeline that suspended itself is asking directly, so it ranks just
+      // under a permission prompt. A pause is user-initiated — the user knows
+      // it is waiting, so it stays out of the queue.
+      items.push({
+        priority: 0.5,
+        reason:
+          waiting.kind === "question"
+            ? (waiting.question ?? "workflow needs your input")
+            : `review limit reached${waiting.question ? ` — ${waiting.question}` : ""}`,
+        task,
+      });
     } else if (task.status === "needs_review") {
       items.push({ priority: 1, reason: "finished — review changes", task });
     } else if (task.status === "blocked") {

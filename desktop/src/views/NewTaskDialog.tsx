@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { History, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -11,7 +11,13 @@ import type { ComposerHandle } from "../components/Composer";
 import { Composer } from "../components/Composer";
 import { TaskComposeBar } from "../components/TaskComposeBar";
 import { daemon } from "../daemon";
-import type { ExternalSession, ProjectFile, PromptSubmission, Snapshot } from "../protocol";
+import type {
+  ExternalSession,
+  ProjectFile,
+  PromptSubmission,
+  Snapshot,
+  WorkflowMeta,
+} from "../protocol";
 import { daemonQuery } from "../query";
 import { useUi } from "../store/ui";
 
@@ -35,6 +41,7 @@ export default function NewTaskDialog({
   defaultProject,
   initialPrompt,
 }: Props) {
+  const queryClient = useQueryClient();
   const openTask = useUi((s) => s.openTask);
   const autoNameTasks = useUi((s) => s.autoNameTasks);
   const textGenAgentId = useUi((s) => s.textGenAgentId);
@@ -53,6 +60,7 @@ export default function NewTaskDialog({
   const [shareContext, setShareContext] = useState(true);
   const [useWorktree, setUseWorktree] = useState(false);
   const [orchChat, setOrchChat] = useState(false);
+  const [workflow, setWorkflow] = useState<string | null>(null);
   const composerRef = useRef<ComposerHandle>(null);
 
   const agent = enabledAgents.some((candidate) => candidate.id === selectedAgent)
@@ -66,6 +74,20 @@ export default function NewTaskDialog({
     setProject(nextProject);
     setSelectedAgent(enabledAgents[0]?.id ?? "claude");
     setConfigPicks({});
+    // Workflows are per-project files — a pick can't carry over.
+    setWorkflow(null);
+  };
+
+  // A workflow and the orchestrator chat are different engines for the same
+  // task, so picking one clears the other.
+  const changeWorkflow = (next: string | null) => {
+    setWorkflow(next);
+    if (next) setOrchChat(false);
+  };
+
+  const changeOrchChat = (next: boolean) => {
+    setOrchChat(next);
+    if (next) setWorkflow(null);
   };
 
   const changeAgent = (nextAgent: string) => {
@@ -99,6 +121,23 @@ export default function NewTaskDialog({
     queryKey: ["fileList", "new", project],
   });
   const projectFiles = Array.isArray(filesQuery.data) ? filesQuery.data : [];
+  const workflowsQuery = useQuery({
+    enabled: !!project,
+    queryFn: () => daemon.workflowList(project),
+    queryKey: ["workflows", project],
+  });
+  const workflows: WorkflowMeta[] = workflowsQuery.data ?? [];
+  const selectedWorkflow = workflows.find((w) => w.id === workflow) ?? null;
+
+  const ejectWorkflow = async (id: string) => {
+    try {
+      const path = await daemon.workflowEject(project, id);
+      toast.success("Workflow copied to project", { description: path });
+      await queryClient.invalidateQueries({ queryKey: ["workflows", project] });
+    } catch (e) {
+      toast.error("Could not copy workflow", { description: String(e) });
+    }
+  };
 
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
@@ -125,24 +164,35 @@ export default function NewTaskDialog({
       const pick = configPicks[opt.id];
       if (pick != null) configOverrides[opt.id] = pick;
     }
-    const resp = await daemon.request("task.create", {
-      project,
-      prompt: submission.text.trim(),
-      attachments: submission.attachments,
-      agent,
-      tags: orchChat ? [...userTags, "orchestrator-chat"] : userTags,
-      include_runtime_context: shareContext,
-      worktree: orchChat ? false : useWorktree,
-      default_model: modelPick,
-      config_overrides: configOverrides,
-    });
+    let resp: unknown;
+    try {
+      resp = await daemon.request("task.create", {
+        project,
+        prompt: submission.text.trim(),
+        attachments: submission.attachments,
+        agent,
+        tags: orchChat ? [...userTags, "orchestrator-chat"] : userTags,
+        include_runtime_context: shareContext,
+        worktree: orchChat ? false : useWorktree,
+        default_model: modelPick,
+        config_overrides: configOverrides,
+        workflow: workflow ?? undefined,
+      });
+    } catch (e) {
+      // A workflow can fail validation daemon-side (edited YAML between the
+      // list and the send) — keep the dialog open so the prompt isn't lost.
+      toast.error("Could not start the task", { description: String(e) });
+      return;
+    }
     const taskId =
       (resp as { taskId?: string } | null)?.taskId ??
       (resp as { result?: { taskId?: string } } | null)?.result?.taskId ??
       null;
     if (taskId) {
-      toast.success("Task started", {
-        description: `${orchChat ? "Orchestrator" : "Agent"} session created for ${project}`,
+      toast.success(selectedWorkflow ? "Workflow started" : "Task started", {
+        description: selectedWorkflow
+          ? `${selectedWorkflow.name} pipeline running in ${project}`
+          : `${orchChat ? "Orchestrator" : "Agent"} session created for ${project}`,
         action: {
           label: "Open task",
           onClick: () => openTask(taskId),
@@ -205,11 +255,15 @@ export default function NewTaskDialog({
             shareContext={shareContext}
             useWorktree={useWorktree}
             orchChat={orchChat}
+            workflows={workflows}
+            workflow={workflow}
             onProjectChange={changeProject}
             onAgentChange={changeAgent}
             onShareContextChange={setShareContext}
             onUseWorktreeChange={setUseWorktree}
-            onOrchChatChange={setOrchChat}
+            onOrchChatChange={changeOrchChat}
+            onWorkflowChange={changeWorkflow}
+            onEjectWorkflow={ejectWorkflow}
           />
 
           <div className="mt-6 border-t border-border/70 pt-4">
@@ -234,7 +288,11 @@ export default function NewTaskDialog({
                 />
               }
               placeholder={
-                orchChat ? "What should the orchestrator coordinate?" : "What should the agent do?"
+                selectedWorkflow
+                  ? `What should the ${selectedWorkflow.name} pipeline work on?`
+                  : orchChat
+                    ? "What should the orchestrator coordinate?"
+                    : "What should the agent do?"
               }
             />
           </div>
@@ -292,7 +350,7 @@ export default function NewTaskDialog({
             onClick={() => composerRef.current?.submit()}
             disabled={!prompt.trim() || !project}
           >
-            {orchChat ? "Start orchestrator" : "Start task"}
+            {selectedWorkflow ? "Start workflow" : orchChat ? "Start orchestrator" : "Start task"}
           </Button>
         </footer>
       </div>

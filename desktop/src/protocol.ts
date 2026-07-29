@@ -192,8 +192,10 @@ export interface TaskInfo {
   configOptions?: ConfigOption[];
   /** Path to the git worktree for this task, if isolated. */
   worktree?: string | null;
-  /** Orchestration graph for parent orchestrator tasks. */
+  /** Orchestration graph for parent orchestrator tasks, and for workflow parents. */
   orchestrationGraph?: OrchGraphInfo | null;
+  /** Live pipeline state when this task is a workflow parent. */
+  workflowRun?: WorkflowRunInfo | null;
   /** Task that spawned this sub-agent through the orchestrator MCP. */
   parentTaskId?: string | null;
   /** Explicit settle override (true = settled, false = not settled). */
@@ -255,6 +257,56 @@ export interface OrchWorkerPool {
 export interface OrchReviewerPool {
   agent: string;
 }
+
+// ── Workflow DTOs ──────────────────────────────────────────────────────────
+
+/** One selectable workflow template, from `workflow.list`. */
+export interface WorkflowMeta {
+  id: string;
+  name: string;
+  description?: string | null;
+  source: WorkflowSource;
+  /** False when the YAML failed to parse or validate — listed but unselectable. */
+  valid: boolean;
+  error?: string | null;
+  /** Non-fatal issues (unknown keys, clamped values). */
+  warnings?: string[];
+  /** Stage names for the picker tooltip, e.g. ["plan","implement","review\u00d72","fix"]. */
+  stages?: string[];
+  maxRounds?: number;
+}
+
+export type WorkflowSource = "project" | "builtin";
+
+/** Live state of a workflow pipeline, carried on its parent task. */
+export interface WorkflowRunInfo {
+  workflowId: string;
+  workflowName: string;
+  stage: WorkflowStage;
+  /** Current review round, 1-based; 0 until the first review starts. */
+  round: number;
+  /** Round limit including any user-granted extensions. */
+  maxRounds: number;
+  verdict?: WorkflowVerdict | null;
+  /** Set while the pipeline waits for the user. */
+  waiting?: WorkflowWaiting | null;
+}
+
+export type WorkflowStage = "plan" | "implement" | "review" | "fix" | "done" | "failed";
+
+export type WorkflowVerdict = "approve" | "request_changes";
+
+export interface WorkflowWaiting {
+  kind: WorkflowWaitKind;
+  /** Which stage asked (for `question`). */
+  stage?: WorkflowStage | null;
+  /** The question text, or a findings summary for `limit`. */
+  question?: string | null;
+}
+
+export type WorkflowWaitKind = "question" | "limit" | "paused";
+
+export type WorkflowDecision = "extend" | "finish" | "stop";
 
 export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";
 

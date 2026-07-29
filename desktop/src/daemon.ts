@@ -1061,13 +1061,53 @@ export class DaemonClient {
     return (result as { ok?: boolean })?.ok ?? false;
   }
 
+  // ── Workflow RPCs ──
+
+  /** Workflows selectable for a project: its own files plus built-ins. */
+  async workflowList(project: string): Promise<import("./protocol").WorkflowMeta[]> {
+    const result = await this.request("workflow.list", { project });
+    const workflows = (result as { workflows?: import("./protocol").WorkflowMeta[] })?.workflows;
+    return Array.isArray(workflows) ? workflows : [];
+  }
+
+  /** Copy a built-in workflow into the project so it can be customized. */
+  async workflowEject(project: string, id: string): Promise<string> {
+    const result = await this.request("workflow.eject", { id, project });
+    return (result as { path?: string })?.path ?? "";
+  }
+
+  /** Soft-pause a pipeline: the running stage finishes, the next won't start. */
+  async workflowPause(task: string): Promise<void> {
+    await this.request("workflow.pause", { task });
+  }
+
+  /** Resume a paused pipeline; `note` reaches the next stage as guidance. */
+  async workflowResume(task: string, note?: string): Promise<void> {
+    await this.request("workflow.resume", { note, task });
+  }
+
+  /** Answer a stage's pending question. */
+  async workflowReply(task: string, message: string): Promise<void> {
+    await this.request("workflow.reply", { message, task });
+  }
+
+  /** Decide what an out-of-rounds pipeline does next. */
+  async workflowDecide(
+    task: string,
+    decision: import("./protocol").WorkflowDecision,
+    opts?: { rounds?: number; note?: string },
+  ): Promise<void> {
+    await this.request("workflow.decide", {
+      decision,
+      note: opts?.note,
+      rounds: opts?.rounds,
+      task,
+    });
+  }
+
   // ── Terminal PTY RPCs ──
 
-  async spawnTerminal(
-    project: string,
-    cols: number,
-    rows: number,
-  ): Promise<string> {
+  async spawnTerminal(project: string, cols: number, rows: number): Promise<string> {
     const result = await this.request("terminal.spawn", {
       project,
       command: 'exec "${SHELL:-/bin/sh}" -l',
