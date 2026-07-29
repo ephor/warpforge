@@ -3968,9 +3968,8 @@ impl Daemon {
                     // only the latest turn's text: answered questions and
                     // superseded verdicts from earlier turns must not count.
                     // The legacy orchestrator inbox path does not apply here.
-                    let last_turn = self.collect_last_turn_text(&task_id);
-                    self.workflow_stage_finished(&task_id, success, last_turn)
-                        .await;
+                    let text = self.collect_stage_text(&task_id);
+                    self.workflow_stage_finished(&task_id, success, text).await;
                 } else {
                     // Deliver to a parent if this was a sub-agent; and drain our
                     // own inbox if we are a parent that just went idle.
@@ -4003,7 +4002,15 @@ impl Daemon {
                 }
                 self.notify_orch_finished(&task_id, false, reason.clone());
                 if self.workflow_child_of(&task_id).is_some() {
-                    self.workflow_stage_finished(&task_id, false, reason).await;
+                    self.workflow_stage_finished(
+                        &task_id,
+                        false,
+                        StageText {
+                            closing: reason.clone(),
+                            full: reason,
+                        },
+                    )
+                    .await;
                 } else {
                     self.deliver_child_result(&task_id, false, reason);
                 }
@@ -4110,22 +4117,51 @@ impl Daemon {
     /// engine parses this: a `need_user_input` block answered two turns ago
     /// must not be mistaken for a fresh question.
     fn collect_last_turn_text(&self, task_id: &str) -> String {
+        self.collect_stage_text(task_id).full
+    }
+
+    /// A finished stage's output, in the two shapes the pipeline needs.
+    ///
+    /// `closing` is the agent's final message — the text streamed after its
+    /// last tool call or file edit. That is what the stage prompts ask for
+    /// ("your final message should summarize what you did") and what a human
+    /// reads as the result, so it is what reviewers and fixers are handed.
+    /// `full` is every chunk of the turn, kept as a parsing fallback for an
+    /// agent that emits its protocol block before a trailing tool call.
+    fn collect_stage_text(&self, task_id: &str) -> StageText {
         let Some(updates) = self
             .store
             .as_ref()
             .and_then(|s| s.load_session_updates(task_id).ok())
         else {
-            return String::new();
+            return StageText::default();
         };
-        let mut texts: Vec<String> = Vec::new();
+        let mut full: Vec<String> = Vec::new();
+        let mut closing: Vec<String> = Vec::new();
         for update in updates {
             match update {
-                wire::SessionUpdate::UserMessage { .. } => texts.clear(),
-                wire::SessionUpdate::AgentText { text } => texts.push(text),
+                // A new user message starts a fresh turn.
+                wire::SessionUpdate::UserMessage { .. } => {
+                    full.clear();
+                    closing.clear();
+                }
+                wire::SessionUpdate::AgentText { text } => {
+                    full.push(text.clone());
+                    closing.push(text);
+                }
+                // Any work the agent does ends whatever it was narrating, so
+                // the closing message restarts after it.
+                wire::SessionUpdate::ToolCall { .. }
+                | wire::SessionUpdate::FileEdit { .. }
+                | wire::SessionUpdate::AgentThought { .. }
+                | wire::SessionUpdate::Plan { .. } => closing.clear(),
                 _ => {}
             }
         }
-        texts.join("")
+        StageText {
+            closing: closing.join(""),
+            full: full.join(""),
+        }
     }
 
     /// Tell the orchestrator a dispatched task finished. No-op unless the task
@@ -4915,7 +4951,21 @@ impl Daemon {
     }
 
     /// A stage child's turn ended (or its session died). Advance the pipeline.
-    async fn workflow_stage_finished(&mut self, child_id: &str, success: bool, output: String) {
+    async fn workflow_stage_finished(&mut self, child_id: &str, success: bool, text: StageText) {
+        // Prefer the closing message: it is the agent's actual result, and
+        // reading it instead of the whole turn means a JSON block quoted
+        // mid-turn (while browsing a config file, say) cannot be mistaken for
+        // the protocol payload. Fall back to the full turn only when the
+        // payload genuinely is not in the closing message — an agent that
+        // emitted its block and then made one last tool call.
+        let closing_is_usable = !text.closing.trim().is_empty()
+            && (workflow::has_protocol_payload(&text.closing)
+                || !workflow::has_protocol_payload(&text.full));
+        let output = if closing_is_usable {
+            text.closing.clone()
+        } else {
+            text.full.clone()
+        };
         let Some(parent_id) = self.workflow_child_of(child_id) else {
             return;
         };
@@ -5485,7 +5535,7 @@ impl Daemon {
     /// A stage child task was cancelled or deleted out from under the run.
     async fn workflow_child_gone(&mut self, child_id: &str) {
         if self.workflow_child_of(child_id).is_some() {
-            self.workflow_stage_finished(child_id, false, String::new())
+            self.workflow_stage_finished(child_id, false, StageText::default())
                 .await;
         }
     }
@@ -5766,6 +5816,14 @@ impl Daemon {
             self.workflow_runs.insert(task_id, run);
         }
     }
+}
+
+/// A finished stage's text, split into the agent's closing message and the
+/// whole turn. See [`Daemon::collect_stage_text`].
+#[derive(Debug, Default, Clone)]
+struct StageText {
+    closing: String,
+    full: String,
 }
 
 /// Create the default policy set for a new daemon.

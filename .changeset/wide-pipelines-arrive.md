@@ -24,3 +24,8 @@ rounds asks whether to grant more, finish as is, or stop. Pipelines can be
 paused between stages and resumed with extra guidance, survive a daemon restart
 by parking at their last safe point, and never commit anything — a finished run
 lands in Needs review for you to inspect.
+
+Reviewers can pin each finding to a line and a short code excerpt, so the
+repair stage goes straight to the right place instead of searching, and the
+summary a stage hands to the next one is its closing message rather than the
+whole turn's tool narration.

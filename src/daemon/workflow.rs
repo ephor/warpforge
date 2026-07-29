@@ -2,11 +2,10 @@
 //! helpers (stage prompts, verdict/marker parsing, review merging, context
 //! formatting).
 //!
-//! The pipeline shape is fixed: `plan? → implement → review ⇄ fix` (see
-//! design doc). This module has no side effects — the actor
-//! glue that spawns stage sessions, reacts to turn ends, and emits events
-//! lives in `actor.rs` and calls into these helpers, so everything here is
-//! unit-testable in isolation.
+//! The pipeline shape is fixed: `plan? → implement → review ⇄ fix`. This
+//! module has no side effects — the actor glue that spawns stage sessions,
+//! reacts to turn ends, and emits events lives in `actor.rs` and calls into
+//! these helpers, so everything here is unit-testable in isolation.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -154,6 +153,13 @@ impl Severity {
 pub struct Finding {
     pub severity: Severity,
     pub file: Option<String>,
+    /// Line in the post-change file, when the reviewer pinned one down.
+    #[serde(default)]
+    pub line: Option<u32>,
+    /// A short verbatim excerpt of the offending code. More robust than a line
+    /// number — the fixer can search for it after the file has shifted.
+    #[serde(default)]
+    pub snippet: Option<String>,
     pub description: String,
     /// Reviewer label, e.g. "reviewer 2 (codex)".
     pub reviewer: String,
@@ -545,6 +551,28 @@ pub fn parse_review_verdict(text: &str, reviewer: &str) -> Result<(Verdict, Vec<
                     .and_then(|v| v.as_str())
                     .map(str::to_string)
                     .filter(|f| !f.is_empty()),
+                // Agents emit the line as a number or a string, and sometimes
+                // as a range ("42-45") — the first number is the anchor.
+                line: item
+                    .get("line")
+                    .and_then(|v| {
+                        v.as_u64().or_else(|| {
+                            v.as_str().and_then(|s| {
+                                s.trim()
+                                    .split(|c: char| !c.is_ascii_digit())
+                                    .find(|part| !part.is_empty())
+                                    .and_then(|part| part.parse().ok())
+                            })
+                        })
+                    })
+                    .and_then(|n| u32::try_from(n).ok())
+                    .filter(|n| *n > 0),
+                snippet: item
+                    .get("snippet")
+                    .or_else(|| item.get("code"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| clip_snippet(s.trim()))
+                    .filter(|s| !s.is_empty()),
                 description,
                 reviewer: reviewer.to_string(),
             });
@@ -566,6 +594,8 @@ pub fn parse_review_verdict(text: &str, reviewer: &str) -> Result<(Verdict, Vec<
         findings.push(Finding {
             severity: Severity::Medium,
             file: None,
+            line: None,
+            snippet: None,
             description: if prose.is_empty() {
                 "Changes were requested without any detail. Re-check the diff against the task \
                  and fix what looks wrong."
@@ -760,22 +790,48 @@ pub fn format_findings(findings: &[Finding]) -> String {
         .iter()
         .enumerate()
         .map(|(i, f)| {
-            let file = f
-                .file
-                .as_deref()
-                .map(|p| format!(" `{p}`"))
-                .unwrap_or_default();
-            format!(
+            let location = match (f.file.as_deref(), f.line) {
+                (Some(path), Some(line)) => format!(" `{path}:{line}`"),
+                (Some(path), None) => format!(" `{path}`"),
+                (None, _) => String::new(),
+            };
+            let mut entry = format!(
                 "{}. [{}]{} — {} ({})",
                 i + 1,
                 f.severity.label(),
-                file,
+                location,
                 f.description,
                 f.reviewer
-            )
+            );
+            if let Some(snippet) = f.snippet.as_deref() {
+                // A verbatim excerpt survives line drift: the fixer can search
+                // for it even after the file has moved underneath the number.
+                entry.push_str(&format!("\n   at: `{snippet}`"));
+            }
+            entry
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Keep a code anchor short: a reviewer that pastes a whole function would
+/// otherwise dominate the repair prompt.
+fn clip_snippet(snippet: &str) -> String {
+    const MAX: usize = 200;
+    let one_line = snippet.replace('\n', " ").trim().to_string();
+    if one_line.len() <= MAX {
+        return one_line;
+    }
+    let end = floor_char_boundary(&one_line, MAX);
+    format!("{}…", &one_line[..end])
+}
+
+/// True when `text` carries either machine protocol payload. Used to decide
+/// whether an agent's closing message is the authoritative output or whether
+/// the payload only appears earlier in the turn.
+pub fn has_protocol_payload(text: &str) -> bool {
+    extract_last_json_with_key(text, "verdict").is_some()
+        || extract_last_json_with_key(text, "need_user_input").is_some()
 }
 
 /// Short one-line findings summary for the limit-decision prompt.
@@ -843,7 +899,12 @@ Report real problems only — do not invent findings to seem thorough. You may r
 verification (build, tests, linters) to check your reasoning, but do not edit files.\n\n\
 You MUST end your reply with exactly one fenced code block, and nothing after it, of this \
 shape:\n\
-```json\n{\"verdict\": \"request_changes\", \"findings\": [{\"severity\": \"high\", \"file\": \"src/example.rs\", \"description\": \"what is wrong and why\"}]}\n```\n\
+```json\n{\"verdict\": \"request_changes\", \"findings\": [{\"severity\": \"high\", \"file\": \"src/example.rs\", \"line\": 42, \"snippet\": \"if attempts > max {\", \"description\": \"what is wrong and why\"}]}\n```\n\
+Anchor every finding you can: `line` is the line in the file AFTER the change \
+(each diff hunk header `@@ -old +new @@` gives you the new-file line its body \
+starts at), and `snippet` is one short verbatim line of the offending code. \
+Both are optional but they let the repair stage go straight to the right place \
+instead of searching.\n\
 When you approve, send `{\"verdict\": \"approve\", \"findings\": []}` — use `approve` only when no \
 critical, high, or medium problem remains. `findings` MUST be a JSON array (empty when there are \
 none) and every entry MUST carry a `description`: anything you only write in prose is invisible \
@@ -1148,10 +1209,62 @@ mod tests {
     }
 
     #[test]
+    fn verdict_parsing_reads_finding_anchors() {
+        let text = r#"```json
+{"verdict": "request_changes", "findings": [
+  {"severity": "high", "file": "src/a.rs", "line": 42, "snippet": "if attempts > max {", "description": "off-by-one"},
+  {"severity": "high", "file": "src/b.rs", "line": "17-20", "code": "let x = 1;", "description": "string range"},
+  {"severity": "low", "line": 0, "description": "no anchor"}
+]}
+```"#;
+        let (_, findings) = parse_review_verdict(text, "r").unwrap();
+        assert_eq!(findings[0].line, Some(42));
+        assert_eq!(findings[0].snippet.as_deref(), Some("if attempts > max {"));
+        // A range and a `code` alias both resolve.
+        assert_eq!(findings[1].line, Some(17));
+        assert_eq!(findings[1].snippet.as_deref(), Some("let x = 1;"));
+        // Line 0 is not a location.
+        assert_eq!(findings[2].line, None);
+        assert_eq!(findings[2].snippet, None);
+
+        // Anchors reach the repair prompt.
+        let rendered = format_findings(&findings);
+        assert!(rendered.contains("`src/a.rs:42`"), "{rendered}");
+        assert!(rendered.contains("at: `if attempts > max {`"), "{rendered}");
+        assert!(rendered.contains("`src/b.rs:17`"), "{rendered}");
+
+        // An oversized excerpt is clipped to one line.
+        let long = format!(
+            "```json\n{{\"verdict\": \"approve\", \"findings\": [{{\"description\": \"d\", \"snippet\": \"{}\"}}]}}\n```",
+            "x".repeat(400)
+        );
+        let (_, findings) = parse_review_verdict(&long, "r").unwrap();
+        let snippet = findings[0].snippet.as_deref().unwrap();
+        assert!(snippet.len() <= 204, "{}", snippet.len());
+        assert!(snippet.ends_with('…'));
+    }
+
+    #[test]
+    fn protocol_payload_detection() {
+        assert!(has_protocol_payload(
+            "```json\n{\"verdict\": \"approve\"}\n```"
+        ));
+        assert!(has_protocol_payload(
+            "```json\n{\"need_user_input\": \"which db?\"}\n```"
+        ));
+        // An unrelated JSON block is not a protocol payload — this is what
+        // keeps a quoted config file from hijacking a stage's result.
+        assert!(!has_protocol_payload("```json\n{\"name\": \"pkg\"}\n```"));
+        assert!(!has_protocol_payload("just prose"));
+    }
+
+    #[test]
     fn merge_reviews_requires_unanimous_approve() {
         let f = |desc: &str| Finding {
             severity: Severity::High,
             file: None,
+            line: None,
+            snippet: None,
             description: desc.into(),
             reviewer: "r".into(),
         };
@@ -1438,6 +1551,8 @@ mod tests {
         run.open_findings = vec![Finding {
             severity: Severity::High,
             file: None,
+            line: None,
+            snippet: None,
             description: "d".into(),
             reviewer: "r".into(),
         }];
@@ -1484,6 +1599,8 @@ mod tests {
         run.open_findings = vec![Finding {
             severity: Severity::Critical,
             file: Some("a.rs".into()),
+            line: Some(7),
+            snippet: Some("let x = 1;".into()),
             description: "boom".into(),
             reviewer: "r".into(),
         }];

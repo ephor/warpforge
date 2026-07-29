@@ -21,7 +21,10 @@ pub const SUPPORTED_VERSION: u64 = 1;
 /// Hard cap on review ⇄ fix rounds a YAML may request (a human can still
 /// extend a running pipeline past this — that is an explicit decision).
 pub const MAX_ROUNDS_CAP: u32 = 5;
-pub const DEFAULT_MAX_ROUNDS: u32 = 2;
+/// Default review rounds. A fix runs *between* rounds, so N rounds buy N-1
+/// repair attempts: 3 keeps a second attempt available when the first fix
+/// misses, which is the common case.
+pub const DEFAULT_MAX_ROUNDS: u32 = 3;
 pub const MAX_REVIEWERS: usize = 4;
 
 /// Built-in templates, selectable everywhere and ejectable into a project.
