@@ -239,7 +239,7 @@ export interface OrchNodeInfo {
   result?: string | null;
 }
 
-export type OrchNodeKind = "plan" | "implement" | "review" | "merge";
+export type OrchNodeKind = "plan" | "implement" | "review" | "fix" | "merge";
 
 export type OrchNodeStatus = "pending" | "running" | "complete" | "failed" | "skipped";
 
@@ -339,10 +339,36 @@ export interface SessionUsageCost {
   currency: string;
 }
 
+export interface WorkflowEventAgent {
+  taskId: string;
+  label: string;
+  agent: string;
+  model?: string | null;
+}
+
+export type WorkflowEventKind =
+  | "workflow_started"
+  | "stage_started"
+  | "agent_output"
+  | "review_result"
+  | "status"
+  | "workflow_finished";
+
+export type WorkflowEventTone = "info" | "running" | "success" | "warning" | "error";
+
 export type SessionUpdate =
   | { kind: "user_message"; text: string; attachments?: PromptAttachmentSummary[] }
   | { kind: "prompt_capabilities"; image: boolean; embedded_context: boolean }
   | { kind: "agent_text"; text: string }
+  | {
+      kind: "workflow_event";
+      event: WorkflowEventKind;
+      title: string;
+      detail?: string | null;
+      stage?: WorkflowStage | null;
+      agents: WorkflowEventAgent[];
+      tone: WorkflowEventTone;
+    }
   | { kind: "agent_thought"; text: string }
   | {
       kind: "tool_call";

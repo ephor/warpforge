@@ -45,6 +45,15 @@ impl StageKind {
         }
     }
 
+    pub fn title(self) -> &'static str {
+        match self {
+            StageKind::Plan => "Plan",
+            StageKind::Implement => "Implement",
+            StageKind::Review => "Review",
+            StageKind::Fix => "Fix",
+        }
+    }
+
     pub fn wire(self) -> wire::WorkflowStage {
         match self {
             StageKind::Plan => wire::WorkflowStage::Plan,

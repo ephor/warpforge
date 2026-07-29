@@ -110,6 +110,12 @@ describe("ChatComposer — workflow parents", () => {
     );
   });
 
+  it("hard-stops a running workflow from the parent composer", async () => {
+    renderComposer(task(run()));
+    await userEvent.click(screen.getByRole("button", { name: /^stop$/i }));
+    expect(request).toHaveBeenCalledWith("task.cancel", { task_id: "t_1" });
+  });
+
   it("re-enables input once the pipeline finishes", () => {
     renderComposer(task({ ...run(), stage: "done", waiting: null }));
     expect(screen.getByRole("textbox")).not.toBeDisabled();

@@ -1,17 +1,85 @@
 # Built-in workflow: plan → implement → review ⇄ fix.
 #
-# Copy this file into <project>/.warpforge/workflows/ (or use "Copy to
-# project" in the New Task dialog) to customize it. Every key except `name`
-# is optional — omitted stages fall back to the lead agent picked in the
-# dialog and to the built-in stage prompts.
+# Every stage is explicit here so this file is both runnable and a complete
+# customization example. Agent/model omissions use the lead agent selected in
+# the New Task dialog.
 version: 1
-name: Plan + review loop
-description: Plan first, then implement and loop reviews and fixes until approved.
+name: Plan + implement + review loop
+description: Plan first, implement the plan, then loop reviews and fixes until approved.
 
-plan: {} # presence of this key enables the planning stage (a bare `plan:` works too)
-#   agent: claude
-#   model: claude-opus-5
+plan:
+  # agent: claude
+  # model: claude-opus-5
+  prompt: |
+    You are the planning stage of a workflow pipeline. Explore the codebase as
+    needed and produce a concise implementation plan: files to touch, approach,
+    edge cases, and verification. Do not edit files. End with the complete plan
+    because it is passed verbatim to the implementer.
+
+    ## Task
+    {{task_prompt}}
+
+implement:
+  # agent: codex
+  # model: gpt-5.6-sol
+  prompt: |
+    You are the implementation stage of a workflow pipeline. Implement the task
+    and approved plan completely: write the code, keep the change focused, and
+    verify your work with builds/tests where feasible. Your final message must
+    summarize what you did because it is passed to the reviewers.
+
+    ## Task
+    {{task_prompt}}
+
+    ## Approved plan
+    {{plan}}
 
 review:
   max_rounds: 2 # review ⇄ fix iterations before asking you what to do
   on_limit: ask # ask | finish — behaviour when the limit is hit
+  context: [prompt, plan, implementer_summary, diff]
+  reviewers:
+    - # agent: claude
+      # model: claude-opus-5
+      # focus: correctness and edge cases
+      prompt: |
+        You are a code reviewer in workflow round {{round}}/{{max_rounds}}.
+        Review the implementation against the task and approved plan. Do not
+        edit files. Verify claims against the diff and report only concrete,
+        actionable problems.
+
+        ## Task
+        {{task_prompt}}
+
+        ## Approved plan
+        {{plan}}
+
+        ## Implementer's summary
+        {{implementer_summary}}
+
+        ## Working-copy diff
+        {{diff}}
+
+fix:
+  # Omitted agent/model inherit the implementation stage; uncomment to pin.
+  # agent: codex
+  # model: gpt-5.6-sol
+  prompt: |
+    You are the repair stage of workflow round {{round}}/{{max_rounds}}.
+    Address every reviewer finding: fix it or, if it is factually wrong,
+    explain why in your final summary. Do not change unrelated code. Verify the
+    result where feasible and summarize what changed for the next review.
+
+    ## Task
+    {{task_prompt}}
+
+    ## Approved plan
+    {{plan}}
+
+    ## Findings to address
+    {{findings}}
+
+    ## Current working-copy diff
+    {{diff}}
+
+# Warpforge appends the need_user_input/verdict JSON protocols to these prompts.

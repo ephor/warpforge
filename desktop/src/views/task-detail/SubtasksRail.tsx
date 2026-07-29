@@ -6,20 +6,45 @@ import { AgentBadge } from "../../components/AgentBadge";
 import { StatusBadge } from "../../components/StatusBadge";
 import type { OrchNodeInfo, TaskInfo } from "../../protocol";
 
-function SubtaskRow({ node }: { node: OrchNodeInfo }) {
-  return (
-    <div className="flex items-center gap-2 rounded bg-secondary/30 px-2 py-1.5 text-xs">
+function SubtaskRow({
+  node,
+  onOpenTask,
+}: {
+  node: OrchNodeInfo;
+  onOpenTask: (id: string) => void;
+}) {
+  const content = (
+    <>
       <StatusBadge status={node.status} size="xs" />
       <span className="min-w-0 flex-1 truncate font-medium text-foreground">{node.kind}</span>
       <AgentBadge agentId={node.agent} size="xs" className="shrink-0 text-muted-foreground" />
       {node.taskId && (
         <span className="shrink-0 text-[10px] text-muted-foreground/60">{node.taskId}</span>
       )}
+    </>
+  );
+  return node.taskId ? (
+    <button
+      type="button"
+      onClick={() => onOpenTask(node.taskId!)}
+      className="flex w-full items-center gap-2 rounded bg-secondary/30 px-2 py-1.5 text-left text-xs transition-colors hover:bg-secondary/60"
+    >
+      {content}
+    </button>
+  ) : (
+    <div className="flex items-center gap-2 rounded bg-secondary/30 px-2 py-1.5 text-xs">
+      {content}
     </div>
   );
 }
 
-export function SubtasksRail({ task }: { task: TaskInfo }) {
+export function SubtasksRail({
+  onOpenTask,
+  task,
+}: {
+  onOpenTask: (id: string) => void;
+  task: TaskInfo;
+}) {
   const nodes = task.orchestrationGraph?.nodes ?? [];
   const graph = task.orchestrationGraph;
   if (!graph) {
@@ -38,7 +63,7 @@ export function SubtasksRail({ task }: { task: TaskInfo }) {
       <ScrollArea className="flex-1">
         <div className="flex flex-col gap-1 p-2">
           {nodes.map((node) => (
-            <SubtaskRow key={node.id} node={node} />
+            <SubtaskRow key={node.id} node={node} onOpenTask={onOpenTask} />
           ))}
         </div>
       </ScrollArea>

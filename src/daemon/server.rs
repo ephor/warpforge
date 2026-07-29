@@ -609,7 +609,13 @@ async fn dispatch(
             Ok(json!({ "text": text }))
         }
         TaskCancel { task_id } => {
-            handle.send(Command::CancelTask { id: task_id }).await;
+            handle
+                .cancel_task(&task_id)
+                .await
+                .map_err(|message| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message,
+                })?;
             Ok(json!(null))
         }
         TaskArchive { task_id } => {

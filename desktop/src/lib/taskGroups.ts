@@ -63,7 +63,9 @@ export function taskLifecycle(task: TaskInfo, nowSeconds: number): TaskLifecycle
 }
 
 export function taskNeedsAttention(task: TaskInfo): boolean {
+  const waiting = task.workflowRun?.waiting ?? null;
   return (
+    (!!waiting && waiting.kind !== "paused") ||
     task.status === "needs_review" || task.status === "blocked" || task.status === "interrupted"
   );
 }

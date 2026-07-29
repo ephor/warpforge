@@ -58,6 +58,7 @@ import { BufferedMarkdown, CollapsibleMarkdown, Markdown } from "../components/M
 import { StatusBadge } from "../components/StatusBadge";
 import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { ThinkingBlock } from "../components/ThinkingBlock";
+import { WorkflowEventLine } from "../components/WorkflowEventLine";
 import type { DaemonState } from "../daemon";
 import { daemon } from "../daemon";
 import type { CommandInfo, EditHunk, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
@@ -703,6 +704,7 @@ export function StreamLine({
   resolveFilePath,
   onOpenFile,
   onOpenFileDiff,
+  onOpenTask,
   project,
   thinkingActive,
   textStreaming,
@@ -716,6 +718,8 @@ export function StreamLine({
   resolveFilePath?: FileLinkResolver;
   onOpenFile?: (path: string) => void;
   onOpenFileDiff?: (path: string, hunks?: EditHunk[]) => void;
+  /** Opens a workflow stage/reviewer child from an inline timeline card. */
+  onOpenTask?: (id: string) => void;
   /** Project root label retained after stripping the machine-specific prefix. */
   project?: string;
   /** True only for the thought block currently receiving streamed deltas. */
@@ -778,6 +782,10 @@ export function StreamLine({
         <Markdown resolveFilePath={resolveFilePath} onOpenFile={onOpenFile}>
           {update.text}
         </Markdown>
+      );
+    case "workflow_event":
+      return (
+        <WorkflowEventLine update={update} compact={compact} onOpenTask={onOpenTask} />
       );
     case "agent_thought":
       return compact ? (

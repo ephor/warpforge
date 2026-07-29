@@ -98,6 +98,7 @@ pub enum AcpCommand {
 #[derive(Clone)]
 pub struct AcpHandle {
     cmd_tx: mpsc::UnboundedSender<AcpCommand>,
+    exit_rx: watch::Receiver<ChildState>,
     image_capability: Arc<AtomicU8>,
     process: Arc<ProcessGuard>,
     run_id: u64,
@@ -126,6 +127,29 @@ impl AcpHandle {
     pub fn cancel(&self) {
         self.process.stop_intentionally();
         let _ = self.cmd_tx.send(AcpCommand::Cancel);
+    }
+
+    /// Request cancellation and wait until the process monitor has reaped the
+    /// ACP child. Callers can use this as the acknowledgement boundary for a
+    /// hard-stop operation.
+    pub async fn cancel_and_wait(&self) -> Result<(), String> {
+        self.cancel();
+        self.wait_for_exit().await
+    }
+
+    /// Wait for the process monitor's post-`child.wait()` notification.
+    pub async fn wait_for_exit(&self) -> Result<(), String> {
+        let mut exit_rx = self.exit_rx.clone();
+        loop {
+            if matches!(*exit_rx.borrow(), ChildState::Exited(_)) {
+                return Ok(());
+            }
+            if exit_rx.changed().await.is_err() {
+                return Err(
+                    "ACP process monitor closed before confirming process termination".to_string(),
+                );
+            }
+        }
     }
 
     pub fn run_id(&self) -> u64 {
@@ -759,10 +783,12 @@ pub fn spawn_acp_session(
         let driver_stderr_capture = Arc::clone(&stderr_capture);
         let driver_default_model = default_model.clone();
         let driver_config_overrides = config_overrides;
+        let driver_exit_state = exit_rx.clone();
         tokio::spawn(async move {
             const INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
             const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
             let agent_name = sanitize_stderr(command_for_err.trim().as_bytes());
+            let exit_rx = driver_exit_state;
             let mut driver_exit_rx = exit_rx.clone();
 
             let init = match tokio::time::timeout(
@@ -1182,6 +1208,7 @@ pub fn spawn_acp_session(
 
     Ok(AcpHandle {
         cmd_tx,
+        exit_rx,
         image_capability,
         process,
         run_id,
@@ -2142,9 +2169,11 @@ mod tests {
     #[test]
     fn handle_enforces_negotiated_image_capability() {
         let (tx, mut rx) = mpsc::unbounded_channel();
+        let (_exit_tx, exit_rx) = watch::channel(ChildState::Running);
         let capability = Arc::new(AtomicU8::new(1));
         let handle = AcpHandle {
             cmd_tx: tx,
+            exit_rx,
             image_capability: Arc::clone(&capability),
             process: test_process_guard(),
             run_id: 1,
