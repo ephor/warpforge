@@ -194,6 +194,11 @@ impl Store {
                 id         INTEGER PRIMARY KEY CHECK (id = 1),
                 config_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS workflow_runs (
+                task_id    TEXT PRIMARY KEY,
+                run_json   TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             "#,
         )?;
         // Existing databases from before config selector persistence won't have
@@ -312,6 +317,7 @@ impl Store {
                 config_options: serde_json::from_str(&config_options_json).unwrap_or_default(),
                 worktree: row.get(12)?,
                 orchestration_graph: None,
+                workflow_run: None,
                 parent_task_id: row.get(13)?,
                 settled_override: row.get::<_, Option<i64>>(15)?.map(|v| v != 0),
                 settled_at: row.get::<_, Option<u64>>(16)?,
@@ -414,10 +420,42 @@ impl Store {
         Ok(())
     }
 
+    /// Persist a workflow pipeline's full state (spec snapshot included) as
+    /// one JSON blob, replacing any previous snapshot for the task.
+    pub fn save_workflow_run(&self, task_id: &str, run_json: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO workflow_runs (task_id, run_json, updated_at) \
+             VALUES (?1, ?2, strftime('%s','now'))",
+            rusqlite::params![task_id, run_json],
+        )?;
+        Ok(())
+    }
+
+    /// All persisted workflow runs as (task_id, run_json) pairs.
+    pub fn load_workflow_runs(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT task_id, run_json FROM workflow_runs")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn delete_workflow_run(&self, task_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM workflow_runs WHERE task_id = ?1",
+            rusqlite::params![task_id],
+        )?;
+        Ok(())
+    }
+
     /// Delete a task and its session history permanently.
     pub fn delete_task(&self, id: &str) -> Result<()> {
         self.conn.execute(
             "DELETE FROM session_updates WHERE task_id = ?1",
+            rusqlite::params![id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM workflow_runs WHERE task_id = ?1",
             rusqlite::params![id],
         )?;
         self.conn

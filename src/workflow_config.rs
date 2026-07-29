@@ -11,7 +11,7 @@
 //! sync code unit-testable in isolation.
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ pub const BUILTIN_WORKFLOWS: &[(&str, &str)] = &[
 
 // ─── Validated model ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowSpec {
     /// File stem for project workflows, registry key for built-ins.
     pub id: String,
@@ -52,14 +52,14 @@ pub struct WorkflowSpec {
 /// Per-stage overrides. `None` falls back to the lead agent / model picked in
 /// the New Task dialog (for `fix`: to the `implement` stage's values) and to
 /// the built-in stage prompt.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StageConfig {
     pub agent: Option<String>,
     pub model: Option<String>,
     pub prompt: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewConfig {
     pub max_rounds: u32,
     pub on_limit: OnLimit,
@@ -69,7 +69,8 @@ pub struct ReviewConfig {
 }
 
 /// What the pipeline does when `max_rounds` is exhausted with open findings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OnLimit {
     /// Suspend and ask the user (extend / finish / stop).
     Ask,
@@ -78,7 +79,8 @@ pub enum OnLimit {
 }
 
 /// One piece of context assembled into a reviewer's prompt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReviewContextItem {
     /// The task prompt the user typed.
     Prompt,
@@ -90,7 +92,7 @@ pub enum ReviewContextItem {
     Diff,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ReviewerConfig {
     pub agent: Option<String>,
     pub model: Option<String>,

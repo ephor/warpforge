@@ -64,6 +64,9 @@ pub struct Task {
     pub worktree: Option<String>,
     /// Orchestration graph for parent orchestrator tasks.
     pub orchestration_graph: Option<warpforge_protocol::OrchGraphInfo>,
+    /// Live workflow pipeline state for workflow parent tasks. Derived from
+    /// the engine's run (not persisted with the task — the run itself is).
+    pub workflow_run: Option<warpforge_protocol::WorkflowRunInfo>,
     /// When this task was spawned by an orchestrator agent as a sub-agent, the
     /// id of that orchestrator task. Its result is delivered back into the
     /// parent's inbox on completion.
@@ -99,6 +102,7 @@ impl Task {
             config_options: Vec::new(),
             worktree: None,
             orchestration_graph: None,
+            workflow_run: None,
             parent_task_id: None,
             settled_override: None,
             settled_at: None,
