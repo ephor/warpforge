@@ -1,0 +1,31 @@
+# Built-in workflow: implement → review ⇄ fix.
+#
+# Copy this file into <project>/.warpforge/workflows/ (or use "Copy to
+# project" in the New Task dialog) to customize it. Every key except `name`
+# is optional — omitted stages fall back to the lead agent picked in the
+# dialog and to the built-in stage prompts.
+version: 1
+name: Review loop
+description: Implement, then loop reviews and fixes until reviewers approve.
+
+# implement:                    # defaults to the lead agent from the dialog
+#   agent: claude
+#   model: claude-opus-5
+#   prompt: |                   # custom stage prompt, supports {{task_prompt}}, {{plan}}
+#     ...
+
+review:
+  max_rounds: 2 # review ⇄ fix iterations before asking you what to do
+  on_limit: ask # ask | finish — behaviour when the limit is hit
+  # context: [prompt, plan, implementer_summary, diff]
+  # reviewers:                  # defaults to one reviewer = the lead agent
+  #   - agent: claude
+  #     model: claude-opus-5
+  #     focus: correctness and edge cases
+  #   - agent: codex
+  #     focus: security and error handling
+
+# fix:                          # defaults to the implement stage's agent/model
+#   agent: claude
+#   prompt: |                   # supports {{findings}}, {{diff}}, {{round}}, …
+#     ...

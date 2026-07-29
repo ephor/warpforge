@@ -432,6 +432,18 @@ pub enum Method {
     #[serde(rename = "orchestrate.saveConfig")]
     OrchestrateSaveConfig { config: OrchestratorConfigDto },
 
+    // ── Workflows (deterministic pipeline templates) ──
+    /// List workflows selectable for a project: `.warpforge/workflows/*.yaml`
+    /// plus built-in templates (a project file overrides the built-in with the
+    /// same id). Returns `{ "workflows": [WorkflowMeta] }`.
+    #[serde(rename = "workflow.list")]
+    WorkflowList { project: String },
+    /// Copy a built-in workflow into the project's `.warpforge/workflows/`
+    /// directory so it can be customized. Refuses to overwrite an existing
+    /// file. Returns `{ "path": … }`.
+    #[serde(rename = "workflow.eject")]
+    WorkflowEject { project: String, id: String },
+
     // ── Bootstrap wizard (desktop) ──
     /// Scan the repo, build the bootstrap prompt from the user's answers, and
     /// create a config-gen task. Returns `{ taskId }`.
@@ -1313,6 +1325,42 @@ pub enum OrchNodeStatus {
     Complete,
     Failed,
     Skipped,
+}
+
+/// One selectable workflow template, as returned by `workflow.list`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowMeta {
+    pub id: String,
+    /// Display name from the YAML; falls back to the id for invalid files.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub source: WorkflowSource,
+    /// False when the file failed to parse or validate — such workflows are
+    /// listed (greyed out in the picker, `error` in the tooltip) but cannot
+    /// be selected.
+    pub valid: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Non-fatal issues (unknown keys, clamped values).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+    /// Stage names for the picker tooltip, e.g. ["plan","implement","review×2","fix"].
+    /// Empty for invalid files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<String>,
+    /// Review ⇄ fix round limit. 0 for invalid files.
+    #[serde(default)]
+    pub max_rounds: u32,
+}
+
+/// Where a workflow definition comes from.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkflowSource {
+    Project,
+    Builtin,
 }
 
 /// Orchestrator configuration DTO (wire format).

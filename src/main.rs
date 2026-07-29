@@ -14,6 +14,7 @@ mod ports;
 mod registry;
 mod service;
 mod tui;
+mod workflow_config;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
@@ -40,7 +41,7 @@ enum Commands {
     Remove { name: String },
     /// List registered projects
     List,
-    /// Generate .warpforge.yaml in the current (or given) directory
+    /// Generate .warpforge/workspace.yaml in the current (or given) directory
     Init {
         /// Directory to init (defaults to current directory)
         path: Option<String>,
@@ -48,7 +49,7 @@ enum Commands {
         #[arg(short, long)]
         add: bool,
     },
-    /// Interactively generate a .warpforge.yaml with an agent. Registers the
+    /// Interactively generate a workspace config with an agent. Registers the
     /// project if needed, asks the daemon to run a bootstrap task, then lets you
     /// accept / edit / discard the proposed config.
     Bootstrap {
@@ -269,6 +270,10 @@ async fn run_bootstrap(path: &str) -> Result<()> {
         .starts_with('y')
     {
         let target = config::find_config_file(std::path::Path::new(path));
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
         std::fs::write(&target, &yaml).with_context(|| format!("writing {}", target.display()))?;
         println!("Wrote {}", target.display());
     } else {

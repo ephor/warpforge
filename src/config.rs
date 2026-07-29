@@ -89,8 +89,15 @@ pub fn sorted_services(config: &WorkspaceConfig) -> Vec<String> {
     result
 }
 
-/// Config file names in priority order: new → legacy.
-const CONFIG_NAMES: &[&str] = &[".warpforge.yaml", ".wf.yaml", ".workspace.yaml"];
+/// Config file names in priority order: new → legacy. `.warpforge/` is the
+/// preferred home for warpforge files (workspace config, workflows); the
+/// root-level names keep working for existing projects.
+const CONFIG_NAMES: &[&str] = &[
+    ".warpforge/workspace.yaml",
+    ".warpforge.yaml",
+    ".wf.yaml",
+    ".workspace.yaml",
+];
 
 /// Load a project's config while preserving the distinction between a missing
 /// config and an existing file that could not be read or parsed.
@@ -115,7 +122,9 @@ pub fn load_workspace_config(project_path: &Path) -> Option<WorkspaceConfig> {
     try_load_workspace_config(project_path).ok().flatten()
 }
 
-/// Return the first existing config file path, or the default `.warpforge.yaml`.
+/// Return the first existing config file path, or the default
+/// `.warpforge/workspace.yaml` for projects that have no config yet. Callers
+/// writing to the returned path must create its parent directory first.
 pub fn find_config_file(project_path: &Path) -> std::path::PathBuf {
     for name in CONFIG_NAMES {
         let p = project_path.join(name);
@@ -123,7 +132,7 @@ pub fn find_config_file(project_path: &Path) -> std::path::PathBuf {
             return p;
         }
     }
-    project_path.join(".warpforge.yaml")
+    project_path.join(CONFIG_NAMES[0])
 }
 
 fn auto_detect(project_path: &Path) -> Option<WorkspaceConfig> {
@@ -219,13 +228,17 @@ fn auto_detect(project_path: &Path) -> Option<WorkspaceConfig> {
     })
 }
 
-/// Generate a .warpforge.yaml file in the given directory.
-/// If auto-detection finds services, pre-populates them.
+/// Generate a `.warpforge/workspace.yaml` file in the given directory.
+/// If auto-detection finds services, pre-populates them. Refuses to run when
+/// any config (new or legacy location) already exists.
 pub fn generate_workspace_yaml(project_path: &Path) -> anyhow::Result<()> {
-    let target = project_path.join(".warpforge.yaml");
-    if target.exists() {
-        anyhow::bail!(".warpforge.yaml already exists at {}", target.display());
+    for name in CONFIG_NAMES {
+        let existing = project_path.join(name);
+        if existing.exists() {
+            anyhow::bail!("config already exists at {}", existing.display());
+        }
     }
+    let target = project_path.join(CONFIG_NAMES[0]);
 
     let name = project_path
         .canonicalize()
@@ -238,11 +251,11 @@ pub fn generate_workspace_yaml(project_path: &Path) -> anyhow::Result<()> {
     let content = if let Some(config) = auto_detect(project_path) {
         // Serialize detected config
         let yaml = serde_yaml::to_string(&config)?;
-        format!("# .warpforge.yaml — auto-detected by warpforge\n{yaml}")
+        format!("# .warpforge/workspace.yaml — auto-detected by warpforge\n{yaml}")
     } else {
         // Write template
         format!(
-            r#"# .warpforge.yaml — Warpforge project configuration
+            r#"# .warpforge/workspace.yaml — Warpforge project configuration
 name: {name}
 
 services:
@@ -263,6 +276,9 @@ services:
         )
     };
 
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    }
     fs::write(&target, content)?;
     println!("Created {}", target.display());
     Ok(())
