@@ -4596,6 +4596,14 @@ impl Daemon {
                 StageKind::Fix => Some(workflow::format_findings(&run.open_findings)),
                 _ => None,
             },
+            prior_findings: match stage {
+                // On a repeat round `open_findings` still holds what the last
+                // review raised — the next reviewers must verify each item.
+                StageKind::Review if run.round > 1 && !run.open_findings.is_empty() => {
+                    Some(workflow::format_findings(&run.open_findings))
+                }
+                _ => None,
+            },
             round: run.round,
             max_rounds: run.effective_max_rounds(),
             guidance,
@@ -4614,11 +4622,68 @@ impl Daemon {
                 run.review_collected.clear();
                 run.reasked.clear();
                 let round_label = format!("round {}/{}", run.round, run.effective_max_rounds());
+                // Repeat rounds follow up in the previous reviewers' live
+                // sessions (review.reask: same_session, the default): the
+                // reviewer remembers its own findings and verifies each one
+                // instead of re-reviewing from scratch. A dead session falls
+                // back to a fresh spawn whose prompt carries those findings.
+                let reuse_sessions = run.round > 1
+                    && run.spec.review.reask == crate::workflow_config::ReaskMode::SameSession;
                 let mut event_agents = Vec::with_capacity(run.spec.review.reviewers.len());
+                let mut reused = 0usize;
                 for index in 0..run.spec.review.reviewers.len() {
                     let (agent, model) = run.stage_agent(stage, Some(index));
-                    let prompt = workflow::build_reviewer_prompt(&run.spec, index, &ctx);
                     let label = run.reviewer_label(index);
+                    if reuse_sessions {
+                        if let Some(prior_id) = run.prior_review_children.get(&index).cloned() {
+                            let followup = workflow::build_rereview_prompt(&ctx);
+                            let delivered = self
+                                .sessions
+                                .get(&prior_id)
+                                .map(|handle| {
+                                    handle
+                                        .prompt(super::prompt::PreparedPrompt {
+                                            content: vec![super::prompt::PromptContent::Text(
+                                                followup.clone(),
+                                            )],
+                                            summaries: vec![],
+                                            has_images: false,
+                                        })
+                                        .is_ok()
+                                })
+                                .unwrap_or(false);
+                            if delivered {
+                                self.emit_session(
+                                    &prior_id,
+                                    wire::SessionUpdate::UserMessage {
+                                        text: followup,
+                                        attachments: vec![],
+                                    },
+                                );
+                                // The child was parked Done after its verdict;
+                                // the generic mark_task_running refuses Done
+                                // tasks, so flip it explicitly.
+                                self.workflow_set_child_status(&prior_id, TaskStatus::Running);
+                                run.review_pending.insert(prior_id.clone(), index);
+                                run.active_children.insert(prior_id.clone(), stage);
+                                run.record_stage(
+                                    stage,
+                                    &prior_id,
+                                    &agent,
+                                    format!("{label}, {round_label}"),
+                                );
+                                event_agents.push(wire::WorkflowEventAgent {
+                                    task_id: prior_id,
+                                    label,
+                                    agent,
+                                    model,
+                                });
+                                reused += 1;
+                                continue;
+                            }
+                        }
+                    }
+                    let prompt = workflow::build_reviewer_prompt(&run.spec, index, &ctx);
                     let child_id = self.workflow_spawn_child(
                         &run.project,
                         parent_id,
@@ -4639,11 +4704,26 @@ impl Daemon {
                         model,
                     });
                 }
+                // Remember this round's staffing for the next reask.
+                run.prior_review_children = run
+                    .review_pending
+                    .iter()
+                    .map(|(child, index)| (*index, child.clone()))
+                    .collect();
+                let detail = if reused > 0 {
+                    format!(
+                        "{} reviewer(s) running; {reused} continuing their previous session to \
+                         verify their own findings.",
+                        run.review_pending.len()
+                    )
+                } else {
+                    format!("{} reviewer(s) running.", run.review_pending.len())
+                };
                 self.workflow_event(
                     parent_id,
                     wire::WorkflowEventKind::StageStarted,
                     format!("Review {round_label} started"),
-                    Some(format!("{} reviewer(s) running.", run.review_pending.len())),
+                    Some(detail),
                     Some(stage),
                     event_agents,
                     wire::WorkflowEventTone::Running,
@@ -5165,17 +5245,24 @@ impl Daemon {
         }
     }
 
-    /// Kill any still-running stage children (their sessions), wait until
-    /// their processes have exited, then Idle them.
+    /// Kill the run's stage sessions, wait until their processes have exited,
+    /// and mark the still-active children Interrupted. Completed stages keep
+    /// their sessions alive during the run (same-session re-review follows up
+    /// in them), so the sweep covers every child the run ever spawned — not
+    /// just the active ones.
     async fn workflow_stop_children(&mut self, run: &mut WorkflowRun) -> Result<(), String> {
-        let children: Vec<String> = run.active_children.keys().cloned().collect();
+        let active: Vec<String> = run.active_children.keys().cloned().collect();
         let mut handles = Vec::new();
-        for child_id in children {
+        for child_id in run.all_children() {
             if let Some(handle) = self.sessions.remove(&child_id) {
                 handle.cancel();
                 handles.push(handle);
             }
             self.pending_permissions.cleanup_task(&child_id);
+        }
+        // Only in-flight stages get their record and task status rewritten;
+        // completed ones keep their Done/Complete state.
+        for child_id in active {
             run.set_record_status(&child_id, wire::OrchNodeStatus::Skipped);
             if let Some(task) = self.tasks.get_mut(&child_id) {
                 if task.status == TaskStatus::Running || task.status == TaskStatus::Queued {

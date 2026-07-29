@@ -25,6 +25,9 @@ implement:
 review:
   max_rounds: 2 # review ⇄ fix iterations before asking you what to do
   on_limit: ask # ask | finish — behaviour when the limit is hit
+  # reask: same_session # same_session | fresh — repeat rounds follow up in the
+  #   same reviewer session (it verifies its own findings); `fresh` spawns new
+  #   reviewers each round, with last round's findings included for verification.
   context: [prompt, implementer_summary, diff]
   reviewers:
     # Each reviewer may use a different agent/model. Omitted values use Lead.
