@@ -81,7 +81,7 @@ describe("TaskComposeBar — workflow picker", () => {
     const user = userEvent.setup();
     renderBar();
     await user.click(screen.getByRole("button", { name: /workflow/i }));
-    await user.click(screen.getByRole("menuitem", { name: /Review loop/ }));
+    await user.click(screen.getByRole("menuitem", { name: /implement → review×2 → fix/ }));
     expect(onWorkflowChange).toHaveBeenCalledWith("review-loop");
   });
 
@@ -99,16 +99,17 @@ describe("TaskComposeBar — workflow picker", () => {
     const user = userEvent.setup();
     renderBar();
     await user.click(screen.getByRole("button", { name: /workflow/i }));
-    await user.click(screen.getByRole("menuitem", { name: /copy to project/i }));
+    await user.click(screen.getByRole("menuitem", { name: /copy review loop to this project/i }));
     expect(onEjectWorkflow).toHaveBeenCalledWith("review-loop");
     expect(onWorkflowChange).not.toHaveBeenCalled();
   });
 
-  it("summarizes the selected workflow and relabels the agent as the lead", () => {
+  it("summarizes the selected workflow and labels the agent as the per-stage default", () => {
     renderBar({ workflow: "review-loop" });
-    expect(screen.getByText(/implement → review×2 → fix/)).toBeInTheDocument();
+    expect(screen.getByText(/Stages: implement → review×2 → fix/)).toBeInTheDocument();
     expect(screen.getByText(/up to 2 review rounds/)).toBeInTheDocument();
-    expect(screen.getByText("Lead agent")).toBeInTheDocument();
+    // Nothing is "led": the parent has no session, this is just the fallback.
+    expect(screen.getByText("Default agent")).toBeInTheDocument();
   });
 
   it("locks the orchestrator toggle while a workflow is selected", () => {

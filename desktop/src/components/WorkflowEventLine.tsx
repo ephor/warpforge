@@ -44,7 +44,10 @@ export function WorkflowEventLine({
     <section className={cn("min-w-0 rounded-lg border px-3 py-2.5", tone)}>
       <div className="flex min-w-0 items-center gap-2">
         <Icon className="size-4 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+        <span
+          className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground"
+          title={update.title}
+        >
           {update.title}
         </span>
         {!showAgentCards &&
@@ -70,7 +73,12 @@ export function WorkflowEventLine({
               type="button"
               disabled={!onOpenTask}
               onClick={() => onOpenTask?.(agent.taskId)}
-              className="group flex min-w-44 max-w-full items-center gap-2 rounded-md border border-current/20 bg-background/45 px-2.5 py-2 text-left text-foreground transition-colors hover:border-current/40 hover:bg-background/70 disabled:pointer-events-none"
+              className={cn(
+                "group flex min-w-44 max-w-full items-center gap-2 rounded-md border border-border bg-background/45 px-2.5 py-2 text-left text-foreground transition-colors",
+                onOpenTask
+                  ? "hover:border-primary/40 hover:bg-background/70"
+                  : "cursor-default disabled:pointer-events-none",
+              )}
               aria-label={`Open ${agent.label} agent session`}
             >
               <span className="size-2 shrink-0 rounded-full bg-current" />
@@ -89,7 +97,9 @@ export function WorkflowEventLine({
                   )}
                 </span>
               </span>
-              <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+              {onOpenTask && (
+                <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+              )}
             </button>
           ))}
         </div>
@@ -99,7 +109,7 @@ export function WorkflowEventLine({
         (compact ? (
           <Markdown className="mt-2 text-xs text-current">{update.detail}</Markdown>
         ) : (
-          <div className="mt-2 border-t border-current/15 pt-2 text-foreground">
+          <div className="mt-2 border-t border-border pt-2 text-foreground">
             <CollapsibleMarkdown>{update.detail}</CollapsibleMarkdown>
           </div>
         ))}

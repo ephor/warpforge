@@ -616,6 +616,8 @@ mod tests {
                 workflow: "test".into(),
                 attachments: vec![],
                 default_model: None,
+                include_runtime_context: false,
+                config_overrides: std::collections::HashMap::new(),
                 reply: tx,
             })
             .await;
@@ -744,19 +746,27 @@ mod tests {
                 )
             })
             .unwrap();
+        // The finding reaches the timeline through the round's merged-verdict
+        // entry. The reviewer's own card shows its prose, NOT the raw protocol
+        // JSON it was asked to emit — that is stripped for display.
         let finding = workflow_events
             .iter()
             .position(|update| {
                 matches!(
                     update,
-                    wire::SessionUpdate::WorkflowEvent {
-                        event: wire::WorkflowEventKind::ReviewResult,
-                        detail: Some(detail),
-                        ..
-                    } if detail.contains("bug here")
+                    wire::SessionUpdate::WorkflowEvent { detail: Some(detail), .. }
+                        if detail.contains("bug here")
                 )
             })
-            .unwrap();
+            .expect("the merged verdict lists the finding");
+        assert!(
+            workflow_events.iter().all(|update| !matches!(
+                update,
+                wire::SessionUpdate::WorkflowEvent { detail: Some(detail), .. }
+                    if detail.contains("\"verdict\"")
+            )),
+            "the machine protocol block must not leak into the parent's timeline"
+        );
         let fix_summary = workflow_events
             .iter()
             .position(|update| {

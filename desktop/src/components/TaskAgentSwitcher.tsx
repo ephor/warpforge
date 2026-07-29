@@ -29,21 +29,20 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
   const currentIndex = members.findIndex((member) => member.id === currentTaskId);
   const current = members[currentIndex] ?? tree.task;
   const workflow = Boolean(tree.task.workflowRun);
-  const stageByTaskId = useMemo(
-    () => {
-      const result = new Map<string, string>();
-      for (const node of tree.task.orchestrationGraph?.nodes ?? []) {
-        if (node.taskId) result.set(node.taskId, node.id);
-      }
-      return result;
-    },
-    [tree.task.orchestrationGraph?.nodes],
-  );
+  const stageByTaskId = useMemo(() => {
+    const result = new Map<string, string>();
+    for (const node of tree.task.orchestrationGraph?.nodes ?? []) {
+      if (node.taskId) result.set(node.taskId, node.id);
+    }
+    return result;
+  }, [tree.task.orchestrationGraph?.nodes]);
   const memberLabel = useCallback(
     (member: (typeof members)[number], index: number) => {
       if (index === 0) return workflow ? "Workflow" : "Lead";
       const stage = stageByTaskId.get(member.id);
-      return stage ? `${stage} · ${agentDisplayName(member.agent)}` : agentDisplayName(member.agent);
+      return stage
+        ? `${stage} · ${agentDisplayName(member.agent)}`
+        : agentDisplayName(member.agent);
     },
     [stageByTaskId, workflow],
   );
@@ -67,7 +66,9 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
           className="flex h-7 shrink-0 items-center gap-1.5 rounded px-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
         >
           <Users className="size-3.5 text-primary" />
-          <span>{workflow ? "Stages" : "Agents"} {members.length - 1}</span>
+          <span>
+            {workflow ? "Stages" : "Agents"} {members.length - 1}
+          </span>
           <span className="text-border">·</span>
           {currentIndex === 0 ? (
             <span className="max-w-24 truncate text-foreground">

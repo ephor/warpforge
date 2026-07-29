@@ -100,7 +100,8 @@ describe("TaskAgentSwitcher", () => {
       "Stages 1",
     );
     await user.click(screen.getByRole("button", { name: /current: workflow/i }));
-    expect(await screen.findByRole("menuitem", { name: /implement · codex: running/i }))
-      .toBeInTheDocument();
+    expect(
+      await screen.findByRole("menuitem", { name: /implement · codex: running/i }),
+    ).toBeInTheDocument();
   });
 });

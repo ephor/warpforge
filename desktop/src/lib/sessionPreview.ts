@@ -128,6 +128,11 @@ export function latestSessionPreview(
       continue;
     }
 
+    if (update.kind === "workflow_event") {
+      // A workflow parent's transcript is almost entirely these, so without a
+      // branch here a running pipeline shows no activity in the rail or tiles.
+      return { kind: "message", label: "Pipeline", text: update.title, truncated: false };
+    }
     if (update.kind === "agent_text" || update.kind === "agent_thought") {
       const preview = textPreview(updates, index, update.kind, active, maxChars);
       if (preview) return preview;

@@ -290,6 +290,8 @@ export interface WorkflowRunInfo {
   verdict?: WorkflowVerdict | null;
   /** Set while the pipeline waits for the user. */
   waiting?: WorkflowWaiting | null;
+  /** A pause is queued and takes effect when the running stage finishes. */
+  pauseRequested?: boolean;
 }
 
 export type WorkflowStage = "plan" | "implement" | "review" | "fix" | "done" | "failed";

@@ -27,7 +27,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { workflowStageLabel } from "@/lib/workflow";
 import { elapsed } from "@/lib/status";
 import type { BoardLifecycleFilter, TaskTree } from "@/lib/taskGroups";
 import {
@@ -43,6 +42,7 @@ import {
 } from "@/lib/taskGroups";
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
+import { workflowStageLabel } from "@/lib/workflow";
 
 import type { OrchNodeInfo, Snapshot, TaskInfo, TaskStatus } from "../protocol";
 
@@ -608,7 +608,10 @@ function TaskCard({
       {hasAccordion && expanded && (
         <div className="ml-2 mt-1 flex flex-col gap-1 border-l-2 border-border pl-2">
           {nodes.map((node) => (
-            <NodeRow key={node.id} node={node} />
+            // `node.id` is a human label and repeats when a stage re-runs
+            // (restart-resume, or a same-session review round), so it is not
+            // a key on its own.
+            <NodeRow key={`${node.taskId ?? "pending"}:${node.id}`} node={node} />
           ))}
         </div>
       )}
@@ -620,7 +623,12 @@ function NodeRow({ node }: { node: OrchNodeInfo }) {
   return (
     <div className="flex items-center gap-2 rounded bg-secondary/20 px-2 py-1 text-xs">
       <StatusBadge status={node.status} size="xs" />
-      <span className="min-w-0 flex-1 truncate font-medium text-foreground">{node.kind}</span>
+      <span
+        className="min-w-0 flex-1 truncate font-medium text-foreground"
+        title={node.id || node.kind}
+      >
+        {node.id || node.kind}
+      </span>
       <AgentBadge agentId={node.agent} size="xs" className="shrink-0 text-muted-foreground" />
       {node.taskId && (
         <span className="shrink-0 text-[10px] text-muted-foreground/60">{node.taskId}</span>
@@ -734,10 +742,8 @@ function WorkflowBadge({ task }: { task: TaskInfo }) {
     <span
       title={`${run.workflowName}${run.round > 0 ? ` — round ${run.round}/${run.maxRounds}` : ""}`}
       className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-        needsUser
-          ? "bg-amber-500/12 text-amber-600 dark:text-amber-400"
-          : "bg-primary/10 text-primary",
+        "inline-flex min-w-0 max-w-32 items-center gap-1 truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+        needsUser ? "bg-warn/12 text-warn" : "bg-primary/10 text-primary",
       )}
     >
       <Route className="size-2.5" />

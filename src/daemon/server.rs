@@ -432,6 +432,8 @@ async fn dispatch(
                         workflow,
                         attachments,
                         default_model,
+                        include_runtime_context,
+                        config_overrides,
                         reply: tx,
                     })
                     .await;

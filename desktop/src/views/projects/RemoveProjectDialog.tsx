@@ -31,8 +31,7 @@ function countLabel(count: number, singular: string): string {
 export function RemoveProjectDialog({ project, liveCounts, onCancel, onConfirm }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const hasLiveResources =
-    liveCounts.services + liveCounts.portforwards + liveCounts.terminals > 0;
+  const hasLiveResources = liveCounts.services + liveCounts.portforwards + liveCounts.terminals > 0;
   const actorRejectedRemoval =
     error?.startsWith("conflict:") === true || error?.startsWith("internal:") === true;
 
@@ -85,12 +84,7 @@ export function RemoveProjectDialog({ project, liveCounts, onCancel, onConfirm }
                   <li>{countLabel(liveCounts.services, "running or starting service")}</li>
                 )}
                 {liveCounts.portforwards > 0 && (
-                  <li>
-                    {countLabel(
-                      liveCounts.portforwards,
-                      "active or starting port-forward",
-                    )}
-                  </li>
+                  <li>{countLabel(liveCounts.portforwards, "active or starting port-forward")}</li>
                 )}
                 {liveCounts.terminals > 0 && (
                   <li>{countLabel(liveCounts.terminals, "live terminal")}</li>

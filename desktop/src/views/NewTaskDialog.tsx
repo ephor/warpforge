@@ -135,7 +135,9 @@ export default function NewTaskDialog({
       toast.success("Workflow copied to project", { description: path });
       await queryClient.invalidateQueries({ queryKey: ["workflows", project] });
     } catch (e) {
-      toast.error("Could not copy workflow", { description: String(e) });
+      toast.error("Could not copy workflow", {
+        description: e instanceof Error ? e.message : String(e),
+      });
     }
   };
 
@@ -181,7 +183,9 @@ export default function NewTaskDialog({
     } catch (e) {
       // A workflow can fail validation daemon-side (edited YAML between the
       // list and the send) — keep the dialog open so the prompt isn't lost.
-      toast.error("Could not start the task", { description: String(e) });
+      toast.error("Could not start the task", {
+        description: e instanceof Error ? e.message : String(e),
+      });
       return;
     }
     const taskId =
@@ -230,7 +234,9 @@ export default function NewTaskDialog({
           <h1 className="text-lg font-semibold">New task</h1>
           <div className="flex items-center gap-3">
             <span className="text-xs text-muted-foreground">
-              One task = one agent session. The agent starts working immediately.
+              {selectedWorkflow
+                ? `One task = the ${selectedWorkflow.name} pipeline. Each stage runs as its own agent session.`
+                : "One task = one agent session. The agent starts working immediately."}
             </span>
             <Button
               variant="ghost"

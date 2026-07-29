@@ -101,23 +101,34 @@ describe("ChatComposer — workflow parents", () => {
     });
   });
 
-  it("disables input while the pipeline runs unattended", () => {
+  it("disables input while the pipeline runs unattended and points at the stages", () => {
     renderComposer(task(run()));
     expect(screen.getByRole("textbox")).toBeDisabled();
     expect(screen.getByRole("textbox")).toHaveAttribute(
       "placeholder",
-      expect.stringContaining("Subtasks"),
+      expect.stringContaining("open a stage above"),
     );
   });
 
-  it("hard-stops a running workflow from the parent composer", async () => {
+  it("leaves stopping a pipeline to WorkflowControls, not the composer", () => {
+    // Two destructive controls a few pixels apart is a trap; the labelled Stop
+    // in WorkflowControls owns this for pipelines.
     renderComposer(task(run()));
-    await userEvent.click(screen.getByRole("button", { name: /^stop$/i }));
-    expect(request).toHaveBeenCalledWith("task.cancel", { task_id: "t_1" });
+    expect(screen.queryByRole("button", { name: /^stop$/i })).not.toBeInTheDocument();
   });
 
-  it("re-enables input once the pipeline finishes", () => {
+  it("keeps input disabled after the pipeline finishes, with an explanation", () => {
+    // The parent never has an agent session, so a message here could only fail
+    // with a raw daemon error.
     renderComposer(task({ ...run(), stage: "done", waiting: null }));
-    expect(screen.getByRole("textbox")).not.toBeDisabled();
+    const input = screen.getByRole("textbox");
+    expect(input).toBeDisabled();
+    expect(input).toHaveAttribute("placeholder", expect.stringContaining("has finished"));
+  });
+
+  it("never prompts the session-less parent, even with no barrier pending", async () => {
+    renderComposer(task({ ...run(), stage: "done", waiting: null }));
+    // Disabled input cannot submit, but the routing must refuse regardless.
+    expect(request).not.toHaveBeenCalledWith("session.prompt", expect.anything());
   });
 });

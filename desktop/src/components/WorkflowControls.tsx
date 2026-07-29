@@ -31,7 +31,9 @@ export const WorkflowControls = memo(function WorkflowControls({ task }: { task:
     try {
       await fn();
     } catch (e) {
-      toast.error(`Could not ${label}`, { description: String(e) });
+      toast.error(`Could not ${label}`, {
+        description: e instanceof Error ? e.message : String(e),
+      });
     } finally {
       setBusyAction(null);
     }
@@ -42,7 +44,7 @@ export const WorkflowControls = memo(function WorkflowControls({ task }: { task:
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <StageIndicator run={run} />
         <span className="ml-auto flex items-center gap-1.5">
-          {!finished && waiting?.kind !== "limit" && (
+          {!finished && (waiting === null || waiting.kind === "paused") && (
             <>
               {waiting?.kind === "paused" ? (
                 <Button
@@ -64,8 +66,12 @@ export const WorkflowControls = memo(function WorkflowControls({ task }: { task:
                   size="sm"
                   variant="ghost"
                   className="h-6 gap-1 px-2 text-xs"
-                  disabled={busy}
-                  title="Let the running stage finish, then hold before the next one"
+                  disabled={busy || run.pauseRequested}
+                  title={
+                    run.pauseRequested
+                      ? "The pipeline will hold once the running stage finishes"
+                      : "Let the running stage finish, then hold before the next one"
+                  }
                   onClick={() => void act("pause", () => daemon.workflowPause(task.id))}
                 >
                   {busyAction === "pause" ? (
@@ -73,7 +79,7 @@ export const WorkflowControls = memo(function WorkflowControls({ task }: { task:
                   ) : (
                     <Pause className="size-3" />
                   )}
-                  {busyAction === "pause" ? "Pausing…" : "Pause"}
+                  {busyAction === "pause" || run.pauseRequested ? "Pausing…" : "Pause"}
                 </Button>
               )}
             </>
@@ -216,7 +222,8 @@ function LimitDecision({
       </div>
 
       <p className="mt-2 text-[11px] text-muted-foreground">
-        Guidance typed below is used only when you continue with another round.
+        These buttons continue without guidance. To add guidance, type it below and press Send
+        instead — that runs one more round with your note.
       </p>
     </section>
   );
@@ -226,7 +233,9 @@ function StageIndicator({ run }: { run: WorkflowRunInfo }) {
   const waiting = run.waiting ?? null;
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-      <span className="truncate font-medium text-foreground">{run.workflowName}</span>
+      <span className="truncate font-medium text-foreground" title={run.workflowName}>
+        {run.workflowName}
+      </span>
       <span className="text-border">·</span>
       <span className="text-muted-foreground">
         {waiting?.kind === "paused"
@@ -242,9 +251,7 @@ function StageIndicator({ run }: { run: WorkflowRunInfo }) {
         <span
           className={cn(
             "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-            run.verdict === "approve"
-              ? "bg-emerald-500/12 text-emerald-600 dark:text-emerald-400"
-              : "bg-amber-500/12 text-amber-600 dark:text-amber-400",
+            run.verdict === "approve" ? "bg-ok/12 text-ok" : "bg-warn/12 text-warn",
           )}
         >
           {run.verdict === "approve" ? "approved" : "changes requested"}

@@ -1485,6 +1485,10 @@ pub struct WorkflowRunInfo {
     /// opens on this, and it drives the attention ("Needs you") rail.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting: Option<WorkflowWaiting>,
+    /// A pause has been requested and takes effect when the running stage
+    /// finishes. Lets the UI show progress instead of an idle Pause button.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pause_requested: bool,
 }
 
 /// Pipeline position for display.

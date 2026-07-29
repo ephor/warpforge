@@ -18,6 +18,8 @@ use crate::workflow_config::{render_template, ReviewContextItem, WorkflowSpec};
 pub const DIFF_CONTEXT_MAX_BYTES: usize = 200 * 1024;
 /// Byte budget for the implementer-summary context section (tail wins).
 pub const SUMMARY_CONTEXT_MAX_BYTES: usize = 16 * 1024;
+/// Budget for a salvaged review body used as a stand-in finding.
+const SALVAGED_FINDING_MAX_BYTES: usize = 4 * 1024;
 /// How many times a reviewer is re-asked for a parseable verdict before the
 /// pipeline fails.
 pub const MAX_VERDICT_REASKS: u8 = 1;
@@ -133,11 +135,16 @@ impl Severity {
         !matches!(self, Severity::Low)
     }
 
+    /// Map an agent's severity word onto the four levels. Agents use a much
+    /// wider vocabulary than the protocol asks for, and the default matters:
+    /// an unknown word becomes `Medium`, which forces a repair round, so
+    /// opinion-shaped words must land in `Low` rather than fall through.
     fn parse(s: &str) -> Severity {
-        match s.to_ascii_lowercase().as_str() {
-            "critical" | "blocker" => Severity::Critical,
-            "high" | "major" => Severity::High,
-            "low" | "minor" | "nit" | "info" => Severity::Low,
+        match s.trim().to_ascii_lowercase().as_str() {
+            "critical" | "blocker" | "blocking" | "severe" | "fatal" => Severity::Critical,
+            "high" | "major" | "important" => Severity::High,
+            "low" | "minor" | "nit" | "nitpick" | "info" | "informational" | "suggestion"
+            | "style" | "cosmetic" | "trivial" | "optional" | "polish" | "note" => Severity::Low,
             _ => Severity::Medium,
         }
     }
@@ -217,25 +224,41 @@ pub struct WorkflowRun {
     pub last_summary: Option<String>,
     pub last_verdict: Option<Verdict>,
     /// Findings of the latest review round that still need fixing.
+    #[serde(default)]
     pub open_findings: Vec<Finding>,
     /// Low-severity findings accumulated for the final summary only.
+    #[serde(default)]
     pub deferred_findings: Vec<Finding>,
     /// child task id → reviewer index, while a review stage is in flight.
+    #[serde(default)]
     pub review_pending: HashMap<String, usize>,
     /// (reviewer index, verdict, findings) collected this round.
+    #[serde(default)]
     pub review_collected: Vec<(usize, Verdict, Vec<Finding>)>,
     /// child task id → verdict re-ask count.
+    #[serde(default)]
     pub reasked: HashMap<String, u8>,
     /// child task id → stage kind, for routing TurnEnded (single-child stages).
+    #[serde(default)]
     pub active_children: HashMap<String, StageKind>,
     /// reviewer index → child task id of the previous review round. With
     /// `review.reask: same_session` the next round follows up in these
     /// sessions instead of spawning fresh ones.
     #[serde(default)]
     pub prior_review_children: HashMap<usize, String>,
+    #[serde(default)]
     pub history: Vec<StageRecord>,
     /// Attachments from the New Task dialog, delivered to the first stage.
+    #[serde(default)]
     pub attachments: Vec<wire::PromptAttachment>,
+    /// Whether stage sessions get the project's runtime-context preamble, as
+    /// picked in the New Task dialog.
+    #[serde(default)]
+    pub include_runtime_context: bool,
+    /// Non-model session config picks from the dialog (reasoning effort, mode),
+    /// applied to every stage session.
+    #[serde(default)]
+    pub config_overrides: HashMap<String, String>,
 }
 
 impl WorkflowRun {
@@ -247,6 +270,8 @@ impl WorkflowRun {
         lead_agent: String,
         lead_model: Option<String>,
         attachments: Vec<wire::PromptAttachment>,
+        include_runtime_context: bool,
+        config_overrides: HashMap<String, String>,
     ) -> Self {
         Self {
             parent_id,
@@ -273,6 +298,8 @@ impl WorkflowRun {
             active_children: HashMap::new(),
             history: Vec::new(),
             attachments: Vec::new(),
+            include_runtime_context,
+            config_overrides,
         }
         .with_attachments(attachments)
     }
@@ -296,19 +323,6 @@ impl WorkflowRun {
 
     pub fn is_active(&self) -> bool {
         !matches!(self.state, RunState::Done | RunState::Failed)
-    }
-
-    /// The pipeline is at a stage barrier: no agent turn is in flight, so the
-    /// state survives a daemon restart as-is.
-    pub fn at_barrier(&self) -> bool {
-        matches!(
-            self.state,
-            RunState::AwaitingReply { .. }
-                | RunState::AwaitingLimitDecision
-                | RunState::Paused { .. }
-                | RunState::Done
-                | RunState::Failed
-        )
     }
 
     /// Agent + model for a stage, applying the fallback chain:
@@ -440,6 +454,7 @@ impl WorkflowRun {
             max_rounds: self.effective_max_rounds(),
             verdict: self.last_verdict.map(Verdict::wire),
             waiting,
+            pause_requested: self.pause_requested,
         }
     }
 
@@ -476,10 +491,12 @@ pub enum StageSignal {
 
 /// Scan a stage's output for the trailing `need_user_input` marker.
 pub fn parse_stage_signal(text: &str) -> StageSignal {
-    if let Some(value) = extract_last_json_object(text) {
+    if let Some(value) = extract_last_json_with_key(text, "need_user_input") {
         if let Some(q) = value.get("need_user_input").and_then(|v| v.as_str()) {
             let q = q.trim();
-            if !q.is_empty() {
+            // Ignore an agent that echoes the protocol example back at us
+            // instead of asking something.
+            if !q.is_empty() && q != "<your question>" {
                 return StageSignal::Question(q.to_string());
             }
         }
@@ -490,8 +507,8 @@ pub fn parse_stage_signal(text: &str) -> StageSignal {
 /// Parse a reviewer's verdict from its output. `Err` is a human-readable
 /// reason suitable for the re-ask prompt / failure message.
 pub fn parse_review_verdict(text: &str, reviewer: &str) -> Result<(Verdict, Vec<Finding>), String> {
-    let Some(value) = extract_last_json_object(text) else {
-        return Err("no fenced JSON verdict block found".to_string());
+    let Some(value) = extract_last_json_with_key(text, "verdict") else {
+        return Err("no fenced JSON block with a `verdict` field found".to_string());
     };
     let verdict = match value.get("verdict").and_then(|v| v.as_str()) {
         Some("approve") => Verdict::Approve,
@@ -501,7 +518,7 @@ pub fn parse_review_verdict(text: &str, reviewer: &str) -> Result<(Verdict, Vec<
                 "verdict must be \"approve\" or \"request_changes\", got \"{other}\""
             ))
         }
-        None => return Err("JSON block has no \"verdict\" field".to_string()),
+        None => return Err("the `verdict` field is not a string".to_string()),
     };
     let mut findings = Vec::new();
     if let Some(items) = value.get("findings").and_then(|v| v.as_array()) {
@@ -533,12 +550,46 @@ pub fn parse_review_verdict(text: &str, reviewer: &str) -> Result<(Verdict, Vec<
             });
         }
     }
+    // A reviewer that asks for changes but leaves `findings` empty (prose-only
+    // review, a differently-named key, entries without a description) must not
+    // read as "nothing to fix" — that path finishes the pipeline as a success
+    // and silently rubber-stamps the change. Salvage its own words instead so
+    // the repair stage still has something concrete to act on.
+    if verdict == Verdict::RequestChanges && findings.is_empty() {
+        let prose = strip_protocol_blocks(text).trim().to_string();
+        let prose = if prose.len() > SALVAGED_FINDING_MAX_BYTES {
+            let end = floor_char_boundary(&prose, SALVAGED_FINDING_MAX_BYTES);
+            format!("{}\n[…truncated…]", &prose[..end])
+        } else {
+            prose
+        };
+        findings.push(Finding {
+            severity: Severity::Medium,
+            file: None,
+            description: if prose.is_empty() {
+                "Changes were requested without any detail. Re-check the diff against the task \
+                 and fix what looks wrong."
+                    .to_string()
+            } else {
+                format!(
+                    "Changes requested without a structured findings list — the reviewer's own \
+                     words follow:\n\n{prose}"
+                )
+            },
+            reviewer: reviewer.to_string(),
+        });
+    }
+
     Ok((verdict, findings))
 }
 
-/// The last fenced code block in `text` that parses as a JSON object.
-/// Accepts both ```json and bare ``` fences — agents are inconsistent.
-fn extract_last_json_object(text: &str) -> Option<serde_json::Value> {
+/// The last fenced code block in `text` that parses as a JSON object
+/// containing `key`. Requiring the key matters: agents routinely end a reply
+/// with an unrelated fenced block (a config snippet, a quoted diff), and
+/// taking the last JSON object unconditionally would misread that as the
+/// protocol payload. Accepts both ```json and bare ``` fences — agents are
+/// inconsistent.
+fn extract_last_json_with_key(text: &str, key: &str) -> Option<serde_json::Value> {
     let mut best: Option<serde_json::Value> = None;
     let mut rest = text;
     while let Some(open) = rest.find("```") {
@@ -553,7 +604,7 @@ fn extract_last_json_object(text: &str) -> Option<serde_json::Value> {
         };
         let body = &after_open[body_start..body_start + close];
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(body.trim()) {
-            if value.is_object() {
+            if value.get(key).is_some() {
                 best = Some(value);
             }
         }
@@ -626,6 +677,56 @@ pub fn format_diff(files: &[wire::FileDiff]) -> String {
         }
     }
     out
+}
+
+/// Strip the trailing machine protocol block (the `verdict` / `need_user_input`
+/// JSON fence) so the parent's timeline shows the agent's prose instead of the
+/// wire format it was asked to emit. Falls back to the full text when nothing
+/// matches, and always clips to the summary budget.
+pub fn display_output(text: &str) -> String {
+    let trimmed = strip_protocol_blocks(text).trim().to_string();
+    let trimmed = trimmed.as_str();
+    if trimmed.is_empty() {
+        // The whole reply was the protocol block — show it rather than an
+        // empty card.
+        return clip_summary(text.trim());
+    }
+    clip_summary(trimmed)
+}
+
+/// Drop the trailing machine protocol fences from an agent reply.
+fn strip_protocol_blocks(text: &str) -> &str {
+    let mut visible = text;
+    for key in ["verdict", "need_user_input"] {
+        if let Some(start) = protocol_block_start(visible, key) {
+            visible = &visible[..start];
+        }
+    }
+    visible
+}
+
+/// Byte offset of the fence that opens the last JSON block containing `key`.
+fn protocol_block_start(text: &str, key: &str) -> Option<usize> {
+    let mut found = None;
+    let mut cursor = 0;
+    while let Some(open) = text[cursor..].find("```").map(|p| cursor + p) {
+        let after_open = open + 3;
+        let Some(nl) = text[after_open..].find('\n').map(|p| after_open + p + 1) else {
+            break;
+        };
+        let Some(close) = text[nl..].find("```").map(|p| nl + p) else {
+            break;
+        };
+        if serde_json::from_str::<serde_json::Value>(text[nl..close].trim())
+            .ok()
+            .and_then(|value| value.get(key).cloned())
+            .is_some()
+        {
+            found = Some(open);
+        }
+        cursor = close + 3;
+    }
+    found
 }
 
 /// Keep the tail of a long implementer summary (the conclusion matters most).
@@ -727,19 +828,28 @@ pub struct PromptCtx {
 
 /// Appended to every plan/implement/fix prompt — the question protocol the
 /// engine's `parse_stage_signal` understands.
-const QUESTION_PROTOCOL: &str = "If you cannot proceed without an answer from the user, end your \
-reply with exactly one fenced code block of this shape and stop:\n\
+const QUESTION_PROTOCOL: &str = "This stage runs unattended, so stop for the user only when you \
+genuinely cannot proceed — a decision only they can make, or missing access. Otherwise pick the \
+most reasonable option, proceed, and record the assumption in your final message. When you do \
+need them, end your reply with exactly one fenced code block of this shape and stop:\n\
 ```json\n{\"need_user_input\": \"<your question>\"}\n```\n\
 Otherwise, do not emit such a block.";
 
 /// Appended to every reviewer prompt — the verdict protocol the engine's
 /// `parse_review_verdict` understands.
-const VERDICT_PROTOCOL: &str = "You MUST end your reply with exactly one fenced code block of \
-this shape:\n\
-```json\n{\"verdict\": \"approve\", \"findings\": [{\"severity\": \"high\", \"file\": \"src/example.rs\", \"description\": \"…\"}]}\n```\n\
-`verdict` is \"approve\" or \"request_changes\"; `severity` is critical, high, medium, or low; \
-`file` may be null. Use \"approve\" only when no critical, high, or medium severity problems \
-remain. Report real problems only — do not invent findings to seem thorough.";
+const VERDICT_PROTOCOL: &str = "Scope: judge correctness, regressions, and whether the task's \
+stated requirements are met. Style, naming, and improvements nobody asked for are `low` at most. \
+Report real problems only — do not invent findings to seem thorough. You may run read-only \
+verification (build, tests, linters) to check your reasoning, but do not edit files.\n\n\
+You MUST end your reply with exactly one fenced code block, and nothing after it, of this \
+shape:\n\
+```json\n{\"verdict\": \"request_changes\", \"findings\": [{\"severity\": \"high\", \"file\": \"src/example.rs\", \"description\": \"what is wrong and why\"}]}\n```\n\
+When you approve, send `{\"verdict\": \"approve\", \"findings\": []}` — use `approve` only when no \
+critical, high, or medium problem remains. `findings` MUST be a JSON array (empty when there are \
+none) and every entry MUST carry a `description`: anything you only write in prose is invisible \
+to the pipeline. `severity` is critical, high, medium, or low, and `file` may be null. Note that \
+`low` findings are recorded for the human but are NEVER sent to the repair stage — use `medium` \
+or higher for anything you actually want fixed.";
 
 fn vars_from_ctx(ctx: &PromptCtx, focus: Option<&str>) -> HashMap<&'static str, String> {
     let mut vars: HashMap<&'static str, String> = HashMap::new();
@@ -964,6 +1074,8 @@ mod tests {
             "claude".into(),
             Some("lead-model".into()),
             vec![],
+            false,
+            HashMap::new(),
         )
     }
 
@@ -1019,10 +1131,11 @@ mod tests {
         assert!(parse_review_verdict("no block at all", "r")
             .unwrap_err()
             .contains("no fenced JSON"));
+        // A JSON block without a `verdict` key is not the protocol payload.
         assert!(
             parse_review_verdict("```json\n{\"findings\": []}\n```", "r")
                 .unwrap_err()
-                .contains("no \"verdict\" field")
+                .contains("no fenced JSON")
         );
         assert!(
             parse_review_verdict("```json\n{\"verdict\": \"maybe\"}\n```", "r")
@@ -1301,7 +1414,14 @@ mod tests {
         let info = run.wire_info();
         assert_eq!(info.stage, wire::WorkflowStage::Implement);
         assert!(info.waiting.is_none());
+        assert!(!info.pause_requested);
         assert_eq!(info.max_rounds, 2);
+
+        // A requested pause is visible before it takes effect, so the UI can
+        // show progress rather than an idle Pause button.
+        run.pause_requested = true;
+        assert!(run.wire_info().pause_requested);
+        run.pause_requested = false;
 
         run.extra_rounds = 2;
         run.state = RunState::AwaitingReply {

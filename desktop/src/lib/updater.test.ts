@@ -35,9 +35,7 @@ describe("DesktopUpdater", () => {
   });
 
   it("explains that the update feed is unavailable before the first desktop release", async () => {
-    check.mockRejectedValueOnce(
-      new Error("Could not fetch a valid release JSON from the remote"),
-    );
+    check.mockRejectedValueOnce(new Error("Could not fetch a valid release JSON from the remote"));
     const updater = new DesktopUpdater();
 
     await updater.check();

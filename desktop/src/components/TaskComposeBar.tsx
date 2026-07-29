@@ -100,7 +100,7 @@ export function TaskComposeBar({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <FieldLabel>{orchChat || workflow ? "Lead agent" : "Agent"}</FieldLabel>
+        <FieldLabel>{orchChat ? "Lead agent" : workflow ? "Default agent" : "Agent"}</FieldLabel>
         {agentChoices.map((a) => (
           <Chip key={a.id} active={agent === a.id} onClick={() => onAgentChange(a.id)}>
             <AgentBadge agentId={a.id} displayName={a.displayName} size="md" />
@@ -147,11 +147,15 @@ export function TaskComposeBar({
       {selectedWorkflow && (
         <p className="-mt-2 text-xs text-muted-foreground">
           {selectedWorkflow.description ? `${selectedWorkflow.description} ` : ""}
-          {(selectedWorkflow.stages ?? []).join(" \u2192 ")}
-          {selectedWorkflow.maxRounds
-            ? `, up to ${selectedWorkflow.maxRounds} review round${selectedWorkflow.maxRounds === 1 ? "" : "s"}`
-            : ""}
-          {". The agent above leads any stage the workflow doesn\u2019t assign."}
+          {(selectedWorkflow.stages ?? []).length > 0 &&
+            `Stages: ${(selectedWorkflow.stages ?? []).join(" \u2192 ")}${
+              selectedWorkflow.maxRounds
+                ? ` (up to ${selectedWorkflow.maxRounds} review round${
+                    selectedWorkflow.maxRounds === 1 ? "" : "s"
+                  })`
+                : ""
+            }. `}
+          {"Stages that don\u2019t name their own agent use the one selected above."}
         </p>
       )}
     </div>
@@ -267,9 +271,11 @@ function WorkflowPicker({
             disabled && "cursor-not-allowed opacity-40",
           )}
         >
-          <Route className="size-3" />
-          {selected ? selected.name : "Workflow"}
-          <ChevronDown className="size-3 opacity-60" />
+          <Route className="size-3 shrink-0" />
+          <span className="max-w-40 truncate" title={selected?.name}>
+            {selected ? selected.name : "Workflow"}
+          </span>
+          <ChevronDown className="size-3 shrink-0 opacity-60" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-80">
@@ -324,6 +330,7 @@ function WorkflowPicker({
               <DropdownMenuItem
                 title="Write a copy into .warpforge/workflows/ so you can edit it"
                 onSelect={() => onEject(w.id)}
+                aria-label={`Copy ${w.name} to this project`}
               >
                 <span className="flex items-center gap-2 pl-5 text-xs text-muted-foreground">
                   <Copy className="size-3" />

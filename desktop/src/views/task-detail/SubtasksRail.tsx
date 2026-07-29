@@ -16,7 +16,12 @@ function SubtaskRow({
   const content = (
     <>
       <StatusBadge status={node.status} size="xs" />
-      <span className="min-w-0 flex-1 truncate font-medium text-foreground">{node.kind}</span>
+      <span
+        className="min-w-0 flex-1 truncate font-medium text-foreground"
+        title={node.id || node.kind}
+      >
+        {node.id || node.kind}
+      </span>
       <AgentBadge agentId={node.agent} size="xs" className="shrink-0 text-muted-foreground" />
       {node.taskId && (
         <span className="shrink-0 text-[10px] text-muted-foreground/60">{node.taskId}</span>
@@ -63,7 +68,12 @@ export function SubtasksRail({
       <ScrollArea className="flex-1">
         <div className="flex flex-col gap-1 p-2">
           {nodes.map((node) => (
-            <SubtaskRow key={node.id} node={node} onOpenTask={onOpenTask} />
+            // Labels repeat when a stage re-runs, so index-qualify the key.
+            <SubtaskRow
+              key={`${node.taskId ?? "pending"}:${node.id}`}
+              node={node}
+              onOpenTask={onOpenTask}
+            />
           ))}
         </div>
       </ScrollArea>
