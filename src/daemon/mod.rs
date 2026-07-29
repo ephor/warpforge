@@ -680,6 +680,14 @@ mod tests {
         assert!(graph.nodes.iter().all(|n| n.task_id.is_some()));
         assert_eq!(graph.nodes[0].kind, wire::OrchNodeKind::Implement);
         assert_eq!(graph.nodes[2].kind, wire::OrchNodeKind::Fix);
+        // Default reask mode: round 2 follows up in the SAME reviewer session,
+        // so both review nodes point at one task.
+        assert_eq!(graph.nodes[1].kind, wire::OrchNodeKind::Review);
+        assert_eq!(graph.nodes[3].kind, wire::OrchNodeKind::Review);
+        assert_eq!(
+            graph.nodes[1].task_id, graph.nodes[3].task_id,
+            "same_session re-review must continue the round-1 reviewer session"
+        );
 
         // The parent conversation is a useful workflow narrative, not just a
         // sequence of opaque/coalesced stage transitions. Agent cards and
@@ -781,6 +789,115 @@ mod tests {
                 .filter(|task| task.parent_task_id.as_deref() == Some(&parent_id))
                 .all(|task| task.status == wire::TaskStatus::Done),
             "consumed workflow stages should be terminal, not idle/needs-review"
+        );
+        assert_eq!(
+            snapshot
+                .tasks
+                .iter()
+                .filter(|task| task.parent_task_id.as_deref() == Some(&parent_id))
+                .count(),
+            3,
+            "implement, one reused reviewer session, fix"
+        );
+        // Finalize must sweep every stage session — completed ones included —
+        // so no mock agent processes outlive the pipeline.
+        assert_no_stage_processes(&dir).await;
+    }
+
+    /// Poll until no mock agent process whose command line references this
+    /// test's tempdir remains alive. Stage sessions are kept alive during a
+    /// run (same-session re-review follows up in them) and must all be killed
+    /// at finalize.
+    async fn assert_no_stage_processes(dir: &tempfile::TempDir) {
+        let needle = dir.path().to_string_lossy().into_owned();
+        for _ in 0..50 {
+            let alive = std::process::Command::new("pgrep")
+                .args(["-f", &needle])
+                .output()
+                .map(|out| out.status.success())
+                .unwrap_or(false);
+            if !alive {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("stage agent processes still alive after the pipeline finished");
+    }
+
+    #[tokio::test]
+    async fn workflow_fresh_reask_spawns_new_reviewers() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: placeholder\n");
+        let reviewer = wf_agent(&dir, "rev.state", "reject approve");
+        std::fs::write(
+            dir.path().join(".warpforge/workflows/test.yaml"),
+            format!(
+                "name: Fresh flow\nreview:\n  max_rounds: 2\n  reask: fresh\n  reviewers:\n    - agent: {reviewer}\n"
+            ),
+        )
+        .unwrap();
+        let lead = wf_agent(&dir, "impl.state", "impl fix");
+
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(projects, store);
+        let mut events = daemon.subscribe();
+        let parent_id = create_workflow_task(&daemon, &lead).await;
+
+        let done = wait_for_parent(&mut events, &parent_id, "pipeline done", |t| {
+            t.workflow_run
+                .as_ref()
+                .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
+        })
+        .await;
+        assert_eq!(done.status, TaskStatus::NeedsReview);
+        let graph = done.orchestration_graph.unwrap();
+        assert_eq!(graph.nodes.len(), 4, "{:?}", graph.nodes);
+        assert_ne!(
+            graph.nodes[1].task_id, graph.nodes[3].task_id,
+            "reask: fresh must staff round 2 with a new reviewer session"
+        );
+    }
+
+    /// With the default same_session reask, a reviewer whose session died
+    /// between rounds falls back to a fresh session — whose prompt carries the
+    /// previous round's findings for verification.
+    #[tokio::test]
+    async fn workflow_dead_reviewer_session_falls_back_to_fresh() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: placeholder\n");
+        // Round 1: reject, then the process exits. Round 2 (fresh fallback
+        // process) pops the next behavior: approve.
+        let reviewer = wf_agent(&dir, "rev.state", "reject-die approve");
+        std::fs::write(
+            dir.path().join(".warpforge/workflows/test.yaml"),
+            format!(
+                "name: Fallback flow\nreview:\n  max_rounds: 2\n  reviewers:\n    - agent: {reviewer}\n"
+            ),
+        )
+        .unwrap();
+        // A slow fix keeps round 2 far enough away for the reviewer process
+        // death (~100ms after its verdict) to be observed first.
+        let lead = wf_agent(&dir, "impl.state", "impl slow-fix");
+
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(projects, store);
+        let mut events = daemon.subscribe();
+        let parent_id = create_workflow_task(&daemon, &lead).await;
+
+        let done = wait_for_parent(&mut events, &parent_id, "pipeline done", |t| {
+            t.workflow_run
+                .as_ref()
+                .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
+        })
+        .await;
+        assert_eq!(done.status, TaskStatus::NeedsReview);
+        let run = done.workflow_run.unwrap();
+        assert_eq!(run.verdict, Some(wire::WorkflowVerdict::Approve));
+        let graph = done.orchestration_graph.unwrap();
+        assert_eq!(graph.nodes.len(), 4, "{:?}", graph.nodes);
+        assert_ne!(
+            graph.nodes[1].task_id, graph.nodes[3].task_id,
+            "a dead reviewer session must be replaced by a fresh one"
         );
     }
 

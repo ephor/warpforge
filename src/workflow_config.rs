@@ -63,9 +63,27 @@ pub struct StageConfig {
 pub struct ReviewConfig {
     pub max_rounds: u32,
     pub on_limit: OnLimit,
+    /// How repeat review rounds are staffed after a fix.
+    #[serde(default)]
+    pub reask: ReaskMode,
     pub context: Vec<ReviewContextItem>,
     /// Always 1..=MAX_REVIEWERS entries; defaults to one all-`None` reviewer.
     pub reviewers: Vec<ReviewerConfig>,
+}
+
+/// Who reviews repeat rounds after a fix.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReaskMode {
+    /// Follow up in the same reviewer session: it remembers its own findings
+    /// and verifies each one is actually resolved, at the cost of some
+    /// anchoring bias. Falls back to a fresh session when the old one is gone
+    /// (daemon restart, agent death).
+    #[default]
+    SameSession,
+    /// Spawn fresh reviewer sessions every round. The previous round's
+    /// findings are still included in the prompt for verification.
+    Fresh,
 }
 
 /// What the pipeline does when `max_rounds` is exhausted with open findings.
@@ -174,6 +192,7 @@ struct RawStage {
 struct RawReview {
     max_rounds: Option<u32>,
     on_limit: Option<String>,
+    reask: Option<String>,
     context: Option<Vec<String>>,
     reviewers: Option<Vec<RawReviewer>>,
 }
@@ -223,7 +242,7 @@ fn collect_unknown_keys(value: &serde_yaml::Value, warnings: &mut Vec<String>) {
         "fix",
     ];
     const STAGE: &[&str] = &["agent", "model", "prompt"];
-    const REVIEW: &[&str] = &["max_rounds", "on_limit", "context", "reviewers"];
+    const REVIEW: &[&str] = &["max_rounds", "on_limit", "reask", "context", "reviewers"];
     const REVIEWER: &[&str] = &["agent", "model", "focus", "prompt"];
 
     check_keys(value, TOP, "top level", warnings);
@@ -335,6 +354,17 @@ fn build_review(raw: RawReview, warnings: &mut Vec<String>) -> Result<ReviewConf
         max_rounds = MAX_ROUNDS_CAP;
     }
 
+    let reask = match raw.reask.as_deref() {
+        None => ReaskMode::default(),
+        Some("same_session") => ReaskMode::SameSession,
+        Some("fresh") => ReaskMode::Fresh,
+        Some(other) => {
+            return Err(format!(
+                "review.reask must be `same_session` or `fresh`, got `{other}`"
+            ))
+        }
+    };
+
     let on_limit = match raw.on_limit.as_deref() {
         None => OnLimit::Ask,
         Some("ask") => OnLimit::Ask,
@@ -401,6 +431,7 @@ fn build_review(raw: RawReview, warnings: &mut Vec<String>) -> Result<ReviewConf
     Ok(ReviewConfig {
         max_rounds,
         on_limit,
+        reask,
         context,
         reviewers,
     })
@@ -633,6 +664,7 @@ mod tests {
         assert_eq!(spec.implement, StageConfig::default());
         assert_eq!(spec.review.max_rounds, DEFAULT_MAX_ROUNDS);
         assert_eq!(spec.review.on_limit, OnLimit::Ask);
+        assert_eq!(spec.review.reask, ReaskMode::SameSession);
         assert_eq!(spec.review.reviewers, vec![ReviewerConfig::default()]);
         assert_eq!(
             spec.review.context,
@@ -688,6 +720,7 @@ implement:
 review:
   max_rounds: 3
   on_limit: finish
+  reask: fresh
   context: [prompt, diff]
   reviewers:
     - agent: claude
@@ -702,6 +735,7 @@ fix:
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(spec.review.max_rounds, 3);
         assert_eq!(spec.review.on_limit, OnLimit::Finish);
+        assert_eq!(spec.review.reask, ReaskMode::Fresh);
         assert_eq!(
             spec.review.context,
             vec![ReviewContextItem::Prompt, ReviewContextItem::Diff]
@@ -735,6 +769,9 @@ fix:
         assert!(parse_err("name: X\nversion: 2\n").contains("unsupported workflow version 2"));
         assert!(parse_err("name: X\nreview:\n  max_rounds: 0\n").contains("at least 1"));
         assert!(parse_err("name: X\nreview:\n  on_limit: retry\n").contains("`ask` or `finish`"));
+        assert!(
+            parse_err("name: X\nreview:\n  reask: never\n").contains("`same_session` or `fresh`")
+        );
         assert!(
             parse_err("name: X\nreview:\n  context: [prompt, everything]\n")
                 .contains("unknown review.context item `everything`")

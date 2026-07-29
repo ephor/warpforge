@@ -76,6 +76,19 @@ function handle(msg) {
         );
         endTurn(msg.id);
         break;
+      case "reject-die":
+        // Reject, then die shortly after: simulates a reviewer whose session
+        // is gone by the time the next round wants to follow up in it.
+        text(
+          'Found problems.\n```json\n{"verdict": "request_changes", "findings": [{"severity": "high", "file": "a.rs", "description": "bug here"}]}\n```'
+        );
+        endTurn(msg.id);
+        setTimeout(() => process.exit(0), 100);
+        break;
+      case "slow-fix":
+        text("FIX-DONE: addressed the findings (slowly).");
+        setTimeout(() => endTurn(msg.id), 600);
+        break;
       case "garbage":
         text("looks fine to me, ship it");
         endTurn(msg.id);

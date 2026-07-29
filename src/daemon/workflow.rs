@@ -228,6 +228,11 @@ pub struct WorkflowRun {
     pub reasked: HashMap<String, u8>,
     /// child task id → stage kind, for routing TurnEnded (single-child stages).
     pub active_children: HashMap<String, StageKind>,
+    /// reviewer index → child task id of the previous review round. With
+    /// `review.reask: same_session` the next round follows up in these
+    /// sessions instead of spawning fresh ones.
+    #[serde(default)]
+    pub prior_review_children: HashMap<usize, String>,
     pub history: Vec<StageRecord>,
     /// Attachments from the New Task dialog, delivered to the first stage.
     pub attachments: Vec<wire::PromptAttachment>,
@@ -263,6 +268,7 @@ impl WorkflowRun {
             deferred_findings: Vec::new(),
             review_pending: HashMap::new(),
             review_collected: Vec::new(),
+            prior_review_children: HashMap::new(),
             reasked: HashMap::new(),
             active_children: HashMap::new(),
             history: Vec::new(),
@@ -379,6 +385,17 @@ impl WorkflowRun {
     /// Take the pending guidance (it is delivered to exactly one stage).
     pub fn take_guidance(&mut self) -> Option<String> {
         self.pending_guidance.take()
+    }
+
+    /// Every stage child this run ever spawned. Completed stages keep their
+    /// sessions alive during the run (same-session re-review needs them), so
+    /// final cleanup must sweep this full set, not just `active_children`.
+    pub fn all_children(&self) -> std::collections::HashSet<String> {
+        self.history
+            .iter()
+            .map(|record| record.task_id.clone())
+            .chain(self.active_children.keys().cloned())
+            .collect()
     }
 
     // ── Wire projections ──
@@ -700,6 +717,9 @@ pub struct PromptCtx {
     pub diff: Option<String>,
     /// Pre-formatted findings list (fix stage).
     pub findings: Option<String>,
+    /// Previous round's findings (repeat review rounds) — the reviewer must
+    /// verify each one instead of reviewing from scratch.
+    pub prior_findings: Option<String>,
     pub round: u32,
     pub max_rounds: u32,
     pub guidance: Option<String>,
@@ -835,8 +855,60 @@ pub fn build_reviewer_prompt(spec: &WorkflowSpec, reviewer: usize, ctx: &PromptC
             out
         }
     };
+    let mut body = body;
+    if let Some(prior) = ctx.prior_findings.as_deref() {
+        if !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push('\n');
+        push_section(
+            &mut body,
+            "Previous round's findings — verify each one",
+            &format!(
+                "{prior}\n\nThis is a repeat review after a repair pass. For every finding \
+                 above, state whether it is actually resolved in the current diff — do not take \
+                 the fixer's summary on faith; reopen anything that is not. Then check the rest \
+                 of the changes for regressions the repair may have introduced, including code \
+                 that was fine last round."
+            ),
+        );
+    }
     // Reviewers get no guidance block — guidance targets implement/fix.
     finish_prompt(body, VERDICT_PROTOCOL, None)
+}
+
+/// Follow-up message sent into a reviewer's EXISTING session for a repeat
+/// round (`review.reask: same_session`). The session already holds the task,
+/// the original diff, and this reviewer's own reasoning, so the follow-up
+/// carries only what changed since — plus the explicit anti-anchoring
+/// instructions: verify every prior finding and re-check for regressions.
+pub fn build_rereview_prompt(ctx: &PromptCtx) -> String {
+    let mut out = format!(
+        "The repair stage has addressed your review. This is review round {}/{}.\n\n",
+        ctx.round, ctx.max_rounds
+    );
+    if let Some(summary) = ctx.implementer_summary.as_deref() {
+        push_section(&mut out, "Fixer's summary", summary);
+    }
+    if let Some(findings) = ctx.prior_findings.as_deref() {
+        push_section(
+            &mut out,
+            "Findings raised last round (all reviewers)",
+            findings,
+        );
+    }
+    if let Some(diff) = ctx.diff.as_deref() {
+        push_section(&mut out, "Current working-copy diff", diff);
+    }
+    push_section(
+        &mut out,
+        "What to do",
+        "Go through each finding above and verify against the current diff that it is actually \
+         resolved — do not take the fixer's summary on faith; reopen anything that is not. Then \
+         check the changes for regressions the repair may have introduced, including code you \
+         found fine last round. Defending your earlier verdict is not a goal — accuracy is.",
+    );
+    finish_prompt(out, VERDICT_PROTOCOL, None)
 }
 
 pub fn build_fix_prompt(spec: &WorkflowSpec, ctx: &PromptCtx) -> String {
@@ -1033,6 +1105,7 @@ mod tests {
             implementer_summary: Some("did things".into()),
             diff: Some("--- a/x\n+++ b/x".into()),
             findings: Some("1. [high] — bug (r)".into()),
+            prior_findings: None,
             round: 1,
             max_rounds: 2,
             guidance: Some("prefer tower middleware".into()),
@@ -1083,6 +1156,81 @@ mod tests {
         let review = build_reviewer_prompt(&run.spec, 0, &ctx);
         assert!(review.starts_with("perf check DIFF r2"));
         assert!(review.contains("\"verdict\""));
+    }
+
+    #[test]
+    fn repeat_round_reviewer_prompt_verifies_prior_findings() {
+        let run = run_for("name: X\nreview:\n  reviewers:\n    - focus: security\n");
+        let base = PromptCtx {
+            task_prompt: "Add rate limiting".into(),
+            diff: Some("DIFF".into()),
+            round: 2,
+            max_rounds: 3,
+            ..Default::default()
+        };
+        // Round 1 (no prior findings): no verification section.
+        let first = build_reviewer_prompt(&run.spec, 0, &base);
+        assert!(!first.contains("Previous round's findings"));
+
+        let ctx = PromptCtx {
+            prior_findings: Some("1. [high] `a.rs` — bug here (reviewer)".into()),
+            ..base.clone()
+        };
+        let repeat = build_reviewer_prompt(&run.spec, 0, &ctx);
+        assert!(repeat.contains("Previous round's findings — verify each one"));
+        assert!(repeat.contains("bug here"));
+        assert!(repeat.contains("regressions"));
+
+        // The verification section is engine-owned: custom reviewer prompts
+        // get it appended too, without any template changes.
+        let custom = run_for("name: X\nreview:\n  reviewers:\n    - prompt: \"check {{diff}}\"\n");
+        let repeat = build_reviewer_prompt(&custom.spec, 0, &ctx);
+        assert!(repeat.starts_with("check DIFF"));
+        assert!(repeat.contains("Previous round's findings — verify each one"));
+        assert!(
+            repeat.contains("\"verdict\""),
+            "protocol still appended last"
+        );
+    }
+
+    #[test]
+    fn rereview_followup_carries_delta_and_instructions() {
+        let ctx = PromptCtx {
+            task_prompt: "irrelevant — the session already has it".into(),
+            implementer_summary: Some("FIX-DONE: patched the parser".into()),
+            prior_findings: Some("1. [high] — off-by-one (reviewer)".into()),
+            diff: Some("THE-NEW-DIFF".into()),
+            round: 2,
+            max_rounds: 2,
+            ..Default::default()
+        };
+        let followup = build_rereview_prompt(&ctx);
+        assert!(followup.starts_with("The repair stage has addressed your review"));
+        assert!(followup.contains("round 2/2"));
+        assert!(followup.contains("FIX-DONE: patched the parser"));
+        assert!(followup.contains("off-by-one"));
+        assert!(followup.contains("THE-NEW-DIFF"));
+        assert!(followup.contains("regressions"));
+        assert!(
+            followup.contains("\"verdict\""),
+            "verdict protocol reminder"
+        );
+        // The session already has the task prompt — the follow-up must not
+        // re-send it.
+        assert!(!followup.contains("irrelevant — the session already has it"));
+    }
+
+    #[test]
+    fn all_children_spans_history_and_active() {
+        let mut run = run_for("name: X\n");
+        run.record_stage(StageKind::Implement, "t_impl", "claude", "implement".into());
+        run.record_stage(StageKind::Review, "t_rev", "claude", "reviewer".into());
+        run.active_children.insert("t_fix".into(), StageKind::Fix);
+        let all = run.all_children();
+        assert_eq!(all.len(), 3);
+        for id in ["t_impl", "t_rev", "t_fix"] {
+            assert!(all.contains(id), "{id} missing");
+        }
     }
 
     #[test]
