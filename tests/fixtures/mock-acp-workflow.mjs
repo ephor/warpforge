@@ -50,6 +50,19 @@ function handle(msg) {
         text("IMPL-DONE: implemented the change.");
         endTurn(msg.id);
         break;
+      case "noisy-impl":
+        // Narration, then work, then the real closing message — only the last
+        // part is the summary the pipeline should carry forward.
+        text("NARRATION: let me look at the files first.");
+        update({
+          sessionUpdate: "tool_call",
+          toolCallId: "t1",
+          title: "read src/lib.rs",
+          status: "completed",
+        });
+        text("CLOSING: implemented the change and ran the tests.");
+        endTurn(msg.id);
+        break;
       case "slow-impl":
         text("IMPL-DONE: implemented the change (slowly).");
         setTimeout(() => endTurn(msg.id), 600);

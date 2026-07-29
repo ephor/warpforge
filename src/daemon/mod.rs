@@ -834,6 +834,69 @@ mod tests {
         panic!("stage agent processes still alive after the pipeline finished");
     }
 
+    /// Reviewers must receive the implementer's closing message, not the
+    /// whole turn's tool narration.
+    #[tokio::test]
+    async fn workflow_carries_the_closing_message_not_the_narration() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: placeholder\n");
+        let reviewer = wf_agent(&dir, "rev.state", "approve");
+        std::fs::write(
+            dir.path().join(".warpforge/workflows/test.yaml"),
+            format!("name: Closing flow\nreview:\n  reviewers:\n    - agent: {reviewer}\n"),
+        )
+        .unwrap();
+        let lead = wf_agent(&dir, "impl.state", "noisy-impl");
+
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(projects, store);
+        let mut events = daemon.subscribe();
+        let parent_id = create_workflow_task(&daemon, &lead).await;
+
+        wait_for_parent(&mut events, &parent_id, "pipeline done", |t| {
+            t.workflow_run
+                .as_ref()
+                .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
+        })
+        .await;
+
+        // The reviewer child's prompt is its task prompt.
+        let snapshot = daemon.snapshot().await;
+        let reviewer_prompt = snapshot
+            .tasks
+            .iter()
+            .find(|t| {
+                t.parent_task_id.as_deref() == Some(&parent_id) && t.title.starts_with("review")
+            })
+            .map(|t| t.prompt.clone())
+            .expect("a reviewer stage ran");
+        assert!(
+            reviewer_prompt.contains("CLOSING: implemented the change"),
+            "the reviewer must see the closing message"
+        );
+        assert!(
+            !reviewer_prompt.contains("NARRATION:"),
+            "tool narration must not be passed off as the implementer's summary"
+        );
+
+        // The parent's timeline shows the same closing text as the stage result.
+        let events: Vec<_> = snapshot.session_history[&parent_id]
+            .iter()
+            .filter_map(|update| match update {
+                wire::SessionUpdate::WorkflowEvent { detail, .. } => detail.clone(),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            events.iter().any(|detail| detail.contains("CLOSING:")),
+            "{events:?}"
+        );
+        assert!(
+            events.iter().all(|detail| !detail.contains("NARRATION:")),
+            "{events:?}"
+        );
+    }
+
     #[tokio::test]
     async fn workflow_fresh_reask_spawns_new_reviewers() {
         use warpforge_protocol as wire;

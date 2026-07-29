@@ -23,7 +23,7 @@ implement:
     {{task_prompt}}
 
 review:
-  max_rounds: 2 # review rounds; a fix runs between them, so 2 = one fix attempt
+  max_rounds: 3 # review rounds; a fix runs between them, so 3 = two fix attempts
   on_limit: ask # ask | finish — behaviour when the limit is hit
   # reask: same_session # same_session | fresh — repeat rounds follow up in the
   #   same reviewer session (it verifies its own findings); `fresh` spawns new
