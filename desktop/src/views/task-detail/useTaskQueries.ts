@@ -1,12 +1,33 @@
 import { keepPreviousData, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
-import type { FileDiff, FileDoc, ProjectFile, TaskDiff } from "../../protocol";
+import type { FileDiff, FileDoc, ProjectFile, SessionUpdate, TaskDiff } from "../../protocol";
 import { daemonQuery } from "../../query";
 
 const EMPTY_PROJECT_FILES: ProjectFile[] = [];
 
 export type ActiveTab = { kind: "changes" } | { kind: "file"; path: string };
+
+export function useTaskFileEditCacheSync(taskId: string, updates: SessionUpdate[]) {
+  const queryClient = useQueryClient();
+  const latestFileEdit = useMemo(() => {
+    for (let index = updates.length - 1; index >= 0; index -= 1) {
+      if (updates[index].kind === "file_edit") {
+        return updates[index];
+      }
+    }
+    return null;
+  }, [updates]);
+
+  useEffect(() => {
+    if (!latestFileEdit) {
+      return;
+    }
+    void queryClient.invalidateQueries({ queryKey: ["diff", taskId] });
+    void queryClient.invalidateQueries({ queryKey: ["fileList", taskId] });
+    void queryClient.invalidateQueries({ queryKey: ["fileContents", taskId] });
+  }, [latestFileEdit, queryClient, taskId]);
+}
 
 export function useTaskQueries(
   taskId: string,

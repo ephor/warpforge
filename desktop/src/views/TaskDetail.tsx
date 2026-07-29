@@ -48,7 +48,11 @@ import { FocusButton } from "./task-detail/FocusButton";
 import { GitWorkspaceControls } from "./task-detail/GitWorkspaceControls";
 import { ProjectFilesPanel } from "./task-detail/ProjectFilesPanel";
 import { SubtasksRail } from "./task-detail/SubtasksRail";
-import { useTaskQueries, type ActiveTab } from "./task-detail/useTaskQueries";
+import {
+  useTaskFileEditCacheSync,
+  useTaskQueries,
+  type ActiveTab,
+} from "./task-detail/useTaskQueries";
 
 interface Props {
   task: TaskInfo;
@@ -94,6 +98,7 @@ type TaskConversationProps = Omit<
 
 const TaskConversation = memo(function TaskConversation(props: TaskConversationProps) {
   const updates = useTaskSessionUpdates(props.task.id);
+  useTaskFileEditCacheSync(props.task.id, updates);
   const activity = useMemo(() => sessionActivity(props.task, updates), [props.task, updates]);
   const commands = useMemo<CommandInfo[]>(() => {
     for (let index = updates.length - 1; index >= 0; index -= 1) {
