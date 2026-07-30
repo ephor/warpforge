@@ -112,7 +112,7 @@ jobs:
           {
             echo "### Tagged \`$RELEASE_TAG\`"
             echo
-            echo "Run **Draft release** with \`$RELEASE_TAG\` to build," \
-              "sign, and stage the assets, then smoke-test the draft before" \
-              "publishing it."
+            echo "**Draft release** starts from this tag on its own. Approve" \
+              "the \`release\` environment when it asks, then smoke-test the" \
+              "draft before publishing it."
           } >> "$GITHUB_STEP_SUMMARY"

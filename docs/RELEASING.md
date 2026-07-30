@@ -1,10 +1,11 @@
 # Releasing Warpforge
 
-Warpforge releases in two manually triggered stages. **Version release** turns
-the changesets merged into `main` into a version bump, changelog entry, and
-immutable `vX.Y.Z` tag. **Draft release** then builds that tag into a GitHub
-Release draft with the desktop bundles, updater metadata, signatures, CLI
-archives, and checksums. Neither workflow ever publishes the release.
+A release starts with one manual trigger. **Version release** turns the
+changesets merged into `main` into a version bump, changelog entry, and immutable
+`vX.Y.Z` tag. Pushing that tag starts **Draft release**, which builds it into a
+GitHub Release draft with the desktop bundles, updater metadata, signatures, CLI
+archives, and checksums. Neither workflow ever publishes the release: you
+smoke-test the draft and publish it yourself.
 
 macOS Apple Silicon is the primary release target. Windows x64 and Linux x64
 desktop builds are opt-in preview artifacts; a successful CI build does not
@@ -134,9 +135,14 @@ not match it.
 
 ## Build the draft
 
-In GitHub Actions, run **Draft release** and enter the `vX.Y.Z` tag that
-**Version release** pushed.
-Leave both preview toggles disabled for the normal macOS Apple Silicon release:
+**Draft release** starts by itself from the tag that **Version release** pushed,
+building only the normal macOS Apple Silicon release. Nothing to do but approve
+the `release` environment when it asks.
+
+Dispatch it manually when you need something the tag push cannot select: an
+unpublished draft rebuilt after a flaky notarization, or the preview platforms.
+It then takes the `vX.Y.Z` tag as its `version` input, plus two toggles that a
+tag push always leaves off:
 
 - `include_windows_x64` adds Windows x64 NSIS desktop and CLI artifacts.
 - `include_linux_x64` adds Linux x64 AppImage, Debian package, and CLI
