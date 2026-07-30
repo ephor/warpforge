@@ -12,6 +12,12 @@ mean those platforms have been validated for public support.
 
 ## One-time repository setup
 
+Add a deploy key with write access and store its private key as the **repository**
+secret `DEPLOY_KEY`. **Version release** checks out `main` with it, so the
+version commit and the release tag are pushed over SSH under that key instead of
+`GITHUB_TOKEN`. Keep it a repository secret: the versioning job runs outside the
+`release` environment and cannot read environment-scoped secrets.
+
 Create a protected GitHub Actions environment named `release`. Require a
 reviewer for it so signed builds cannot start without approval, and store these
 secrets in that environment:
@@ -105,8 +111,10 @@ anything. Otherwise it:
 - verifies the result with `scripts/check-release-version.mjs`;
 - creates and pushes the immutable annotated tag `vX.Y.Z`.
 
-The workflow pushes to `main` as `github-actions[bot]`. If `main` is protected,
-allow that push or the run fails after versioning but before tagging.
+The workflow pushes the version commit and the tag to `main` over SSH using the
+`DEPLOY_KEY` repository secret, which is what authorizes those pushes against
+branch protection. It fails immediately when that secret is missing rather than
+after the bump.
 
 To check the same metadata locally — for example while reviewing the versioned
 commit:
