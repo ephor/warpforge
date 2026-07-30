@@ -18,6 +18,10 @@ function write(path, contents) {
   writeFileSync(resolve(root, path), contents);
 }
 
+// Every crate versioned in lockstep with the product. Each one has to be
+// rewritten in each lockfile that mentions it.
+const LOCAL_CRATES = ["warpforge", "warpforge-desktop", "warpforge-protocol"];
+
 const version = JSON.parse(read("package.json")).version;
 
 if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(version)) {
@@ -38,17 +42,28 @@ function setCargoPackageVersion(path) {
   return true;
 }
 
-// Rewrites the `version` of one `[[package]]` entry in a Cargo lockfile.
-function setCargoLockVersion(path, name) {
+// Rewrites the `version` of every locally versioned `[[package]]` entry in a
+// Cargo lockfile. A crate can appear in more than one lockfile: the desktop
+// shell depends on warpforge-protocol by path, so that lockfile carries the
+// protocol version too, and `cargo check --locked` rejects a stale copy.
+function setCargoLockVersions(path) {
   const contents = read(path);
-  const pattern = new RegExp(
-    `(\\[\\[package\\]\\]\\nname = "${name}"\\nversion = ")[^"]*(")`,
-  );
-  if (!pattern.test(contents)) {
-    console.error(`missing: ${path} entry for ${name}`);
+  let updated = contents;
+  let patched = 0;
+
+  for (const name of LOCAL_CRATES) {
+    const pattern = new RegExp(
+      `(\\[\\[package\\]\\]\\nname = "${name}"\\nversion = ")[^"]*(")`,
+    );
+    if (!pattern.test(updated)) continue;
+    updated = updated.replace(pattern, `$1${version}$2`);
+    patched += 1;
+  }
+
+  if (patched === 0) {
+    console.error(`missing: ${path} has no entry for any local crate`);
     process.exit(1);
   }
-  const updated = contents.replace(pattern, `$1${version}$2`);
   if (updated === contents) return false;
   write(path, updated);
   return true;
@@ -77,15 +92,10 @@ const targets = [
     () => setJsonVersion("desktop/src-tauri/tauri.conf.json"),
   ],
   ["desktop/package.json", () => setJsonVersion("desktop/package.json")],
-  ["Cargo.lock (warpforge)", () => setCargoLockVersion("Cargo.lock", "warpforge")],
+  ["Cargo.lock", () => setCargoLockVersions("Cargo.lock")],
   [
-    "Cargo.lock (warpforge-protocol)",
-    () => setCargoLockVersion("Cargo.lock", "warpforge-protocol"),
-  ],
-  [
-    "desktop/src-tauri/Cargo.lock (warpforge-desktop)",
-    () =>
-      setCargoLockVersion("desktop/src-tauri/Cargo.lock", "warpforge-desktop"),
+    "desktop/src-tauri/Cargo.lock",
+    () => setCargoLockVersions("desktop/src-tauri/Cargo.lock"),
   ],
 ];
 

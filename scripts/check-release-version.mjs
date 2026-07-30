@@ -60,6 +60,21 @@ function cargoVersion(metadata, name) {
   return pkg.version;
 }
 
+// `cargo metadata --no-deps` never resolves the graph, so it cannot notice a
+// stale lockfile. Read the entries directly instead: a crate that appears in a
+// lockfile with the wrong version fails `cargo check --locked` in CI.
+function cargoLockVersions(path) {
+  const contents = readFileSync(resolve(root, path), "utf8");
+  const entries = new Map();
+  for (const [, name, lockedVersion] of contents.matchAll(
+    /\[\[package\]\]\nname = "(warpforge(?:-[a-z]+)?)"\nversion = "([^"]*)"/g,
+  )) {
+    entries.set(`${path} (${name})`, lockedVersion);
+  }
+  if (entries.size === 0) throw new Error(`no local crate found in ${path}`);
+  return entries;
+}
+
 const versions = new Map([
   ["package.json (Changesets source of truth)", rootPackage.version],
   ["Cargo.toml (warpforge)", cargoVersion(rootMetadata, "warpforge")],
@@ -73,6 +88,8 @@ const versions = new Map([
   ],
   ["desktop/src-tauri/tauri.conf.json", tauriConfig.version],
   ["desktop/package.json", desktopPackage.version],
+  ...cargoLockVersions("Cargo.lock"),
+  ...cargoLockVersions("desktop/src-tauri/Cargo.lock"),
 ]);
 
 let valid = true;
