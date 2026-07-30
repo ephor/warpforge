@@ -7,6 +7,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuPortal,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -88,18 +89,20 @@ export const MessageActions = memo(function MessageActions({
             <GitBranch className="size-3.5" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuLabel>Continue with…</DropdownMenuLabel>
-          {agents.map((agent) => (
-            <DropdownMenuItem
-              key={agent.id}
-              disabled={startingAgent !== null}
-              onSelect={() => void start(agent.id)}
-            >
-              <AgentBadge agentId={agent.id} displayName={agent.displayName} />
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
+        <DropdownMenuPortal>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel>Continue with…</DropdownMenuLabel>
+            {agents.map((agent) => (
+              <DropdownMenuItem
+                key={agent.id}
+                disabled={startingAgent !== null}
+                onSelect={() => void start(agent.id)}
+              >
+                <AgentBadge agentId={agent.id} displayName={agent.displayName} />
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenuPortal>
       </DropdownMenu>
     </div>
   );
