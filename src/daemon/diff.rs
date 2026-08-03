@@ -691,6 +691,13 @@ pub async fn file_doc(repo: &str, path: &str) -> Result<wire::FileDoc> {
     if path.contains("..") {
         bail!("refusing path with ..: {path}");
     }
+
+    let is_image = is_image_path(path);
+
+    if is_image {
+        return file_doc_binary(repo, path).await;
+    }
+
     let show = Command::new("git")
         .args(["-C", repo, "show", &format!("HEAD:{path}")])
         .output()
@@ -721,7 +728,61 @@ pub async fn file_doc(repo: &str, path: &str) -> Result<wire::FileDoc> {
         status,
         old_text,
         new_text,
+        new_data_base64: None,
+        old_data_base64: None,
     })
+}
+
+/// Binary file variant — returns base64-encoded content for images.
+async fn file_doc_binary(repo: &str, path: &str) -> Result<wire::FileDoc> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let show = Command::new("git")
+        .args(["-C", repo, "show", &format!("HEAD:{path}")])
+        .output()
+        .await?;
+    let in_head = show.status.success();
+    let old_data_base64 = if in_head {
+        Some(STANDARD.encode(&show.stdout))
+    } else {
+        None
+    };
+
+    let full = std::path::Path::new(repo).join(path);
+    let in_tree = full.is_file();
+    let new_data_base64 = if in_tree {
+        let bytes = std::fs::read(&full)?;
+        Some(STANDARD.encode(bytes))
+    } else {
+        None
+    };
+
+    let status = match (in_head, in_tree) {
+        (true, true) => wire::FileDiffStatus::Modified,
+        (false, true) => wire::FileDiffStatus::Added,
+        (true, false) => wire::FileDiffStatus::Deleted,
+        (false, false) => wire::FileDiffStatus::Modified,
+    };
+    Ok(wire::FileDoc {
+        path: path.to_string(),
+        status,
+        old_text: String::new(),
+        new_text: String::new(),
+        new_data_base64,
+        old_data_base64,
+    })
+}
+
+/// Check if path is a binary image file.
+fn is_image_path(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+        || lower.ends_with(".jpeg")
+        || lower.ends_with(".gif")
+        || lower.ends_with(".webp")
+        || lower.ends_with(".ico")
+        || lower.ends_with(".bmp")
 }
 
 /// Write new contents to a file in the working tree (an in-review edit).

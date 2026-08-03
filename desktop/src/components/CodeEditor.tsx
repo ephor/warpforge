@@ -15,6 +15,24 @@ import { Markdown } from "./Markdown";
 type SaveStatus = "clean" | "unsaved" | "saved";
 
 const isMarkdownPath = (path: string) => /\.(md|markdown|mdx)$/i.test(path);
+const isSvgPath = (path: string) => /\.svg$/i.test(path);
+const isBinaryImagePath = (path: string) =>
+  /\.(png|jpg|jpeg|gif|webp|ico|bmp)$/i.test(path);
+
+function getMimeType(path: string): string {
+  const ext = path.toLowerCase().split(".").pop();
+  const mimeMap: Record<string, string> = {
+    png: "image/png",
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    gif: "image/gif",
+    webp: "image/webp",
+    ico: "image/x-icon",
+    bmp: "image/bmp",
+    svg: "image/svg+xml",
+  };
+  return mimeMap[ext ?? ""] ?? "application/octet-stream";
+}
 
 export function CodeEditor({
   doc,
@@ -31,8 +49,11 @@ export function CodeEditor({
   const [status, setStatus] = useState<SaveStatus>("clean");
   const [preview, setPreview] = useState(false);
   const markdown = isMarkdownPath(doc.path);
-  const showPreview = markdown && preview;
+  const svgImage = isSvgPath(doc.path);
+  const binaryImage = isBinaryImagePath(doc.path);
+  const showPreview = (markdown || svgImage) && preview;
   const previewText = viewRef.current?.state.doc.toString() ?? doc.newText;
+  const isReadOnly = binaryImage || svgImage;
 
   useEffect(() => {
     onSaveRef.current = onSave;
@@ -51,7 +72,7 @@ export function CodeEditor({
 
   useEffect(() => {
     const parent = host.current;
-    if (!parent) {
+    if (!parent || binaryImage) {
       return;
     }
     let disposed = false;
@@ -69,7 +90,7 @@ export function CodeEditor({
             oneDark,
             EditorView.lineWrapping,
             ...language,
-            EditorState.readOnly.of(!editable),
+            EditorState.readOnly.of(!editable || isReadOnly),
             keymap.of([{ key: "Mod-s", run: flushSave }]),
             EditorView.updateListener.of((u) => {
               if (!u.docChanged) {
@@ -91,7 +112,7 @@ export function CodeEditor({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.path, editable]);
+  }, [doc.path, editable, binaryImage, isReadOnly]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -125,7 +146,7 @@ export function CodeEditor({
             </>
           ) : null}
         </span>
-        {markdown && (
+        {(markdown || svgImage) && (
           <button
             type="button"
             onClick={() => setPreview((p) => !p)}
@@ -142,29 +163,71 @@ export function CodeEditor({
             )}
           </button>
         )}
-        <button
-          type="button"
-          onClick={flushSave}
-          disabled={!editable}
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground disabled:opacity-50"
-        >
-          <Save className="size-3" />
-          save
-        </button>
+        {!isReadOnly && (
+          <button
+            type="button"
+            onClick={flushSave}
+            disabled={!editable}
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground disabled:opacity-50"
+          >
+            <Save className="size-3" />
+            save
+          </button>
+        )}
       </div>
       <div className="relative min-h-0 flex-1">
-        <div
-          ref={host}
-          className={cn(
-            "warpforge-code-editor h-full overflow-auto bg-card",
-            showPreview && "hidden",
-          )}
-          style={{ fontSize: "var(--app-mono-font-size)" }}
-        />
-        {showPreview && (
-          <div className="h-full overflow-auto px-4 py-3">
-            <Markdown>{previewText}</Markdown>
+        {binaryImage ? (
+          <div className="flex h-full flex-col items-center justify-center overflow-auto bg-card p-4">
+            {doc.newDataBase64 ? (
+              <>
+                <img
+                  src={`data:${getMimeType(doc.path)};base64,${doc.newDataBase64}`}
+                  alt={doc.path}
+                  className="max-h-full max-w-full object-contain"
+                />
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {doc.path} • {(doc.newDataBase64.length * 0.75 / 1024).toFixed(1)} KB
+                </div>
+              </>
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                No image data available for {doc.path}
+              </div>
+            )}
           </div>
+        ) : (
+          <>
+            <div
+              ref={host}
+              className={cn(
+                "warpforge-code-editor h-full overflow-auto bg-card",
+                showPreview && "hidden",
+              )}
+              style={{ fontSize: "var(--app-mono-font-size)" }}
+            />
+            {showPreview && (
+              <div className="h-full overflow-auto px-4 py-3">
+                {svgImage ? (
+                  <div className="flex h-full items-center justify-center">
+                    {doc.newDataBase64 ? (
+                      <img
+                        src={`data:image/svg+xml;base64,${doc.newDataBase64}`}
+                        alt={doc.path}
+                        className="max-h-full max-w-full object-contain"
+                      />
+                    ) : (
+                      <div
+                        className="prose dark:prose-invert max-w-none"
+                        dangerouslySetInnerHTML={{ __html: previewText }}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <Markdown>{previewText}</Markdown>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

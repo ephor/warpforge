@@ -1193,6 +1193,11 @@ pub struct FileDoc {
     pub status: FileDiffStatus,
     pub old_text: String,
     pub new_text: String,
+    /// Base64-encoded binary content for images (PNG, JPG, etc). None for text files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_data_base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_data_base64: Option<String>,
 }
 
 /// Result of `file.list`: project files available to open in the editor.

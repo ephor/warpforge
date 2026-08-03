@@ -446,6 +446,9 @@ export interface FileDoc {
   status: "added" | "modified" | "deleted" | "renamed";
   oldText: string;
   newText: string;
+  /** Base64-encoded binary content for images (PNG, JPG, etc). Undefined for text files. */
+  newDataBase64?: string;
+  oldDataBase64?: string;
 }
 
 export interface ProjectFile {
