@@ -19,7 +19,6 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/lib/taskGroups";
-import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
 import { AgentBadge } from "../components/AgentBadge";
@@ -31,6 +30,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { TaskDetailActions } from "../components/TaskDetailActions";
 import { TaskMenu } from "../components/TaskMenu";
+import { TaskTitleEditor } from "../components/TaskTitleEditor";
 import { daemon } from "../daemon";
 import type {
   CommandInfo,
@@ -395,9 +395,7 @@ export default function TaskDetail({ task, snapshot, onClose, onOpenTask, onOpen
           <ArrowLeft className="size-4" />
         </Button>
         <TaskActivityStatus task={task} />
-        <h1 className="min-w-0 flex-1 truncate text-base font-semibold" title={task.prompt}>
-          {taskLabel(task)}
-        </h1>
+        <TaskTitleEditor task={task} />
         <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
           <span className="max-w-36 truncate">{task.project}</span>
           <span aria-hidden className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
