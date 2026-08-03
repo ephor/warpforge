@@ -11,6 +11,13 @@ export type DiffView = "unified" | "split";
 export type RightPanel = "changes" | "files" | "subtasks" | null;
 export type RepositoryOperation = { taskId: string; kind: "pull" | "push" };
 
+export interface PinnedTileLayout {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 const DEFAULT_FONT_SIZE = 14;
 const DEFAULT_MONO_FONT_SIZE = 13;
 const FONT_SIZE_STEP = 1;
@@ -63,6 +70,7 @@ interface UiState extends SettingsState {
   rightPanel: RightPanel;
   runtimeOpenByProject: Record<string, boolean>;
   pinnedTaskIds: string[];
+  pinnedLayout: Record<string, PinnedTileLayout>;
   sidebarWidth: number;
 
   setView: (v: View) => void;
@@ -81,6 +89,7 @@ interface UiState extends SettingsState {
   clearRuntimeOpen: (project: string) => void;
   togglePinnedTask: (id: string) => void;
   setPinnedTaskIds: (ids: string[]) => void;
+  setPinnedLayout: (id: string, layout: PinnedTileLayout) => void;
   setSidebarWidth: (w: number) => void;
 }
 
@@ -107,6 +116,7 @@ export const useUi = create<UiState>()(
       rightPanel: null,
       runtimeOpenByProject: {},
       pinnedTaskIds: [],
+      pinnedLayout: {},
       sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
       fontSize: DEFAULT_FONT_SIZE,
       monoFontSize: DEFAULT_MONO_FONT_SIZE,
@@ -156,10 +166,31 @@ export const useUi = create<UiState>()(
         }),
       setPinnedTaskIds: (pinnedTaskIds) => set({ pinnedTaskIds }),
       togglePinnedTask: (id) =>
+        set((s) => {
+          const isPinned = s.pinnedTaskIds.includes(id);
+          if (isPinned) {
+            const pinnedLayout = { ...s.pinnedLayout };
+            delete pinnedLayout[id];
+            return {
+              pinnedTaskIds: s.pinnedTaskIds.filter((x) => x !== id),
+              pinnedLayout,
+            };
+          }
+          const y = Object.values(s.pinnedLayout).reduce(
+            (max, l) => Math.max(max, l.y + l.h),
+            0,
+          );
+          return {
+            pinnedTaskIds: [...s.pinnedTaskIds, id],
+            pinnedLayout: {
+              ...s.pinnedLayout,
+              [id]: { x: 0, y, w: 2, h: 2 },
+            },
+          };
+        }),
+      setPinnedLayout: (id, layout) =>
         set((s) => ({
-          pinnedTaskIds: s.pinnedTaskIds.includes(id)
-            ? s.pinnedTaskIds.filter((x) => x !== id)
-            : [...s.pinnedTaskIds, id],
+          pinnedLayout: { ...s.pinnedLayout, [id]: layout },
         })),
       setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: clampSidebarWidth(sidebarWidth) }),
 
@@ -181,20 +212,18 @@ export const useUi = create<UiState>()(
     }),
     {
       name: "wf-ui",
-      version: 1,
+      version: 2,
       migrate: (persisted: unknown, version: number) => {
-        if (
-          version === 0 &&
-          persisted &&
-          typeof persisted === "object" &&
-          "sidebarWidth" in persisted
-        ) {
-          const p = persisted as Record<string, unknown>;
-          if (p.sidebarWidth !== undefined) {
-            return { ...p, sidebarWidth: clampSidebarWidth(p.sidebarWidth) };
+        let state = persisted as Record<string, unknown>;
+        if (version === 0 && state && "sidebarWidth" in state) {
+          if (typeof state.sidebarWidth === "number") {
+            state = { ...state, sidebarWidth: clampSidebarWidth(state.sidebarWidth) };
           }
         }
-        return persisted as Record<string, unknown>;
+        if (version < 2 && state && !("pinnedLayout" in state)) {
+          state = { ...state, pinnedLayout: {} };
+        }
+        return state;
       },
       // OpenTaskId is session-only — a reload shouldn't force-open a stale task.
       partialize: ({

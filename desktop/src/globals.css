@@ -190,3 +190,96 @@ textarea {
 .warpforge-code-editor .cm-panel.cm-search button[name="close"]:hover {
   color: hsl(var(--foreground));
 }
+
+/* Resize handles for Mission Control grid */
+.react-resizable-handle {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  background-repeat: no-repeat;
+  background-origin: content-box;
+  box-sizing: border-box;
+  cursor: se-resize;
+}
+
+.react-resizable-handle-se {
+  bottom: 0;
+  right: 0;
+  cursor: se-resize;
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2IDYiIHdpZHRoPSI2IiBoZWlnaHQ9IjYiPjxwYXRoIGQ9Ik02IDZMMC02TDEtNUw1LTFaIiBmaWxsPSJjdXJyZW50Q29sb3IiLz48L3N2Zz4=");
+}
+
+.react-resizable-handle-sw {
+  bottom: 0;
+  left: 0;
+  cursor: sw-resize;
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2IDYiIHdpZHRoPSI2IiBoZWlnaHQ9IjYiPjxwYXRoIGQ9Ik0wIDZMNi02TDUtNUwxLTFaIiBmaWxsPSJjdXJyZW50Q29sb3IiLz48L3N2Zz4=");
+}
+
+.react-resizable-handle-ne {
+  top: 0;
+  right: 0;
+  cursor: ne-resize;
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2IDYiIHdpZHRoPSI2IiBoZWlnaHQ9IjYiPjxwYXRoIGQ9Ik02IDBMMCA2TDEgNUw1IDFaIiBmaWxsPSJjdXJyZW50Q29sb3IiLz48L3N2Zz4=");
+}
+
+.react-resizable-handle-nw {
+  top: 0;
+  left: 0;
+  cursor: nw-resize;
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2IDYiIHdpZHRoPSI2IiBoZWlnaHQ9IjYiPjxwYXRoIGQ9Ik0wIDBMNiA2TDUgNUwxIDFaIiBmaWxsPSJjdXJyZW50Q29sb3IiLz48L3N2Zz4=");
+}
+
+.react-resizable-handle-n,
+.react-resizable-handle-s {
+  left: 50%;
+  margin-left: -10px;
+  cursor: ns-resize;
+}
+
+.react-resizable-handle-n {
+  top: 0;
+}
+
+.react-resizable-handle-s {
+  bottom: 0;
+}
+
+.react-resizable-handle-e,
+.react-resizable-handle-w {
+  top: 50%;
+  margin-top: -10px;
+  cursor: ew-resize;
+}
+
+.react-resizable-handle-e {
+  right: 0;
+}
+
+.react-resizable-handle-w {
+  left: 0;
+}
+
+.react-resizable-handle:hover {
+  background-color: hsl(var(--primary) / 0.1);
+  border-radius: 2px;
+}
+
+/* Hide react-resizable drag/resize overlay */
+.react-resizable-handle::after,
+.react-grid-item.react-draggable-dragging,
+.react-grid-item.react-draggable {
+  outline: none !important;
+}
+
+.react-grid-item.react-grid-placeholder {
+  background: hsl(var(--primary) / 0.1) !important;
+  opacity: 1 !important;
+  border-radius: 0.375rem;
+}
+
+/* Prevent text selection during drag/resize */
+body.wf-dragging,
+body.wf-dragging * {
+  user-select: none !important;
+}

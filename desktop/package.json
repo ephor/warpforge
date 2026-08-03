@@ -54,6 +54,7 @@
     "lucide-react": "^1.23.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "react-grid-layout": "^2.2.4",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^2.1.9",
     "remark-gfm": "^4.0.1",

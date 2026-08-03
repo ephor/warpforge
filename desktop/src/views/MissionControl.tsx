@@ -1,4 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
+
+import "react-grid-layout/css/styles.css";
+import "react-resizable/css/styles.css";
+
 import {
   Activity,
   ChevronRight,
@@ -15,7 +19,9 @@ import {
   TriangleAlert,
   Wrench,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactGridLayout, { useContainerWidth } from "react-grid-layout";
+import type { EventCallback, LayoutItem } from "react-grid-layout";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -82,13 +88,113 @@ interface Props {
 
 const PINNED_PREVIEW_LIMIT = 18;
 const FOCUSED_PREVIEW_LIMIT = 24;
+const GRID_SCROLL_EDGE = 48;
+const GRID_SCROLL_STEP = 24;
+const GRID_SCROLL_GAP = 8;
+
+function pointerClientY(event: Event): number | null {
+  if ("clientY" in event && typeof event.clientY === "number") {
+    return event.clientY;
+  }
+
+  const touchEvent = event as TouchEvent;
+  const touch = touchEvent.touches[0] ?? touchEvent.changedTouches[0];
+  return touch?.clientY ?? null;
+}
 
 export default function MissionControl({ state, onOpenTask, onNewTask }: Props) {
   const pinned = useUi((s) => s.pinnedTaskIds);
+  const pinnedLayout = useUi((s) => s.pinnedLayout);
   const setPinnedTaskIds = useUi((s) => s.setPinnedTaskIds);
+  const setPinnedLayout = useUi((s) => s.setPinnedLayout);
   const attentionTargetId = useUi((s) => s.attentionTargetId);
   const attentionTargetNonce = useUi((s) => s.attentionTargetNonce);
   const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
+  const { width, containerRef, mounted } = useContainerWidth();
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const [boardHeight, setBoardHeight] = useState(0);
+
+  const beginGridInteraction = useCallback(() => {
+    document.body.classList.add("wf-dragging");
+  }, []);
+  const endGridInteraction = useCallback(() => {
+    document.body.classList.remove("wf-dragging");
+  }, []);
+  const scrollDuringResize = useCallback((event: Event) => {
+    const pointerY = pointerClientY(event);
+    if (pointerY === null) return;
+
+    const viewport = scrollAreaRef.current?.querySelector<HTMLElement>(
+      "[data-radix-scroll-area-viewport]",
+    );
+    if (!viewport) return;
+
+    const bounds = viewport.getBoundingClientRect();
+    let delta = 0;
+    if (pointerY > bounds.bottom - GRID_SCROLL_EDGE) {
+      delta = Math.min(GRID_SCROLL_STEP, pointerY - (bounds.bottom - GRID_SCROLL_EDGE));
+    } else if (pointerY < bounds.top + GRID_SCROLL_EDGE) {
+      delta = -Math.min(GRID_SCROLL_STEP, bounds.top + GRID_SCROLL_EDGE - pointerY);
+    }
+    if (delta !== 0) viewport.scrollTop += delta;
+  }, []);
+  const beginResizeInteraction = useCallback<EventCallback>(
+    (_layout, _oldItem, _newItem, _placeholder, event) => {
+      beginGridInteraction();
+      scrollDuringResize(event);
+    },
+    [beginGridInteraction, scrollDuringResize],
+  );
+  const handleResize = useCallback<EventCallback>(
+    (_layout, _oldItem, _newItem, _placeholder, event) => {
+      scrollDuringResize(event);
+    },
+    [scrollDuringResize],
+  );
+  const revealResizedCard = useCallback<EventCallback>(
+    (_newLayout, _oldItem, _newItem, _placeholder, _event, element) => {
+      endGridInteraction();
+      if (!element) return;
+
+      window.requestAnimationFrame(() => {
+        const viewport = scrollAreaRef.current?.querySelector<HTMLElement>(
+          "[data-radix-scroll-area-viewport]",
+        );
+        if (!viewport) {
+          element.scrollIntoView({ block: "end", inline: "nearest" });
+          return;
+        }
+
+        const bounds = viewport.getBoundingClientRect();
+        const card = element.getBoundingClientRect();
+        const bottomOverflow = card.bottom - (bounds.bottom - GRID_SCROLL_GAP);
+        const topOverflow = card.top - bounds.top;
+        if (bottomOverflow > 0) {
+          viewport.scrollTop += bottomOverflow;
+        } else if (topOverflow < 0) {
+          viewport.scrollTop += topOverflow;
+        }
+      });
+    },
+    [endGridInteraction],
+  );
+
+  useEffect(() => () => document.body.classList.remove("wf-dragging"), []);
+
+  useEffect(() => {
+    const viewport = scrollAreaRef.current?.querySelector<HTMLElement>(
+      "[data-radix-scroll-area-viewport]",
+    );
+    if (!viewport) return;
+
+    const measure = () => setBoardHeight(Math.round(viewport.getBoundingClientRect().height));
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
   const live = useMemo(
     () => state.snapshot.tasks.filter((t) => t.status !== "done"),
     [state.snapshot.tasks],
@@ -100,6 +206,45 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
   const pinnedGroups = useMemo(
     () => resolvePinnedTaskGroups(groupIndex, pinned),
     [groupIndex, pinned],
+  );
+
+  const layout = useMemo<LayoutItem[]>(() => {
+    return pinned.map((id) => {
+      const stored = pinnedLayout[id];
+      return {
+        i: id,
+        x: stored?.x ?? 0,
+        y: stored?.y ?? 0,
+        w: stored?.w ?? 2,
+        h: stored?.h ?? 2,
+        minW: 1,
+        minH: 1,
+        maxW: 4,
+      };
+    });
+  }, [pinned, pinnedLayout]);
+
+  const handleLayoutChange = useCallback(
+    (newLayout: readonly LayoutItem[]) => {
+      for (const item of newLayout) {
+        const current = pinnedLayout[item.i];
+        if (
+          !current ||
+          current.x !== item.x ||
+          current.y !== item.y ||
+          current.w !== item.w ||
+          current.h !== item.h
+        ) {
+          setPinnedLayout(item.i, {
+            x: item.x,
+            y: item.y,
+            w: item.w,
+            h: item.h,
+          });
+        }
+      }
+    },
+    [pinnedLayout, setPinnedLayout],
   );
 
   const handleUnpin = useCallback(
@@ -116,46 +261,74 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
   const visibleGroups = resolvedFocusedGroupId
     ? pinnedGroups.filter((tree) => tree.task.id === resolvedFocusedGroupId)
     : pinnedGroups;
+  const rowHeight =
+    boardHeight > 0
+      ? Math.min(260, Math.max(160, Math.floor((boardHeight - GRID_SCROLL_GAP) / 2)))
+      : 260;
 
   return (
-    <ScrollArea className="h-full min-h-0">
-      <div className="flex flex-col gap-2 pr-2">
-        {pinnedGroups.length > 0 ? (
-          <div
-            className={cn("grid grid-cols-1 gap-2", !resolvedFocusedGroupId && "xl:grid-cols-2")}
-          >
-            {visibleGroups.map((tree) => (
-              <FocusGroupPane
-                key={tree.task.id}
-                tree={tree}
-                updatesByTaskId={state.sessionUpdates}
-                attentionTargetId={attentionTargetId}
-                attentionTargetNonce={attentionTargetNonce}
-                onUnpin={handleUnpin}
-                onOpen={onOpenTask}
-                focused={resolvedFocusedGroupId === tree.task.id}
-                onFocus={handleFocus}
-              />
-            ))}
-          </div>
-        ) : live.length > 0 ? (
-          <div className="mt-16 flex flex-col items-center gap-2 text-center text-muted-foreground">
-            <p className="text-foreground">No pinned sessions.</p>
-            <p className="max-w-md text-sm">
-              Pin sessions from the sidebar when you want them on the Mission Control board.
-            </p>
-          </div>
-        ) : null}
+    <ScrollArea ref={scrollAreaRef} className="h-full min-h-0">
+      <div className="min-w-0 pb-2 pr-2">
+        <div ref={containerRef} className="flex min-w-0 w-full flex-col gap-2">
+          {pinnedGroups.length > 0 ? (
+            mounted && width > 0 ? (
+              <ReactGridLayout
+                className="layout"
+                layout={layout}
+                width={width}
+                gridConfig={{
+                  cols: 4,
+                  rowHeight,
+                  margin: [8, 0],
+                  containerPadding: [0, 0],
+                }}
+                dragConfig={{ enabled: !resolvedFocusedGroupId }}
+                resizeConfig={{
+                  enabled: !resolvedFocusedGroupId,
+                  handles: ["se", "sw", "ne", "nw", "n", "s", "e", "w"],
+                }}
+                onDragStart={beginGridInteraction}
+                onDragStop={endGridInteraction}
+                onResizeStart={beginResizeInteraction}
+                onResize={handleResize}
+                onResizeStop={revealResizedCard}
+                onLayoutChange={handleLayoutChange}
+              >
+                {visibleGroups.map((tree) => (
+                  <div key={tree.task.id} className="h-full min-h-0">
+                    <FocusGroupPane
+                      tree={tree}
+                      updatesByTaskId={state.sessionUpdates}
+                      attentionTargetId={attentionTargetId}
+                      attentionTargetNonce={attentionTargetNonce}
+                      onUnpin={handleUnpin}
+                      onOpen={onOpenTask}
+                      focused={resolvedFocusedGroupId === tree.task.id}
+                      onFocus={handleFocus}
+                    />
+                  </div>
+                ))}
+              </ReactGridLayout>
+            ) : null
+          ) : live.length > 0 ? (
+            <div className="mt-16 flex flex-col items-center gap-2 text-center text-muted-foreground">
+              <p className="text-foreground">No pinned sessions.</p>
+              <p className="max-w-md text-sm">
+                Pin sessions from the sidebar when you want them on the Mission Control board.
+              </p>
+            </div>
+          ) : null}
 
-        {live.length === 0 ? (
-          <div className="mt-16 flex flex-col items-center gap-3 text-muted-foreground">
-            <p>No live sessions.</p>
-            <Button variant="outline" onClick={() => onNewTask()}>
-              <Plus className="size-4" />
-              Start a task
-            </Button>
-          </div>
-        ) : null}
+          {live.length === 0 ? (
+            <div className="mt-16 flex flex-col items-center gap-3 text-muted-foreground">
+              <p>No live sessions.</p>
+              <Button variant="outline" onClick={() => onNewTask()}>
+                <Plus className="size-4" />
+                Start a task
+              </Button>
+            </div>
+          ) : null}
+        </div>
       </div>
     </ScrollArea>
   );
@@ -302,8 +475,7 @@ function FocusPane({
   return (
     <Card
       className={cn(
-        "group flex h-[520px] min-h-[420px] flex-col overflow-hidden rounded-md border border-border/80 bg-card shadow-none",
-        focused && "h-[calc(100vh-3rem)]",
+        "group flex h-full min-h-0 flex-col overflow-hidden rounded-md border border-border/80 bg-card shadow-none",
       )}
     >
       <div className="border-b border-border/80 px-3 py-1.5">
