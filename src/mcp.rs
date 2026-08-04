@@ -13,6 +13,11 @@
 //! - `read_inbox()` — drain finished sub-agent results.
 //! - `message_agent(task_id, message)` — send a follow-up message to a running
 //!   or idle sub-agent, continuing the same session.
+//! - `list_agents(project?)` — list this orchestrator's child sessions.
+//! - `stop_agent(task_id)` — hard-stop one owned child session while retaining
+//!   history.
+//! - `cleanup_agents(max_age_seconds?, dry_run?, include_active?)` — permanently
+//!   remove selected child sessions and their task history.
 //!
 //! Environment (set by the daemon when it starts the orchestrator session):
 //! - `WF_ORCH_TASK`    — the orchestrator's task id (the inbox owner / parent).
@@ -21,6 +26,7 @@
 use anyhow::{anyhow, Context, Result};
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
@@ -244,8 +250,133 @@ fn tool_defs() -> Value {
                 },
                 "required": ["task_id", "message"]
             }
+        },
+        {
+            "name": "list_agents",
+            "description": "List sub-agent sessions spawned by this orchestrator. \
+                The result is scoped to your current orchestrator task, and can \
+                optionally be narrowed to a project.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the orchestrator's project."
+                    }
+                }
+            }
+        },
+        {
+            "name": "stop_agent",
+            "description": "Hard-stop one sub-agent session owned by this orchestrator. \
+                The task remains in history so its result and context are not lost.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task id returned by spawn_agent or list_agents."
+                    }
+                },
+                "required": ["task_id"]
+            }
+        },
+        {
+            "name": "cleanup_agents",
+            "description": "Permanently remove child agent sessions owned by this \
+                orchestrator. By default all idle, needs_review, done, blocked, and \
+                interrupted tasks are selected: each is hard-stopped first, then its \
+                task record and session history are deleted. Running and queued \
+                sessions are skipped unless include_active=true. Returns a JSON report.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "max_age_seconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Optional minimum age since last update; defaults to 0 (all eligible children)."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "When true, report candidates without stopping or deleting them. Defaults to false."
+                    },
+                    "include_active": {
+                        "type": "boolean",
+                        "description": "Also allow running/queued sessions to be stopped and deleted. Defaults to false."
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name; must match the orchestrator project."
+                    }
+                }
+            }
         }
     ])
+}
+
+const DEFAULT_CLEANUP_MAX_AGE_SECONDS: u64 = 0;
+const INACTIVE_AGENT_STATUSES: &[&str] =
+    &["idle", "needs_review", "done", "blocked", "interrupted"];
+const ACTIVE_AGENT_STATUSES: &[&str] = &["running", "queued"];
+
+/// Keep MCP calls within the project that owns the orchestrator session. The
+/// optional argument is useful for tests and for older daemons that do not set
+/// WF_ORCH_PROJECT, but cannot be used to escape a non-empty environment scope.
+fn scoped_project(args: &Value, orchestrator_project: &str) -> Result<Option<String>> {
+    let requested = match args.get("project") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) if !value.trim().is_empty() => Some(value.clone()),
+        Some(Value::String(_)) => None,
+        Some(_) => return Err(anyhow!("'project' must be a string")),
+    };
+
+    if !orchestrator_project.is_empty() {
+        if let Some(requested) = requested.as_deref() {
+            if requested != orchestrator_project {
+                return Err(anyhow!(
+                    "project '{requested}' is outside the orchestrator project '{orchestrator_project}'"
+                ));
+            }
+        }
+        return Ok(Some(orchestrator_project.to_string()));
+    }
+
+    Ok(requested)
+}
+
+async fn list_owned_agents(
+    client: &mut DaemonClient,
+    parent_task: &str,
+    project: Option<&str>,
+) -> Result<Value> {
+    client
+        .request(
+            "orchestrator.listAgents",
+            json!({
+                "parent_task_id": parent_task,
+                "project": project,
+            }),
+        )
+        .await
+}
+
+fn agent_values(result: &Value) -> Result<Vec<Value>> {
+    result
+        .get("agents")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| anyhow!("daemon returned an invalid orchestrator.listAgents response"))
+}
+
+fn json_text(value: &Value) -> Result<String> {
+    serde_json::to_string_pretty(value).context("encoding MCP JSON result")
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 async fn handle_tool_call(
@@ -348,6 +479,199 @@ async fn handle_tool_call(
                  you will be notified when its result is waiting — then call read_inbox."
             ))
         }
+        "list_agents" => {
+            let scoped = scoped_project(&args, project)?;
+            let result = list_owned_agents(client, parent_task, scoped.as_deref()).await?;
+            json_text(&result)
+        }
+        "stop_agent" => {
+            let task_id = args
+                .get("task_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| anyhow!("'task_id' is required"))?;
+            let scoped = scoped_project(&args, project)?;
+            let result = list_owned_agents(client, parent_task, scoped.as_deref()).await?;
+            let agents = agent_values(&result)?;
+            let Some(agent) = agents
+                .iter()
+                .find(|agent| agent.get("id").and_then(Value::as_str) == Some(task_id))
+            else {
+                return Err(anyhow!(
+                    "task {task_id} is not a sub-agent owned by this orchestrator"
+                ));
+            };
+
+            client
+                .request("task.cancel", json!({ "task_id": task_id }))
+                .await?;
+            json_text(&json!({
+                "taskId": task_id,
+                "stopped": true,
+                "task": agent,
+            }))
+        }
+        "cleanup_agents" => {
+            let max_age_seconds = match args.get("max_age_seconds") {
+                None | Some(Value::Null) => DEFAULT_CLEANUP_MAX_AGE_SECONDS,
+                Some(value) => value
+                    .as_u64()
+                    .ok_or_else(|| anyhow!("'max_age_seconds' must be a non-negative integer"))?,
+            };
+            let dry_run = match args.get("dry_run") {
+                None | Some(Value::Null) => false,
+                Some(value) => value
+                    .as_bool()
+                    .ok_or_else(|| anyhow!("'dry_run' must be a boolean"))?,
+            };
+            let include_active = match args.get("include_active") {
+                None | Some(Value::Null) => false,
+                Some(value) => value
+                    .as_bool()
+                    .ok_or_else(|| anyhow!("'include_active' must be a boolean"))?,
+            };
+            let scoped = scoped_project(&args, project)?;
+            let result = list_owned_agents(client, parent_task, scoped.as_deref()).await?;
+            let agents = agent_values(&result)?;
+            let now = now_secs();
+            let mut selected = Vec::new();
+            let mut skipped = Vec::new();
+
+            for agent in agents {
+                let task_id = agent.get("id").and_then(Value::as_str).unwrap_or("");
+                let status = agent.get("status").and_then(Value::as_str).unwrap_or("");
+                let updated_at = agent
+                    .get("updatedAt")
+                    .and_then(Value::as_u64)
+                    .or_else(|| agent.get("createdAt").and_then(Value::as_u64));
+                let Some(updated_at) = updated_at else {
+                    skipped.push(json!({
+                        "taskId": task_id,
+                        "status": status,
+                        "reason": "missing_timestamp",
+                    }));
+                    continue;
+                };
+                let age_seconds = now.saturating_sub(updated_at);
+
+                let eligible_status = INACTIVE_AGENT_STATUSES.contains(&status)
+                    || (include_active && ACTIVE_AGENT_STATUSES.contains(&status));
+                if !eligible_status {
+                    let reason = if ACTIVE_AGENT_STATUSES.contains(&status) {
+                        "active"
+                    } else {
+                        "unknown_status"
+                    };
+                    skipped.push(json!({
+                        "taskId": task_id,
+                        "status": status,
+                        "ageSeconds": age_seconds,
+                        "reason": reason,
+                    }));
+                    continue;
+                }
+                if age_seconds < max_age_seconds {
+                    skipped.push(json!({
+                        "taskId": task_id,
+                        "status": status,
+                        "ageSeconds": age_seconds,
+                        "reason": "too_new",
+                    }));
+                    continue;
+                }
+
+                selected.push(json!({
+                    "taskId": task_id,
+                    "status": status,
+                    "ageSeconds": age_seconds,
+                }));
+            }
+
+            let mut deleted = Vec::new();
+            let mut errors = Vec::new();
+            if !dry_run {
+                for candidate in &selected {
+                    let Some(task_id) = candidate.get("taskId").and_then(Value::as_str) else {
+                        errors.push(json!({
+                            "task": candidate,
+                            "error": "candidate has no task id",
+                        }));
+                        continue;
+                    };
+                    if let Err(error) = client
+                        .request("task.cancel", json!({ "task_id": task_id }))
+                        .await
+                    {
+                        errors.push(json!({
+                            "taskId": task_id,
+                            "phase": "stop",
+                            "error": error.to_string(),
+                        }));
+                        continue;
+                    }
+                    match client
+                        .request("task.delete", json!({ "task_id": task_id }))
+                        .await
+                    {
+                        Ok(_) => deleted.push(candidate.clone()),
+                        Err(error) => errors.push(json!({
+                            "taskId": task_id,
+                            "phase": "delete",
+                            "error": error.to_string(),
+                        })),
+                    }
+                }
+            }
+
+            json_text(&json!({
+                "parentTaskId": parent_task,
+                "project": scoped,
+                "maxAgeSeconds": max_age_seconds,
+                "dryRun": dry_run,
+                "includeActive": include_active,
+                "selected": selected,
+                "deleted": deleted,
+                "skipped": skipped,
+                "errors": errors,
+            }))
+        }
         other => Err(anyhow!("unknown tool: {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_tools_advertise_stop_and_destructive_cleanup() {
+        let tools = tool_defs();
+        let definitions = tools.as_array().expect("tool definitions");
+        let names: Vec<&str> = definitions
+            .iter()
+            .filter_map(|definition| definition.get("name").and_then(Value::as_str))
+            .collect();
+
+        assert!(names.contains(&"stop_agent"));
+        assert!(names.contains(&"cleanup_agents"));
+        assert!(!names.contains(&"kill_agent"));
+        assert_eq!(DEFAULT_CLEANUP_MAX_AGE_SECONDS, 0);
+
+        let cleanup = definitions
+            .iter()
+            .find(|definition| definition["name"] == "cleanup_agents")
+            .expect("cleanup tool definition");
+        let description = cleanup["description"].as_str().unwrap_or_default();
+        assert!(description.contains("Permanently remove"));
+        assert!(description.contains("task record and session history are deleted"));
+    }
+
+    #[test]
+    fn project_scope_cannot_escape_the_orchestrator_project() {
+        assert_eq!(
+            scoped_project(&json!({}), "demo").unwrap(),
+            Some("demo".to_string())
+        );
+        assert!(scoped_project(&json!({ "project": "other" }), "demo").is_err());
     }
 }

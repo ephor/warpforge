@@ -170,7 +170,7 @@ fn is_acp_replay_update(update: &wire::SessionUpdate) -> bool {
 const ORCHESTRATOR_SYSTEM: &str = "\
 You are an orchestrator agent in warpforge. You coordinate work by delegating to \
 sub-agents rather than doing large tasks yourself.\n\n\
-You have three MCP tools:\n\
+You have these MCP tools:\n\
 - spawn_agent(agent, task): dispatch a sub-agent (e.g. \"claude\", \"codex\", \
 \"opencode\") to work on a task. It runs asynchronously in its own session and \
 returns immediately with a task id. Spawn several in one turn to parallelize.\n\
@@ -182,6 +182,15 @@ spawned sub-agent, continuing the same session. The agent sees the full \
 conversation history and can respond in context. Use this instead of spawn_agent \
 when you want to continue a conversation with an agent you already started. \
 Returns immediately; the response lands in your inbox — then call read_inbox.\n\n\
+- list_agents(): list the sub-agents spawned by this orchestrator, including \
+their task ids, statuses, and last-activity timestamps.\n\
+- stop_agent(task_id): stop one sub-agent session and wait for its process to \
+exit. Use this when a specific child is stale or no longer needed.\n\
+- cleanup_agents(max_age_seconds, dry_run, include_active): permanently remove \
+child sessions and their task history in bulk. By default it removes all \
+inactive/completed children; use `max_age_seconds` to filter by age, `dry_run` \
+to preview candidates, and `include_active` only when you explicitly intend to \
+stop and delete running work.\n\n\
 Talk to the user normally. When a task needs real work, delegate it with \
 spawn_agent, tell the user what you dispatched, and continue the conversation. \
 The user can keep messaging you while sub-agents run.";
@@ -630,6 +639,7 @@ pub enum Command {
     /// Delete a task and its session history permanently.
     DeleteTask {
         id: String,
+        reply: oneshot::Sender<Result<(), String>>,
     },
     /// Override a task's title, persist, and emit TaskUpdated.
     SetTaskTitle {
@@ -1072,6 +1082,19 @@ impl DaemonHandle {
         .await;
         rx.await
             .map_err(|_| "daemon stopped before the task was cancelled".to_string())?
+    }
+
+    /// Hard-stop a task, wait for its session process to exit, then permanently
+    /// remove the task and its persisted session history.
+    pub async fn delete_task(&self, id: &str) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::DeleteTask {
+            id: id.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .map_err(|_| "daemon stopped before the task was deleted".to_string())?
     }
 
     pub async fn set_task_title(&self, id: &str, title: &str) {
@@ -2859,21 +2882,26 @@ impl Daemon {
                     }
                 }
             }
-            Command::DeleteTask { id } => {
-                if self.workflow_is_active(&id) {
-                    let _ = self.workflow_finalize(&id, WorkflowOutcome::Stopped).await;
-                }
-                if self.workflow_runs.remove(&id).is_some() {
+            Command::DeleteTask { id, reply } => {
+                let stop_result = if self.workflow_is_active(&id) {
+                    self.workflow_finalize(&id, WorkflowOutcome::Stopped).await
+                } else {
+                    match self.sessions.remove(&id) {
+                        Some(handle) => handle.cancel_and_wait().await,
+                        None => Ok(()),
+                    }
+                };
+                let mut delete_result = stop_result;
+                if delete_result.is_ok() && self.workflow_runs.remove(&id).is_some() {
                     if let Some(store) = &self.store {
                         let _ = store.delete_workflow_run(&id);
                     }
                 }
-                if let Some(handle) = self.sessions.remove(&id) {
-                    handle.cancel();
+                if delete_result.is_ok() {
+                    self.pending_permissions.cleanup_task(&id);
                 }
-                self.pending_permissions.cleanup_task(&id);
                 // Clean up worktree if the task had one.
-                if let Some(task) = self.tasks.get(&id) {
+                if let Some(task) = self.tasks.get(&id).filter(|_| delete_result.is_ok()) {
                     if task.worktree.is_some() {
                         if let Some(wt_mgr) = self.worktrees.get_mut(&task.project) {
                             if let Err(e) = wt_mgr.remove(&id).await {
@@ -2882,16 +2910,19 @@ impl Daemon {
                         }
                     }
                 }
-                if self.tasks.remove(&id).is_some() {
+                if delete_result.is_ok() && self.tasks.remove(&id).is_some() {
                     self.tool_call_starts
                         .retain(|(task_id, _), _| task_id != &id);
                     if let Some(store) = &self.store {
-                        let _ = store.delete_task(&id);
+                        if let Err(error) = store.delete_task(&id) {
+                            delete_result = Err(error.to_string());
+                        }
                     }
                     self.emit(Event::TaskRemoved { id: id.clone() });
                     // Deleting a stage child mid-run fails that stage.
                     self.workflow_child_gone(&id).await;
                 }
+                let _ = reply.send(delete_result);
             }
             Command::SetTaskTitle { id, title } => {
                 if let Some(task) = self.tasks.get_mut(&id) {
@@ -5937,7 +5968,10 @@ mod project_removal_tests {
         handle
             .send(Command::ArchiveTask { id: archived_task })
             .await;
-        handle.send(Command::DeleteTask { id: deleted_task }).await;
+        handle
+            .delete_task(&deleted_task)
+            .await
+            .expect("task deletion should complete");
 
         assert!(handle
             .snapshot()

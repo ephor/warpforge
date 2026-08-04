@@ -466,6 +466,30 @@ async fn dispatch(
             let results = handle.read_inbox(&parent_task_id).await;
             Ok(json!({ "results": results }))
         }
+        OrchestratorListAgents {
+            parent_task_id,
+            project,
+        } => {
+            if parent_task_id.trim().is_empty() {
+                return Err(wire::RpcError {
+                    code: wire::ErrorCode::InvalidRequest,
+                    message: "parent_task_id must not be empty".into(),
+                });
+            }
+            let agents: Vec<wire::TaskInfo> = handle
+                .tasks()
+                .await
+                .into_iter()
+                .filter(|task| {
+                    task.parent_task_id.as_deref() == Some(parent_task_id.as_str())
+                        && project
+                            .as_deref()
+                            .is_none_or(|project| task.project == project)
+                })
+                .map(|task| wireconv::task_info(&task))
+                .collect();
+            Ok(json!({ "agents": agents }))
+        }
         DiffGet { task_id } => {
             let diff = handle.diff(&task_id).await;
             serde_json::to_value(diff).map_err(|e| wire::RpcError {
@@ -625,7 +649,13 @@ async fn dispatch(
             Ok(json!(null))
         }
         TaskDelete { task_id } => {
-            handle.send(Command::DeleteTask { id: task_id }).await;
+            handle
+                .delete_task(&task_id)
+                .await
+                .map_err(|message| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message,
+                })?;
             Ok(json!(null))
         }
         TaskSetTitle { task_id, title } => {
@@ -1125,6 +1155,7 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | PortForwardLogs { .. }
             | TaskListWorktrees { .. }
             | SessionsList { .. }
+            | OrchestratorListAgents { .. }
             | AgentsDetect {}
             | DiffGet { .. }
             | FileContents { .. }
@@ -1232,6 +1263,97 @@ mod tests {
         }
         assert!(saw_created, "expected a task.created event");
         assert!(saw_response, "expected a response with a taskId");
+    }
+
+    #[tokio::test]
+    async fn orchestrator_list_agents_scopes_parent_and_project() {
+        let projects = vec![
+            ProjectEntry {
+                name: "demo".into(),
+                path: ".".into(),
+                added_at: "0".into(),
+            },
+            ProjectEntry {
+                name: "other".into(),
+                path: ".".into(),
+                added_at: "0".into(),
+            },
+        ];
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let handle = Daemon::spawn(projects, store);
+        let parent = handle
+            .create_task(
+                "demo",
+                "orchestrator",
+                "codex",
+                vec!["orchestrator-chat".into()],
+                false,
+                false,
+                None,
+                Vec::new(),
+                None,
+                Default::default(),
+            )
+            .await;
+        let demo_child = handle
+            .create_task(
+                "demo",
+                "demo child",
+                "codex",
+                Vec::new(),
+                false,
+                false,
+                Some(parent.clone()),
+                Vec::new(),
+                None,
+                Default::default(),
+            )
+            .await;
+        let _other_project_child = handle
+            .create_task(
+                "other",
+                "other child",
+                "codex",
+                Vec::new(),
+                false,
+                false,
+                Some(parent.clone()),
+                Vec::new(),
+                None,
+                Default::default(),
+            )
+            .await;
+        let unrelated = handle
+            .create_task(
+                "demo",
+                "unrelated child",
+                "codex",
+                Vec::new(),
+                false,
+                false,
+                Some("t_other_parent".into()),
+                Vec::new(),
+                None,
+                Default::default(),
+            )
+            .await;
+
+        let lifecycle = Arc::new(ServerLifecycle::new(wire::DaemonOwner::External));
+        let result = dispatch(
+            &handle,
+            wire::Method::OrchestratorListAgents {
+                parent_task_id: parent,
+                project: Some("demo".into()),
+            },
+            &lifecycle,
+        )
+        .await
+        .unwrap();
+        let agents = result["agents"].as_array().unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0]["id"], demo_child);
+        assert_ne!(agents[0]["id"], unrelated);
+        handle.shutdown().await;
     }
 
     #[tokio::test]

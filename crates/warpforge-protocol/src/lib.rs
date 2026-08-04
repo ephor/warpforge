@@ -270,6 +270,16 @@ pub enum Method {
     /// `read_inbox` MCP tool.
     #[serde(rename = "orchestrator.readInbox")]
     OrchestratorReadInbox { parent_task_id: String },
+    /// List tasks spawned by an orchestrator. The parent id is required so an
+    /// orchestrator cannot accidentally inspect another task's children.
+    /// Returns `{ agents: TaskInfo[] }`; `project`, when supplied, narrows the
+    /// result to that project as an additional safety filter.
+    #[serde(rename = "orchestrator.listAgents")]
+    OrchestratorListAgents {
+        parent_task_id: String,
+        #[serde(default)]
+        project: Option<String>,
+    },
 
     // ── Agent registry ──
     /// Detect installed ACP-capable agents. Returns `{ detected: DetectedAgent[] }`.
@@ -1595,6 +1605,35 @@ mod tests {
         let req: Request = serde_json::from_value(json).unwrap();
         assert_eq!(req.id, 1);
         assert!(matches!(req.method, Method::AgentsDetect {}));
+    }
+
+    #[test]
+    fn orchestrator_list_agents_wire_shape() {
+        let req = Request {
+            id: 9,
+            method: Method::OrchestratorListAgents {
+                parent_task_id: "t_parent".into(),
+                project: Some("demo".into()),
+            },
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["method"], "orchestrator.listAgents");
+        assert_eq!(json["params"]["parent_task_id"], "t_parent");
+        assert_eq!(json["params"]["project"], "demo");
+
+        let back: Request = serde_json::from_value(json).unwrap();
+        assert_eq!(back, req);
+
+        let no_project: Request = serde_json::from_value(serde_json::json!({
+            "id": 10,
+            "method": "orchestrator.listAgents",
+            "params": { "parent_task_id": "t_parent" }
+        }))
+        .unwrap();
+        assert!(matches!(
+            no_project.method,
+            Method::OrchestratorListAgents { project: None, .. }
+        ));
     }
 
     #[test]

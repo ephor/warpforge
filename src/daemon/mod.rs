@@ -1223,6 +1223,58 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn task_delete_stops_the_active_process_before_removing_history() {
+        let (dir, projects) = workflow_project("name: Delete flow\n");
+        let pid_path = dir.path().join("delete.pid");
+        let lead = format!(
+            "echo $$ > {}; exec {}",
+            pid_path.display(),
+            wf_agent(&dir, "delete.state", "slow-impl")
+        );
+        let daemon = Daemon::spawn(
+            projects,
+            Store::open_at(std::path::Path::new(":memory:")).ok(),
+        );
+        let parent_id = create_workflow_task(&daemon, &lead).await;
+
+        let pid = timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(pid) = std::fs::read_to_string(&pid_path) {
+                    let pid = pid.trim();
+                    if pid.parse::<u32>().is_ok() {
+                        break pid.to_string();
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("active stage should write its process id");
+
+        daemon
+            .delete_task(&parent_id)
+            .await
+            .expect("task deletion acknowledged");
+
+        let process_alive = tokio::process::Command::new("kill")
+            .args(["-0", &pid])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await
+            .is_ok_and(|status| status.success());
+        assert!(
+            !process_alive,
+            "task.delete acknowledged before ACP process {pid} exited"
+        );
+        assert!(
+            daemon.tasks().await.iter().all(|task| task.id != parent_id),
+            "deleted task remained in the daemon task list"
+        );
+    }
+
     /// A daemon restart mid-stage parks the pipeline at its last barrier as
     /// Paused; resume re-runs the interrupted stage and the run completes.
     #[tokio::test]
