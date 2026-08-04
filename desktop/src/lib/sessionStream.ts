@@ -1,5 +1,33 @@
-import type { SessionUpdate } from "../protocol";
+import type { SessionUpdate, ToolCallStatus } from "../protocol";
 import { preferToolTitle } from "./toolDisplay";
+
+export const MAX_SESSION_UPDATES = 2000;
+const TOOL_CONTENT_HEAD = 2048;
+const TOOL_CONTENT_TAIL = 2048;
+const TOOL_CONTENT_TRUNCATE_MARKER = "\n\n… truncated …\n\n";
+
+function isTerminalToolStatus(status: ToolCallStatus): boolean {
+  return status === "completed" || status === "failed";
+}
+
+export function truncateToolContent(update: SessionUpdate): SessionUpdate {
+  if (update.kind !== "tool_call" || !update.content) return update;
+  if (!isTerminalToolStatus(update.status)) return update;
+  const total = TOOL_CONTENT_HEAD + TOOL_CONTENT_TAIL + TOOL_CONTENT_TRUNCATE_MARKER.length;
+  if (update.content.length <= total) return update;
+  return {
+    ...update,
+    content:
+      update.content.slice(0, TOOL_CONTENT_HEAD) +
+      TOOL_CONTENT_TRUNCATE_MARKER +
+      update.content.slice(-TOOL_CONTENT_TAIL),
+  };
+}
+
+export function capSessionUpdates(updates: SessionUpdate[]): SessionUpdate[] {
+  if (updates.length <= MAX_SESSION_UPDATES) return updates;
+  return updates.slice(updates.length - MAX_SESSION_UPDATES);
+}
 
 /** Stable keys preserve row-local state while streamed blocks are coalesced. */
 export function sessionUpdateKey(update: SessionUpdate, index: number): string {
@@ -147,7 +175,7 @@ export function appendCoalesced(
     const index = toolIndexes.get(update.tool_call_id);
     const existing = index !== undefined ? output[index] : undefined;
     if (existing?.kind === "tool_call") {
-      output[index!] = {
+      const merged: SessionUpdate = {
         ...existing,
         content: update.content ?? existing.content,
         status: update.status,
@@ -155,9 +183,10 @@ export function appendCoalesced(
         title: preferToolTitle(existing, update),
         tool_kind: update.tool_kind || existing.tool_kind,
       };
+      output[index!] = truncateToolContent(merged);
     } else {
       toolIndexes.set(update.tool_call_id, output.length);
-      output.push(update);
+      output.push(truncateToolContent(update));
     }
   } else if (update.kind === "file_edit" && update.tool_call_id) {
     const key = `edit:${update.tool_call_id}`;
@@ -185,7 +214,7 @@ export function coalesceUpdates(updates: SessionUpdate[]): SessionUpdate[] {
   const output: SessionUpdate[] = [];
   const toolIndexes = new Map<string, number>();
   for (const update of updates) appendCoalesced(output, toolIndexes, update);
-  return output;
+  return capSessionUpdates(output);
 }
 
 /** Append one live daemon update without retaining the raw streaming frame. */
@@ -193,6 +222,18 @@ export function appendCoalescedUpdate(
   existing: SessionUpdate[],
   update: SessionUpdate,
 ): SessionUpdate[] {
+  const last = existing[existing.length - 1];
+
+  if (
+    (update.kind === "agent_text" || update.kind === "agent_thought") &&
+    last?.kind === update.kind
+  ) {
+    const merged = { ...last, text: last.text + update.text };
+    const output = existing.slice(0, -1);
+    output.push(merged);
+    return output;
+  }
+
   const output = existing.slice();
   const indexes = new Map<string, number>();
   if (update.kind === "tool_call") {
@@ -213,5 +254,21 @@ export function appendCoalescedUpdate(
     }
   }
   appendCoalesced(output, indexes, update);
+  return capSessionUpdates(output);
+}
+
+/**
+ * Coalesce only the tail of a session's raw updates. Used by Mission Control
+ * tiles where the full history is not needed — only the last few renderable
+ * items. A delta chain that starts before the window boundary is dropped
+ * silently (acceptable: the tile shows a truncated tail, not a partial word).
+ */
+export function coalesceTailUpdates(updates: SessionUpdate[], tailSize: number): SessionUpdate[] {
+  if (updates.length <= tailSize) return coalesceUpdates(updates);
+  const start = updates.length - tailSize;
+  const tail = updates.slice(start);
+  const output: SessionUpdate[] = [];
+  const toolIndexes = new Map<string, number>();
+  for (const update of tail) appendCoalesced(output, toolIndexes, update);
   return output;
 }

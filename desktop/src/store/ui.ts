@@ -176,10 +176,7 @@ export const useUi = create<UiState>()(
               pinnedLayout,
             };
           }
-          const y = Object.values(s.pinnedLayout).reduce(
-            (max, l) => Math.max(max, l.y + l.h),
-            0,
-          );
+          const y = Object.values(s.pinnedLayout).reduce((max, l) => Math.max(max, l.y + l.h), 0);
           return {
             pinnedTaskIds: [...s.pinnedTaskIds, id],
             pinnedLayout: {

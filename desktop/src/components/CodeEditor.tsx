@@ -16,8 +16,7 @@ type SaveStatus = "clean" | "unsaved" | "saved";
 
 const isMarkdownPath = (path: string) => /\.(md|markdown|mdx)$/i.test(path);
 const isSvgPath = (path: string) => /\.svg$/i.test(path);
-const isBinaryImagePath = (path: string) =>
-  /\.(png|jpg|jpeg|gif|webp|ico|bmp)$/i.test(path);
+const isBinaryImagePath = (path: string) => /\.(png|jpg|jpeg|gif|webp|ico|bmp)$/i.test(path);
 
 function getMimeType(path: string): string {
   const ext = path.toLowerCase().split(".").pop();
@@ -186,7 +185,7 @@ export function CodeEditor({
                   className="max-h-full max-w-full object-contain"
                 />
                 <div className="mt-2 text-xs text-muted-foreground">
-                  {doc.path} • {(doc.newDataBase64.length * 0.75 / 1024).toFixed(1)} KB
+                  {doc.path} • {((doc.newDataBase64.length * 0.75) / 1024).toFixed(1)} KB
                 </div>
               </>
             ) : (

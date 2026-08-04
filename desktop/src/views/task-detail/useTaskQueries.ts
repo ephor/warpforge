@@ -5,6 +5,9 @@ import type { FileDiff, FileDoc, ProjectFile, SessionUpdate, TaskDiff } from "..
 import { daemonQuery } from "../../query";
 
 const EMPTY_PROJECT_FILES: ProjectFile[] = [];
+/** Diffs and file docs are the heaviest reads; drop them sooner than the
+ * default once nothing observes them, but keep reopening a task warm. */
+const LARGE_PAYLOAD_GC_TIME = 120_000;
 
 export type ActiveTab = { kind: "changes" } | { kind: "file"; path: string };
 
@@ -38,6 +41,7 @@ export function useTaskQueries(
   const queryClient = useQueryClient();
 
   const diffQuery = useQuery({
+    gcTime: LARGE_PAYLOAD_GC_TIME,
     placeholderData: keepPreviousData,
     queryFn: daemonQuery<TaskDiff>("diff.get", { task_id: taskId }),
     queryKey: ["diff", taskId],
@@ -68,6 +72,7 @@ export function useTaskQueries(
   const fileContentsEnabled = Boolean(activeFile) && activeTab.kind === "file";
   const fileDocQuery = useQuery({
     enabled: fileContentsEnabled,
+    gcTime: LARGE_PAYLOAD_GC_TIME,
     placeholderData: keepPreviousData,
     queryFn: daemonQuery<FileDoc>("file.contents", {
       task_id: taskId,
@@ -109,6 +114,7 @@ export function useSplitFileQueries(
       const visible = index >= range.start && index <= range.end;
       return {
         enabled: enabled && visible,
+        gcTime: LARGE_PAYLOAD_GC_TIME,
         placeholderData: keepPreviousData,
         queryFn: daemonQuery<FileDoc>("file.contents", {
           task_id: taskId,
