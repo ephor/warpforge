@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.1
+
+### Patch Changes
+
+- [`208c4ec`](https://github.com/ephor/warpforge/commit/208c4ec438554502c243a76954be4eff01b739bb) Thanks [@ephor](https://github.com/ephor)! - Orchestrators can now list their sub-agents, stop individual sessions without
+  losing their history, and permanently clean up completed sessions in bulk.
+  Active sessions are protected by default, and cleanup can be previewed before
+  anything is removed.
+
+- [`f8cd422`](https://github.com/ephor/warpforge/commit/f8cd422c1e767a9b836854a060c32188df1b23d3) Thanks [@ephor](https://github.com/ephor)! - Keep the task agent picker within the available viewport and make long agent lists scrollable.
+
+- [`def2ec8`](https://github.com/ephor/warpforge/commit/def2ec83d4efd412bce82ef850059dc2499b161f) Thanks [@ephor](https://github.com/ephor)! - Chat rendering is now identical between MissionControl and TaskDetail views
+  by extracting a shared SessionChat component with LegendList virtualization,
+  work-group toggles, MessageActions overlay, and unified composer routing.
+
+- [`81105f4`](https://github.com/ephor/warpforge/commit/81105f4626391a58b7d9b6aba671a48b683fda0c) Thanks [@ephor](https://github.com/ephor)! - Remove focus mode from Mission Control pinned tiles. The feature hid other tiles and disabled grid resize — unnecessary complexity for a dashboard overview.
+
 ## 0.3.0
 
 ### Minor Changes
