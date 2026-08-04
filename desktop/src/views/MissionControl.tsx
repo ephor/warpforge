@@ -6,13 +6,10 @@ import "react-resizable/css/styles.css";
 import {
   Activity,
   ChevronRight,
-  Clock3,
   ExternalLink,
   FilePen,
   FileText,
   ListTodo,
-  Maximize2,
-  Minimize2,
   MoreHorizontal,
   PinOff,
   Plus,
@@ -33,12 +30,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { withOccurrenceKeys } from "@/lib/renderKeys";
 import { sessionActivity } from "@/lib/sessionActivity";
-import {
-  latestPendingPermission,
-  pendingPermission,
-  resolvedPermissions,
-} from "@/lib/sessionPermissions";
-import { latestContextUsage } from "@/lib/sessionUsage";
+import { latestPendingPermission } from "@/lib/sessionPermissions";
 import { elapsed } from "@/lib/status";
 import type { StatusKind } from "@/lib/statusMeta";
 import {
@@ -55,24 +47,27 @@ import { taskLabel } from "@/lib/taskLabel";
 import { toolDisplayTitle } from "@/lib/toolDisplay";
 import { cn } from "@/lib/utils";
 
-import { AgentActivityIndicator } from "../components/AgentActivityIndicator";
 import { AgentAvatarGroup } from "../components/AgentAvatar";
-import { AgentConfigBar } from "../components/AgentConfigBar";
-import { Composer } from "../components/Composer";
 import type { FileLinkResolver } from "../components/Markdown";
 import { BufferedMarkdown, CollapsibleMarkdown, Markdown } from "../components/Markdown";
+import { SessionChat } from "../components/SessionChat";
 import { StatusBadge } from "../components/StatusBadge";
 import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { ThinkingBlock } from "../components/ThinkingBlock";
-import { WorkflowControls } from "../components/WorkflowControls";
 import { WorkflowEventLine } from "../components/WorkflowEventLine";
 import type { DaemonState } from "../daemon";
 import { daemon } from "../daemon";
-import { useWorkflowSend } from "../hooks/useWorkflowSend";
-import type { CommandInfo, EditHunk, ProjectFile, SessionUpdate, TaskInfo } from "../protocol";
+import type {
+  AgentConfig,
+  CommandInfo,
+  EditHunk,
+  ProjectFile,
+  SessionUpdate,
+  TaskInfo,
+} from "../protocol";
 import { daemonQuery } from "../query";
 import { useUi } from "../store/ui";
-import { coalesceUpdates, streamKey } from "./missionControlStream";
+import { coalesceTailUpdates } from "./missionControlStream";
 
 /**
  * Mission Control — the default, attention-driven operating view.
@@ -86,8 +81,7 @@ interface Props {
   onNewTask: (project?: string) => void;
 }
 
-const PINNED_PREVIEW_LIMIT = 18;
-const FOCUSED_PREVIEW_LIMIT = 24;
+const FOCUS_PANE_RAW_TAIL = 300;
 const GRID_SCROLL_EDGE = 48;
 const GRID_SCROLL_STEP = 24;
 const GRID_SCROLL_GAP = 8;
@@ -109,7 +103,6 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
   const setPinnedLayout = useUi((s) => s.setPinnedLayout);
   const attentionTargetId = useUi((s) => s.attentionTargetId);
   const attentionTargetNonce = useUi((s) => s.attentionTargetNonce);
-  const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
   const { width, containerRef, mounted } = useContainerWidth();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [boardHeight, setBoardHeight] = useState(0);
@@ -250,17 +243,10 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
   const handleUnpin = useCallback(
     (tree: TaskTree) => {
       setPinnedTaskIds(setTaskGroupPinned(groupIndex, pinned, tree.task.id, false));
-      setFocusedGroupId((current) => (current === tree.task.id ? null : current));
     },
     [groupIndex, pinned, setPinnedTaskIds],
   );
-  const handleFocus = useCallback((id: string | null) => setFocusedGroupId(id), []);
-  const resolvedFocusedGroupId = pinnedGroups.some((tree) => tree.task.id === focusedGroupId)
-    ? focusedGroupId
-    : null;
-  const visibleGroups = resolvedFocusedGroupId
-    ? pinnedGroups.filter((tree) => tree.task.id === resolvedFocusedGroupId)
-    : pinnedGroups;
+
   const rowHeight =
     boardHeight > 0
       ? Math.min(260, Math.max(160, Math.floor((boardHeight - GRID_SCROLL_GAP) / 2)))
@@ -282,9 +268,9 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
                   margin: [8, 0],
                   containerPadding: [0, 0],
                 }}
-                dragConfig={{ enabled: !resolvedFocusedGroupId }}
+                dragConfig={{ enabled: true }}
                 resizeConfig={{
-                  enabled: !resolvedFocusedGroupId,
+                  enabled: true,
                   handles: ["se", "sw", "ne", "nw", "n", "s", "e", "w"],
                 }}
                 onDragStart={beginGridInteraction}
@@ -294,7 +280,7 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
                 onResizeStop={revealResizedCard}
                 onLayoutChange={handleLayoutChange}
               >
-                {visibleGroups.map((tree) => (
+                {pinnedGroups.map((tree) => (
                   <div key={tree.task.id} className="h-full min-h-0">
                     <FocusGroupPane
                       tree={tree}
@@ -303,8 +289,7 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
                       attentionTargetNonce={attentionTargetNonce}
                       onUnpin={handleUnpin}
                       onOpen={onOpenTask}
-                      focused={resolvedFocusedGroupId === tree.task.id}
-                      onFocus={handleFocus}
+                      agents={(state.snapshot.agents ?? []).filter((a) => a.enabled)}
                     />
                   </div>
                 ))}
@@ -341,8 +326,7 @@ interface FocusGroupPaneProps {
   attentionTargetNonce: number;
   onUnpin: (tree: TaskTree) => void;
   onOpen: (id: string) => void;
-  focused: boolean;
-  onFocus: (id: string | null) => void;
+  agents: AgentConfig[];
 }
 
 const FocusGroupPane = memo(function FocusGroupPane({
@@ -352,8 +336,7 @@ const FocusGroupPane = memo(function FocusGroupPane({
   attentionTargetNonce,
   onUnpin,
   onOpen,
-  focused,
-  onFocus,
+  agents,
 }: FocusGroupPaneProps) {
   const members = useMemo(() => flattenTaskTree(tree), [tree]);
   const childAgents = useMemo(
@@ -381,10 +364,6 @@ const FocusGroupPane = memo(function FocusGroupPane({
   const handleUnpin = useCallback(() => onUnpin(tree), [onUnpin, tree]);
   const handleOpen = useCallback(() => onOpen(selectedTask.id), [onOpen, selectedTask.id]);
   const handleSelect = useCallback((id: string) => setSelectedId(id), []);
-  const handleFocus = useCallback(
-    () => onFocus(focused ? null : tree.task.id),
-    [focused, onFocus, tree.task.id],
-  );
 
   return (
     <FocusPane
@@ -394,11 +373,10 @@ const FocusGroupPane = memo(function FocusGroupPane({
       selectedId={selectedTask.id}
       groupStatus={status}
       childAgents={childAgents}
+      agents={agents}
       onSelect={handleSelect}
       onUnpin={handleUnpin}
       onOpen={handleOpen}
-      focused={focused}
-      onFocus={handleFocus}
     />
   );
 }, focusGroupPaneEqual);
@@ -409,9 +387,7 @@ function focusGroupPaneEqual(previous: FocusGroupPaneProps, next: FocusGroupPane
     previous.attentionTargetId !== next.attentionTargetId ||
     previous.attentionTargetNonce !== next.attentionTargetNonce ||
     previous.onOpen !== next.onOpen ||
-    previous.onUnpin !== next.onUnpin ||
-    previous.focused !== next.focused ||
-    previous.onFocus !== next.onFocus
+    previous.onUnpin !== next.onUnpin
   ) {
     return false;
   }
@@ -432,11 +408,10 @@ function FocusPane({
   selectedId,
   groupStatus,
   childAgents,
+  agents,
   onSelect,
   onUnpin,
   onOpen,
-  focused,
-  onFocus,
 }: {
   task: TaskInfo;
   updates: SessionUpdate[];
@@ -444,23 +419,15 @@ function FocusPane({
   selectedId: string;
   groupStatus: TaskGroupStatus;
   childAgents?: string[];
+  agents: AgentConfig[];
   onSelect: (id: string) => void;
   onUnpin: () => void;
   onOpen: () => void;
-  focused: boolean;
-  onFocus: () => void;
 }) {
-  const stream = useMemo(() => coalesceUpdates(updates), [updates]);
-  const resolved = useMemo(() => resolvedPermissions(stream), [stream]);
-  const pending = useMemo(() => pendingPermission(stream, resolved), [stream, resolved]);
-  const preview = useMemo(
-    () => pinnedPreview(stream, focused ? FOCUSED_PREVIEW_LIMIT : PINNED_PREVIEW_LIMIT),
-    [focused, stream],
-  );
-  const tools = useMemo(() => summarizeTools(stream), [stream]);
-  const files = useMemo(() => summarizeFiles(stream), [stream]);
+  const stream = useMemo(() => coalesceTailUpdates(updates, FOCUS_PANE_RAW_TAIL), [updates]);
+  const tools = useMemo(() => summarizeTools(updates), [updates]);
+  const files = useMemo(() => summarizeFiles(updates), [updates]);
   const commands = useMemo(() => latestCommands(updates), [updates]);
-  const contextUsage = useMemo(() => latestContextUsage(updates), [updates]);
   const fileListQuery = useQuery({
     queryFn: daemonQuery<ProjectFile[]>("file.list", { task_id: task.id }),
     queryKey: ["fileList", task.id, task.updatedAt],
@@ -469,8 +436,8 @@ function FocusPane({
   const capability = [...updates].reverse().find((update) => update.kind === "prompt_capabilities");
   const imageSupported = capability?.kind === "prompt_capabilities" ? capability.image : false;
   const activity = sessionActivity(task, stream);
-  const workflowSend = useWorkflowSend(task);
   const openTask = useUi((s) => s.openTask);
+  const composerRef = useRef<import("../components/Composer").ComposerHandle>(null);
 
   return (
     <Card
@@ -479,7 +446,6 @@ function FocusPane({
       )}
     >
       <div className="border-b border-border/80 px-3 py-1.5">
-        {/* Row 1: title (left) · window actions (right) */}
         <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
@@ -501,15 +467,6 @@ function FocusPane({
             </button>
             <button
               type="button"
-              aria-label={focused ? "Exit focus mode" : "Focus this conversation"}
-              className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
-              onClick={onFocus}
-              title={focused ? "Exit focus mode" : "Focus"}
-            >
-              {focused ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
-            </button>
-            <button
-              type="button"
               aria-label="Unpin from Mission Control"
               className="flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
               onClick={onUnpin}
@@ -519,7 +476,6 @@ function FocusPane({
             </button>
           </div>
         </div>
-        {/* Row 2: status + project (left) · agent · time (right) — the shared card grammar */}
         <div className="mt-1 flex min-w-0 items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
           <StatusBadge status={groupStatusKind(groupStatus)} activity={activity} size="xs" />
           <span className="min-w-0 truncate font-semibold text-foreground/90">{task.project}</span>
@@ -570,71 +526,22 @@ function FocusPane({
         </div>
       </div>
 
-      {pending && (
-        <div className="border-b border-warn/20 bg-warn/[0.06] px-3 py-2">
-          <PermissionLine
-            update={pending}
-            taskId={task.id}
-            resolvedOutcome={resolved[pending.request_id]}
-          />
-        </div>
-      )}
-
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-2 p-2.5 text-[13px] leading-6">
-          {preview.hidden > 0 && (
-            <button
-              type="button"
-              onClick={onOpen}
-              className="flex items-center justify-between rounded border border-border/60 bg-background/20 px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
-            >
-              <span>{preview.hidden} earlier updates hidden here</span>
-              <span className="text-primary">more in details</span>
-            </button>
-          )}
-          {preview.items.length === 0 && !activity && (
-            <div className="flex items-center gap-2 rounded-md border border-dashed border-border/80 px-3 py-4 text-muted-foreground">
-              <Clock3 className="size-4" />
-              waiting for agent activity...
-            </div>
-          )}
-          {preview.items.map((u, i) => (
-            <PinnedStreamLine
-              key={streamKey(u, i + preview.hidden)}
-              update={u}
-              taskId={task.id}
-              resolved={resolved}
-              onOpenTask={openTask}
-              compact
-            />
-          ))}
-          {activity && <AgentActivityIndicator activity={activity} compact />}
-        </div>
-      </ScrollArea>
-
-      <div className="border-t border-border/80">
-        {task.workflowRun && <WorkflowControls task={task} />}
-        <Composer
-          compact
-          commands={commands}
-          contextUsage={contextUsage}
-          files={projectFiles}
-          filesLoading={fileListQuery.isLoading}
-          imageSupported={imageSupported}
-          disabled={task.status === "done" || workflowSend.disabled}
-          placeholder={workflowSend.placeholder ?? "Steer this session..."}
-          onSend={async (submission) => {
-            // A workflow parent has no session — route to the pipeline instead.
-            if (await workflowSend.send(submission)) return;
-            await daemon.request("session.prompt", { task_id: task.id, ...submission });
-          }}
-          toolbar={
-            task.configOptions && task.configOptions.length > 0 ? (
-              <AgentConfigBar taskId={task.id} options={task.configOptions} />
-            ) : undefined
-          }
-        />
-      </div>
+      <SessionChat
+        activity={activity}
+        active
+        commands={commands}
+        composerRef={composerRef}
+        files={projectFiles}
+        filesLoading={fileListQuery.isLoading}
+        imageSupported={imageSupported}
+        onOpenFile={() => {}}
+        onOpenFileDiff={() => {}}
+        resolveFilePath={() => null}
+        task={task}
+        updates={updates}
+        agents={agents}
+        onOpenTask={openTask}
+      />
     </Card>
   );
 }
@@ -647,38 +554,6 @@ function latestCommands(updates: SessionUpdate[]): CommandInfo[] {
     }
   }
   return [];
-}
-
-function pinnedPreview(
-  updates: SessionUpdate[],
-  limit: number,
-): {
-  items: SessionUpdate[];
-  hidden: number;
-} {
-  const items = updates.filter((update) => {
-    if (
-      update.kind === "available_commands" ||
-      update.kind === "permission_resolved" ||
-      update.kind === "usage"
-    ) {
-      return false;
-    }
-    if (update.kind === "permission_request") {
-      return false;
-    }
-    if (update.kind === "tool_call") {
-      return update.status === "in_progress" || update.status === "failed";
-    }
-    if (update.kind === "turn_ended") {
-      return false;
-    }
-    return true;
-  });
-  return {
-    hidden: Math.max(0, items.length - limit),
-    items: items.slice(-limit),
-  };
 }
 
 function summarizeTools(updates: SessionUpdate[]): {
@@ -733,45 +608,6 @@ function ActivityChip({
   );
 }
 
-function PinnedStreamLine({
-  update,
-  compact,
-  taskId,
-  resolved,
-  onOpenTask,
-}: {
-  update: SessionUpdate;
-  compact?: boolean;
-  taskId?: string;
-  resolved?: Record<string, string>;
-  /** Lets a workflow stage card in a tile open that stage's session. */
-  onOpenTask?: (id: string) => void;
-}) {
-  if (update.kind === "agent_text" || update.kind === "agent_thought") {
-    return (
-      <div
-        className={cn(
-          "rounded-md border border-transparent px-0.5",
-          update.kind === "agent_thought" && "text-muted-foreground",
-        )}
-      >
-        <StreamLine update={update} compact={compact} taskId={taskId} resolved={resolved} />
-      </div>
-    );
-  }
-  return (
-    <StreamLine
-      update={update}
-      compact={compact}
-      taskId={taskId}
-      resolved={resolved}
-      onOpenTask={onOpenTask}
-    />
-  );
-}
-
-/** Shared renderer for one session-stream update. `compact` = focus pane
- * (plain text, dense); otherwise the full Task Detail (markdown, tool cards). */
 /** A tool-call card whose output can be expanded/collapsed. Collapsed by default. */
 function ToolCallLine({
   update,
