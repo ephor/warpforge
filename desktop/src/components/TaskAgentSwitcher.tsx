@@ -80,7 +80,10 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
           <ChevronDown className="size-3 opacity-60" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72">
+      <DropdownMenuContent
+        align="end"
+        className="w-72 max-h-[min(32rem,var(--radix-dropdown-menu-content-available-height))] overflow-y-auto overscroll-contain"
+      >
         {members.map((member, index) => {
           const selected = member.id === currentTaskId;
           const label = memberLabel(member, index);

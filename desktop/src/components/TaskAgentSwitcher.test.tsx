@@ -104,4 +104,25 @@ describe("TaskAgentSwitcher", () => {
       await screen.findByRole("menuitem", { name: /implement · codex: running/i }),
     ).toBeInTheDocument();
   });
+
+  it("keeps a long agent list inside a scrollable picker", async () => {
+    const user = userEvent.setup();
+    const [tree] = buildTaskForest([
+      task("root", "root-agent", "running"),
+      ...Array.from({ length: 30 }, (_, index) =>
+        task(`child-${index}`, `agent-${index}`, "idle", "root"),
+      ),
+    ]);
+
+    render(
+      <TaskAgentSwitcher tree={tree} currentTaskId="root" onOpenTask={vi.fn<(id: string) => void>()} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /current: lead/i }));
+
+    expect(screen.getByRole("menu")).toHaveClass("overflow-y-auto");
+    expect(screen.getByRole("menu")).toHaveClass(
+      "max-h-[min(32rem,var(--radix-dropdown-menu-content-available-height))]",
+    );
+  });
 });
