@@ -293,6 +293,27 @@ pub enum Method {
     #[serde(rename = "agents.install")]
     AgentsInstall { id: String },
 
+    // ── Agent accounts (several logins per agent, one active) ──
+    /// All registered accounts. Returns `{ accounts: AccountInfo[] }`.
+    #[serde(rename = "accounts.list")]
+    AccountsList {},
+    /// Register the agent's currently-authenticated login as a new account.
+    /// Returns `{ accounts: AccountInfo[] }`.
+    #[serde(rename = "accounts.import")]
+    AccountsImport { agent_id: String, label: String },
+    /// Rename an account. Returns `{ accounts: AccountInfo[] }`.
+    #[serde(rename = "accounts.rename")]
+    AccountsRename { account_id: String, label: String },
+    /// Remove an account and delete its vault. Returns `{ accounts: AccountInfo[] }`.
+    #[serde(rename = "accounts.remove")]
+    AccountsRemove { account_id: String },
+    /// Make an account the one new sessions use. Returns `{ accounts: AccountInfo[] }`.
+    #[serde(rename = "accounts.setActive")]
+    AccountsSetActive {
+        agent_id: String,
+        account_id: String,
+    },
+
     // ── ACP passthrough for a task's agent session ──
     /// Send a follow-up user message into a running session.
     #[serde(rename = "session.prompt")]
@@ -630,6 +651,10 @@ pub enum Event {
     #[serde(rename = "agents.updated")]
     AgentsUpdated { agents: Vec<AgentConfig> },
 
+    /// Account list or active selection changed.
+    #[serde(rename = "accounts.updated")]
+    AccountsUpdated { accounts: Vec<AccountInfo> },
+
     /// Terminal (PTY) screen changed. Carries the rendered screen contents,
     /// not raw bytes — every client sees the same vt100 state.
     #[serde(rename = "terminal.screen")]
@@ -702,6 +727,10 @@ pub struct Snapshot {
     /// the setup wizard.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<AgentConfig>,
+    /// Registered agent accounts. Empty until the user adds one; a single
+    /// account is still listed so the switcher can show which one is live.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accounts: Vec<AccountInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1311,6 +1340,26 @@ pub struct DetectedAgent {
     pub update_command: Option<String>,
     /// Whether the daemon can run an automated install/update for this agent.
     pub can_manage: bool,
+}
+
+/// One registered login for an agent. Carries only what the switcher shows —
+/// credentials never cross this boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountInfo {
+    /// Stable id, `"<agent>:<slug>"`.
+    pub id: String,
+    pub agent_id: String,
+    /// User-facing name ("personal", "work"). Editable.
+    pub label: String,
+    /// Account email, read out of the agent's own credential metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    /// Plan or seat tier, when the agent reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Whether new sessions for this agent use this account.
+    pub active: bool,
 }
 
 /// An agent session discovered on disk (claude/codex native session store),

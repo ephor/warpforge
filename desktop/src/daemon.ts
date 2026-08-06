@@ -10,6 +10,7 @@
 import { appendCoalescedUpdate, coalesceUpdates } from "./lib/sessionStream";
 import { stampSessionHistoryStartTimes } from "./lib/sessionTiming";
 import type {
+  AccountInfo,
   AgentConfig,
   DaemonEndpoint,
   DaemonEvent,
@@ -854,6 +855,9 @@ export class DaemonClient {
           snapshot: { ...snap, agents: ev.data.agents },
         });
         break;
+      case "accounts.updated":
+        this.setState({ snapshot: { ...snap, accounts: ev.data.accounts } });
+        break;
       // Screen snapshots consumed by TUI clients; desktop uses terminal.data.
       case "terminal.screen":
         break;
@@ -901,6 +905,49 @@ export class DaemonClient {
 
   async saveAgents(agents: AgentConfig[]) {
     await this.request("agents.update", { agents });
+  }
+
+  // ── Agent accounts ──
+  // Every mutation answers with the full list, so callers replace rather than
+  // patch; the daemon also broadcasts `accounts.updated` for other clients.
+
+  async listAccounts(): Promise<AccountInfo[]> {
+    const result = (await this.request("accounts.list", {})) as { accounts?: AccountInfo[] };
+    return result?.accounts ?? [];
+  }
+
+  // Method names are camelCase; their *params* are snake_case, matching the
+  // Rust variant fields (`rename_all` on the Method enum renames variants, not
+  // fields). A mismatch makes the daemon drop the frame with no reply.
+  async importAccount(agentId: string, label: string): Promise<AccountInfo[]> {
+    const result = (await this.request("accounts.import", { agent_id: agentId, label })) as {
+      accounts?: AccountInfo[];
+    };
+    return result?.accounts ?? [];
+  }
+
+  async renameAccount(accountId: string, label: string): Promise<AccountInfo[]> {
+    const result = (await this.request("accounts.rename", { account_id: accountId, label })) as {
+      accounts?: AccountInfo[];
+    };
+    return result?.accounts ?? [];
+  }
+
+  async removeAccount(accountId: string): Promise<AccountInfo[]> {
+    const result = (await this.request("accounts.remove", { account_id: accountId })) as {
+      accounts?: AccountInfo[];
+    };
+    return result?.accounts ?? [];
+  }
+
+  async setActiveAccount(agentId: string, accountId: string): Promise<AccountInfo[]> {
+    const result = (await this.request("accounts.setActive", {
+      account_id: accountId,
+      agent_id: agentId,
+    })) as {
+      accounts?: AccountInfo[];
+    };
+    return result?.accounts ?? [];
   }
 
   /** Install or update an agent's global package. Resolves with the command's

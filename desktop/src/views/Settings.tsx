@@ -1,6 +1,7 @@
 import { RotateCcw, X } from "lucide-react";
 import { useEffect, useSyncExternalStore } from "react";
 
+import AccountsPanel from "@/components/AccountsPanel";
 import AgentSetupPanel from "@/components/AgentSetupPanel";
 import { Button } from "@/components/ui/button";
 import { daemon } from "@/daemon";
@@ -197,6 +198,13 @@ export default function SettingsView({ open, onOpenChange }: Props) {
           <Section title="Agents">
             <div className="p-4">
               <AgentSetupPanel />
+            </div>
+          </Section>
+
+          {/* ── Accounts ── */}
+          <Section title="Accounts">
+            <div className="p-4">
+              <AccountsPanel />
             </div>
           </Section>
 

@@ -62,6 +62,7 @@ export type DaemonEvent =
   | { event: "session.update"; data: { task_id: string; update: SessionUpdate } }
   | { event: "agents.setup_needed"; data: { detected: DetectedAgent[] } }
   | { event: "agents.updated"; data: { agents: AgentConfig[] } }
+  | { event: "accounts.updated"; data: { accounts: AccountInfo[] } }
   | {
       event: "terminal.screen";
       data: { terminal_id: string; screen: TerminalScreen };
@@ -117,6 +118,8 @@ export interface Snapshot {
   sessionHistory?: Record<string, SessionUpdate[]>;
   /** Configured agents (empty until setup wizard is completed). */
   agents?: AgentConfig[];
+  /** Registered agent accounts (empty until the user adds one). */
+  accounts?: AccountInfo[];
 }
 
 export const EMPTY_SNAPSHOT: Snapshot = {
@@ -551,6 +554,22 @@ export interface DetectedAgent {
   installCommand?: string;
   updateCommand?: string;
   canManage: boolean;
+}
+
+/**
+ * One registered login for an agent. Never carries credentials — the daemon
+ * keeps those in its vault and only reports what the switcher shows.
+ */
+export interface AccountInfo {
+  /** Stable id, "<agent>:<slug>". */
+  id: string;
+  agentId: string;
+  label: string;
+  email?: string;
+  /** Plan or seat tier, when the agent reports one. */
+  plan?: string;
+  /** Whether new sessions for this agent use this account. */
+  active: boolean;
 }
 
 /** An agent session discovered on disk (claude/codex), resumable via task.resume. */

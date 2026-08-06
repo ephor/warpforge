@@ -80,6 +80,10 @@ pub struct Task {
     pub snoozed_until: Option<u64>,
     /// Unix seconds when the current snooze was set.
     pub snoozed_at: Option<u64>,
+    /// Agent account this task's session was started with. Recorded so resume
+    /// and restart reuse the same account even after the active one changed.
+    /// `None` = whatever account is active at spawn time.
+    pub account_id: Option<String>,
 }
 
 impl Task {
@@ -108,6 +112,7 @@ impl Task {
             settled_at: None,
             snoozed_until: None,
             snoozed_at: None,
+            account_id: None,
         }
     }
 

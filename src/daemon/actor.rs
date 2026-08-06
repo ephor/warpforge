@@ -795,6 +795,31 @@ pub enum Command {
     UpdateAgents {
         agents: Vec<wire::AgentConfig>,
     },
+    /// Every registered agent account.
+    ListAccounts {
+        reply: oneshot::Sender<Vec<wire::AccountInfo>>,
+    },
+    /// Register the agent's current login as a new account. Replies with the
+    /// updated list, or the reason the import failed.
+    ImportAccount {
+        agent_id: String,
+        label: String,
+        reply: oneshot::Sender<Result<Vec<wire::AccountInfo>, String>>,
+    },
+    RenameAccount {
+        account_id: String,
+        label: String,
+        reply: oneshot::Sender<Result<Vec<wire::AccountInfo>, String>>,
+    },
+    RemoveAccount {
+        account_id: String,
+        reply: oneshot::Sender<Result<Vec<wire::AccountInfo>, String>>,
+    },
+    SetActiveAccount {
+        agent_id: String,
+        account_id: String,
+        reply: oneshot::Sender<Result<Vec<wire::AccountInfo>, String>>,
+    },
     /// Trigger an ACP probe for one agent's model selectors. The probe runs in
     /// a background task and reports back via [`Command::AgentProbed`].
     ProbeAgent {
@@ -882,6 +907,10 @@ pub enum Event {
     },
     AgentsUpdated {
         agents: Vec<wire::AgentConfig>,
+    },
+    /// Account list or active selection changed.
+    AccountsUpdated {
+        accounts: Vec<wire::AccountInfo>,
     },
     /// A PTY agent was created; carries the live vt100 parser so an in-process
     /// client can render it. (Stage 3 replaces this with serialized screens.)
@@ -1429,6 +1458,70 @@ impl DaemonHandle {
         self.send(Command::UpdateAgents { agents }).await;
     }
 
+    pub async fn list_accounts(&self) -> Vec<wire::AccountInfo> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::ListAccounts { reply: tx }).await;
+        rx.await.unwrap_or_default()
+    }
+
+    pub async fn import_account(
+        &self,
+        agent_id: String,
+        label: String,
+    ) -> Result<Vec<wire::AccountInfo>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::ImportAccount {
+            agent_id,
+            label,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| Err("daemon stopped".into()))
+    }
+
+    pub async fn rename_account(
+        &self,
+        account_id: String,
+        label: String,
+    ) -> Result<Vec<wire::AccountInfo>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::RenameAccount {
+            account_id,
+            label,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| Err("daemon stopped".into()))
+    }
+
+    pub async fn remove_account(
+        &self,
+        account_id: String,
+    ) -> Result<Vec<wire::AccountInfo>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::RemoveAccount {
+            account_id,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| Err("daemon stopped".into()))
+    }
+
+    pub async fn set_active_account(
+        &self,
+        agent_id: String,
+        account_id: String,
+    ) -> Result<Vec<wire::AccountInfo>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::SetActiveAccount {
+            agent_id,
+            account_id,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| Err("daemon stopped".into()))
+    }
+
     pub async fn session_set_config_option(&self, task_id: &str, config_id: &str, value: &str) {
         self.send(Command::SessionSetConfigOption {
             task_id: task_id.into(),
@@ -1580,6 +1673,8 @@ pub struct Daemon {
     /// Deterministic workflow pipelines keyed by parent task id. Finished runs
     /// stay in the map so their state remains visible on the board.
     workflow_runs: HashMap<String, WorkflowRun>,
+    /// Registered agent accounts, mirroring the `agent_accounts` table.
+    accounts: Vec<super::store::StoredAccount>,
 }
 
 impl Daemon {
@@ -1656,6 +1751,11 @@ impl Daemon {
             })
             .collect();
 
+        let accounts = store
+            .as_ref()
+            .and_then(|s| s.load_accounts().ok())
+            .unwrap_or_default();
+
         let config_observer = ConfigObserver::new(&projects);
         let daemon = Daemon {
             projects,
@@ -1682,6 +1782,7 @@ impl Daemon {
             pending_wake: std::collections::HashSet::new(),
             tool_call_starts,
             workflow_runs: HashMap::new(),
+            accounts,
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -1918,6 +2019,7 @@ impl Daemon {
             terminals,
             session_history,
             agents: self.configured_agents.clone(),
+            accounts: self.account_infos(),
         }
     }
 
@@ -2797,11 +2899,12 @@ impl Daemon {
                         .or_else(|| self.project_path(&task.project))
                         .unwrap_or_else(|| ".".to_string());
                     let command = self.resolve_agent_command(&task.project, &agent_id);
+                    let env = self.resolve_agent_env(&agent_id, None);
                     let prompt = task.prompt.clone();
-                    (repo, command, prompt)
+                    (repo, command, prompt, env)
                 });
                 match resolved {
-                    Some((repo, command, prompt)) => {
+                    Some((repo, command, prompt, env)) => {
                         tokio::spawn(async move {
                             let message = match kind {
                                 wire::TextGenKind::TaskTitle => Some(prompt.as_str()),
@@ -2809,7 +2912,8 @@ impl Daemon {
                             };
                             let result = match build_textgen_prompt(&repo, kind, message).await {
                                 Ok(prompt) => {
-                                    super::acp::generate_text(command, repo, prompt, model).await
+                                    super::acp::generate_text(command, repo, prompt, model, env)
+                                        .await
                                 }
                                 Err(e) => Err(e),
                             };
@@ -3270,6 +3374,45 @@ impl Daemon {
                     let _ = self.cmd_tx.send(Command::ProbeAgent { id }).await;
                 }
             }
+            Command::ListAccounts { reply } => {
+                let _ = reply.send(self.account_infos());
+            }
+            Command::ImportAccount {
+                agent_id,
+                label,
+                reply,
+            } => {
+                let _ = reply.send(self.import_account(&agent_id, &label));
+            }
+            Command::RenameAccount {
+                account_id,
+                label,
+                reply,
+            } => {
+                let result = match self.accounts.iter_mut().find(|a| a.id == account_id) {
+                    Some(account) => {
+                        account.label = label;
+                        let updated = account.clone();
+                        if let Some(store) = &self.store {
+                            let _ = store.upsert_account(&updated);
+                        }
+                        Ok(())
+                    }
+                    None => Err(format!("no account {account_id}")),
+                };
+                let _ = reply.send(result.map(|()| self.emit_accounts()));
+            }
+            Command::RemoveAccount { account_id, reply } => {
+                let _ = reply.send(self.remove_account(&account_id));
+            }
+            Command::SetActiveAccount {
+                agent_id,
+                account_id,
+                reply,
+            } => {
+                let result = self.set_active_account(&agent_id, &account_id);
+                let _ = reply.send(result);
+            }
             Command::ProbeAgent { id } => {
                 if let Some(agent) = self.configured_agents.iter().find(|a| a.id == id) {
                     if !agent.enabled || agent.models.is_empty() {
@@ -3698,6 +3841,234 @@ impl Daemon {
         agent.to_string()
     }
 
+    /// Extra environment for an agent process: the selected account's home and
+    /// any auth env the agent must not inherit. `account` pins a specific
+    /// account (a task reusing the one it started on); `None` uses the active
+    /// one for that agent.
+    ///
+    /// Codex selects its account by `CODEX_HOME`; Claude does not (its account
+    /// is swapped in place) but still needs conflicting auth env stripped.
+    fn resolve_agent_env(&self, agent: &str, account: Option<&str>) -> super::accounts::AgentEnv {
+        let selected = super::accounts::select_for_spawn(&self.accounts, agent, account);
+        // Re-link the shared home before every spawn, not just at import: the
+        // agent's own home grows entries over time, and a vault that missed
+        // them starts the agent with no config and no session history.
+        if let Some(account) = selected {
+            if account.agent_id == "codex" {
+                if let Some(home) = super::accounts::agent_home("codex") {
+                    if let Err(error) = super::accounts::materialize_codex_home(
+                        &home,
+                        std::path::Path::new(&account.home_dir),
+                    ) {
+                        eprintln!("[accounts] codex home for '{}': {error}", account.label);
+                    }
+                }
+            }
+        }
+        super::accounts::env_for(agent, selected)
+    }
+
+    /// How the daemon reaches the Claude CLI's credential storage.
+    fn claude_runtime(&self) -> super::claude_auth::ClaudeRuntime {
+        super::claude_auth::ClaudeRuntime::detect()
+    }
+
+    /// Wire view of the account list.
+    fn account_infos(&self) -> Vec<wire::AccountInfo> {
+        self.accounts
+            .iter()
+            .map(|a| wire::AccountInfo {
+                id: a.id.clone(),
+                agent_id: a.agent_id.clone(),
+                label: a.label.clone(),
+                email: a.email.clone(),
+                plan: a.plan.clone(),
+                active: a.active,
+            })
+            .collect()
+    }
+
+    /// Broadcast the current account list and return it for the caller's reply.
+    fn emit_accounts(&mut self) -> Vec<wire::AccountInfo> {
+        let accounts = self.account_infos();
+        self.emit(Event::AccountsUpdated {
+            accounts: accounts.clone(),
+        });
+        accounts
+    }
+
+    /// Register the agent's currently-authenticated login as a new account by
+    /// copying its credentials into a fresh vault. The agent's own home is only
+    /// ever read.
+    fn import_account(
+        &mut self,
+        agent_id: &str,
+        label: &str,
+    ) -> Result<Vec<wire::AccountInfo>, String> {
+        let slug = super::accounts::slugify(label);
+        let id = super::accounts::account_id(agent_id, &slug);
+        if self.accounts.iter().any(|a| a.id == id) {
+            return Err(format!("account '{label}' already exists for {agent_id}"));
+        }
+        let vault =
+            super::accounts::create_vault(agent_id, &slug, &id).map_err(|e| e.to_string())?;
+        let identity = match super::accounts::import_agent_login(
+            agent_id,
+            &vault,
+            &id,
+            &self.claude_runtime(),
+        ) {
+            Ok(identity) => identity,
+            Err(e) => {
+                // Nothing usable was captured — drop the empty vault so a retry
+                // starts clean instead of adopting a half-made one.
+                let _ = super::accounts::remove_vault(&vault, &id);
+                return Err(e.to_string());
+            }
+        };
+        let account = super::store::StoredAccount {
+            id,
+            agent_id: agent_id.to_string(),
+            label: label.trim().to_string(),
+            email: identity.email,
+            plan: identity.plan,
+            home_dir: vault.to_string_lossy().into_owned(),
+            created_at: super::task::now_secs(),
+            // First account for an agent becomes the active one; later ones
+            // wait to be picked, so importing never moves live sessions.
+            active: !self.accounts.iter().any(|a| a.agent_id == agent_id),
+        };
+        if let Some(store) = &self.store {
+            store.upsert_account(&account).map_err(|e| e.to_string())?;
+            if account.active {
+                let _ = store.set_active_account(agent_id, &account.id);
+            }
+        }
+        self.accounts.push(account);
+        Ok(self.emit_accounts())
+    }
+
+    /// Point an agent at one of its accounts.
+    ///
+    /// For Codex this only records the choice — the account travels to the next
+    /// process in `CODEX_HOME`. For Claude it performs the credential swap, and
+    /// the selection is only recorded if that succeeded: a stored "active"
+    /// account the CLI is not actually using would misreport which login every
+    /// session runs under.
+    fn set_active_account(
+        &mut self,
+        agent_id: &str,
+        account_id: &str,
+    ) -> Result<Vec<wire::AccountInfo>, String> {
+        let Some(target) = self
+            .accounts
+            .iter()
+            .find(|a| a.id == account_id && a.agent_id == agent_id)
+            .cloned()
+        else {
+            return Err(format!("no account {account_id} for agent {agent_id}"));
+        };
+        if agent_id == "claude" {
+            let outgoing = self
+                .accounts
+                .iter()
+                .find(|a| a.agent_id == agent_id && a.active)
+                .cloned();
+            super::accounts::activate_claude_account(
+                &self.claude_runtime(),
+                outgoing.as_ref(),
+                &target,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if let Some(store) = &self.store {
+            store
+                .set_active_account(agent_id, account_id)
+                .map_err(|e| e.to_string())?;
+        }
+        for account in &mut self.accounts {
+            if account.agent_id == agent_id {
+                account.active = account.id == account_id;
+            }
+        }
+        self.retire_sessions_for_agent(agent_id);
+        Ok(self.emit_accounts())
+    }
+
+    /// Drop the live agent processes for an agent after its account changed, so
+    /// the next message starts a fresh one on the new account.
+    ///
+    /// A running process cannot be moved to another account. Codex reads its
+    /// account from `CODEX_HOME` once, at spawn. Claude caches the credentials
+    /// it authenticated with for the life of the process, so swapping the store
+    /// underneath it does not switch the account — it makes the next request
+    /// fail with "OAuth session expired and could not be refreshed", which
+    /// reads like a broken login rather than a stale process.
+    ///
+    /// Killing the handle is enough: `SessionPrompt` sees a dead session and
+    /// resumes it (`session/load`) in a new process, so history is preserved.
+    fn retire_sessions_for_agent(&mut self, agent_id: &str) {
+        let stale: Vec<String> = self
+            .sessions
+            .keys()
+            .filter(|task_id| {
+                self.tasks
+                    .get(*task_id)
+                    .is_some_and(|task| self.agent_id_of(&task.agent) == agent_id)
+            })
+            .cloned()
+            .collect();
+        for task_id in stale {
+            if let Some(handle) = self.sessions.remove(&task_id) {
+                handle.cancel();
+            }
+        }
+    }
+
+    /// Resolve a task's agent field (an id or a display name) to a registry id.
+    fn agent_id_of<'a>(&'a self, agent: &'a str) -> &'a str {
+        self.configured_agents
+            .iter()
+            .find(|a| a.id == agent || a.display_name == agent)
+            .map(|a| a.id.as_str())
+            .unwrap_or(agent)
+    }
+
+    fn remove_account(&mut self, account_id: &str) -> Result<Vec<wire::AccountInfo>, String> {
+        let Some(index) = self.accounts.iter().position(|a| a.id == account_id) else {
+            return Err(format!("no account {account_id}"));
+        };
+        let account = self.accounts[index].clone();
+        super::accounts::remove_vault(std::path::Path::new(&account.home_dir), &account.id)
+            .map_err(|e| e.to_string())?;
+        if let Some(store) = &self.store {
+            store
+                .delete_account(account_id)
+                .map_err(|e| e.to_string())?;
+        }
+        self.accounts.remove(index);
+        if account.agent_id == "claude" {
+            let _ = self
+                .claude_runtime()
+                .delete_managed_credentials(&account.id);
+        }
+        // Promote a sibling so the agent is never left with accounts but no
+        // active one — that state resolves to "no account" everywhere. For
+        // Claude that also has to perform the swap, or the CLI would keep using
+        // the deleted account's credentials.
+        if account.active {
+            if let Some(next_id) = self
+                .accounts
+                .iter()
+                .find(|a| a.agent_id == account.agent_id)
+                .map(|a| a.id.clone())
+            {
+                self.set_active_account(&account.agent_id, &next_id)?;
+            }
+        }
+        Ok(self.emit_accounts())
+    }
+
     /// A context block describing the project's currently-running services and
     /// their live URLs — prepended to the agent's first prompt so it knows the
     /// app is already up and can hit real endpoints / run tests against it.
@@ -3757,6 +4128,12 @@ impl Daemon {
                 .unwrap_or_else(|| ".".to_string())
         };
         let command = self.resolve_agent_command(project, agent);
+        let env = self.resolve_agent_env(
+            agent,
+            self.tasks
+                .get(task_id)
+                .and_then(|t| t.account_id.as_deref()),
+        );
         // An orchestrator-chat session gets the warpforge MCP bridge (spawn_agent
         // / read_inbox tools) and an orchestrator system preamble; a plain task
         // gets neither.
@@ -3825,6 +4202,7 @@ impl Daemon {
             Some(self.policy_tx.clone()),
             default_model,
             config_overrides,
+            env,
         ) {
             Ok(handle) => {
                 self.sessions.insert(task_id.to_string(), handle);
