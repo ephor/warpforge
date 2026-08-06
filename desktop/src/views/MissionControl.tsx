@@ -430,7 +430,7 @@ function FocusPane({
   const commands = useMemo(() => latestCommands(updates), [updates]);
   const fileListQuery = useQuery({
     queryFn: daemonQuery<ProjectFile[]>("file.list", { task_id: task.id }),
-    queryKey: ["fileList", task.id, task.updatedAt],
+    queryKey: ["fileList", task.id, "tracked"],
   });
   const projectFiles = Array.isArray(fileListQuery.data) ? fileListQuery.data : [];
   const capability = [...updates].reverse().find((update) => update.kind === "prompt_capabilities");
