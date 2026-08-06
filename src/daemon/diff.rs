@@ -12,6 +12,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use warpforge_protocol as wire;
 
+/// Build/dependency directories, skipped at any depth. Keeping them costs
+/// ~162k entries on this repo alone, and the editor tree never wants them —
+/// but other .gitignore'd files (`.env` and friends) stay listed.
+const HEAVY_DIRS: &[&str] = &[".git", "node_modules", "target", "dist", ".next"];
+
 /// OS / editor junk never shown in the file tree.
 const IGNORED_NAMES: &[&str] = &[
     ".DS_Store",
@@ -67,6 +72,9 @@ pub async fn list_files(repo: &str, include_ignored: bool) -> Result<Vec<wire::P
 }
 
 fn is_ignored_path(path: &str) -> bool {
+    if path.split('/').any(|part| HEAVY_DIRS.contains(&part)) {
+        return true;
+    }
     let name = std::path::Path::new(path)
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -94,10 +102,7 @@ fn walk_files(
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if matches!(
-            name.as_ref(),
-            ".git" | "node_modules" | "target" | "dist" | ".next"
-        ) {
+        if HEAVY_DIRS.contains(&name.as_ref()) {
             continue;
         }
         if path.is_dir() {

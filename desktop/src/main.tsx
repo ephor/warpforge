@@ -11,6 +11,12 @@ import { queryClient } from "./query";
 // eslint-disable-next-line import/no-unassigned-import
 import "./globals.css";
 
+if (import.meta.env.DEV) {
+  void import("./lib/memProbe").then(({ installMemProbe }) => {
+    installMemProbe();
+  });
+}
+
 const reactScanEnabled = import.meta.env.DEV && import.meta.env.VITE_REACT_SCAN === "true";
 
 if (reactScanEnabled) {
