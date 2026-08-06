@@ -146,6 +146,20 @@ pub struct Store {
     conn: Connection,
 }
 
+/// A persisted agent account. Credentials never live here — only the vault path
+/// and the display identity read out of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredAccount {
+    pub id: String,
+    pub agent_id: String,
+    pub label: String,
+    pub email: Option<String>,
+    pub plan: Option<String>,
+    pub home_dir: String,
+    pub created_at: u64,
+    pub active: bool,
+}
+
 impl Store {
     /// Open (creating if needed) the default database.
     pub fn open() -> Result<Self> {
@@ -199,6 +213,21 @@ impl Store {
                 run_json   TEXT NOT NULL,
                 updated_at INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS agent_accounts (
+                id         TEXT PRIMARY KEY,
+                agent_id   TEXT NOT NULL,
+                label      TEXT NOT NULL,
+                email      TEXT,
+                plan       TEXT,
+                home_dir   TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS agent_accounts_agent_idx
+                ON agent_accounts(agent_id);
+            CREATE TABLE IF NOT EXISTS active_account (
+                agent_id   TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL
+            );
             "#,
         )?;
         // Existing databases from before config selector persistence won't have
@@ -229,6 +258,9 @@ impl Store {
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN settled_at INTEGER", []);
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN snoozed_until INTEGER", []);
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN snoozed_at INTEGER", []);
+        // Migration: remember which agent account a task's session ran under, so
+        // resume/restart reuses it after the active account changed.
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN account_id TEXT", []);
         Ok(Self { conn })
     }
 
@@ -240,8 +272,9 @@ impl Store {
             INSERT INTO tasks
                 (id, session_id, project, prompt, agent, status, tags, title,
                  created_at, updated_at, files_changed, blocked_reason, config_options, worktree,
-                 parent_task_id, settled_override, settled_at, snoozed_until, snoozed_at)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+                 parent_task_id, settled_override, settled_at, snoozed_until, snoozed_at,
+                 account_id)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
             ON CONFLICT(id) DO UPDATE SET
                 session_id=excluded.session_id,
                 status=excluded.status,
@@ -255,7 +288,8 @@ impl Store {
                 settled_override=excluded.settled_override,
                 settled_at=excluded.settled_at,
                 snoozed_until=excluded.snoozed_until,
-                snoozed_at=excluded.snoozed_at
+                snoozed_at=excluded.snoozed_at,
+                account_id=excluded.account_id
             "#,
             rusqlite::params![
                 task.id,
@@ -277,6 +311,7 @@ impl Store {
                 task.settled_at,
                 task.snoozed_until,
                 task.snoozed_at,
+                task.account_id,
             ],
         )?;
         Ok(())
@@ -290,7 +325,8 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, project, prompt, agent, status, tags, \
              created_at, updated_at, files_changed, blocked_reason, config_options, worktree, \
-             parent_task_id, title, settled_override, settled_at, snoozed_until, snoozed_at \
+             parent_task_id, title, settled_override, settled_at, snoozed_until, snoozed_at, \
+             account_id \
              FROM tasks",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -323,6 +359,7 @@ impl Store {
                 settled_at: row.get::<_, Option<u64>>(16)?,
                 snoozed_until: row.get::<_, Option<u64>>(17)?,
                 snoozed_at: row.get::<_, Option<u64>>(18)?,
+                account_id: row.get(19)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -356,6 +393,73 @@ impl Store {
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Every registered agent account, with the active flag resolved from
+    /// `active_account`. Usage is not persisted — it is a live readout.
+    pub fn load_accounts(&self) -> Result<Vec<StoredAccount>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.id, a.agent_id, a.label, a.email, a.plan, a.home_dir, a.created_at, \
+             (SELECT account_id FROM active_account WHERE agent_id = a.agent_id) \
+             FROM agent_accounts a ORDER BY a.agent_id, a.created_at",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let active_id: Option<String> = row.get(7)?;
+            Ok(StoredAccount {
+                active: active_id.as_deref() == Some(id.as_str()),
+                id,
+                agent_id: row.get(1)?,
+                label: row.get(2)?,
+                email: row.get(3)?,
+                plan: row.get(4)?,
+                home_dir: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn upsert_account(&self, account: &StoredAccount) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO agent_accounts (id, agent_id, label, email, plan, home_dir, created_at) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7) \
+             ON CONFLICT(id) DO UPDATE SET \
+                label=excluded.label, email=excluded.email, plan=excluded.plan, \
+                home_dir=excluded.home_dir",
+            rusqlite::params![
+                account.id,
+                account.agent_id,
+                account.label,
+                account.email,
+                account.plan,
+                account.home_dir,
+                account.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Delete an account row and, when it was the active one, clear the
+    /// selection for its agent. Leaving a dangling active id would resolve to
+    /// "no account" on every later lookup with no way to notice.
+    pub fn delete_account(&self, account_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM active_account WHERE account_id = ?1",
+            [account_id],
+        )?;
+        self.conn
+            .execute("DELETE FROM agent_accounts WHERE id = ?1", [account_id])?;
+        Ok(())
+    }
+
+    pub fn set_active_account(&self, agent_id: &str, account_id: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO active_account (agent_id, account_id) VALUES (?1,?2) \
+             ON CONFLICT(agent_id) DO UPDATE SET account_id=excluded.account_id",
+            [agent_id, account_id],
+        )?;
+        Ok(())
     }
 
     pub fn save_agents(&self, agents: &[wire::AgentConfig]) -> Result<()> {
@@ -572,6 +676,90 @@ mod tests {
         assert_eq!(loaded[0].session_id.as_deref(), Some("sess-1"));
         assert_eq!(loaded[0].tags, vec!["x".to_string()]);
         assert_eq!(loaded[0].config_options, task.config_options);
+    }
+
+    fn account(id: &str, agent: &str, label: &str) -> StoredAccount {
+        StoredAccount {
+            id: id.to_string(),
+            agent_id: agent.to_string(),
+            label: label.to_string(),
+            email: Some(format!("{label}@example.com")),
+            plan: Some("pro".into()),
+            home_dir: format!("/tmp/{id}"),
+            created_at: 1,
+            active: false,
+        }
+    }
+
+    #[test]
+    fn accounts_roundtrip_with_active_selection() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        store
+            .upsert_account(&account("codex:personal", "codex", "personal"))
+            .unwrap();
+        store
+            .upsert_account(&account("codex:work", "codex", "work"))
+            .unwrap();
+        store
+            .upsert_account(&account("claude:personal", "claude", "personal"))
+            .unwrap();
+
+        // No selection yet: nothing is active.
+        assert!(store.load_accounts().unwrap().iter().all(|a| !a.active));
+
+        store.set_active_account("codex", "codex:work").unwrap();
+        let loaded = store.load_accounts().unwrap();
+        let active: Vec<&str> = loaded
+            .iter()
+            .filter(|a| a.active)
+            .map(|a| a.id.as_str())
+            .collect();
+        assert_eq!(active, vec!["codex:work"]);
+
+        // Selection is per agent — picking a Codex account leaves Claude alone.
+        store
+            .set_active_account("claude", "claude:personal")
+            .unwrap();
+        let loaded = store.load_accounts().unwrap();
+        assert_eq!(loaded.iter().filter(|a| a.active).count(), 2);
+
+        // Rename is an update, not a second row.
+        let mut renamed = account("codex:work", "codex", "job");
+        renamed.email = Some("job@example.com".into());
+        store.upsert_account(&renamed).unwrap();
+        let loaded = store.load_accounts().unwrap();
+        assert_eq!(loaded.len(), 3);
+        let work = loaded.iter().find(|a| a.id == "codex:work").unwrap();
+        assert_eq!(work.label, "job");
+        assert!(work.active, "rename must not drop the active selection");
+    }
+
+    #[test]
+    fn deleting_active_account_clears_selection() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        store
+            .upsert_account(&account("codex:personal", "codex", "personal"))
+            .unwrap();
+        store.set_active_account("codex", "codex:personal").unwrap();
+
+        store.delete_account("codex:personal").unwrap();
+        assert!(store.load_accounts().unwrap().is_empty());
+
+        // A dangling active row would make the next account silently inactive.
+        store
+            .upsert_account(&account("codex:personal", "codex", "personal"))
+            .unwrap();
+        assert!(store.load_accounts().unwrap().iter().all(|a| !a.active));
+    }
+
+    #[test]
+    fn task_remembers_its_account() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        let mut task = Task::new("demo", "do a thing", "codex", vec![]);
+        task.account_id = Some("codex:work".into());
+        store.upsert_task(&task).unwrap();
+        let loaded = store.load_tasks().unwrap();
+        assert_eq!(loaded[0].account_id.as_deref(), Some("codex:work"));
     }
 
     #[test]

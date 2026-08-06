@@ -8,11 +8,13 @@
 //! the TUI and socket consume the actor.
 #![allow(dead_code)]
 
+pub mod accounts;
 pub mod acp;
 pub mod acp_server;
 pub mod actor;
 pub mod agent_probe;
 pub mod agents;
+pub mod claude_auth;
 pub mod diff;
 pub mod prompt;
 pub mod server;

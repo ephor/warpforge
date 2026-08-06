@@ -7,10 +7,13 @@ import {
   Plus,
   Settings,
 } from "lucide-react";
+import { useSyncExternalStore } from "react";
 
+import AccountSwitcher from "@/components/AccountSwitcher";
 import { Button } from "@/components/ui/button";
 import UpdateControl from "@/components/UpdateControl";
 import type { ConnectionState } from "@/daemon";
+import { daemon } from "@/daemon";
 import { cn } from "@/lib/utils";
 import type { TaskInfo } from "@/protocol";
 import type { View } from "@/store/ui";
@@ -46,6 +49,11 @@ export default function AppHeader({
   onNewTask,
   onOpenSettings,
 }: AppHeaderProps) {
+  // Accounts come straight from the daemon rather than through App: the chip is
+  // the only consumer, and threading them through every render of the shell
+  // would couple unrelated views to account state.
+  const { snapshot } = useSyncExternalStore(daemon.subscribe, daemon.getState);
+
   return (
     <header className="flex h-10 items-center gap-3 border-b border-border/70 bg-card/80 px-2.5">
       <div className="px-1 text-xs font-semibold uppercase tracking-[0.18em] text-foreground">
@@ -101,6 +109,7 @@ export default function AppHeader({
       </nav>
 
       <div className="ml-auto flex items-center gap-3">
+        <AccountSwitcher agents={snapshot.agents ?? []} accounts={snapshot.accounts ?? []} />
         <UpdateControl daemonConnected={connection === "connected"} />
         <Button
           size="icon"

@@ -225,7 +225,26 @@ async fn handle_conn(
 
                 let req: wire::Request = match serde_json::from_str(&text) {
                     Ok(r) => r,
-                    Err(_) => continue, // ignore malformed frames (no id to reply to)
+                    Err(error) => {
+                        // A frame that carries a request id but fails to parse
+                        // (unknown method, params that don't match the variant)
+                        // must still be answered: dropping it silently leaves
+                        // the caller's promise pending forever, which surfaces
+                        // as a spinner that never stops.
+                        if let Some(id) = serde_json::from_str::<serde_json::Value>(&text)
+                            .ok()
+                            .and_then(|v| v.get("id").and_then(serde_json::Value::as_u64))
+                        {
+                            send!(wire::ServerMessage::Error {
+                                id,
+                                error: wire::RpcError {
+                                    code: wire::ErrorCode::InvalidRequest,
+                                    message: format!("unrecognized request: {error}"),
+                                },
+                            });
+                        }
+                        continue;
+                    }
                 };
                 let id = req.id;
 
@@ -855,6 +874,19 @@ async fn dispatch(
             let (ok, output) = crate::daemon::agents::run_manage_command(&command).await;
             Ok(json!({ "ok": ok, "command": command, "output": output }))
         }
+        // ── Agent accounts ──
+        AccountsList {} => Ok(json!({ "accounts": handle.list_accounts().await })),
+        AccountsImport { agent_id, label } => {
+            accounts_result(handle.import_account(agent_id, label).await)
+        }
+        AccountsRename { account_id, label } => {
+            accounts_result(handle.rename_account(account_id, label).await)
+        }
+        AccountsRemove { account_id } => accounts_result(handle.remove_account(account_id).await),
+        AccountsSetActive {
+            agent_id,
+            account_id,
+        } => accounts_result(handle.set_active_account(agent_id, account_id).await),
         // ── Orchestration ──
         OrchestrateStart { project, goal } => {
             let (tx, rx) = oneshot::channel();
@@ -1145,6 +1177,21 @@ fn bootstrap_context(
     }
 }
 
+/// Account mutations answer with the whole list, so the client re-renders from
+/// one payload instead of patching. A failure is the user's problem to fix
+/// (no login found, name taken), so it maps to InvalidRequest, not Internal.
+fn accounts_result(
+    result: Result<Vec<wire::AccountInfo>, String>,
+) -> Result<serde_json::Value, wire::RpcError> {
+    match result {
+        Ok(accounts) => Ok(json!({ "accounts": accounts })),
+        Err(message) => Err(wire::RpcError {
+            code: wire::ErrorCode::InvalidRequest,
+            message,
+        }),
+    }
+}
+
 fn method_is_mutation(method: &wire::Method) -> bool {
     use wire::Method::*;
     !matches!(
@@ -1157,6 +1204,7 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | SessionsList { .. }
             | OrchestratorListAgents { .. }
             | AgentsDetect {}
+            | AccountsList {}
             | DiffGet { .. }
             | FileContents { .. }
             | FileList { .. }
@@ -1177,6 +1225,49 @@ mod tests {
     use crate::registry::ProjectEntry;
     use std::time::Duration;
     use tokio::time::timeout;
+
+    /// A request the daemon cannot parse must still be answered. Dropping it
+    /// leaves the caller waiting forever, which is indistinguishable from a
+    /// hung daemon — it showed up as a spinner that never stopped when a client
+    /// sent params in the wrong case.
+    #[tokio::test]
+    async fn unparseable_request_is_answered_instead_of_dropped() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let handle = Daemon::spawn(Vec::new(), store);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(run(listener, handle.clone(), String::new()));
+        let (mut ws, _) = tokio_tungstenite::connect_async(&format!("ws://{addr}"))
+            .await
+            .unwrap();
+
+        for (id, frame) in [
+            // Params that don't match the variant's fields.
+            (
+                7,
+                json!({ "id": 7, "method": "accounts.import", "params": { "agentId": "claude", "label": "personal" } }),
+            ),
+            // A method this daemon has never heard of.
+            (
+                8,
+                json!({ "id": 8, "method": "accounts.teleport", "params": {} }),
+            ),
+        ] {
+            ws.send(Message::Text(frame.to_string())).await.unwrap();
+
+            let msg = timeout(Duration::from_secs(2), ws.next())
+                .await
+                .expect("a reply, not silence")
+                .expect("some")
+                .expect("ok");
+            let Message::Text(t) = msg else {
+                panic!("expected a text frame")
+            };
+            let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+            assert_eq!(v["id"].as_u64(), Some(id));
+            assert_eq!(v["error"]["code"], "invalid_request");
+        }
+    }
 
     #[tokio::test]
     async fn subscribe_then_create_task_over_websocket() {

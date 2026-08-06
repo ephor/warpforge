@@ -427,6 +427,7 @@ pub async fn generate_text(
     cwd: String,
     prompt: String,
     model: Option<String>,
+    env: super::accounts::AgentEnv,
 ) -> Result<String, String> {
     const OVERALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
@@ -447,6 +448,7 @@ pub async fn generate_text(
         None,
         model,
         HashMap::new(),
+        env,
     )
     .map_err(|e| format!("failed to start agent: {e}"))?;
 
@@ -513,12 +515,20 @@ pub fn spawn_acp_session(
     // Non-model config overrides (reasoning effort, mode, etc.) keyed by
     // config-option id; applied via `session/setConfigOption` after model.
     config_overrides: std::collections::HashMap<String, String>,
+    // Environment changes for the agent process, layered over the daemon's own:
+    // the selected account's home to set, and inherited auth variables to drop.
+    env: super::accounts::AgentEnv,
 ) -> anyhow::Result<AcpHandle> {
     let run_id = NEXT_RUN_ID.fetch_add(1, Ordering::Relaxed);
     let mut child_command = Command::new("sh");
     child_command
         .args(["-c", &command])
         .current_dir(&cwd)
+        .envs(env.set);
+    for key in env.remove {
+        child_command.env_remove(key);
+    }
+    child_command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2257,6 +2267,7 @@ mod tests {
             None,
             None,
             std::collections::HashMap::new(),
+            super::super::accounts::AgentEnv::default(),
         )
         .unwrap();
 
@@ -2285,6 +2296,59 @@ mod tests {
         );
     }
 
+    /// The account switcher is only real if the selected account's home
+    /// actually reaches the agent process — and if inherited auth env is
+    /// actually gone from it. Assert both against the real child rather than
+    /// trusting `Command::envs` / `env_remove`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_env_reaches_the_agent_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let out_path = dir.path().join("env");
+        let command = format!(
+            "printf '%s|%s\\n' \"${{CODEX_HOME:-unset}}\" \"${{ANTHROPIC_API_KEY:-unset}}\" > {}; exec 1>&-",
+            out_path.display()
+        );
+        let (updates, mut rx) = mpsc::unbounded_channel();
+        // The daemon inherits a stale key; the child must not.
+        std::env::set_var("ANTHROPIC_API_KEY", "inherited-key");
+        let mut env = super::super::accounts::AgentEnv::default();
+        env.set
+            .insert("CODEX_HOME".to_string(), "/tmp/wf-account-home".to_string());
+        env.remove.push("ANTHROPIC_API_KEY".to_string());
+        let _handle = spawn_acp_session(
+            "task".into(),
+            command,
+            dir.path().to_string_lossy().into_owned(),
+            empty_prompt(),
+            None,
+            Vec::new(),
+            updates,
+            None,
+            None,
+            std::collections::HashMap::new(),
+            env,
+        )
+        .unwrap();
+
+        // Wait for the child to fail on closed stdout, by which point it has run.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv()).await;
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Ok(value) = std::fs::read_to_string(&out_path) {
+                    if !value.trim().is_empty() {
+                        break value.trim().to_string();
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("child should report its environment");
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        assert_eq!(seen, "/tmp/wf-account-home|unset");
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn closed_stdout_is_reported_without_waiting_for_initialize_timeout() {
@@ -2303,6 +2367,7 @@ mod tests {
             None,
             None,
             std::collections::HashMap::new(),
+            super::super::accounts::AgentEnv::default(),
         )
         .unwrap();
 
@@ -2365,6 +2430,7 @@ mod tests {
             None,
             None,
             std::collections::HashMap::new(),
+            super::super::accounts::AgentEnv::default(),
         )
         .unwrap();
         let pid = tokio::time::timeout(std::time::Duration::from_secs(2), async {
