@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.2
+
+### Patch Changes
+
+- [#22](https://github.com/ephor/warpforge/pull/22) [`57baf2d`](https://github.com/ephor/warpforge/commit/57baf2dddcf680c39cc166609475f6ede312bcb6) Thanks [@ephor](https://github.com/ephor)! - Keep the desktop app light when a project has large build directories. The file
+  tree and mention picker no longer list `node_modules`, `target`, `dist`, `.next`
+  or `.git` at any depth — on a Rust + Node project that is 162,000 entries down
+  to under 1,000 — while other `.gitignore`'d files such as `.env` stay listed and
+  openable. Mission Control session tiles also stop refetching a project's file
+  list on every task update, so their data is reused instead of rebuilt.
+
+- [#22](https://github.com/ephor/warpforge/pull/22) [`f93391f`](https://github.com/ephor/warpforge/commit/f93391ffbdef8ed368113d56f9b8add557677000) Thanks [@ephor](https://github.com/ephor)! - Run several agent accounts and switch between them without logging in again.
+  Register each login you already use from Settings → Accounts, then pick the
+  active one from the chip in the header. Switching a Claude account applies to
+  running sessions on their next request; Codex sessions keep the account they
+  started with until restarted.
+
 ## 0.3.1
 
 ### Patch Changes
