@@ -3847,6 +3847,22 @@ impl Daemon {
             .collect()
     }
 
+    /// Valid workflow ids the orchestrator may pass to `spawn_workflow`: a
+    /// project's `.warpforge/workflows/*.yaml` plus built-ins not overridden
+    /// by one — the same set `workflow.list` shows the New Task picker.
+    fn available_workflow_ids(&self, project: &str) -> Vec<String> {
+        let Some(path) = self.project_path(project) else {
+            return Vec::new();
+        };
+        crate::workflow_config::list_workflows(std::path::Path::new(&path))
+            .into_iter()
+            .filter_map(|w| {
+                let spec = w.spec.ok()?;
+                Some(format!("{} ({})", w.id, spec.name))
+            })
+            .collect()
+    }
+
     fn resolve_agent_command(&self, project: &str, agent: &str) -> String {
         // 1. Global registry (configured via setup wizard / settings).
         if let Some(cfg) = self
@@ -4178,9 +4194,18 @@ impl Daemon {
                     agents.join(", ")
                 )
             };
+            let workflows = self.available_workflow_ids(project);
+            let workflow_roster = if workflows.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n\nWorkflows you can pass to spawn_workflow: {}.",
+                    workflows.join(", ")
+                )
+            };
             (
                 orchestrator_mcp_servers(task_id, project),
-                format!("{ORCHESTRATOR_SYSTEM}{roster}\n\n{prompt}"),
+                format!("{ORCHESTRATOR_SYSTEM}{roster}{workflow_roster}\n\n{prompt}"),
             )
         } else {
             (Vec::new(), prompt.to_string())
