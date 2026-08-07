@@ -453,6 +453,7 @@ async fn dispatch(
                         default_model,
                         include_runtime_context,
                         config_overrides,
+                        parent_task_id,
                         reply: tx,
                     })
                     .await;

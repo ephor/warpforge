@@ -620,6 +620,7 @@ mod tests {
                 default_model: None,
                 include_runtime_context: false,
                 config_overrides: std::collections::HashMap::new(),
+                parent_task_id: None,
                 reply: tx,
             })
             .await;
@@ -897,6 +898,88 @@ mod tests {
             events.iter().all(|detail| !detail.contains("NARRATION:")),
             "{events:?}"
         );
+    }
+
+    /// A workflow spawned with a `parent_task_id` (the `spawn_workflow` MCP
+    /// tool's path) reports its finish to that parent's inbox exactly like a
+    /// plain `spawn_agent` sub-agent — this is what `read_inbox` surfaces back
+    /// to an orchestrator session.
+    #[tokio::test]
+    async fn workflow_spawned_with_a_parent_reports_to_its_inbox() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: placeholder\n");
+        let reviewer = wf_agent(&dir, "rev.state", "approve");
+        std::fs::write(
+            dir.path().join(".warpforge/workflows/test.yaml"),
+            format!("name: Closing flow\nreview:\n  reviewers:\n    - agent: {reviewer}\n"),
+        )
+        .unwrap();
+        let lead = wf_agent(&dir, "impl.state", "noisy-impl");
+
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(projects, store);
+        let mut events = daemon.subscribe();
+
+        // Stand in for an orchestrator-chat task: only its id and inbox matter
+        // here, so a session that fails to start is fine.
+        let orch_id = daemon
+            .create_task(
+                "demo",
+                "orchestrate",
+                "no-such-agent",
+                vec!["orchestrator-chat".into()],
+                false,
+                false,
+                None,
+                vec![],
+                None,
+                std::collections::HashMap::new(),
+            )
+            .await;
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::CreateWorkflowTask {
+                project: "demo".into(),
+                prompt: "do the thing".into(),
+                agent: lead,
+                tags: vec![],
+                worktree: false,
+                workflow: "test".into(),
+                attachments: vec![],
+                default_model: None,
+                include_runtime_context: false,
+                config_overrides: std::collections::HashMap::new(),
+                parent_task_id: Some(orch_id.clone()),
+                reply: tx,
+            })
+            .await;
+        let parent_id = rx.await.unwrap().expect("workflow task created");
+
+        wait_for_parent(&mut events, &parent_id, "pipeline done", |t| {
+            t.workflow_run
+                .as_ref()
+                .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
+        })
+        .await;
+
+        let inbox = daemon.read_inbox(&orch_id).await;
+        assert_eq!(
+            inbox.len(),
+            1,
+            "the finished pipeline should be in the inbox"
+        );
+        let result = &inbox[0];
+        assert_eq!(result.child_id, parent_id);
+        assert!(result.success);
+        assert!(
+            result.output.contains("Workflow **Closing flow** finished"),
+            "{}",
+            result.output
+        );
+
+        // Draining is one-shot, same as for a plain sub-agent.
+        assert!(daemon.read_inbox(&orch_id).await.is_empty());
     }
 
     #[tokio::test]

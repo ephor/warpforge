@@ -15,9 +15,18 @@
 //!   or idle sub-agent, continuing the same session.
 //! - `list_agents(project?)` — list this orchestrator's child sessions.
 //! - `stop_agent(task_id)` — hard-stop one owned child session while retaining
-//!   history.
+//!   history. Also stops an owned workflow pipeline.
 //! - `cleanup_agents(max_age_seconds?, dry_run?, include_active?)` — permanently
 //!   remove selected child sessions and their task history.
+//! - `spawn_workflow(workflow_id, goal, agent)` — dispatch a deterministic
+//!   multi-stage pipeline (plan/implement/review/fix) as a child of this
+//!   orchestrator, same lifecycle as `spawn_agent`.
+//! - `pause_workflow(task_id)` / `resume_workflow(task_id, note?)` — soft-pause
+//!   an owned pipeline at its next stage boundary, or resume it.
+//! - `answer_workflow(task_id, message)` — answer a pipeline stage's pending
+//!   question (`need_user_input`).
+//! - `decide_workflow(task_id, decision, rounds?, note?)` — decide what an
+//!   owned pipeline does once it has exhausted its review rounds.
 //!
 //! Environment (set by the daemon when it starts the orchestrator session):
 //! - `WF_ORCH_TASK`    — the orchestrator's task id (the inbox owner / parent).
@@ -310,6 +319,122 @@ fn tool_defs() -> Value {
                     }
                 }
             }
+        },
+        {
+            "name": "spawn_workflow",
+            "description": "Dispatch a deterministic multi-stage pipeline (plan → implement → \
+                review ⇄ fix) as a child of this orchestrator, instead of a single sub-agent. \
+                Use this for changes that benefit from an independent review pass; for \
+                straightforward tasks prefer spawn_agent — a pipeline costs several times the \
+                tokens and wall-clock. Returns immediately with a task id; the pipeline's final \
+                outcome is delivered to your inbox like a sub-agent's, and its live progress \
+                (current stage, review round, whether it is waiting on you) shows up in \
+                list_agents under workflowRun. It has no agent session of its own — do not use \
+                message_agent on it; use answer_workflow / decide_workflow instead.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "workflow_id": {
+                        "type": "string",
+                        "description": "Id of a workflow template available to the project (see the project's .warpforge/workflows/ or ask the user which pipelines exist)."
+                    },
+                    "goal": {
+                        "type": "string",
+                        "description": "The objective for the pipeline's first stage — what should be planned/implemented."
+                    },
+                    "agent": {
+                        "type": "string",
+                        "description": "Default agent for the pipeline's stages: e.g. \"claude\", \"codex\", \"opencode\"."
+                    }
+                },
+                "required": ["workflow_id", "goal", "agent"]
+            }
+        },
+        {
+            "name": "pause_workflow",
+            "description": "Soft-pause a workflow pipeline owned by this orchestrator. The \
+                running stage finishes its current turn; the next stage does not start until \
+                resume_workflow is called.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task id returned by spawn_workflow or list_agents."
+                    }
+                },
+                "required": ["task_id"]
+            }
+        },
+        {
+            "name": "resume_workflow",
+            "description": "Resume a paused workflow pipeline owned by this orchestrator.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task id returned by spawn_workflow or list_agents."
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Optional guidance delivered to the next stage as extra context."
+                    }
+                },
+                "required": ["task_id"]
+            }
+        },
+        {
+            "name": "answer_workflow",
+            "description": "Answer a workflow pipeline stage's pending question. Only valid \
+                while the pipeline is waiting on a question (list_agents shows \
+                workflowRun.waiting.kind == \"question\"). The message is forwarded to the \
+                stage session that asked.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task id returned by spawn_workflow or list_agents."
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "The answer to the stage's question."
+                    }
+                },
+                "required": ["task_id", "message"]
+            }
+        },
+        {
+            "name": "decide_workflow",
+            "description": "Decide what a workflow pipeline does once it has exhausted its \
+                review ⇄ fix rounds with open findings (list_agents shows \
+                workflowRun.waiting.kind == \"limit\").",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task id returned by spawn_workflow or list_agents."
+                    },
+                    "decision": {
+                        "type": "string",
+                        "enum": ["extend", "finish", "stop"],
+                        "description": "extend: grant more review rounds and continue. finish: accept the pipeline's work as-is with the open findings noted. stop: stop the pipeline."
+                    },
+                    "rounds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5,
+                        "description": "For decision=extend: how many extra review rounds to grant. Defaults to 1."
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "For decision=extend: optional guidance delivered to the next fix stage."
+                    }
+                },
+                "required": ["task_id", "decision"]
+            }
         }
     ])
 }
@@ -366,6 +491,31 @@ fn agent_values(result: &Value) -> Result<Vec<Value>> {
         .and_then(Value::as_array)
         .cloned()
         .ok_or_else(|| anyhow!("daemon returned an invalid orchestrator.listAgents response"))
+}
+
+/// Confirm `task_id` is a child of this orchestrator before letting a
+/// workflow-control tool touch it — otherwise one orchestrator session could
+/// pause/answer/decide a pipeline it does not own.
+async fn ensure_owned(
+    client: &mut DaemonClient,
+    parent_task: &str,
+    project: &str,
+    args: &Value,
+    task_id: &str,
+) -> Result<()> {
+    let scoped = scoped_project(args, project)?;
+    let result = list_owned_agents(client, parent_task, scoped.as_deref()).await?;
+    let agents = agent_values(&result)?;
+    let owned = agents
+        .iter()
+        .any(|agent| agent.get("id").and_then(Value::as_str) == Some(task_id));
+    if owned {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "task {task_id} is not a pipeline owned by this orchestrator"
+        ))
+    }
 }
 
 fn json_text(value: &Value) -> Result<String> {
@@ -634,6 +784,129 @@ async fn handle_tool_call(
                 "skipped": skipped,
                 "errors": errors,
             }))
+        }
+        "spawn_workflow" => {
+            let workflow_id = args
+                .get("workflow_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("'workflow_id' is required"))?;
+            let goal = args
+                .get("goal")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("'goal' is required"))?;
+            let agent = args
+                .get("agent")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("'agent' is required"))?;
+            let result = client
+                .request(
+                    "task.create",
+                    json!({
+                        "project": project,
+                        "prompt": goal,
+                        "agent": agent,
+                        "tags": ["orchestrator", "workflow-subagent"],
+                        "include_runtime_context": true,
+                        "worktree": false,
+                        "parent_task_id": parent_task,
+                        "workflow": workflow_id,
+                    }),
+                )
+                .await?;
+            let child = result
+                .get("taskId")
+                .and_then(Value::as_str)
+                .unwrap_or("(unknown)");
+            Ok(format!(
+                "Dispatched workflow '{workflow_id}' as task {child}. It runs asynchronously \
+                 through its own plan/implement/review/fix stages; you will be notified when \
+                 its result is waiting — then call read_inbox. Check list_agents for its \
+                 progress and whether it needs an answer (answer_workflow) or a decision \
+                 (decide_workflow)."
+            ))
+        }
+        "pause_workflow" => {
+            let task_id = args
+                .get("task_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("'task_id' is required"))?;
+            ensure_owned(client, parent_task, project, &args, task_id).await?;
+            client
+                .request("workflow.pause", json!({ "task": task_id }))
+                .await?;
+            Ok(format!(
+                "Paused workflow pipeline {task_id} at its next stage boundary."
+            ))
+        }
+        "resume_workflow" => {
+            let task_id = args
+                .get("task_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("'task_id' is required"))?;
+            ensure_owned(client, parent_task, project, &args, task_id).await?;
+            let note = args.get("note").and_then(Value::as_str);
+            client
+                .request("workflow.resume", json!({ "task": task_id, "note": note }))
+                .await?;
+            Ok(format!("Resumed workflow pipeline {task_id}."))
+        }
+        "answer_workflow" => {
+            let task_id = args
+                .get("task_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("'task_id' is required"))?;
+            let message = args
+                .get("message")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("'message' is required"))?;
+            ensure_owned(client, parent_task, project, &args, task_id).await?;
+            client
+                .request(
+                    "workflow.reply",
+                    json!({ "task": task_id, "message": message }),
+                )
+                .await?;
+            Ok(format!(
+                "Answer sent to workflow pipeline {task_id}. It runs asynchronously; you will \
+                 be notified when its result is waiting — then call read_inbox."
+            ))
+        }
+        "decide_workflow" => {
+            let task_id = args
+                .get("task_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("'task_id' is required"))?;
+            let decision = args
+                .get("decision")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("'decision' is required"))?;
+            if !["extend", "finish", "stop"].contains(&decision) {
+                return Err(anyhow!("'decision' must be one of: extend, finish, stop"));
+            }
+            let rounds = match args.get("rounds") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(
+                    value
+                        .as_u64()
+                        .ok_or_else(|| anyhow!("'rounds' must be an integer"))?,
+                ),
+            };
+            let note = args.get("note").and_then(Value::as_str);
+            ensure_owned(client, parent_task, project, &args, task_id).await?;
+            client
+                .request(
+                    "workflow.decide",
+                    json!({
+                        "task": task_id,
+                        "decision": decision,
+                        "rounds": rounds,
+                        "note": note,
+                    }),
+                )
+                .await?;
+            Ok(format!(
+                "Decision '{decision}' applied to workflow pipeline {task_id}."
+            ))
         }
         other => Err(anyhow!("unknown tool: {other}")),
     }
