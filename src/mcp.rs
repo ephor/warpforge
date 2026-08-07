@@ -496,6 +496,17 @@ fn agent_values(result: &Value) -> Result<Vec<Value>> {
 /// Confirm `task_id` is a child of this orchestrator before letting a
 /// workflow-control tool touch it — otherwise one orchestrator session could
 /// pause/answer/decide a pipeline it does not own.
+///
+/// TODO(perf, known debt): this fetches and filters the daemon's *entire*
+/// task list (`orchestrator.listAgents` → `Command::Tasks` clones every task
+/// in every project) just to check one id's `parent_task_id`, then the
+/// caller makes a second round trip for the actual `workflow.*` RPC. Cheap in
+/// absolute terms (local WebSocket, in-memory clone) but wasteful, and it
+/// scales with total daemon task count, not with this orchestrator's work.
+/// Deliberately left as-is rather than fixed under time pressure — real fix
+/// is a new, purely additive lookup (e.g. `Command::TaskParent { id, reply }`
+/// doing an O(1) `self.tasks.get`), NOT touching `workflow.pause/resume/
+/// reply/decide` themselves, since desktop UI already depends on those.
 async fn ensure_owned(
     client: &mut DaemonClient,
     parent_task: &str,
