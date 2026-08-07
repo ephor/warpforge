@@ -183,17 +183,39 @@ conversation history and can respond in context. Use this instead of spawn_agent
 when you want to continue a conversation with an agent you already started. \
 Returns immediately; the response lands in your inbox — then call read_inbox.\n\n\
 - list_agents(): list the sub-agents spawned by this orchestrator, including \
-their task ids, statuses, and last-activity timestamps.\n\
+their task ids, statuses, and last-activity timestamps. A workflow pipeline \
+also shows its current stage, review round, and whether it is waiting on you \
+(see workflowRun in the listing).\n\
 - stop_agent(task_id): stop one sub-agent session and wait for its process to \
-exit. Use this when a specific child is stale or no longer needed.\n\
+exit. Use this when a specific child is stale or no longer needed. Also works \
+on a workflow pipeline task id — it stops the whole pipeline.\n\
 - cleanup_agents(max_age_seconds, dry_run, include_active): permanently remove \
 child sessions and their task history in bulk. By default it removes all \
 inactive/completed children; use `max_age_seconds` to filter by age, `dry_run` \
 to preview candidates, and `include_active` only when you explicitly intend to \
 stop and delete running work.\n\n\
+- spawn_workflow(workflow_id, goal, agent): dispatch a multi-stage pipeline \
+(plan/implement/review/fix, with review ⇄ fix rounds) instead of a single \
+sub-agent, for work that benefits from independent review. Runs \
+asynchronously as its own parent task; its final outcome lands in your inbox \
+like a sub-agent's, and its progress shows up in list_agents. Costs several \
+times the tokens of a single sub-agent — prefer spawn_agent for straightforward \
+tasks.\n\
+- pause_workflow(task_id) / resume_workflow(task_id, note?): soft-pause a \
+running pipeline at its next stage boundary, or resume it, optionally with a \
+guidance note for the next stage.\n\
+- answer_workflow(task_id, message): answer a pipeline stage's pending \
+question (list_agents shows workflowRun.waiting.kind == \"question\" when one \
+is open). Do not use message_agent on a workflow pipeline task id — it has no \
+agent session of its own and the message will not be delivered.\n\
+- decide_workflow(task_id, decision, rounds?, note?): decide what a pipeline \
+does when it has exhausted its review rounds with open findings \
+(workflowRun.waiting.kind == \"limit\"). decision is \"extend\" (grant `rounds` \
+more, default 1), \"finish\" (accept as-is), or \"stop\".\n\n\
 Talk to the user normally. When a task needs real work, delegate it with \
-spawn_agent, tell the user what you dispatched, and continue the conversation. \
-The user can keep messaging you while sub-agents run.";
+spawn_agent (or spawn_workflow for review-worthy changes), tell the user what \
+you dispatched, and continue the conversation. The user can keep messaging you \
+while sub-agents and pipelines run.";
 
 /// The warpforge MCP bridge config handed to an orchestrator session so the
 /// agent can call spawn_agent / read_inbox back into this daemon.
@@ -596,6 +618,9 @@ pub enum Command {
         default_model: Option<String>,
         include_runtime_context: bool,
         config_overrides: std::collections::HashMap<String, String>,
+        /// Set when this pipeline is a sub-agent of an orchestrator task —
+        /// its final outcome is delivered to that task's inbox.
+        parent_task_id: Option<String>,
         reply: oneshot::Sender<Result<String, String>>,
     },
     /// Soft-pause a workflow pipeline at its next stage barrier.
@@ -2565,6 +2590,7 @@ impl Daemon {
                 default_model,
                 include_runtime_context,
                 config_overrides,
+                parent_task_id,
                 reply,
             } => {
                 let result = self
@@ -2579,6 +2605,7 @@ impl Daemon {
                         default_model,
                         include_runtime_context,
                         config_overrides,
+                        parent_task_id,
                     )
                     .await;
                 let _ = reply.send(result);
@@ -4979,6 +5006,7 @@ impl Daemon {
         default_model: Option<String>,
         include_runtime_context: bool,
         config_overrides: HashMap<String, String>,
+        parent_task_id: Option<String>,
     ) -> Result<String, String> {
         let path = self
             .project_path(&project)
@@ -5003,6 +5031,7 @@ impl Daemon {
         let mut tags = tags;
         tags.push(format!("workflow:{workflow_id}"));
         let mut task = Task::new(&project, &prompt, &agent, tags);
+        task.parent_task_id = parent_task_id;
         if use_worktree {
             let wt_mgr = self
                 .worktrees
@@ -5915,6 +5944,11 @@ impl Daemon {
                 ));
             }
         }
+        // A pipeline spawned via spawn_workflow (parent_task_id set) reports
+        // to its orchestrator's inbox the same way a plain sub-agent does;
+        // deliver_child_result no-ops when there is no parent.
+        let success = matches!(outcome, WorkflowOutcome::Success { .. });
+        self.deliver_child_result(parent_id, success, summary.clone());
         self.workflow_timeline(parent_id, summary);
 
         if let Some(task) = self.tasks.get_mut(parent_id) {
