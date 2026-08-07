@@ -3004,7 +3004,14 @@ impl Daemon {
                 }
 
                 // Archive every direct child so the whole group moves to history.
+                // A child can itself be a live workflow pipeline (spawned via
+                // spawn_workflow) — stop it the same way as a directly
+                // archived one, or its stage session keeps running and
+                // eventually flips this "archived" task back out of Done.
                 for cid in child_ids {
+                    if self.workflow_is_active(&cid) {
+                        let _ = self.workflow_finalize(&cid, WorkflowOutcome::Stopped).await;
+                    }
                     if let Some(child) = self.tasks.get_mut(&cid) {
                         child.set_status(TaskStatus::Done);
                         let updated = child.clone();

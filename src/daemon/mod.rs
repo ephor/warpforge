@@ -982,6 +982,105 @@ mod tests {
         assert!(daemon.read_inbox(&orch_id).await.is_empty());
     }
 
+    /// Archiving an orchestrator must stop a still-running workflow pipeline
+    /// spawned under it, not just flip its status to Done. Before this was
+    /// fixed, the direct-child cascade in `ArchiveTask` bypassed
+    /// `workflow_finalize`, leaving the pipeline's `workflow_runs` entry and
+    /// its stage session alive — the "archived" task would later flip back
+    /// out of Done when that stage's turn ended.
+    #[tokio::test]
+    async fn archiving_the_orchestrator_stops_a_running_child_workflow() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: placeholder\n");
+        let reviewer = wf_agent(&dir, "rev.state", "approve");
+        std::fs::write(
+            dir.path().join(".warpforge/workflows/test.yaml"),
+            format!("name: Q flow\nplan: {{}}\nreview:\n  reviewers:\n    - agent: {reviewer}\n"),
+        )
+        .unwrap();
+        // The plan stage asks a question and stalls there, mid-pipeline, with
+        // a live (Idle) agent session — exactly the state that must not be
+        // left running behind an "archived" task.
+        let lead = wf_agent(&dir, "lead.state", "question plan impl");
+
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(projects, store);
+        let mut events = daemon.subscribe();
+
+        let orch_id = daemon
+            .create_task(
+                "demo",
+                "orchestrate",
+                "no-such-agent",
+                vec!["orchestrator-chat".into()],
+                false,
+                false,
+                None,
+                vec![],
+                None,
+                std::collections::HashMap::new(),
+            )
+            .await;
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::CreateWorkflowTask {
+                project: "demo".into(),
+                prompt: "do the thing".into(),
+                agent: lead,
+                tags: vec![],
+                worktree: false,
+                workflow: "test".into(),
+                attachments: vec![],
+                default_model: None,
+                include_runtime_context: false,
+                config_overrides: std::collections::HashMap::new(),
+                parent_task_id: Some(orch_id.clone()),
+                reply: tx,
+            })
+            .await;
+        let parent_id = rx.await.unwrap().expect("workflow task created");
+
+        wait_for_parent(&mut events, &parent_id, "question", |t| {
+            t.workflow_run
+                .as_ref()
+                .and_then(|w| w.waiting.as_ref())
+                .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Question)
+        })
+        .await;
+
+        daemon
+            .send(Command::ArchiveTask {
+                id: orch_id.clone(),
+            })
+            .await;
+
+        // Answering the stalled question must now fail: the pipeline was
+        // stopped by the archive, not left waiting. `ArchiveTask` has no
+        // reply, but the actor processes commands in order, so this
+        // reply-awaiting command only completes once the archive has too.
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::WorkflowReply {
+                task: parent_id.clone(),
+                message: "Postgres".into(),
+                reply: reply_tx,
+            })
+            .await;
+        assert!(
+            reply_rx.await.unwrap().is_err(),
+            "an archived pipeline must not still accept an answer"
+        );
+
+        let workflow_task = daemon
+            .tasks()
+            .await
+            .into_iter()
+            .find(|t| t.id == parent_id)
+            .expect("workflow parent still exists");
+        assert_eq!(workflow_task.status, TaskStatus::Done);
+    }
+
     #[tokio::test]
     async fn workflow_fresh_reask_spawns_new_reviewers() {
         use warpforge_protocol as wire;
