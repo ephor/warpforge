@@ -3,7 +3,7 @@
 <h2 align="center">Run parallel coding agents without losing the workspace.</h2>
 
 <p align="center">
-  A local desktop meta-harness for Claude Code, Codex, OpenCode, and other coding agents — one workspace for projects, dev services, ports, terminals, diffs, review, and an orchestrator agent that delegates to sub-agents.
+  An open-source, local-first agentic development environment for Claude Code, Codex, OpenCode, and other coding agents — one workspace for agent workflows, projects, dev services, ports, files, diffs, and human review.
 </p>
 
 <p align="center">
@@ -17,11 +17,12 @@
   <a href="#why-warpforge">Why Warpforge?</a> ·
   <a href="#bring-your-own-agents">Agents</a> ·
   <a href="#the-orchestrator-agent">Orchestrator</a> ·
+  <a href="#workflow-pipelines">Workflows</a> ·
   <a href="#projects-and-their-runtime">Projects &amp; runtime</a> ·
   <a href="#build-from-source">Build from source</a>
 </p>
 
-Warpforge is the operating layer around your coding agents. Agent conversations, project runtime, isolated worktrees, live services, and human review live in one place — so running several agents does not turn into managing several terminals.
+Warpforge is an **agentic development environment (ADE)**: the operating layer around your coding agents. Agent conversations, project runtime, isolated worktrees, live services, configurable multi-agent workflows, and human review live in one place — so running several agents does not turn into managing several terminals.
 
 It does not replace Claude Code, Codex, or OpenCode; those tools still do the coding. Warpforge gives them shared project context, parallel execution, runtime visibility, and a reviewable path from prompt to commit. Everything runs on your machine: there is no separate Warpforge account or API key, and your existing agent authentication stays with the underlying CLI.
 
@@ -63,8 +64,9 @@ Warpforge turns that sprawl into one visible workflow:
 - **Human control at the moments that matter.** Permission requests, commands, tool calls, changed files, and diffs stay visible before work moves forward.
 - **From agent output to a reviewed branch.** Unified or split diffs, hunk-level accept/reject, inline edits, commit, update, push, and pull request from the same workspace.
 - **A lead agent when the task outgrows one session.** An orchestrator delegates bounded work to sub-agents, and every child task stays visible.
+- **Repeatable workflows when a prompt is not enough.** Put different agents and models into explicit plan, implement, review, and fix stages; Warpforge drives the transitions and stops when a human decision is needed.
 
-That combination is what makes Warpforge a **hybrid meta-harness**: part agent orchestrator, part project runtime, part review surface.
+That combination is what makes Warpforge an ADE rather than another coding agent: part cross-harness orchestrator, part project runtime, part review surface.
 
 ## Bring your own agents
 
@@ -82,7 +84,11 @@ Claude Code and Codex reach ACP through small adapter binaries. Warpforge shows 
 
 Agent capabilities vary. Image input, session resume, slash commands, model selection, and permission semantics are negotiated with each ACP implementation.
 
-## The orchestrator agent
+## Orchestration and workflows
+
+Warpforge supports two complementary ways to coordinate agents.
+
+### The orchestrator agent
 
 A regular Warpforge task is one conversation with one coding agent. Enable **Orchestrator** and that agent becomes a lead with three Warpforge tools:
 
@@ -90,11 +96,19 @@ A regular Warpforge task is one conversation with one coding agent. Enable **Orc
 - `message_agent` — send a follow-up into an existing sub-agent's session, in context;
 - `read_inbox` — drain finished results and decide what happens next.
 
-Orchestration stays inside a real conversation you can keep steering while child agents work. Sub-agents appear as normal Warpforge tasks linked to their parent, so you can see which harness is running, what it changed, and where human attention is needed instead of sending work into a black box. The daemon also contains an experimental planner → worker → reviewer pipeline; both paths are under active development.
+Orchestration stays inside a real conversation you can keep steering while child agents work. Sub-agents appear as normal Warpforge tasks linked to their parent, so you can see which harness is running, what it changed, and where human attention is needed instead of sending work into a black box.
+
+### Workflow pipelines
+
+For repeatable work, choose one of the built-in **Plan + implement + review loop** or **Implement + review loop** workflows. The daemon—not a manager model—drives the fixed `plan? → implement → review ⇄ fix` sequence. Each stage is a visible child task with its own agent session, and each stage can use a different configured agent and model. Multiple reviewers can run in a review round, findings can point to exact lines, and repair rounds continue until approval or a configured limit.
+
+Workflows pause at safe boundaries, survive a daemon restart, and stop for structured human input when an agent asks a question or the review limit is reached. A completed pipeline never commits automatically; it lands in **Needs review** with its chats, timeline, and diff available for inspection.
+
+Workflow definitions are versioned YAML files in `.warpforge/workflows/`. Built-ins can be copied into a project and customized there, so the process travels with the code instead of living in one person's UI settings.
 
 ## Projects and their runtime
 
-**Register a project once.** In **Projects → Add Project**, pick a folder. Warpforge keeps a local registry and reads or creates `.warpforge.yaml` — optionally prefilled from a `package.json` `dev` script or a Docker Compose file, or generated interactively by an agent in the bootstrap wizard. Removing a project only unregisters it; the directory and its config stay untouched.
+**Register a project once.** In **Projects → Add Project**, pick a folder. Warpforge keeps a local registry and reads or creates `.warpforge/workspace.yaml` — optionally prefilled from a `package.json` `dev` script or a Docker Compose file, or generated interactively by an agent in the bootstrap wizard. Existing `.warpforge.yaml`, `.wf.yaml`, and `.workspace.yaml` files remain supported. Removing a project only unregisters it; the directory and its config stay untouched.
 
 **Bring the real runtime online.** Services start in dependency order with captured logs, interpolated environment variables, and readiness detection. Kubernetes port-forwards run alongside local processes and are watched and retried with backoff when they drop. Each project also has interactive terminals inside the app, so a quick `git log` or one-off script does not need another window.
 
@@ -110,7 +124,7 @@ For services with a configured port, Warpforge selects an available value in the
 
 ### Workspace configuration
 
-Project runtime lives in `.warpforge.yaml`. The alternative `.wf.yaml` and `.workspace.yaml` names are also supported.
+Project runtime lives in `.warpforge/workspace.yaml`. The legacy `.warpforge.yaml`, `.wf.yaml`, and `.workspace.yaml` names are also supported.
 
 ```yaml
 name: my-app
@@ -193,7 +207,7 @@ The Rust binary also manages projects directly and can run the daemon by hand:
 warpforge add <path>        # register a project
 warpforge remove <name>     # unregister it
 warpforge list              # list projects and port ranges
-warpforge init [path]       # create .warpforge.yaml (--add also registers it)
+warpforge init [path]       # create workspace config (--add also registers it)
 warpforge bootstrap [path]  # generate a config interactively with an agent
 warpforge daemon            # run the local daemon explicitly
 warpforge ui                # terminal UI companion
