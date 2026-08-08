@@ -639,8 +639,25 @@ impl AgentEnv {
     }
 }
 
-/// Pick the account a spawn runs under: an explicit per-task selection when
-/// there is one, otherwise the agent's active account.
+/// Which account a spawn runs under.
+///
+/// A session lives in the home it was created in — Codex indexes its threads in
+/// a database under `CODEX_HOME`, so resuming one anywhere else finds nothing
+/// and hangs. The account therefore belongs to the session, not to the moment
+/// of resuming.
+#[derive(Debug, Clone, Copy)]
+pub enum SpawnAccount<'a> {
+    /// The account this session was recorded against.
+    Pinned(&'a str),
+    /// The agent's own home. Every session started before accounts existed is
+    /// here, which is why a task with a session but no recorded account resolves
+    /// to this rather than to whatever happens to be active now.
+    SharedHome,
+    /// No session yet: whatever is active when it starts.
+    Active,
+}
+
+/// Resolve a `SpawnAccount` to a stored account.
 ///
 /// A vault that no longer verifies — deleted, or replaced by a symlink — is
 /// dropped rather than handed to a child process. The agent then falls back to
@@ -649,9 +666,9 @@ impl AgentEnv {
 pub fn select_for_spawn<'a>(
     accounts: &'a [StoredAccount],
     agent_id: &str,
-    account_id: Option<&str>,
+    choice: SpawnAccount<'_>,
 ) -> Option<&'a StoredAccount> {
-    select_for_spawn_under(&accounts_root(), accounts, agent_id, account_id)
+    select_for_spawn_under(&accounts_root(), accounts, agent_id, choice)
 }
 
 /// `select_for_spawn` against an explicit root, so the vault check can be
@@ -660,11 +677,12 @@ fn select_for_spawn_under<'a>(
     root: &Path,
     accounts: &'a [StoredAccount],
     agent_id: &str,
-    account_id: Option<&str>,
+    choice: SpawnAccount<'_>,
 ) -> Option<&'a StoredAccount> {
-    match account_id {
-        Some(id) => accounts.iter().find(|a| a.id == id),
-        None => accounts.iter().find(|a| a.agent_id == agent_id && a.active),
+    match choice {
+        SpawnAccount::Pinned(id) => accounts.iter().find(|a| a.id == id),
+        SpawnAccount::SharedHome => None,
+        SpawnAccount::Active => accounts.iter().find(|a| a.agent_id == agent_id && a.active),
     }
     .filter(|account| verify_vault_under(root, Path::new(&account.home_dir), &account.id).is_ok())
 }
@@ -1247,24 +1265,44 @@ mod tests {
         ];
 
         // A task pinned to an account uses it even though another is active.
-        let picked = select_for_spawn_under(root.path(), &accounts, "codex", Some("codex:work"));
+        let picked = select_for_spawn_under(
+            root.path(),
+            &accounts,
+            "codex",
+            SpawnAccount::Pinned("codex:work"),
+        );
         assert_eq!(picked.map(|a| a.id.as_str()), Some("codex:work"));
 
         // With no pin, the agent's own active account — not another agent's.
-        let picked = select_for_spawn_under(root.path(), &accounts, "codex", None);
+        let picked = select_for_spawn_under(root.path(), &accounts, "codex", SpawnAccount::Active);
         assert_eq!(picked.map(|a| a.id.as_str()), Some("codex:personal"));
-        let picked = select_for_spawn_under(root.path(), &accounts, "claude", None);
+        let picked = select_for_spawn_under(root.path(), &accounts, "claude", SpawnAccount::Active);
         assert_eq!(picked.map(|a| a.id.as_str()), Some("claude:personal"));
+
+        // A session that predates accounts stays in the agent's own home even
+        // though an account is active — its thread index lives there and
+        // nowhere else.
+        assert!(
+            select_for_spawn_under(root.path(), &accounts, "codex", SpawnAccount::SharedHome)
+                .is_none()
+        );
 
         // An id that no longer exists selects nothing rather than falling back
         // to the active account: a task pinned elsewhere must not silently run
         // under someone else's login.
-        assert!(
-            select_for_spawn_under(root.path(), &accounts, "codex", Some("codex:gone")).is_none()
-        );
+        assert!(select_for_spawn_under(
+            root.path(),
+            &accounts,
+            "codex",
+            SpawnAccount::Pinned("codex:gone")
+        )
+        .is_none());
 
         // An agent with no accounts at all.
-        assert!(select_for_spawn_under(root.path(), &accounts, "gemini", None).is_none());
+        assert!(
+            select_for_spawn_under(root.path(), &accounts, "gemini", SpawnAccount::Active)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1272,12 +1310,16 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let vault = create_vault_under(root.path(), "codex", "personal", "codex:personal").unwrap();
         let accounts = vec![account("codex:personal", &vault)];
-        assert!(select_for_spawn_under(root.path(), &accounts, "codex", None).is_some());
+        assert!(
+            select_for_spawn_under(root.path(), &accounts, "codex", SpawnAccount::Active).is_some()
+        );
 
         // The vault was deleted behind the daemon's back. The row survives, but
         // handing a stale path to the child would give it an empty CODEX_HOME.
         std::fs::remove_dir_all(&vault).unwrap();
-        assert!(select_for_spawn_under(root.path(), &accounts, "codex", None).is_none());
+        assert!(
+            select_for_spawn_under(root.path(), &accounts, "codex", SpawnAccount::Active).is_none()
+        );
 
         // And a path swapped for a link out of the accounts root is refused
         // even though it now resolves to a real, marked vault.
@@ -1288,7 +1330,10 @@ mod tests {
         #[cfg(unix)]
         {
             std::os::unix::fs::symlink(&elsewhere, &vault).unwrap();
-            assert!(select_for_spawn_under(root.path(), &accounts, "codex", None).is_none());
+            assert!(
+                select_for_spawn_under(root.path(), &accounts, "codex", SpawnAccount::Active)
+                    .is_none()
+            );
         }
     }
 }

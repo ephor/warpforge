@@ -2899,7 +2899,8 @@ impl Daemon {
                         .or_else(|| self.project_path(&task.project))
                         .unwrap_or_else(|| ".".to_string());
                     let command = self.resolve_agent_command(&task.project, &agent_id);
-                    let env = self.resolve_agent_env(&agent_id, None);
+                    let env =
+                        self.resolve_agent_env(&agent_id, super::accounts::SpawnAccount::Active);
                     let prompt = task.prompt.clone();
                     (repo, command, prompt, env)
                 });
@@ -3841,15 +3842,35 @@ impl Daemon {
         agent.to_string()
     }
 
+    /// Which account a task's next spawn belongs to.
+    ///
+    /// A task that already has a session but no recorded account started before
+    /// accounts existed, in the agent's own home. That is the migration: no rows
+    /// are rewritten, the absence is simply read as "the shared home" instead of
+    /// "whatever is active", which would send an old Codex thread looking for
+    /// itself in an account database that has never heard of it.
+    fn spawn_account<'a>(&'a self, task_id: &str) -> super::accounts::SpawnAccount<'a> {
+        let Some(task) = self.tasks.get(task_id) else {
+            return super::accounts::SpawnAccount::Active;
+        };
+        match (task.account_id.as_deref(), task.session_id.is_some()) {
+            (Some(id), _) => super::accounts::SpawnAccount::Pinned(id),
+            (None, true) => super::accounts::SpawnAccount::SharedHome,
+            (None, false) => super::accounts::SpawnAccount::Active,
+        }
+    }
+
     /// Extra environment for an agent process: the selected account's home and
-    /// any auth env the agent must not inherit. `account` pins a specific
-    /// account (a task reusing the one it started on); `None` uses the active
-    /// one for that agent.
+    /// any auth env the agent must not inherit.
     ///
     /// Codex selects its account by `CODEX_HOME`; Claude does not (its account
     /// is swapped in place) but still needs conflicting auth env stripped.
-    fn resolve_agent_env(&self, agent: &str, account: Option<&str>) -> super::accounts::AgentEnv {
-        let selected = super::accounts::select_for_spawn(&self.accounts, agent, account);
+    fn resolve_agent_env(
+        &self,
+        agent: &str,
+        choice: super::accounts::SpawnAccount<'_>,
+    ) -> super::accounts::AgentEnv {
+        let selected = super::accounts::select_for_spawn(&self.accounts, agent, choice);
         // Re-link the shared home before every spawn, not just at import: the
         // agent's own home grows entries over time, and a vault that missed
         // them starts the agent with no config and no session history.
@@ -4128,12 +4149,23 @@ impl Daemon {
                 .unwrap_or_else(|| ".".to_string())
         };
         let command = self.resolve_agent_command(project, agent);
-        let env = self.resolve_agent_env(
-            agent,
-            self.tasks
-                .get(task_id)
-                .and_then(|t| t.account_id.as_deref()),
-        );
+        let env = self.resolve_agent_env(agent, self.spawn_account(task_id));
+        // Bind the task to the account it is starting on, so a later resume goes
+        // back to the same home even after the active account changed. Recorded
+        // before the session exists, because that is the only moment the answer
+        // is unambiguous.
+        if let Some(account) =
+            super::accounts::select_for_spawn(&self.accounts, agent, self.spawn_account(task_id))
+                .map(|account| account.id.clone())
+        {
+            if let Some(task) = self.tasks.get_mut(task_id) {
+                if task.account_id.as_deref() != Some(account.as_str()) {
+                    task.account_id = Some(account);
+                    let updated = task.clone();
+                    self.persist(&updated);
+                }
+            }
+        }
         // An orchestrator-chat session gets the warpforge MCP bridge (spawn_agent
         // / read_inbox tools) and an orchestrator system preamble; a plain task
         // gets neither.
