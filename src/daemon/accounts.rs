@@ -283,9 +283,36 @@ pub fn claude_identity(config_json: &str) -> AccountIdentity {
 /// real file: the credentials, and the model list (which depends on the plan).
 const CODEX_PRIVATE_ENTRIES: &[&str] = &["auth.json", "models_cache.json"];
 
-/// Noisy per-process state that stays local to the vault instead of being
-/// shared back into the agent's own home.
-const CODEX_LOCAL_ENTRIES: &[&str] = &["log", "memories", "tmp"];
+/// Per-runtime state that must stay real inside the vault.
+///
+/// Codex opens SQLite databases directly under `CODEX_HOME`. Linking those at
+/// the shared home puts one database behind two paths — with the `-wal`/`-shm`
+/// pair split across them — and Codex refuses to start at all:
+///
+/// ```text
+/// Error: failed to initialize sqlite state runtime under <CODEX_HOME>
+/// ```
+///
+/// Lock directories, the IPC socket dir and scratch space are per-run for the
+/// same reason. Logs and memories are here because they are noise, not state.
+const CODEX_LOCAL_ENTRIES: &[&str] = &[
+    "log",
+    "memories",
+    "tmp",
+    ".tmp",
+    "ipc",
+    "sqlite",
+    "thread-writer-locks",
+    "mcp-oauth-locks",
+    "process_manager",
+];
+
+/// Whether an entry stays local to the vault. Database names carry a serial
+/// (`state_5.sqlite`, `logs_2.sqlite-wal`) that changes with Codex versions, so
+/// they are matched by extension rather than listed.
+fn is_codex_local_entry(name: &str) -> bool {
+    CODEX_LOCAL_ENTRIES.contains(&name) || name.contains(".sqlite")
+}
 
 /// Give a Codex account home everything that is not account-specific by
 /// symlinking it out of the shared `~/.codex`.
@@ -305,18 +332,33 @@ pub fn materialize_codex_home(shared: &Path, vault: &Path) -> Result<()> {
         .map(|entry| entry.file_name());
     for name in entries {
         let Some(name) = name.to_str() else { continue };
-        if CODEX_PRIVATE_ENTRIES.contains(&name) || CODEX_LOCAL_ENTRIES.contains(&name) {
+        if CODEX_PRIVATE_ENTRIES.contains(&name) || is_codex_local_entry(name) {
             continue;
         }
         link_shared_entry(shared, vault, name)?;
     }
-    // A private entry that is a symlink would silently share one login between
-    // accounts — the opposite of the point.
-    for name in CODEX_PRIVATE_ENTRIES {
-        let path = vault.join(name);
-        if std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink()) {
+    unlink_wrongly_shared(vault)?;
+    Ok(())
+}
+
+/// Drop links a previous build created for entries that must be the vault's
+/// own: a shared `auth.json` would silently merge two logins into one, and a
+/// shared database stops Codex from starting. Only links are removed — a real
+/// file is the vault's own state and is left alone.
+fn unlink_wrongly_shared(vault: &Path) -> Result<()> {
+    let Ok(entries) = std::fs::read_dir(vault) else {
+        return Ok(());
+    };
+    for entry in entries.filter_map(|entry| entry.ok()) {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !CODEX_PRIVATE_ENTRIES.contains(&name) && !is_codex_local_entry(name) {
+            continue;
+        }
+        let path = entry.path();
+        if std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
             std::fs::remove_file(&path)
-                .with_context(|| format!("removing shared {} from vault", name))?;
+                .with_context(|| format!("removing shared {name} from vault"))?;
         }
     }
     Ok(())
@@ -1045,6 +1087,59 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(vault.path().join("config.toml")).unwrap(),
             "model = 'gpt'"
+        );
+    }
+
+    /// Codex refuses to start when its databases live behind a symlink:
+    /// "failed to initialize sqlite state runtime under <CODEX_HOME>". Every
+    /// account therefore gets its own, and a link a previous build created is
+    /// cleaned up rather than left to break the next spawn.
+    #[cfg(unix)]
+    #[test]
+    fn materialize_keeps_databases_and_locks_out_of_the_link_farm() {
+        let shared = tempfile::tempdir().unwrap();
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(shared.path().join("config.toml"), "model = 'gpt'").unwrap();
+        for name in ["state_5.sqlite", "state_5.sqlite-wal", "logs_2.sqlite-shm"] {
+            std::fs::write(shared.path().join(name), "db").unwrap();
+        }
+        for name in ["sqlite", "ipc", "thread-writer-locks"] {
+            std::fs::create_dir_all(shared.path().join(name)).unwrap();
+        }
+        // What the previous build left behind: the databases linked out.
+        std::os::unix::fs::symlink(
+            shared.path().join("state_5.sqlite"),
+            vault.path().join("state_5.sqlite"),
+        )
+        .unwrap();
+
+        materialize_codex_home(shared.path(), vault.path()).unwrap();
+
+        assert!(vault.path().join("config.toml").exists(), "config shared");
+        for name in [
+            "state_5.sqlite",
+            "state_5.sqlite-wal",
+            "logs_2.sqlite-shm",
+            "sqlite",
+            "ipc",
+            "thread-writer-locks",
+        ] {
+            assert!(
+                !vault.path().join(name).exists(),
+                "{name} must not be linked into the vault"
+            );
+        }
+        assert!(
+            std::fs::symlink_metadata(vault.path().join("state_5.sqlite")).is_err(),
+            "a database linked by an older build must be unlinked"
+        );
+
+        // A database the vault created for itself is its own state: kept.
+        std::fs::write(vault.path().join("state_5.sqlite"), "mine").unwrap();
+        materialize_codex_home(shared.path(), vault.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(vault.path().join("state_5.sqlite")).unwrap(),
+            "mine"
         );
     }
 
