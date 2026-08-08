@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.3
+
+### Patch Changes
+
+- [#23](https://github.com/ephor/warpforge/pull/23) [`aa74c5d`](https://github.com/ephor/warpforge/commit/aa74c5dc8662efae75fd3d6f8ad17ddf84bda92d) Thanks [@ephor](https://github.com/ephor)! - Fix Codex refusing to start once an account was selected. Each account now keeps
+  its own Codex databases instead of sharing the ones in `~/.codex`, which failed
+  with "failed to initialize sqlite state runtime" and left every Codex task
+  unusable until the account was removed. Config, skills and session history are
+  still shared, so an account sees the same setup as a plain `codex` run.
+
+  Conversations also resume in the home they were started in. A chat older than
+  the accounts feature stays on your original login rather than being sent to
+  whichever account happens to be active, and a new chat keeps the account it
+  started on even after you switch.
+
 ## 0.3.2
 
 ### Patch Changes
