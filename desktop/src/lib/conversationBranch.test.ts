@@ -40,4 +40,20 @@ describe("buildConversationBranchPrompt", () => {
     expect(prompt).not.toContain("Read file");
     expect(prompt).not.toContain("Later question");
   });
+
+  it("lists files touched so the new agent knows what was changed", () => {
+    const updates: SessionUpdate[] = [
+      { kind: "user_message", text: "Fix the bug", attachments: [] },
+      { kind: "file_edit", path: "src/app.rs", tool_call_id: "edit-1" },
+      { kind: "file_edit", path: "src/lib.rs", tool_call_id: "edit-2" },
+      { kind: "agent_text", text: "Done" },
+    ];
+
+    const prompt = buildConversationBranchPrompt(task, updates, 3);
+
+    expect(prompt).toContain("Files touched in the source session:");
+    expect(prompt).toContain("- src/app.rs");
+    expect(prompt).toContain("- src/lib.rs");
+    expect(prompt).toContain("Fix the bug");
+  });
 });
