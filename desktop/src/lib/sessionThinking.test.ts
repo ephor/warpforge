@@ -65,7 +65,7 @@ describe("activeThinkingIndex", () => {
     ];
 
     expect(activeThinkingIndex(updates, "running")).toBeNull();
-    expect(activeThinkingIndex([{ kind: "agent_thought", text: "active" }], "idle")).toBeNull();
+    expect(activeThinkingIndex([{ kind: "agent_thought", text: "active" }], "waiting")).toBeNull();
     expect(activeThinkingIndex([{ kind: "agent_thought", text: "stale" }], "queued")).toBeNull();
   });
 });

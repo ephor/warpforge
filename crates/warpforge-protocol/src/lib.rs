@@ -855,22 +855,33 @@ pub struct TaskInfo {
     pub snoozed_at: Option<u64>,
 }
 
-/// Board columns. `Interrupted` covers sessions whose live ACP handle was lost
-/// to a daemon restart. If the task has a saved native session id and the agent
-/// supports `session/load`, the daemon can reconnect when the user continues.
+/// A task's lifecycle. Deliberately **not** an axis for derived facts: whether
+/// a `Waiting` task has a diff worth looking at is `files_changed > 0`, which is
+/// already its own field. Splitting that out into a status is what turned the
+/// old `NeedsReview` into a settling tank that every finished task fell into.
+///
+/// `Interrupted` covers sessions whose live ACP handle was lost to a daemon
+/// restart. If the task has a saved native session id and the agent supports
+/// `session/load`, the daemon can reconnect when the user continues.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
+    /// Created; the agent has not started.
     Queued,
+    /// The agent is actively working.
     Running,
-    /// The agent finished a turn that produced no changes and is now waiting for
-    /// your next message. Distinct from `NeedsReview` (which means there are
-    /// uncommitted changes to look at) and `Done` (finished/archived).
-    Idle,
-    NeedsReview,
-    Done,
+    /// The agent yielded its turn and the ball is in the human's court. Merges
+    /// the former `Idle` and `NeedsReview`, which named one lifecycle state
+    /// twice. Both legacy strings still deserialize into this variant.
+    #[serde(alias = "idle", alias = "needs_review")]
+    Waiting,
+    /// The agent is genuinely stuck and needs a decision or a permission grant.
     Blocked,
+    /// The run was cut short (user stop / workflow stop); the work is
+    /// incomplete. Distinct from `Waiting`, where the agent chose to yield.
     Interrupted,
+    /// Finished or archived.
+    Done,
 }
 
 /// Structured agent-session update, a deliberately small projection of ACP's
@@ -1523,7 +1534,7 @@ pub enum WorkflowSource {
 pub enum WorkflowDecision {
     /// Grant extra review ⇄ fix rounds and continue.
     Extend,
-    /// Finish as NeedsReview with the open findings in the summary.
+    /// Finish as Waiting with the open findings in the summary.
     Finish,
     /// Stop the pipeline (parent becomes Interrupted).
     Stop,
@@ -1645,6 +1656,23 @@ pub struct OrchReviewerPoolDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_status_waiting_absorbs_the_legacy_spellings() {
+        // A daemon may be newer than the client that persisted a snapshot, and
+        // `task.updated` payloads are replayed from disk — so both pre-merge
+        // spellings must still deserialize.
+        let from_idle: TaskStatus = serde_json::from_str(r#""idle""#).unwrap();
+        let from_review: TaskStatus = serde_json::from_str(r#""needs_review""#).unwrap();
+        assert_eq!(from_idle, TaskStatus::Waiting);
+        assert_eq!(from_review, TaskStatus::Waiting);
+
+        // Only the new spelling is ever written.
+        assert_eq!(
+            serde_json::to_string(&TaskStatus::Waiting).unwrap(),
+            r#""waiting""#
+        );
+    }
 
     #[test]
     fn agents_detect_roundtrip() {

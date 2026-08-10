@@ -171,7 +171,8 @@ mod tests {
         let mut saw_detailed_file_edit = false;
         let mut permission_request_id: Option<String> = None;
         let mut saw_turn_ended = false;
-        let mut saw_needs_review = false;
+        let mut saw_waiting = false;
+        let mut waiting_files_changed = 0u32;
         let mut answered = false;
 
         // Drive the event stream to completion of one turn.
@@ -185,8 +186,9 @@ mod tests {
                     if t.status == TaskStatus::Running {
                         saw_running = true;
                     }
-                    if t.status == TaskStatus::NeedsReview {
-                        saw_needs_review = true;
+                    if t.status == TaskStatus::Waiting {
+                        saw_waiting = true;
+                        waiting_files_changed = t.files_changed;
                     }
                 }
                 Event::SessionUpdate {
@@ -221,7 +223,7 @@ mod tests {
                 }
             }
 
-            if saw_turn_ended && saw_needs_review {
+            if saw_turn_ended && saw_waiting {
                 break;
             }
         }
@@ -245,14 +247,18 @@ mod tests {
             saw_turn_ended,
             "turn should end after the permission is answered"
         );
+        assert!(saw_waiting, "task should land in Waiting after the turn");
+        // "There is something to review" is a fact about the diff, not a
+        // separate lifecycle state — this turn edited a file, so it shows up
+        // here rather than as a distinct status.
         assert!(
-            saw_needs_review,
-            "task should land in NeedsReview after the turn"
+            waiting_files_changed > 0,
+            "an editing turn should park in Waiting with changes recorded"
         );
     }
 
     #[tokio::test]
-    async fn no_edit_turn_lands_in_idle_not_needs_review() {
+    async fn no_edit_turn_lands_in_waiting_with_no_changes() {
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let daemon = Daemon::spawn(test_projects(), store);
         let mut events = daemon.subscribe();
@@ -279,6 +285,7 @@ mod tests {
 
         let mut saw_running = false;
         let mut final_status: Option<TaskStatus> = None;
+        let mut final_files_changed = 0u32;
         for _ in 0..60 {
             let ev = match timeout(Duration::from_secs(5), events.recv()).await {
                 Ok(Ok(ev)) => ev,
@@ -290,10 +297,8 @@ mod tests {
                         saw_running = true;
                     }
                     // The turn settles into a non-running, non-queued status.
-                    if matches!(
-                        t.status,
-                        TaskStatus::Idle | TaskStatus::NeedsReview | TaskStatus::Blocked
-                    ) {
+                    if matches!(t.status, TaskStatus::Waiting | TaskStatus::Blocked) {
+                        final_files_changed = t.files_changed;
                         final_status = Some(t.status.clone());
                         break;
                     }
@@ -304,13 +309,17 @@ mod tests {
         assert!(saw_running, "task should go Running during the turn");
         assert_eq!(
             final_status,
-            Some(TaskStatus::Idle),
-            "a turn with no file edits should park in Idle, not NeedsReview"
+            Some(TaskStatus::Waiting),
+            "a finished turn parks in Waiting whether or not it edited anything"
+        );
+        assert_eq!(
+            final_files_changed, 0,
+            "a pure Q&A turn has nothing to review, and that is a field, not a status"
         );
     }
 
     #[tokio::test]
-    async fn cancel_task_marks_idle() {
+    async fn cancel_task_marks_waiting() {
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let daemon = Daemon::spawn(test_projects(), store);
         let id = daemon
@@ -335,7 +344,7 @@ mod tests {
             loop {
                 match events.recv().await.expect("event") {
                     Event::TaskUpdated(task)
-                        if task.id == id && task.status == TaskStatus::Idle =>
+                        if task.id == id && task.status == TaskStatus::Waiting =>
                     {
                         break;
                     }
@@ -674,7 +683,7 @@ mod tests {
         })
         .await;
 
-        assert_eq!(done.status, TaskStatus::NeedsReview);
+        assert_eq!(done.status, TaskStatus::Waiting);
         let run = done.workflow_run.unwrap();
         assert_eq!(run.round, 2, "reject → fix → approve takes two rounds");
         assert_eq!(run.verdict, Some(wire::WorkflowVerdict::Approve));
@@ -1106,7 +1115,7 @@ mod tests {
                 .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
         })
         .await;
-        assert_eq!(done.status, TaskStatus::NeedsReview);
+        assert_eq!(done.status, TaskStatus::Waiting);
         let graph = done.orchestration_graph.unwrap();
         assert_eq!(graph.nodes.len(), 4, "{:?}", graph.nodes);
         assert_ne!(
@@ -1147,7 +1156,7 @@ mod tests {
                 .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
         })
         .await;
-        assert_eq!(done.status, TaskStatus::NeedsReview);
+        assert_eq!(done.status, TaskStatus::Waiting);
         let run = done.workflow_run.unwrap();
         assert_eq!(run.verdict, Some(wire::WorkflowVerdict::Approve));
         let graph = done.orchestration_graph.unwrap();
@@ -1183,7 +1192,7 @@ mod tests {
                 .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Question)
         })
         .await;
-        assert_eq!(waiting.status, TaskStatus::Idle);
+        assert_eq!(waiting.status, TaskStatus::Waiting);
         let question = waiting.workflow_run.unwrap().waiting.unwrap();
         assert_eq!(question.question.as_deref(), Some("Which database?"));
         assert_eq!(question.stage, Some(wire::WorkflowStage::Plan));
@@ -1193,7 +1202,7 @@ mod tests {
             .into_iter()
             .find(|task| task.parent_task_id.as_deref() == Some(&parent_id))
             .expect("asking plan stage");
-        assert_eq!(asking_child.status, TaskStatus::Idle);
+        assert_eq!(asking_child.status, TaskStatus::Waiting);
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         daemon
@@ -1211,7 +1220,7 @@ mod tests {
                 .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
         })
         .await;
-        assert_eq!(done.status, TaskStatus::NeedsReview);
+        assert_eq!(done.status, TaskStatus::Waiting);
         assert_eq!(done.workflow_run.unwrap().round, 1);
     }
 
@@ -1241,7 +1250,7 @@ mod tests {
                 .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Limit)
         })
         .await;
-        assert_eq!(waiting.status, TaskStatus::Idle);
+        assert_eq!(waiting.status, TaskStatus::Waiting);
         assert!(
             daemon
                 .tasks()
@@ -1280,7 +1289,7 @@ mod tests {
                 .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
         })
         .await;
-        assert_eq!(done.status, TaskStatus::NeedsReview);
+        assert_eq!(done.status, TaskStatus::Waiting);
         assert_eq!(
             done.workflow_run.unwrap().verdict,
             Some(wire::WorkflowVerdict::RequestChanges)
@@ -1321,7 +1330,7 @@ mod tests {
                 .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Paused)
         })
         .await;
-        assert_eq!(paused.status, TaskStatus::Idle);
+        assert_eq!(paused.status, TaskStatus::Waiting);
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         daemon
@@ -1339,7 +1348,7 @@ mod tests {
                 .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
         })
         .await;
-        assert_eq!(done.status, TaskStatus::NeedsReview);
+        assert_eq!(done.status, TaskStatus::Waiting);
     }
 
     #[tokio::test]
@@ -1501,7 +1510,7 @@ mod tests {
         })
         .await
         .expect("restored run should be paused at the implement barrier");
-        assert_eq!(restored.status, TaskStatus::Idle);
+        assert_eq!(restored.status, TaskStatus::Waiting);
         assert_eq!(
             restored.workflow_run.unwrap().stage,
             wire::WorkflowStage::Implement
@@ -1523,7 +1532,7 @@ mod tests {
                 .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
         })
         .await;
-        assert_eq!(done.status, TaskStatus::NeedsReview);
+        assert_eq!(done.status, TaskStatus::Waiting);
     }
 
     /// Regression: when a stale ACP handle is in sessions and a prompt
@@ -1557,7 +1566,7 @@ mod tests {
         timeout(Duration::from_secs(2), async {
             loop {
                 if let Ok(Event::TaskUpdated(task)) = events.recv().await {
-                    if task.id == task_id && task.status == TaskStatus::Idle {
+                    if task.id == task_id && task.status == TaskStatus::Waiting {
                         break;
                     }
                 }

@@ -7,15 +7,28 @@ import { daemon } from "@/daemon";
 import { agentDisplayName } from "@/lib/agentNames";
 import { attentionToastSummary } from "@/lib/attentionToast";
 import { permissionToastApproveOption, permissionToastContext } from "@/lib/permissionToast";
+import { awaitsReview } from "@/lib/taskGroups";
+import { taskLabel } from "@/lib/taskLabel";
 import type { DaemonEvent, TaskInfo, TaskStatus } from "@/protocol";
 import { useUi } from "@/store/ui";
 
-const ATTENTION_STATUS = new Set<TaskStatus>(["needs_review", "blocked", "interrupted"]);
+const ATTENTION_STATUS = new Set<TaskStatus>(["waiting", "blocked", "interrupted"]);
 
-function attentionToastTitle(status: TaskStatus): string {
-  if (status === "needs_review") return "Ready for review";
-  if (status === "blocked") return "Task blocked";
-  return "Session interrupted";
+/**
+ * The state a toast is keyed on, or null when the task wants nothing. `waiting`
+ * only earns a toast once the turn actually left changes behind — otherwise
+ * every finished conversation would raise one, which is what made the old
+ * `needs_review` toast noise.
+ */
+function attentionStatusOf(task: TaskInfo): TaskStatus | null {
+  if (task.status === "blocked" || task.status === "interrupted") return task.status;
+  return awaitsReview(task) ? "waiting" : null;
+}
+
+function attentionToastTitle(task: TaskInfo): string {
+  if (task.status === "blocked") return "Task blocked";
+  if (task.status === "interrupted") return "Session interrupted";
+  return "Ready for review";
 }
 
 /** The barrier a pipeline is parked at, or null when it needs nothing. */
@@ -26,6 +39,43 @@ function waitingKind(task: TaskInfo): "question" | "limit" | null {
 
 function workflowToastTitle(kind: "question" | "limit"): string {
   return kind === "question" ? "Pipeline needs your answer" : "Pipeline is out of review rounds";
+}
+
+/** True when the window is minimized or hidden behind other apps — the case a
+ *  native macOS notification should take over from the in-house toast. */
+function appBackgrounded(): boolean {
+  return typeof document !== "undefined" && (document.hidden || !document.hasFocus());
+}
+
+/** Raise a native macOS notification with Approve/Reject/Review buttons, but
+ *  only when inside Tauri, the app is backgrounded, and the feature is wired. */
+async function fireNativeNotification(opts: {
+  body: string;
+  kind: "permission" | "review";
+  request_id?: string;
+  subtitle: string;
+  task_id: string;
+  title: string;
+}) {
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  if (!appBackgrounded()) return;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("notify_attention", opts);
+  } catch {
+    // Native notifications are best-effort; the in-house toast already covers this.
+  }
+}
+
+/** Bring the window back when the user chooses "Review" from a native notification. */
+async function focusWindow() {
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const appWindow = getCurrentWindow();
+    await appWindow.unminimize();
+    await appWindow.setFocus();
+  } catch {}
 }
 
 export function useDaemonEvents() {
@@ -43,11 +93,8 @@ export function useDaemonEvents() {
       notificationsReady.current = true;
     }
 
-    const openInRail = (taskId: string) => useUi.getState().focusAttentionTask(taskId);
     const openInChat = (taskId: string) => {
-      const ui = useUi.getState();
-      ui.openTask(taskId);
-      ui.setAttentionOpen(false);
+      useUi.getState().openTask(taskId);
     };
     const notifyWorkflowWaiting = (task: TaskInfo, kind: "question" | "limit") => {
       const toastId = `attention:workflow:${task.id}:${kind}`;
@@ -76,18 +123,25 @@ export function useDaemonEvents() {
           unstyled: true,
         },
       );
+      void fireNativeNotification({
+        body: attentionToastSummary(question || task.prompt),
+        kind: "review",
+        subtitle: `${task.project} · ${task.workflowRun?.workflowName ?? "workflow"}`,
+        task_id: task.id,
+        title: workflowToastTitle(kind),
+      });
     };
     const notifyTask = (task: TaskInfo) => {
       const toastId = `attention:${task.id}:${task.status}`;
       toast.custom(
         (sonnerId) => (
           <AttentionToast
-            title={attentionToastTitle(task.status)}
+            title={taskLabel(task)}
             identity={`${task.project} · ${agentDisplayName(task.agent)}`}
             summary={attentionToastSummary(task.prompt)}
             onDismiss={() => toast.dismiss(sonnerId)}
             onOpen={() => {
-              openInRail(task.id);
+              openInChat(task.id);
               toast.dismiss(sonnerId);
             }}
           />
@@ -103,6 +157,13 @@ export function useDaemonEvents() {
           unstyled: true,
         },
       );
+      void fireNativeNotification({
+        body: attentionToastSummary(task.prompt),
+        kind: "review",
+        subtitle: `${task.project} · ${agentDisplayName(task.agent)}`,
+        task_id: task.id,
+        title: attentionToastTitle(task),
+      });
     };
 
     return daemon.subscribeEvents((event: DaemonEvent) => {
@@ -169,6 +230,14 @@ export function useDaemonEvents() {
               unstyled: true,
             },
           );
+          void fireNativeNotification({
+            body: context,
+            kind: "permission",
+            request_id: update.request_id,
+            subtitle: task ? `${task.project} · ${agentDisplayName(task.agent)}` : taskId,
+            task_id: taskId,
+            title: "Permission needed",
+          });
         } else if (update.kind === "permission_resolved") {
           toast.dismiss(`attention:permission:${update.request_id}`);
         }
@@ -181,7 +250,7 @@ export function useDaemonEvents() {
           .snapshot.tasks.find((task) => task.id === event.data.id);
         const previous = previousTask?.status;
         // A pipeline parking on the user is an attention state the coarse task
-        // status cannot express (it stays Idle), so it needs its own toast.
+        // status cannot express (it stays Waiting), so it needs its own toast.
         const wasWaiting = previousTask ? waitingKind(previousTask) : null;
         const nowWaiting = waitingKind(event.data);
         if (nowWaiting && nowWaiting !== wasWaiting) {
@@ -189,15 +258,17 @@ export function useDaemonEvents() {
         } else if (!nowWaiting && wasWaiting) {
           toast.dismiss(`attention:workflow:${event.data.id}:${wasWaiting}`);
         }
-        if (ATTENTION_STATUS.has(event.data.status) && previous !== event.data.status) {
-          if (previous && ATTENTION_STATUS.has(previous)) {
-            toast.dismiss(`attention:${event.data.id}:${previous}`);
+        const wasAttention = previousTask ? attentionStatusOf(previousTask) : null;
+        const nowAttention = attentionStatusOf(event.data);
+        if (nowAttention && nowAttention !== wasAttention) {
+          if (wasAttention) {
+            toast.dismiss(`attention:${event.data.id}:${wasAttention}`);
           }
           notifyTask(event.data);
-        } else if (!ATTENTION_STATUS.has(event.data.status) && previous) {
+        } else if (!nowAttention && previous) {
           toast.dismiss(`attention:${event.data.id}:${previous}`);
         }
-      } else if (event.event === "task.created" && ATTENTION_STATUS.has(event.data.status)) {
+      } else if (event.event === "task.created" && attentionStatusOf(event.data)) {
         notifyTask(event.data);
       } else if (event.event === "task.removed") {
         for (const status of ATTENTION_STATUS) {
@@ -205,5 +276,54 @@ export function useDaemonEvents() {
         }
       }
     });
+  }, []);
+
+  // Resolve actions tapped in native macOS notifications (Approve/Reject/Review).
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    void import("@tauri-apps/api/event")
+      .then(async ({ listen }) => {
+        if (disposed) return;
+        unlisten = await listen("notification-action", (event) => {
+          const payload = event.payload as {
+            action: string;
+            kind: string;
+            request_id?: string | null;
+            task_id: string;
+          };
+          const taskId = payload.task_id;
+          if (
+            payload.kind === "permission" &&
+            (payload.action === "approve" || payload.action === "reject") &&
+            payload.request_id
+          ) {
+            void daemon
+              .request("session.permission", {
+                outcome: payload.action === "approve" ? "allow" : "deny",
+                request_id: payload.request_id,
+                task_id: taskId,
+              })
+              .catch(() => {});
+            return;
+          }
+          if (payload.action === "review") {
+            useUi.getState().openTask(taskId);
+            void focusWindow();
+          }
+        });
+        if (disposed) {
+          unlisten();
+          unlisten = undefined;
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 }

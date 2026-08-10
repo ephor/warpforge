@@ -634,16 +634,23 @@ impl Store {
     }
 }
 
+/// `"idle"` and `"needs_review"` are the pre-merge spellings of `Waiting`. Rows
+/// written by older daemons are still on disk in every existing install, so both
+/// must keep loading — this arm is load-bearing, not tidy-up.
 fn parse_status(s: &str) -> TaskStatus {
     match s {
         "queued" => TaskStatus::Queued,
         "running" => TaskStatus::Running,
-        "idle" => TaskStatus::Idle,
-        "needs_review" => TaskStatus::NeedsReview,
+        "waiting" | "idle" | "needs_review" => TaskStatus::Waiting,
         "done" => TaskStatus::Done,
         "blocked" => TaskStatus::Blocked,
         "interrupted" => TaskStatus::Interrupted,
-        _ => TaskStatus::Queued,
+        // A status this build has never heard of came from a newer daemon
+        // sharing the same store. Degrade to "the human's turn", never to
+        // `Queued`: that reads as "never started", and the loader rewrites
+        // `Queued` to `Interrupted`, so finished work would come back looking
+        // like it had been cut short.
+        _ => TaskStatus::Waiting,
     }
 }
 
@@ -900,5 +907,68 @@ mod tests {
         assert_eq!(loaded[0].settled_at, None);
         assert_eq!(loaded[0].snoozed_until, None);
         assert_eq!(loaded[0].snoozed_at, None);
+    }
+
+    /// `Idle` and `NeedsReview` merged into `Waiting`, but every existing
+    /// install has rows on disk spelled the old way. Both must still load, or
+    /// upgrading silently resets live tasks to `Queued` (the fallback arm).
+    #[test]
+    fn legacy_idle_and_needs_review_load_as_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("warpforge.db");
+        {
+            let pre = Connection::open(&db_path).unwrap();
+            pre.execute_batch(
+                r#"
+                CREATE TABLE tasks (
+                    id              TEXT PRIMARY KEY,
+                    session_id      TEXT,
+                    project         TEXT NOT NULL,
+                    prompt          TEXT NOT NULL,
+                    agent           TEXT NOT NULL,
+                    status          TEXT NOT NULL,
+                    tags            TEXT NOT NULL,
+                    title           TEXT NOT NULL DEFAULT '',
+                    created_at      INTEGER NOT NULL,
+                    updated_at      INTEGER NOT NULL,
+                    files_changed   INTEGER NOT NULL,
+                    blocked_reason  TEXT,
+                    config_options  TEXT NOT NULL DEFAULT '[]',
+                    worktree        TEXT,
+                    parent_task_id  TEXT
+                );
+                INSERT INTO tasks (id, session_id, project, prompt, agent, status, tags, title,
+                                   created_at, updated_at, files_changed, blocked_reason, config_options)
+                VALUES ('legacy-idle', NULL, 'proj', 'p', 'claude', 'idle', '[]', 'Idle task',
+                        1700000000, 1700000001, 0, NULL, '[]'),
+                       ('legacy-review', NULL, 'proj', 'p', 'claude', 'needs_review', '[]', 'Review task',
+                        1700000000, 1700000002, 3, NULL, '[]');
+                "#,
+            )
+            .unwrap();
+        }
+
+        let store = Store::open_at(&db_path).unwrap();
+        let loaded = store.load_tasks().unwrap();
+        let by_id = |id: &str| loaded.iter().find(|t| t.id == id).unwrap().clone();
+
+        assert_eq!(by_id("legacy-idle").status, TaskStatus::Waiting);
+        assert_eq!(by_id("legacy-review").status, TaskStatus::Waiting);
+        // The distinction the old pair encoded survives as the field it always
+        // really was.
+        assert_eq!(by_id("legacy-idle").files_changed, 0);
+        assert_eq!(by_id("legacy-review").files_changed, 3);
+    }
+
+    #[test]
+    fn waiting_status_roundtrips_under_its_new_spelling() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        let mut task = Task::new("demo", "do a thing", "claude", vec![]);
+        task.set_status(TaskStatus::Waiting);
+        assert_eq!(task.status.to_string(), "waiting");
+        store.upsert_task(&task).unwrap();
+
+        let loaded = store.load_tasks().unwrap();
+        assert_eq!(loaded[0].status, TaskStatus::Waiting);
     }
 }

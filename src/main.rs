@@ -219,9 +219,8 @@ async fn run_bootstrap(path: &str) -> Result<()> {
                 .map(|t| {
                     matches!(
                         t.status,
-                        TaskStatus::Idle
+                        TaskStatus::Waiting
                             | TaskStatus::Done
-                            | TaskStatus::NeedsReview
                             | TaskStatus::Blocked
                             | TaskStatus::Interrupted
                     )

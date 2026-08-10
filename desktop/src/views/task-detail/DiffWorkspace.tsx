@@ -138,6 +138,8 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
             highlightTimerRef.current = null;
           }, 2400);
         }
+        const container =
+          diffView === "unified" ? unifiedScrollParent.current : splitScrollParent.current;
         const virtualizer = diffView === "unified" ? unifiedVirtualizer : splitVirtualizer;
         virtualizer.scrollToIndex(index, { align: "start" });
         requestAnimationFrame(() => {
@@ -146,10 +148,18 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
               diffView === "unified" && matchingHunks.length > 0
                 ? hunkAnchor(path, matchingHunks[0])
                 : fileAnchor(path);
-            document.getElementById(anchor)?.scrollIntoView({
-              behavior: "smooth",
-              block: "start",
-            });
+            const anchorEl = document.getElementById(anchor);
+            // Scroll only the virtualized list's own container. Native
+            // Element.scrollIntoView() walks every scrollable ancestor
+            // (including ones with overflow: hidden), which can drag
+            // unrelated chrome like the surface tabs or app sidebar with it.
+            if (container && anchorEl) {
+              const offset =
+                anchorEl.getBoundingClientRect().top -
+                container.getBoundingClientRect().top +
+                container.scrollTop;
+              container.scrollTo({ behavior: "smooth", top: offset });
+            }
           });
         });
       },

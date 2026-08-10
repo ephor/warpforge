@@ -142,10 +142,10 @@ function LimitDecision({
   return (
     <section
       aria-label="Review limit reached"
-      className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/[0.07] p-3"
+      className="mt-2 rounded-md border border-warn/40 bg-warn/[0.07] p-3"
     >
       <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" />
         <div className="min-w-0">
           <p className="text-xs font-semibold text-foreground">Review limit reached</p>
           <p className="mt-0.5 text-xs text-muted-foreground">

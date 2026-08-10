@@ -283,6 +283,13 @@ export interface SessionChatProps {
   updates: SessionUpdate[];
   agents: AgentConfig[];
   onOpenTask: (id: string) => void;
+  /**
+   * Render the transcript without the composer. Used where a *different*
+   * task's session is on show — the Pipeline surface watching a child agent —
+   * so the reader can see what it is doing without being offered a reply box
+   * that would steer a session they are not in.
+   */
+  readOnly?: boolean;
 }
 
 export function SessionChat({
@@ -300,6 +307,7 @@ export function SessionChat({
   updates,
   agents,
   onOpenTask,
+  readOnly = false,
 }: SessionChatProps) {
   const merged = updates;
   const contextUsage = useMemo(() => latestContextUsage(updates), [updates]);
@@ -501,26 +509,28 @@ export function SessionChat({
           <AgentActivityIndicator activity={activity} compact />
         </div>
       )}
-      {task.workflowRun && <WorkflowControls task={task} />}
-      <div className="border-t border-border/80">
-        <Composer
-          ref={composerRef}
-          commands={commands}
-          contextUsage={contextUsage}
-          files={files}
-          filesLoading={filesLoading}
-          imageSupported={imageSupported}
-          disabled={task.status === "done" || workflow.disabled}
-          onSend={onSend}
-          onCancel={isRunning && !workflow.isWorkflow ? onCancel : undefined}
-          placeholder={workflow.placeholder ?? "Steer this session..."}
-          toolbar={
-            task.configOptions && task.configOptions.length > 0 ? (
-              <AgentConfigBar taskId={task.id} options={task.configOptions} />
-            ) : undefined
-          }
-        />
-      </div>
+      {task.workflowRun && !readOnly && <WorkflowControls task={task} />}
+      {!readOnly && (
+        <div className="border-t border-border/80">
+          <Composer
+            ref={composerRef}
+            commands={commands}
+            contextUsage={contextUsage}
+            files={files}
+            filesLoading={filesLoading}
+            imageSupported={imageSupported}
+            disabled={task.status === "done" || workflow.disabled}
+            onSend={onSend}
+            onCancel={isRunning && !workflow.isWorkflow ? onCancel : undefined}
+            placeholder={workflow.placeholder ?? "Steer this session..."}
+            toolbar={
+              task.configOptions && task.configOptions.length > 0 ? (
+                <AgentConfigBar taskId={task.id} options={task.configOptions} />
+              ) : undefined
+            }
+          />
+        </div>
+      )}
     </>
   );
 }

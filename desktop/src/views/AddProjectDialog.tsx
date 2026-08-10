@@ -156,7 +156,7 @@ export default function AddProjectDialog({ open, onOpenChange, onAdded }: Props)
             />
           </div>
 
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-xs text-destructive">{error}</p>}
         </div>
 
         <DialogFooter>

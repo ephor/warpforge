@@ -182,7 +182,7 @@ async fn handle_connection(
                                 if matches!(
                                     t.status,
                                     crate::daemon::TaskStatus::Done
-                                        | crate::daemon::TaskStatus::Idle
+                                        | crate::daemon::TaskStatus::Waiting
                                 ) {
                                     let notification = json!({
                                         "jsonrpc": "2.0",

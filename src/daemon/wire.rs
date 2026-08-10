@@ -111,8 +111,7 @@ pub fn task_status(s: &TaskStatus) -> wire::TaskStatus {
     match s {
         TaskStatus::Queued => wire::TaskStatus::Queued,
         TaskStatus::Running => wire::TaskStatus::Running,
-        TaskStatus::Idle => wire::TaskStatus::Idle,
-        TaskStatus::NeedsReview => wire::TaskStatus::NeedsReview,
+        TaskStatus::Waiting => wire::TaskStatus::Waiting,
         TaskStatus::Done => wire::TaskStatus::Done,
         TaskStatus::Blocked => wire::TaskStatus::Blocked,
         TaskStatus::Interrupted => wire::TaskStatus::Interrupted,

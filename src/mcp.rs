@@ -293,7 +293,7 @@ fn tool_defs() -> Value {
         {
             "name": "cleanup_agents",
             "description": "Permanently remove child agent sessions owned by this \
-                orchestrator. By default all idle, needs_review, done, blocked, and \
+                orchestrator. By default all waiting, done, blocked, and \
                 interrupted tasks are selected: each is hard-stopped first, then its \
                 task record and session history are deleted. Running and queued \
                 sessions are skipped unless include_active=true. Returns a JSON report.",
@@ -440,8 +440,7 @@ fn tool_defs() -> Value {
 }
 
 const DEFAULT_CLEANUP_MAX_AGE_SECONDS: u64 = 0;
-const INACTIVE_AGENT_STATUSES: &[&str] =
-    &["idle", "needs_review", "done", "blocked", "interrupted"];
+const INACTIVE_AGENT_STATUSES: &[&str] = &["waiting", "done", "blocked", "interrupted"];
 const ACTIVE_AGENT_STATUSES: &[&str] = &["running", "queued"];
 
 /// Keep MCP calls within the project that owns the orchestrator session. The

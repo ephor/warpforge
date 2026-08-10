@@ -143,9 +143,17 @@ export default function NewTaskDialog({
 
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
 
-  const resume = (s: ExternalSession) => {
-    void daemon.resumeTask(project, s.agent, s.sessionId, s.title);
-    onOpenChange(false);
+  const resume = async (s: ExternalSession) => {
+    try {
+      const taskId = await daemon.resumeTask(project, s.agent, s.sessionId, s.title);
+      if (!taskId) throw new Error("Warpforge did not return the resumed task id");
+      openTask(taskId);
+      onOpenChange(false);
+    } catch (e) {
+      toast.error("Could not resume the session", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    }
   };
 
   const create = async (submission: PromptSubmission) => {
@@ -193,6 +201,7 @@ export default function NewTaskDialog({
       (resp as { result?: { taskId?: string } } | null)?.result?.taskId ??
       null;
     if (taskId) {
+      openTask(taskId);
       toast.success(selectedWorkflow ? "Workflow started" : "Task started", {
         description: selectedWorkflow
           ? `${selectedWorkflow.name} pipeline running in ${project}`
@@ -229,14 +238,24 @@ export default function NewTaskDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background">
-      <div className="flex h-full max-h-full w-full max-w-3xl flex-col px-8 py-8">
-        <header className="mb-6 flex items-center justify-between">
-          <h1 className="text-lg font-semibold">New task</h1>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-muted-foreground">
+      <div className="flex h-full max-h-full w-full max-w-5xl flex-col px-4 py-4 sm:px-8 sm:py-6">
+        <header className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
+              Start from outcome
+            </p>
+            <h1 className="mt-1 text-xl font-semibold tracking-tight">New task</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Describe what you want to ship. Choose execution details only when they matter.
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-3">
+            <span className="hidden text-xs text-muted-foreground sm:inline">
               {selectedWorkflow
-                ? `One task = the ${selectedWorkflow.name} pipeline. Each stage runs as its own agent session.`
-                : "One task = one agent session. The agent starts working immediately."}
+                ? `${selectedWorkflow.name} pipeline`
+                : orchChat
+                  ? "Orchestrator chat"
+                  : "Single agent"}
             </span>
             <Button
               variant="ghost"
@@ -251,103 +270,141 @@ export default function NewTaskDialog({
           </div>
         </header>
 
-        <div className="flex min-h-0 flex-1 flex-col">
-          <TaskComposeBar
-            projects={snapshot.projects}
-            agents={snapshot.agents ?? []}
-            services={snapshot.services}
-            project={project}
-            agent={agent}
-            shareContext={shareContext}
-            useWorktree={useWorktree}
-            orchChat={orchChat}
-            workflows={workflows}
-            workflow={workflow}
-            onProjectChange={changeProject}
-            onAgentChange={changeAgent}
-            onShareContextChange={setShareContext}
-            onUseWorktreeChange={setUseWorktree}
-            onOrchChatChange={changeOrchChat}
-            onWorkflowChange={changeWorkflow}
-            onEjectWorkflow={ejectWorkflow}
-          />
-
-          <div className="mt-6 border-t border-border/70 pt-4">
-            <Composer
-              key={`${project}-${agent}`}
-              ref={composerRef}
-              initialValue={prompt}
-              onDraftChange={setPrompt}
-              files={projectFiles}
-              filesLoading={filesQuery.isLoading}
-              imageSupported
-              hideSendButton
-              onSend={create}
-              toolbar={
-                <AgentConfigBar
-                  options={agentOptions}
-                  picks={configPicks}
-                  loading={probeLoading}
-                  onSelect={(opt, value) =>
-                    setConfigPicks((prev) => ({ ...prev, [opt.id]: value }))
+        <main className="min-h-0 flex-1 overflow-y-auto">
+          <div className="flex flex-col gap-4 pb-4">
+            <section
+              aria-labelledby="task-prompt-heading"
+              className="rounded-lg border border-border/80 bg-card/25"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-2 border-b border-border/60 px-4 py-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                    Prompt
+                  </p>
+                  <h2 id="task-prompt-heading" className="mt-1 text-base font-semibold">
+                    What are you trying to ship?
+                  </h2>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  Attachments and @files supported
+                </span>
+              </div>
+              <div className="px-2 pb-2 pt-1">
+                <Composer
+                  key={`${project}-${agent}`}
+                  ref={composerRef}
+                  initialValue={prompt}
+                  onDraftChange={setPrompt}
+                  files={projectFiles}
+                  filesLoading={filesQuery.isLoading}
+                  imageSupported
+                  hideSendButton
+                  onSend={create}
+                  toolbar={
+                    <AgentConfigBar
+                      options={agentOptions}
+                      picks={configPicks}
+                      loading={probeLoading}
+                      onSelect={(opt, value) =>
+                        setConfigPicks((prev) => ({ ...prev, [opt.id]: value }))
+                      }
+                    />
+                  }
+                  placeholder={
+                    selectedWorkflow
+                      ? `What should the ${selectedWorkflow.name} pipeline work on?`
+                      : orchChat
+                        ? "What should the orchestrator coordinate?"
+                        : "What should the agent do?"
                   }
                 />
-              }
-              placeholder={
-                selectedWorkflow
-                  ? `What should the ${selectedWorkflow.name} pipeline work on?`
-                  : orchChat
-                    ? "What should the orchestrator coordinate?"
-                    : "What should the agent do?"
-              }
-            />
-          </div>
-
-          {/* Tags (collapsed, optional) */}
-          <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
-            <label htmlFor="task-tags">Tags</label>
-            <input
-              id="task-tags"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder="bug, frontend"
-              className="h-7 flex-1 rounded-md border border-input bg-background px-2 text-xs"
-            />
-          </div>
-
-          {sessions.length > 0 && (
-            <div className="mt-6 flex min-h-0 flex-1 flex-col gap-1.5">
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <History className="size-3.5" />
-                Resume a previous session
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto rounded-md border">
-                {sessions.map((s) => (
-                  <button
-                    key={`${s.agent}:${s.sessionId}`}
-                    type="button"
-                    onClick={() => resume(s)}
-                    className="flex w-full items-center gap-2 overflow-hidden border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-secondary"
-                  >
-                    <span className="min-w-0 flex-1 truncate">
-                      {s.title || `(untitled ${s.sessionId.slice(0, 8)})`}
-                    </span>
-                    <AgentBadge
-                      agentId={s.agent}
-                      size="xs"
-                      className="shrink-0 text-muted-foreground"
-                    />
-                    <span className="tnum shrink-0 text-xs text-muted-foreground">
-                      {new Date(s.updatedAt * 1000).toLocaleDateString()}
-                    </span>
-                  </button>
-                ))}
+              <div className="flex items-center gap-2 border-t border-border/60 px-4 py-2 text-xs text-muted-foreground">
+                <label htmlFor="task-tags" className="shrink-0">
+                  Tags
+                </label>
+                <input
+                  id="task-tags"
+                  value={tags}
+                  onChange={(e) => setTags(e.target.value)}
+                  placeholder="bug, frontend"
+                  className="h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs"
+                />
               </div>
-            </div>
-          )}
-        </div>
+            </section>
 
-        <footer className="mt-6 flex items-center justify-end gap-2 border-t border-border/70 pt-4">
+            <section
+              aria-labelledby="task-execution-heading"
+              className="rounded-lg border border-border/70 bg-card/15 px-4 py-3"
+            >
+              <div className="mb-3">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  Execution context
+                </p>
+                <h2 id="task-execution-heading" className="mt-1 text-sm font-semibold">
+                  Where and how should it run?
+                </h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Pick project, agent, runtime context, worktree, or an explicit pipeline.
+                </p>
+              </div>
+              <TaskComposeBar
+                projects={snapshot.projects}
+                agents={snapshot.agents ?? []}
+                services={snapshot.services}
+                project={project}
+                agent={agent}
+                shareContext={shareContext}
+                useWorktree={useWorktree}
+                orchChat={orchChat}
+                workflows={workflows}
+                workflow={workflow}
+                onProjectChange={changeProject}
+                onAgentChange={changeAgent}
+                onShareContextChange={setShareContext}
+                onUseWorktreeChange={setUseWorktree}
+                onOrchChatChange={changeOrchChat}
+                onWorkflowChange={changeWorkflow}
+                onEjectWorkflow={ejectWorkflow}
+              />
+            </section>
+
+            {sessions.length > 0 && (
+              <section aria-labelledby="resume-session-heading" className="rounded-lg border">
+                <div className="flex items-center gap-1.5 border-b px-3 py-2 text-xs text-muted-foreground">
+                  <History className="size-3.5" />
+                  <h2 id="resume-session-heading" className="font-medium">
+                    Resume a previous session
+                  </h2>
+                </div>
+                <div className="max-h-56 overflow-y-auto">
+                  {sessions.map((s) => (
+                    <button
+                      key={`${s.agent}:${s.sessionId}`}
+                      type="button"
+                      onClick={() => void resume(s)}
+                      className="flex w-full items-center gap-2 overflow-hidden border-b px-3 py-2 text-left text-sm last:border-b-0 hover:bg-secondary"
+                    >
+                      <span className="min-w-0 flex-1 truncate">
+                        {s.title || `(untitled ${s.sessionId.slice(0, 8)})`}
+                      </span>
+                      <AgentBadge
+                        agentId={s.agent}
+                        size="xs"
+                        className="shrink-0 text-muted-foreground"
+                      />
+                      <span className="tnum shrink-0 text-xs text-muted-foreground">
+                        {new Date(s.updatedAt * 1000).toLocaleDateString()}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+        </main>
+
+        <footer className="flex items-center justify-end gap-2 border-t border-border/70 pt-4">
           <Button variant="ghost" onClick={close} type="button">
             Cancel
           </Button>

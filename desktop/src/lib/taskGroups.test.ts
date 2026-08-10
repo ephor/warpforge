@@ -11,9 +11,6 @@ import {
   resolveGroupTaskId,
   setTaskGroupPinned,
   taskGroupStatus,
-  taskNeedsAttention,
-  treeLane,
-  treeMatches,
 } from "./taskGroups";
 
 function task(id: string, status: TaskStatus, parentTaskId?: string): TaskInfo {
@@ -33,12 +30,20 @@ function task(id: string, status: TaskStatus, parentTaskId?: string): TaskInfo {
   };
 }
 
+/**
+ * A task parked in `waiting` with a diff behind it — what `needs_review` used
+ * to be, now expressed as the status plus the field that always carried it.
+ */
+function reviewTask(id: string, parentTaskId?: string): TaskInfo {
+  return { ...task(id, "waiting", parentTaskId), filesChanged: 3 };
+}
+
 describe("task orchestration groups", () => {
   it("nests children from explicit parent ids while preserving standalone tasks", () => {
     const forest = buildTaskForest([
       task("standalone", "running"),
       task("child-2", "done", "parent"),
-      task("parent", "idle"),
+      task("parent", "waiting"),
       task("child-1", "running", "parent"),
     ]);
 
@@ -46,14 +51,13 @@ describe("task orchestration groups", () => {
     expect(forest[1].children.map((tree) => tree.task.id)).toStrictEqual(["child-2", "child-1"]);
   });
 
-  it("keeps a review child attached while live work keeps the group active", () => {
+  it("keeps every child attached regardless of its state", () => {
     const [group] = buildTaskForest([
-      task("orchestrator", "idle"),
-      task("finished-child", "needs_review", "orchestrator"),
+      task("orchestrator", "waiting"),
+      reviewTask("finished-child", "orchestrator"),
       task("working-child", "running", "orchestrator"),
     ]);
 
-    expect(treeLane(group)).toBe("active");
     expect(flattenTaskTree(group).map((item) => item.id)).toStrictEqual([
       "orchestrator",
       "finished-child",
@@ -62,16 +66,16 @@ describe("task orchestration groups", () => {
   });
 
   it("treats a child with a missing parent as a normal root", () => {
-    const [root] = buildTaskForest([task("orphaned-snapshot", "needs_review", "deleted")]);
+    const [root] = buildTaskForest([reviewTask("orphaned-snapshot", "deleted")]);
     expect(root.task.id).toBe("orphaned-snapshot");
-    expect(treeLane(root)).toBe("review");
+    expect(root.children).toHaveLength(0);
   });
 
   it("builds multi-level trees from nested parent chains", () => {
     const forest = buildTaskForest([
-      task("root", "idle"),
+      task("root", "waiting"),
       task("child", "running", "root"),
-      task("grandchild", "needs_review", "child"),
+      reviewTask("grandchild", "child"),
     ]);
 
     expect(forest).toHaveLength(1);
@@ -82,58 +86,9 @@ describe("task orchestration groups", () => {
     expect(forest[0].children[0].children[0].task.id).toBe("grandchild");
   });
 
-  it("keeps live groups active and uses review when no member is active", () => {
-    // All children done → history lane
-    const [allDone] = buildTaskForest([
-      task("p", "done"),
-      task("c1", "done", "p"),
-      task("c2", "done", "p"),
-    ]);
-    expect(treeLane(allDone)).toBe("history");
-
-    // One child running → active lane
-    const [oneRunning] = buildTaskForest([
-      task("p", "idle"),
-      task("c1", "done", "p"),
-      task("c2", "running", "p"),
-    ]);
-    expect(treeLane(oneRunning)).toBe("active");
-
-    // A blocked child remains summarized while another member is still active.
-    const [oneBlocked] = buildTaskForest([
-      task("p", "running"),
-      task("c1", "running", "p"),
-      task("c2", "blocked", "p"),
-    ]);
-    expect(treeLane(oneBlocked)).toBe("active");
-
-    // Once nobody is active, the blocked child places the group in review.
-    const [blockedOnly] = buildTaskForest([
-      task("p", "done"),
-      task("c1", "done", "p"),
-      task("c2", "blocked", "p"),
-    ]);
-    expect(treeLane(blockedOnly)).toBe("review");
-  });
-
   it("handles empty task list", () => {
     const forest = buildTaskForest([]);
     expect(forest).toStrictEqual([]);
-  });
-
-  it("treats a workflow waiting for a decision as attention while its task is idle", () => {
-    const workflow = task("workflow", "idle");
-    workflow.workflowRun = {
-      maxRounds: 2,
-      round: 2,
-      stage: "review",
-      verdict: "request_changes",
-      waiting: { kind: "limit", question: "open findings: 1 medium" },
-      workflowId: "review-loop",
-      workflowName: "Review loop",
-    };
-
-    expect(taskNeedsAttention(workflow)).toBeTruthy();
   });
 
   it("handles self-referencing parent (cycle to self)", () => {
@@ -147,8 +102,8 @@ describe("task orchestration groups", () => {
   it("keeps a multi-task cycle and its descendants in one navigable group", () => {
     const index = buildTaskGroupIndex([
       task("cycle-a", "running", "cycle-b"),
-      task("cycle-b", "idle", "cycle-a"),
-      task("descendant", "needs_review", "cycle-a"),
+      task("cycle-b", "waiting", "cycle-a"),
+      reviewTask("descendant", "cycle-a"),
     ]);
     const root = index.rootByTaskId.get("descendant");
 
@@ -161,20 +116,10 @@ describe("task orchestration groups", () => {
     expect(index.rootByTaskId.get("cycle-b")).toBe(root);
   });
 
-  it("treeMatches filters trees where no member matches", () => {
-    const forest = buildTaskForest([task("root", "running"), task("child", "done", "root")]);
-    const matchRunning = (t: TaskInfo) => t.status === "running";
-
-    // Root matches running → whole tree passes
-    expect(treeMatches(forest[0], matchRunning)).toBeTruthy();
-    // No member matches queued → tree filtered out
-    expect(treeMatches(forest[0], (t) => t.status === "queued")).toBeFalsy();
-  });
-
   it("does not nest children under wrong parent", () => {
     const forest = buildTaskForest([
-      task("a", "idle"),
-      task("b", "idle"),
+      task("a", "waiting"),
+      task("b", "waiting"),
       task("child-of-a", "running", "a"),
       task("child-of-b", "running", "b"),
     ]);
@@ -189,7 +134,7 @@ describe("task orchestration groups", () => {
   it("resolves a direct child pin to its root exactly once", () => {
     const tasks = [
       task("root", "running"),
-      task("child", "needs_review", "root"),
+      reviewTask("child", "root"),
       task("grandchild", "running", "child"),
     ];
     const index = buildTaskGroupIndex(tasks);
@@ -202,7 +147,7 @@ describe("task orchestration groups", () => {
     const index = buildTaskGroupIndex([
       task("root", "running"),
       task("child", "running", "root"),
-      task("grandchild", "idle", "child"),
+      task("grandchild", "waiting", "child"),
       task("other", "running"),
     ]);
 
@@ -217,7 +162,7 @@ describe("task orchestration groups", () => {
     const index = buildTaskGroupIndex([
       task("root", "running"),
       task("child", "running", "root"),
-      task("grandchild", "idle", "child"),
+      task("grandchild", "waiting", "child"),
       task("other", "running"),
     ]);
 
@@ -233,7 +178,7 @@ describe("task orchestration groups", () => {
   });
 
   it("bubbles blocked, permission, review, then running from descendants", () => {
-    const [review] = buildTaskForest([task("root", "idle"), task("child", "needs_review", "root")]);
+    const [review] = buildTaskForest([task("root", "waiting"), reviewTask("child", "root")]);
     expect(taskGroupStatus(review)).toBe("review");
     expect(taskGroupStatus(review, new Set(["root"]))).toBe("permission");
 
@@ -242,10 +187,7 @@ describe("task orchestration groups", () => {
   });
 
   it("focuses the exact child attention target without leaking across groups", () => {
-    const [group] = buildTaskForest([
-      task("root", "running"),
-      task("child", "needs_review", "root"),
-    ]);
+    const [group] = buildTaskForest([task("root", "running"), reviewTask("child", "root")]);
     expect(resolveGroupTaskId(group, "root", "child")).toBe("child");
     expect(resolveGroupTaskId(group, "child", "unrelated")).toBe("child");
   });

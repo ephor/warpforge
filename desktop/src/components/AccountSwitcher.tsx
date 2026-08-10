@@ -31,22 +31,31 @@ function accountLabel(account: AccountInfo): string {
 export default function AccountSwitcher({
   agents,
   accounts,
+  agentFilter,
+  alwaysShow = false,
 }: {
   agents: AgentConfig[];
   accounts: AccountInfo[];
+  /** Render only this agent's chip — the task header wants just the one
+      harness a task is running under, not every configured agent. */
+  agentFilter?: string;
+  /** Show even with zero or one account. Off by default: a global bar naming
+      every configured agent regardless of whether there's a choice is noise.
+      A task header naming its own harness is not — it's identity either way,
+      and there's a natural place to add a second account later. */
+  alwaysShow?: boolean;
 }) {
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // One chip per enabled agent that has something to switch between. A single
-  // account needs no switcher — it is not a choice.
-  const switchable = agents
+  const relevantAgents = agentFilter ? agents.filter((a) => a.id === agentFilter) : agents;
+  const switchable = relevantAgents
     .filter((agent) => agent.enabled)
     .map((agent) => ({
       agent,
       accounts: accounts.filter((account) => account.agentId === agent.id),
     }))
-    .filter((entry) => entry.accounts.length > 1);
+    .filter((entry) => alwaysShow || entry.accounts.length > 1);
 
   if (switchable.length === 0) return null;
 
@@ -66,6 +75,21 @@ export default function AccountSwitcher({
     <div className="flex items-center gap-1.5">
       {switchable.map(({ agent, accounts: agentAccounts }) => {
         const active = agentAccounts.find((a) => a.active);
+        if (agentAccounts.length === 0) {
+          // Nothing to switch to — just say which harness this is, same
+          // footprint as the interactive chip below so the row doesn't jump
+          // once a first account gets added.
+          return (
+            <span
+              key={agent.id}
+              className="flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground"
+              title={agent.displayName}
+            >
+              <AgentLogo agentId={agent.id} displayName={agent.displayName} />
+              <span className="max-w-28 truncate">{agent.displayName}</span>
+            </span>
+          );
+        }
         return (
           <DropdownMenu key={agent.id}>
             <DropdownMenuTrigger

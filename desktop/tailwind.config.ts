@@ -43,6 +43,7 @@ export default {
         // Semantic status hues (separate from the accent).
         ok: "hsl(var(--ok))",
         warn: "hsl(var(--warn))",
+        info: "hsl(var(--info))",
       },
       borderRadius: {
         lg: "var(--radius)",

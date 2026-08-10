@@ -227,11 +227,11 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
                   {agent.displayName}
                   {agent.installed ? (
                     behind ? (
-                      <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                      <span className="rounded-full bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
                         update available
                       </span>
                     ) : (
-                      <span className="rounded-full bg-green-500/15 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">
+                      <span className="rounded-full bg-ok/15 px-1.5 py-0.5 text-[10px] font-medium text-ok">
                         {agent.version ? `v${agent.version}` : "installed"}
                       </span>
                     )
@@ -246,7 +246,7 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
                   {agent.defaultAcpCommand}
                 </p>
                 {behind && agent.latestVersion && (
-                  <p className="mt-0.5 text-[11px] text-amber-600 dark:text-amber-400">
+                  <p className="mt-0.5 text-[11px] text-warn">
                     v{agent.version} → v{agent.latestVersion}
                   </p>
                 )}
