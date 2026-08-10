@@ -9,13 +9,13 @@ import { ImageAttachmentPreview } from "./ImageAttachmentPreview";
 const statusIcon = (s: FileDiffType["status"]) => {
   switch (s) {
     case "added":
-      return <FilePlus className="size-3.5 text-emerald-400" />;
+      return <FilePlus className="size-3.5 text-ok" />;
     case "deleted":
       return <FileMinus className="size-3.5 text-destructive" />;
     case "renamed":
-      return <FilePen className="size-3.5 text-sky-400" />;
+      return <FilePen className="size-3.5 text-warn" />;
     default:
-      return <FileDiff className="size-3.5 text-amber-400" />;
+      return <FileDiff className="size-3.5 text-info" />;
   }
 };
 
@@ -42,7 +42,7 @@ export const AttachmentBar = memo(function AttachmentBar({
           {statusIcon(a.status)}
           <span className="max-w-[180px] truncate">{a.filePath}</span>
           <span>
-            <span className="text-emerald-400">+{a.addedLines}</span>{" "}
+            <span className="text-ok">+{a.addedLines}</span>{" "}
             <span className="text-destructive">-{a.removedLines}</span>
           </span>
           <button

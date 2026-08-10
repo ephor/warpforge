@@ -1,7 +1,5 @@
 import type { TaskInfo, TaskStatus } from "@/protocol";
 
-export type BoardLane = "queue" | "active" | "review" | "history";
-
 export interface TaskTree {
   task: TaskInfo;
   children: TaskTree[];
@@ -12,64 +10,26 @@ export interface TaskGroupIndex {
   rootByTaskId: Map<string, TaskTree>;
 }
 
-export interface TaskGroupCounts {
-  blocked: number;
-  done: number;
-  review: number;
-  running: number;
+/**
+ * "There is something to look at." The replacement for the old `needs_review`
+ * status: same fact, read off the field that always carried it. A `waiting`
+ * task with no diff is simply a conversation the user has not replied to yet.
+ */
+export function awaitsReview(task: TaskInfo): boolean {
+  return task.status === "waiting" && task.filesChanged > 0;
 }
 
-export type TaskLifecycle = "active" | "later" | "handled";
-export type BoardLifecycleFilter = "all" | "attention" | "later" | "handled";
-
-export interface TaskLifecycleCounts {
-  handled: number;
-  later: number;
-}
-
-const lanePriority: Record<BoardLane, number> = {
-  active: 3,
-  history: 0,
-  queue: 1,
-  review: 2,
-};
-
-export function statusLane(status: TaskStatus): BoardLane {
-  if (status === "needs_review" || status === "blocked" || status === "interrupted") {
-    return "review";
-  }
-  if (status === "running" || status === "idle") {
-    return "active";
-  }
-  if (status === "queued") {
-    return "queue";
-  }
-  return "history";
-}
-
-export function taskLifecycle(task: TaskInfo, nowSeconds: number): TaskLifecycle {
-  if (
-    typeof task.snoozedAt === "number" &&
-    Number.isFinite(task.snoozedAt) &&
-    task.snoozedAt > 0 &&
-    typeof task.snoozedUntil === "number" &&
-    Number.isFinite(task.snoozedUntil) &&
-    task.snoozedUntil > nowSeconds
-  ) {
-    return "later";
-  }
-  if (task.settledOverride === true) return "handled";
-  return "active";
-}
-
-export function taskNeedsAttention(task: TaskInfo): boolean {
-  const waiting = task.workflowRun?.waiting ?? null;
-  return (
-    (!!waiting && waiting.kind !== "paused") ||
-    task.status === "needs_review" ||
-    task.status === "blocked" ||
-    task.status === "interrupted"
-  );
+/**
+ * A task the user is finished with: the agent completed it, or the user marked
+ * it handled. These are archive material — they still resolve to a state and
+ * stay reachable, but they do not belong in a live tree or a live count.
+ *
+ * Two mechanisms, one meaning, which is why every "is this still work?" check
+ * has to consult both. Filtering on `status !== "done"` alone silently counts
+ * everything the user settled by hand.
+ */
+export function isSettledTask(task: TaskInfo): boolean {
+  return task.status === "done" || task.settledOverride === true;
 }
 
 /**
@@ -185,44 +145,6 @@ export function resolveGroupTaskId(
   return tree.task.id;
 }
 
-export function taskGroupCounts(tree: TaskTree): TaskGroupCounts {
-  return flattenTaskTree(tree)
-    .slice(1)
-    .reduce<TaskGroupCounts>(
-      (counts, task) => {
-        if (task.status === "blocked" || task.status === "interrupted") counts.blocked += 1;
-        else if (task.status === "needs_review") counts.review += 1;
-        else if (task.status === "running" || task.status === "queued") counts.running += 1;
-        else if (task.status === "done") counts.done += 1;
-        return counts;
-      },
-      { blocked: 0, done: 0, review: 0, running: 0 },
-    );
-}
-
-export function taskLifecycleCounts(tree: TaskTree, nowSeconds: number): TaskLifecycleCounts {
-  return flattenTaskTree(tree).reduce<TaskLifecycleCounts>(
-    (counts, task) => {
-      const lifecycle = taskLifecycle(task, nowSeconds);
-      if (lifecycle === "later") counts.later += 1;
-      if (lifecycle === "handled") counts.handled += 1;
-      return counts;
-    },
-    { handled: 0, later: 0 },
-  );
-}
-
-export function treeMatchesLifecycle(
-  tree: TaskTree,
-  filter: BoardLifecycleFilter,
-  nowSeconds: number,
-): boolean {
-  if (filter === "all") return true;
-  const tasks = flattenTaskTree(tree);
-  if (filter === "attention") return tasks.some(taskNeedsAttention);
-  return tasks.some((task) => taskLifecycle(task, nowSeconds) === filter);
-}
-
 export type TaskGroupStatus = "blocked" | "permission" | "review" | "running" | TaskStatus;
 
 /** Human attention bubbles from descendants before ordinary activity. */
@@ -237,25 +159,8 @@ export function taskGroupStatus(
   if (permissionTaskIds && tasks.some((task) => permissionTaskIds.has(task.id))) {
     return "permission";
   }
-  if (tasks.some((task) => task.status === "needs_review")) return "review";
+  if (tasks.some(awaitsReview)) return "review";
   if (tasks.some((task) => task.status === "running" || task.status === "queued")) return "running";
   return tree.task.status;
 }
 
-/**
- * Place a whole orchestration group in its most urgent lane.
- *
- * Live execution from any member keeps the orchestration in Active. Review and
- * blocked descendants remain visible in the group summary and attention filter
- * without hiding work that is still running.
- */
-export function treeLane(tree: TaskTree): BoardLane {
-  return flattenTaskTree(tree).reduce<BoardLane>((lane, task) => {
-    const candidate = statusLane(task.status);
-    return lanePriority[candidate] > lanePriority[lane] ? candidate : lane;
-  }, "history");
-}
-
-export function treeMatches(tree: TaskTree, predicate: (task: TaskInfo) => boolean): boolean {
-  return flattenTaskTree(tree).some(predicate);
-}

@@ -12,7 +12,7 @@ const task = {
   id: "t_source",
   project: "warpforge",
   prompt: "Build message actions",
-  status: "idle",
+  status: "waiting",
   tags: [],
   title: "",
   updatedAt: 1,

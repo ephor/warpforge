@@ -1,10 +1,19 @@
 import { Check, Clock, Minus } from "lucide-react";
 
-import { META, type StatusActivity, type StatusKind } from "@/lib/statusMeta";
+import {
+  ORCH_NODE_META,
+  PERMISSION_VISUAL,
+  type StatusActivity,
+  type StatusVisual,
+  taskStatusVisual,
+} from "@/lib/statusMeta";
 import { cn } from "@/lib/utils";
+import type { OrchNodeStatus, TaskStatus } from "@/protocol";
 
 type Tone = "ok" | "warn" | "destructive" | "neutral";
 type Glyph = "dot" | "ring" | "clock" | "check" | "minus";
+
+const UNKNOWN_NODE_VISUAL: StatusVisual = { glyph: "ring", label: "unknown", tone: "neutral" };
 
 const ACTIVITY_TONE: Record<"thinking" | "working" | "writing", Tone> = {
   thinking: "neutral",
@@ -66,8 +75,23 @@ function GlyphMark({
   );
 }
 
+/** What a badge can be asked to draw. `permission` overlays a task status. */
+export type TaskBadgeStatus = TaskStatus | "permission";
+
+type StatusBadgeProps = {
+  activity?: StatusActivity | null;
+  size?: "xs" | "sm";
+  variant?: "pill" | "dot";
+  className?: string;
+} & ({ kind?: "task"; status: TaskBadgeStatus } | { kind: "node"; status: OrchNodeStatus });
+
 /**
- * The one way to show a task status anywhere in the UI.
+ * The one way to show a status anywhere in the UI.
+ *
+ * Two vocabularies reach this component and they stay apart until here: a task
+ * lifecycle (`kind="task"`, the default) and an orchestration-graph node
+ * (`kind="node"`). The `kind` discriminator is what lets `statusMeta` keep two
+ * independent maps instead of one union with overlapping keys.
  *
  * - `pill` (default) — tinted pill with glyph + label.
  * - `dot` — glyph only with a tooltip and sr-only label, for tight spots
@@ -76,20 +100,15 @@ function GlyphMark({
  * Pass `activity` while the agent is mid-turn: the label swaps to the live
  * activity (thinking/working/writing) and the dot keeps pulsing.
  */
-export function StatusBadge({
-  status,
-  activity,
-  size = "sm",
-  variant = "pill",
-  className,
-}: {
-  status: StatusKind;
-  activity?: StatusActivity | null;
-  size?: "xs" | "sm";
-  variant?: "pill" | "dot";
-  className?: string;
-}) {
-  const meta = META[status];
+export function StatusBadge(props: StatusBadgeProps) {
+  const { activity, size = "sm", variant = "pill", className } = props;
+  const status: string = props.status;
+  const meta: StatusVisual =
+    props.kind === "node"
+      ? (ORCH_NODE_META[props.status] ?? UNKNOWN_NODE_VISUAL)
+      : props.status === "permission"
+        ? PERMISSION_VISUAL
+        : taskStatusVisual(props.status);
   const live = activity != null && (status === "running" || status === "queued");
   const label = live ? activity.label : meta.label;
   const tone = live ? ACTIVITY_TONE[activity.tone] : meta.tone;

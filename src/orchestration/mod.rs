@@ -297,9 +297,9 @@ impl Orchestrator {
                 graph_id: graph_id.to_string(),
                 project,
             });
-            // Transition parent task: all succeeded → NeedsReview
+            // Transition parent task: all succeeded → back to the human.
             self.daemon
-                .set_task_status(&parent_id, crate::daemon::task::TaskStatus::NeedsReview)
+                .set_task_status(&parent_id, crate::daemon::task::TaskStatus::Waiting)
                 .await;
             return;
         }

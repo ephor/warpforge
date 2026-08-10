@@ -1,15 +1,26 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+import type { EditHunk } from "../protocol";
+
 /**
  * Client-side UI state (view, panel toggles, prefs) — persisted to localStorage.
  * The server-data store is `daemon.ts` (useSyncExternalStore); this owns UI only.
  */
 
-export type View = "control" | "board" | "projects";
+export type View = "control" | "projects";
 export type DiffView = "unified" | "split";
 export type RightPanel = "changes" | "files" | "subtasks" | null;
 export type RepositoryOperation = { taskId: string; kind: "pull" | "push" };
+
+/** Center-pane workspace surface. Exactly one is active per task at a time. */
+export type TaskSurface = "files" | "diff" | "runtime" | "pipeline";
+export const DEFAULT_TASK_SURFACE: TaskSurface = "diff";
+
+/** Transient intent to open a task already showing a specific file/diff. */
+export type TaskOpenNav =
+  | { surface: "files"; path: string }
+  | { surface: "diff"; path: string; hunks?: EditHunk[] };
 
 export interface PinnedTileLayout {
   x: number;
@@ -58,8 +69,11 @@ interface UiState extends SettingsState {
   // Navigation
   view: View;
   openTaskId: string | null; // Transient — not persisted
+  /** Project whose detail the Projects view shows. Persisted; cleared when removed. */
+  selectedProjectId: string | null;
+  /** Transient intent to open a task at a specific file/diff. Not persisted. */
+  openTaskNav: TaskOpenNav | null;
   // App shell
-  attentionOpen: boolean;
   attentionTargetId: string | null;
   attentionTargetNonce: number;
   repositoryOperation: RepositoryOperation | null;
@@ -68,15 +82,22 @@ interface UiState extends SettingsState {
   showDiff: boolean;
   diffView: DiffView;
   rightPanel: RightPanel;
+  /** Which of Files/Diff/Runtime/Plan is active in the workspace pane. Task-scoped, like `rightPanel`. */
+  activeSurface: TaskSurface;
   runtimeOpenByProject: Record<string, boolean>;
   pinnedTaskIds: string[];
   pinnedLayout: Record<string, PinnedTileLayout>;
   sidebarWidth: number;
+  /** Sidebar shrunk to its icon rail. */
+  sidebarCollapsed: boolean;
 
   setView: (v: View) => void;
   openTask: (id: string | null) => void;
-  toggleAttention: () => void;
-  setAttentionOpen: (open: boolean) => void;
+  /** Open a task and immediately surface a specific file/diff in its workspace. */
+  openTaskWithNav: (id: string, nav: TaskOpenNav) => void;
+  clearOpenTaskNav: () => void;
+  /** Switch to the Projects view focused on a specific project. */
+  openProject: (id: string) => void;
   focusAttentionTask: (id: string) => void;
   setRepositoryOperation: (operation: RepositoryOperation | null) => void;
   toggleChat: () => void;
@@ -84,6 +105,7 @@ interface UiState extends SettingsState {
   setShowDiff: (open: boolean) => void;
   setDiffView: (v: DiffView) => void;
   setRightPanel: (panel: RightPanel) => void;
+  setActiveSurface: (surface: TaskSurface) => void;
   toggleRuntime: (project: string) => void;
   setRuntimeOpen: (project: string, open: boolean) => void;
   clearRuntimeOpen: (project: string) => void;
@@ -91,6 +113,7 @@ interface UiState extends SettingsState {
   setPinnedTaskIds: (ids: string[]) => void;
   setPinnedLayout: (id: string, layout: PinnedTileLayout) => void;
   setSidebarWidth: (w: number) => void;
+  toggleSidebarCollapsed: () => void;
 }
 
 function clampFontSize(v: number): number {
@@ -106,7 +129,8 @@ export const useUi = create<UiState>()(
     (set) => ({
       view: "control",
       openTaskId: null,
-      attentionOpen: true,
+      selectedProjectId: null,
+      openTaskNav: null,
       attentionTargetId: null,
       attentionTargetNonce: 0,
       repositoryOperation: null,
@@ -114,25 +138,30 @@ export const useUi = create<UiState>()(
       showDiff: true,
       diffView: "split",
       rightPanel: null,
+      activeSurface: DEFAULT_TASK_SURFACE,
       runtimeOpenByProject: {},
       pinnedTaskIds: [],
       pinnedLayout: {},
       sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
+      sidebarCollapsed: false,
       fontSize: DEFAULT_FONT_SIZE,
       monoFontSize: DEFAULT_MONO_FONT_SIZE,
       textGenAgentId: null,
       textGenModel: null,
       autoNameTasks: true,
 
-      setView: (view) => set({ openTaskId: null, view }),
+      setView: (view) => set({ openTaskId: null, openTaskNav: null, view }),
+      openProject: (selectedProjectId) =>
+        set({ openTaskId: null, openTaskNav: null, view: "projects", selectedProjectId }),
       // Contextual task tools must not leak from one task into the next.
       // Project-scoped Runtime visibility and other layout preferences remain persisted.
-      openTask: (openTaskId) => set({ openTaskId, rightPanel: null }),
-      toggleAttention: () => set((s) => ({ attentionOpen: !s.attentionOpen })),
-      setAttentionOpen: (attentionOpen) => set({ attentionOpen }),
+      openTask: (openTaskId) =>
+        set({ openTaskId, openTaskNav: null, rightPanel: null, activeSurface: DEFAULT_TASK_SURFACE }),
+      openTaskWithNav: (openTaskId, openTaskNav) =>
+        set({ openTaskId, openTaskNav, rightPanel: null, activeSurface: openTaskNav.surface }),
+      clearOpenTaskNav: () => set({ openTaskNav: null }),
       focusAttentionTask: (attentionTargetId) =>
         set((s) => ({
-          attentionOpen: true,
           attentionTargetId,
           attentionTargetNonce: s.attentionTargetNonce + 1,
         })),
@@ -144,6 +173,7 @@ export const useUi = create<UiState>()(
       setShowDiff: (showDiff) => set((s) => (!showDiff && !s.showChat ? s : { showDiff })),
       setDiffView: (diffView) => set({ diffView }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
+      setActiveSurface: (activeSurface) => set({ activeSurface }),
       toggleRuntime: (project) =>
         set((s) => ({
           runtimeOpenByProject: {
@@ -190,6 +220,7 @@ export const useUi = create<UiState>()(
           pinnedLayout: { ...s.pinnedLayout, [id]: layout },
         })),
       setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: clampSidebarWidth(sidebarWidth) }),
+      toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
       // ── Font size settings ──
       setFontSize: (fontSize) => set({ fontSize: clampFontSize(fontSize) }),
@@ -209,7 +240,7 @@ export const useUi = create<UiState>()(
     }),
     {
       name: "wf-ui",
-      version: 2,
+      version: 3,
       migrate: (persisted: unknown, version: number) => {
         let state = persisted as Record<string, unknown>;
         if (version === 0 && state && "sidebarWidth" in state) {
@@ -220,15 +251,23 @@ export const useUi = create<UiState>()(
         if (version < 2 && state && !("pinnedLayout" in state)) {
           state = { ...state, pinnedLayout: {} };
         }
+        // The Board view was removed. `view` is persisted, so without this a
+        // session that ended there rehydrates a `view` no branch renders.
+        if (version < 3 && state && state.view === "board") {
+          state = { ...state, view: "control" };
+        }
         return state;
       },
       // OpenTaskId is session-only — a reload shouldn't force-open a stale task.
+      // activeSurface follows rightPanel: task-scoped, reset by openTask, not persisted.
       partialize: ({
         openTaskId: _openTaskId,
+        openTaskNav: _openTaskNav,
         attentionTargetId: _attentionTargetId,
         attentionTargetNonce: _attentionTargetNonce,
         repositoryOperation: _repositoryOperation,
         rightPanel: _rightPanel,
+        activeSurface: _activeSurface,
         ...rest
       }) => rest,
     },

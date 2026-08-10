@@ -3,6 +3,7 @@ import {
   prunePermissionCache,
   type PermissionUpdate,
 } from "@/lib/sessionPermissions";
+import { awaitsReview } from "@/lib/taskGroups";
 import type { SessionUpdate } from "@/protocol";
 import type { TaskInfo, TaskStatus } from "@/protocol";
 
@@ -16,31 +17,48 @@ export interface AttentionItem {
 export type RailFilterMode = "attention" | "running" | "all";
 export type RailSortMode = "updated" | "created" | "status" | "project";
 
+/**
+ * Urgency order. `waiting` sits low because it is a resting state; a waiting
+ * task that actually produced a diff is promoted by `taskStatusRank`, which is
+ * where the old `needs_review` rank went.
+ */
 export const STATUS_RANK: Record<TaskStatus, number> = {
-  needs_review: 1,
   blocked: 2,
   interrupted: 3,
   running: 4,
-  idle: 5,
+  waiting: 5,
   queued: 6,
   done: 7,
 };
 
+/** Rank for a `waiting` task that left changes behind. */
+const AWAITS_REVIEW_RANK = 1;
+
 export const STATUS_LABEL: Record<TaskStatus, string> = {
-  needs_review: "Needs review",
   blocked: "Blocked",
   interrupted: "Interrupted",
   running: "Running",
-  idle: "Idle",
+  waiting: "Waiting",
   queued: "Queued",
   done: "Done",
 };
 
 export function taskStatusRank(task: TaskInfo, permission?: PermissionUpdate): number {
   if (permission) return 0;
+  if (awaitsReview(task)) return AWAITS_REVIEW_RANK;
   return STATUS_RANK[task.status];
 }
 
+/**
+ * Work that cannot move without a human: a permission prompt, a pipeline that
+ * suspended itself to ask, a blocked task, a session lost to a restart.
+ *
+ * A finished turn that left a diff is deliberately *not* here. It used to be,
+ * and it made the queue meaningless — nearly every task an agent touches ends
+ * that way, so "needs you" grew to dozens of rows that were really just "your
+ * work". Nothing is blocked: the diff waits in the sidebar, where the task is
+ * already listed, until you get to it.
+ */
 export function buildAttentionQueue(
   tasks: TaskInfo[],
   sessionUpdates: Record<string, SessionUpdate[]>,
@@ -64,8 +82,6 @@ export function buildAttentionQueue(
             : `review limit reached${waiting.question ? ` — ${waiting.question}` : ""}`,
         task,
       });
-    } else if (task.status === "needs_review") {
-      items.push({ priority: 1, reason: "finished — review changes", task });
     } else if (task.status === "blocked") {
       items.push({ priority: 2, reason: task.blockedReason ?? "blocked", task });
     } else if (task.status === "interrupted") {

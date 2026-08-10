@@ -39,7 +39,7 @@ export default function AttentionToast({
             {summary}
           </p>
           <Button type="button" size="sm" variant="secondary" onClick={onOpen} className="mt-3">
-            Open sessions
+            Open session
           </Button>
         </div>
       </div>

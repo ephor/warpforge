@@ -3,11 +3,161 @@ import userEvent from "@testing-library/user-event";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { EditHunk, SessionUpdate } from "../protocol";
-import { StreamLine } from "./MissionControl";
+import type { DaemonState } from "../daemon";
+import type { EditHunk, SessionUpdate, TaskInfo } from "../protocol";
+import { useUi } from "../store/ui";
+import MissionControl, { StreamLine } from "./MissionControl";
 import { appendCoalesced, coalesceUpdates } from "./missionControlStream";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  useUi.setState({ attentionTargetId: null, pinnedLayout: {}, pinnedTaskIds: [] });
+});
+
+function task(overrides: Partial<TaskInfo>): TaskInfo {
+  return {
+    agent: "claude",
+    blockedReason: null,
+    createdAt: 1,
+    filesChanged: 0,
+    id: "task-1",
+    project: "warpforge",
+    prompt: "Do the work",
+    status: "running",
+    tags: [],
+    title: "Do the work",
+    updatedAt: 10,
+    workflowRun: null,
+    ...overrides,
+  };
+}
+
+function missionState(
+  tasks: TaskInfo[],
+  sessionUpdates: Record<string, SessionUpdate[]> = {},
+): DaemonState {
+  return {
+    connection: "connected",
+    connectionError: null,
+    pendingAgentSetup: null,
+    portforwardLogs: {},
+    serviceLogs: {},
+    sessionUpdates,
+    snapshot: {
+      portforwards: [],
+      projects: [
+        {
+          agentTemplates: {},
+          declaredServices: ["api"],
+          name: "warpforge",
+          path: "/workspace/warpforge",
+          portRange: [4000, 4099],
+        },
+      ],
+      services: [
+        {
+          allocatedPort: 4000,
+          command: "bun run dev",
+          logSeq: 0,
+          name: "api",
+          originalPort: 3000,
+          project: "warpforge",
+          status: "running",
+        },
+      ],
+      tasks,
+      terminals: [],
+    },
+  };
+}
+
+describe("MissionControl overview", () => {
+  it("shows permission and workflow barriers in decision queue and opens task", async () => {
+    const user = userEvent.setup();
+    const onOpenTask = vi.fn<(id: string) => void>();
+    const permission = task({ id: "permission", title: "Allow deploy access" });
+    const workflow = task({
+      id: "workflow",
+      prompt: "Run review pipeline",
+      title: "Run review pipeline",
+      status: "waiting",
+      workflowRun: {
+        maxRounds: 2,
+        round: 2,
+        stage: "review",
+        verdict: "request_changes",
+        waiting: { kind: "limit", question: "2 findings remain" },
+        workflowId: "review-loop",
+        workflowName: "Review loop",
+      },
+    });
+    render(
+      createElement(MissionControl, {
+        state: missionState([permission, workflow], {
+          permission: [
+            {
+              kind: "permission_request",
+              options: ["allow", "deny"],
+              request_id: "permission-1",
+              title: "Allow deployment access?",
+            },
+          ],
+        }),
+        onNewTask: vi.fn<(project?: string) => void>(),
+        onOpenTask,
+      }),
+    );
+
+    expect(screen.getByRole("heading", { name: "Decision queue" })).toBeInTheDocument();
+    expect(screen.getByText("Allow deployment access?")).toBeInTheDocument();
+    expect(screen.getByText(/review limit reached — 2 findings remain/)).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "Open Allow deploy access" })[0]);
+    expect(onOpenTask).toHaveBeenCalledWith("permission");
+  });
+
+  it("keeps finished work with a diff out of the queue", () => {
+    // The queue is for work that cannot move without a human. A finished turn
+    // that left changes is not blocked — it is the resting state of nearly
+    // every task, which is exactly why counting it here made the number
+    // meaningless.
+    render(
+      createElement(MissionControl, {
+        state: missionState([
+          task({ id: "reviewable", title: "Ship API", status: "waiting", filesChanged: 4 }),
+        ]),
+        onNewTask: vi.fn<(project?: string) => void>(),
+        onOpenTask: vi.fn<(id: string) => void>(),
+      }),
+    );
+
+    expect(screen.queryByText("Ship API")).not.toBeInTheDocument();
+    expect(screen.getByText("Nothing is waiting for you.")).toBeInTheDocument();
+  });
+
+  it("counts running work separately from everything unfinished", () => {
+    render(
+      createElement(MissionControl, {
+        state: missionState([
+          task({ id: "one", title: "Ship API", status: "running" }),
+          task({ id: "two", title: "Queue docs", status: "waiting", updatedAt: 20 }),
+          // Settled by hand rather than by the daemon: still finished, so it
+          // must not inflate the count. Filtering on `status !== "done"` alone
+          // is what made this number disagree with the sidebar.
+          task({ id: "three", title: "Old thing", status: "waiting", settledOverride: true }),
+          task({ id: "four", title: "Shipped", status: "done" }),
+        ]),
+        onNewTask: vi.fn<(project?: string) => void>(),
+        onOpenTask: vi.fn<(id: string) => void>(),
+      }),
+    );
+
+    // The headline number and its caption must not contradict each other the
+    // way "Live work 0 / 35 active tasks total" did.
+    expect(screen.getByText("Running now")).toBeInTheDocument();
+    expect(screen.getByText("2 unfinished tasks")).toBeInTheDocument();
+  });
+});
 
 /** Reference incremental fold, mirroring ChatTranscript.useCoalesced. */
 function incrementalCoalesce(prefix: SessionUpdate[], tail: SessionUpdate[]) {

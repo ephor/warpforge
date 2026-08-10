@@ -54,12 +54,15 @@ export function ProjectList({
 }: ProjectListProps) {
   return (
     <Card className="flex min-h-0 flex-col rounded-md border-border/80 bg-card shadow-none">
-      <div className="flex h-10 items-center px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Projects
+      <div className="flex h-10 items-center gap-2 px-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <span>Projects</span>
+        <span className="tnum text-[11px] font-normal tracking-normal text-muted-foreground/70">
+          {projects.length}
+        </span>
       </div>
       <Separator />
       <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-0.5 p-1.5">
+        <div className="flex flex-col gap-0.5 p-1.5" role="list" aria-label="Projects">
           {projects.map((p) => {
             const active = p.name === selected;
             const up = runningByProject.get(p.name) ?? 0;
@@ -67,10 +70,12 @@ export function ProjectList({
             return (
               <div
                 key={p.name}
+                role="listitem"
                 onMouseEnter={() => onRowMouseEnter(p.name)}
                 onMouseLeave={onRowMouseLeave}
+                onFocus={() => onRowMouseEnter(p.name)}
                 className={cn(
-                  "relative flex h-8 items-center rounded px-2 text-sm transition-colors",
+                  "group relative flex min-h-10 items-center rounded px-1.5 text-sm transition-colors",
                   active ? "bg-secondary text-foreground" : "hover:bg-secondary/60",
                 )}
               >
@@ -78,7 +83,8 @@ export function ProjectList({
                   type="button"
                   onClick={() => onSelect(p.name)}
                   aria-label={`Select project ${p.name}`}
-                  className="flex flex-1 items-center gap-2 text-left"
+                  aria-current={active ? "page" : undefined}
+                  className="flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded px-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                 >
                   <FolderGit2 className="size-4 text-muted-foreground" />
                   <span className="flex-1 truncate">{p.name}</span>
@@ -110,7 +116,8 @@ export function ProjectList({
                       <button
                         type="button"
                         aria-label="Project menu"
-                        className="ml-1 flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                        title={`Actions for ${p.name}`}
+                        className="ml-1 flex size-8 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-background/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <EllipsisVertical className="size-3.5" />
@@ -144,7 +151,7 @@ export function ProjectList({
       <Button
         variant="ghost"
         size="sm"
-        className="m-1.5 h-7 gap-1.5 text-muted-foreground"
+        className="m-1.5 h-8 gap-1.5 text-muted-foreground"
         onClick={onAddProject}
       >
         <Plus className="size-4" />

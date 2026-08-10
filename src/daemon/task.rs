@@ -8,16 +8,18 @@ pub fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Mirror of `wire::TaskStatus`; see that enum for why `Waiting` is one state
+/// and not the old `Idle` / `NeedsReview` pair.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskStatus {
     Queued,
     Running,
-    /// Turn finished with no changes; waiting for the next message.
-    Idle,
-    NeedsReview,
-    Done,
+    /// Turn over; waiting on the human. Whether there is a diff to look at is
+    /// `files_changed > 0`, not a separate status.
+    Waiting,
     Blocked,
     Interrupted,
+    Done,
 }
 
 impl std::fmt::Display for TaskStatus {
@@ -25,8 +27,7 @@ impl std::fmt::Display for TaskStatus {
         let s = match self {
             TaskStatus::Queued => "queued",
             TaskStatus::Running => "running",
-            TaskStatus::Idle => "idle",
-            TaskStatus::NeedsReview => "needs_review",
+            TaskStatus::Waiting => "waiting",
             TaskStatus::Done => "done",
             TaskStatus::Blocked => "blocked",
             TaskStatus::Interrupted => "interrupted",

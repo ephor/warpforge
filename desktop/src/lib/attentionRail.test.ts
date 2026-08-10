@@ -21,7 +21,7 @@ function task(id: string, overrides: Partial<TaskInfo> & { status?: TaskStatus }
     parentTaskId: null,
     project: "warpforge",
     prompt: id,
-    status: "idle",
+    status: "waiting",
     tags: [],
     title: "",
     updatedAt: 1,
@@ -41,15 +41,21 @@ function permUpdate(requestId = "perm-1", title = "Write file?"): SessionUpdate 
 describe("taskStatusRank", () => {
   it("returns 0 when a permission is pending", () => {
     const perm = permUpdate() as Extract<SessionUpdate, { kind: "permission_request" }>;
-    expect(taskStatusRank(task("a", { status: "idle" }), perm)).toBe(0);
+    expect(taskStatusRank(task("a", { status: "waiting" }), perm)).toBe(0);
   });
 
   it("uses STATUS_RANK for tasks without permission", () => {
-    expect(taskStatusRank(task("a", { status: "needs_review" }))).toBe(1);
     expect(taskStatusRank(task("a", { status: "blocked" }))).toBe(2);
     expect(taskStatusRank(task("a", { status: "interrupted" }))).toBe(3);
     expect(taskStatusRank(task("a", { status: "running" }))).toBe(4);
     expect(taskStatusRank(task("a", { status: "done" }))).toBe(7);
+  });
+
+  it("promotes a waiting task only once it has changes to look at", () => {
+    // The two halves of the old `needs_review` / `idle` split, now told apart
+    // by the field rather than by the status.
+    expect(taskStatusRank(task("a", { status: "waiting", filesChanged: 1 }))).toBe(1);
+    expect(taskStatusRank(task("a", { status: "waiting", filesChanged: 0 }))).toBe(5);
   });
 });
 
@@ -68,30 +74,35 @@ function waitingRun(
 }
 
 describe("buildAttentionQueue", () => {
-  it("orders permission > review > blocked > interrupted", () => {
+  it("orders permission > blocked > interrupted", () => {
     const tasks = [
       task("blocked", { status: "blocked" }),
-      task("review", { status: "needs_review" }),
       task("interrupted", { status: "interrupted" }),
-      task("perm", { status: "idle" }),
+      task("perm", { status: "waiting" }),
     ];
     const updates: Record<string, SessionUpdate[]> = {
       perm: [permUpdate("p1", "Approve deploy")],
     };
     const queue = buildAttentionQueue(tasks, updates);
-    expect(queue.map((item) => item.task.id)).toStrictEqual([
-      "perm",
-      "review",
-      "blocked",
-      "interrupted",
-    ]);
+    expect(queue.map((item) => item.task.id)).toStrictEqual(["perm", "blocked", "interrupted"]);
+  });
+
+  it("leaves a finished turn with a diff out of the queue", () => {
+    // Nothing is blocked — the agent is done and the diff is waiting in the
+    // sidebar. Counting this as attention is what grew the queue to every
+    // task the user had ever run.
+    const tasks = [
+      task("review", { status: "waiting", filesChanged: 3 }),
+      task("idle", { status: "waiting" }),
+    ];
+    expect(buildAttentionQueue(tasks, {})).toStrictEqual([]);
   });
 
   it("sorts same-priority items by updatedAt desc, then id asc", () => {
     const tasks = [
-      task("b", { status: "needs_review", updatedAt: 10 }),
-      task("a", { status: "needs_review", updatedAt: 10 }),
-      task("c", { status: "needs_review", updatedAt: 20 }),
+      task("b", { status: "blocked", updatedAt: 10 }),
+      task("a", { status: "blocked", updatedAt: 10 }),
+      task("c", { status: "blocked", updatedAt: 20 }),
     ];
     const queue = buildAttentionQueue(tasks, {});
     expect(queue.map((item) => item.task.id)).toStrictEqual(["c", "a", "b"]);
@@ -124,14 +135,14 @@ describe("buildAttentionQueue — workflow pipelines", () => {
     expect(buildAttentionQueue([t], {})).toEqual([]);
   });
 
-  it("ranks a waiting pipeline under a permission but above needs_review", () => {
+  it("ranks a waiting pipeline under a permission but above a blocked task", () => {
     const tasks = [
-      task("review", { status: "needs_review" }),
+      task("blocked", { status: "blocked" }),
       task("wf", { status: "running", workflowRun: waitingRun("question", "?") }),
       task("perm", { status: "running" }),
     ];
     const queue = buildAttentionQueue(tasks, { perm: [permUpdate()] });
-    expect(queue.map((i) => i.task.id)).toEqual(["perm", "wf", "review"]);
+    expect(queue.map((i) => i.task.id)).toEqual(["perm", "wf", "blocked"]);
   });
 
   it("still reports a pending permission on a workflow stage child", () => {
@@ -218,7 +229,7 @@ describe("selectRailTasks", () => {
   it("updated sort uses status rank then id as tie-breakers", () => {
     const tasks = [
       task("b", { status: "blocked", updatedAt: 10 }),
-      task("a", { status: "needs_review", updatedAt: 10 }),
+      task("a", { status: "waiting", filesChanged: 1, updatedAt: 10 }),
       task("c", { status: "running", updatedAt: 10 }),
     ];
     expect(selectRailTasks(tasks, new Map(), "all", "", "updated").map((t) => t.id)).toStrictEqual([
@@ -232,7 +243,7 @@ describe("selectRailTasks", () => {
     const tasks = [
       task("b", { status: "blocked", updatedAt: 10 }),
       task("a", { status: "blocked", updatedAt: 10 }),
-      task("c", { status: "needs_review", updatedAt: 5 }),
+      task("c", { status: "waiting", filesChanged: 1, updatedAt: 5 }),
     ];
     expect(selectRailTasks(tasks, new Map(), "all", "", "status").map((t) => t.id)).toStrictEqual([
       "c",
@@ -274,7 +285,7 @@ describe("partitionRailTasks", () => {
     new Map(ids.map((id) => [id, { priority: 1, reason: "test", task: task(id) }]));
 
   it("excludes done tasks from all shelves", () => {
-    const tasks = [task("a", { status: "done" }), task("b", { status: "idle" })];
+    const tasks = [task("a", { status: "done" }), task("b", { status: "waiting" })];
     const result = partitionRailTasks(tasks, new Map(), now);
     expect(result.needsYou.map((t) => t.id)).toStrictEqual([]);
     expect(result.working.map((t) => t.id)).toStrictEqual(["b"]);

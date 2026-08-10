@@ -169,14 +169,13 @@ export interface PortForwardInfo {
   logSeq: number;
 }
 
-export type TaskStatus =
-  | "queued"
-  | "running"
-  | "idle"
-  | "needs_review"
-  | "done"
-  | "blocked"
-  | "interrupted";
+/**
+ * Mirrors the Rust `TaskStatus`. `waiting` is one state, not the old
+ * `idle` / `needs_review` pair: both meant "the agent yielded its turn", and
+ * whether there is a diff to look at is `TaskInfo.filesChanged`, not a status.
+ * The daemon still *reads* the legacy spellings off disk, but never emits them.
+ */
+export type TaskStatus = "queued" | "running" | "waiting" | "blocked" | "interrupted" | "done";
 
 export interface TaskInfo {
   id: string;

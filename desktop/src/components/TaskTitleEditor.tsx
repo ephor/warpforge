@@ -77,12 +77,12 @@ export function TaskTitleEditor({ task }: { task: TaskInfo }) {
 
   return (
     <div className="group/title flex min-w-0 flex-1 items-center gap-1" aria-busy={regenerating}>
-      <h1 className={cn("min-w-0 max-w-full text-base font-semibold", editing && "flex-1")}>
+      <h1 className={cn("min-w-0 max-w-full text-xs font-medium", editing && "flex-1")}>
         {editing ? (
           <input
             ref={inputRef}
             aria-label="Task title"
-            className="w-full min-w-0 border-0 bg-transparent p-0 text-base font-semibold text-foreground outline-none ring-0 focus:outline-none focus:ring-0"
+            className="w-full min-w-0 border-0 bg-transparent p-0 text-sm font-medium text-foreground outline-none ring-0 focus:outline-none focus:ring-0"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onBlur={() => void save()}
@@ -120,10 +120,10 @@ export function TaskTitleEditor({ task }: { task: TaskInfo }) {
           type="button"
           aria-label="Regenerate task title"
           title="Regenerate task title"
-          className="flex size-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity hover:bg-secondary hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring group-hover/title:opacity-100 disabled:cursor-wait disabled:opacity-100"
+          className="flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity hover:bg-secondary hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring group-hover/title:opacity-100 disabled:cursor-wait disabled:opacity-100"
           onClick={() => void regenerate()}
         >
-          <WandSparkles className="size-3.5" />
+          <WandSparkles className="size-3" />
         </button>
       )}
     </div>

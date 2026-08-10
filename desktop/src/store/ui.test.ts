@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   clampSidebarWidth,
+  DEFAULT_TASK_SURFACE,
   SIDEBAR_WIDTH_DEFAULT,
   SIDEBAR_WIDTH_MAX,
   SIDEBAR_WIDTH_MIN,
@@ -132,5 +133,108 @@ describe("sidebar width state", () => {
     await useUi.persist.rehydrate();
 
     expect(useUi.getState().sidebarWidth).toBe(400);
+  });
+});
+
+describe("task workspace surface state", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useUi.setState({
+      activeSurface: DEFAULT_TASK_SURFACE,
+      openTaskId: null,
+      showChat: true,
+      showDiff: true,
+    });
+  });
+
+  it("defaults to a single split state with Diff active", () => {
+    expect(useUi.getState().showChat).toBe(true);
+    expect(useUi.getState().showDiff).toBe(true);
+    expect(useUi.getState().activeSurface).toBe("diff");
+  });
+
+  it("focuses conversation and restores split view", () => {
+    useUi.getState().setShowDiff(false);
+    expect(useUi.getState().showChat).toBe(true);
+    expect(useUi.getState().showDiff).toBe(false);
+
+    useUi.getState().setShowDiff(true);
+    expect(useUi.getState().showChat).toBe(true);
+    expect(useUi.getState().showDiff).toBe(true);
+  });
+
+  it("focuses the surface pane and restores split view", () => {
+    useUi.getState().toggleChat();
+    expect(useUi.getState().showChat).toBe(false);
+    expect(useUi.getState().showDiff).toBe(true);
+
+    useUi.getState().toggleChat();
+    expect(useUi.getState().showChat).toBe(true);
+    expect(useUi.getState().showDiff).toBe(true);
+  });
+
+  it("switches the active surface to exactly one value at a time", () => {
+    useUi.getState().setActiveSurface("files");
+    expect(useUi.getState().activeSurface).toBe("files");
+
+    useUi.getState().setActiveSurface("runtime");
+    expect(useUi.getState().activeSurface).toBe("runtime");
+
+    useUi.getState().setActiveSurface("pipeline");
+    expect(useUi.getState().activeSurface).toBe("pipeline");
+  });
+
+  it("clears task-specific surface selection when opening a new task", () => {
+    useUi.getState().setActiveSurface("files");
+
+    useUi.getState().openTask("next-task");
+
+    expect(useUi.getState().openTaskId).toBe("next-task");
+    expect(useUi.getState().activeSurface).toBe(DEFAULT_TASK_SURFACE);
+  });
+
+  it("does not persist activeSurface across reload", () => {
+    useUi.getState().setActiveSurface("pipeline");
+
+    const persistedValue = localStorage.getItem("wf-ui");
+    const persisted = JSON.parse(persistedValue ?? "{}") as {
+      state?: { activeSurface?: unknown };
+    };
+    expect(persisted.state?.activeSurface).toBeUndefined();
+  });
+
+  it("migrates old persisted wf-ui state without an activeSurface key without throwing", async () => {
+    const legacyState = {
+      diffView: "split",
+      rightPanel: null,
+      runtimeOpenByProject: {},
+      showChat: true,
+      showDiff: true,
+    };
+    localStorage.setItem("wf-ui", JSON.stringify({ state: legacyState, version: 2 }));
+
+    await expect(useUi.persist.rehydrate()).resolves.not.toThrow();
+
+    // No stored value for the new key — falls back to a valid, defined surface.
+    expect(["files", "diff", "runtime", "pipeline"]).toContain(useUi.getState().activeSurface);
+  });
+
+  it("moves a persisted view off the removed Board screen", async () => {
+    // `view` is persisted and the Board view is gone, so without this
+    // migration a session that ended there rehydrates a `view` no branch
+    // renders.
+    localStorage.setItem("wf-ui", JSON.stringify({ state: { view: "board" }, version: 2 }));
+
+    await useUi.persist.rehydrate();
+
+    expect(useUi.getState().view).toBe("control");
+  });
+
+  it("leaves a persisted view alone when it is still reachable", async () => {
+    localStorage.setItem("wf-ui", JSON.stringify({ state: { view: "projects" }, version: 2 }));
+
+    await useUi.persist.rehydrate();
+
+    expect(useUi.getState().view).toBe("projects");
   });
 });

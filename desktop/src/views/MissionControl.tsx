@@ -32,10 +32,11 @@ import { withOccurrenceKeys } from "@/lib/renderKeys";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { latestPendingPermission } from "@/lib/sessionPermissions";
 import { elapsed } from "@/lib/status";
-import type { StatusKind } from "@/lib/statusMeta";
 import {
+  awaitsReview,
   buildTaskGroupIndex,
   flattenTaskTree,
+  isSettledTask,
   resolvePinnedTaskGroups,
   resolveGroupTaskId,
   setTaskGroupPinned,
@@ -51,12 +52,13 @@ import { AgentAvatarGroup } from "../components/AgentAvatar";
 import type { FileLinkResolver } from "../components/Markdown";
 import { BufferedMarkdown, CollapsibleMarkdown, Markdown } from "../components/Markdown";
 import { SessionChat } from "../components/SessionChat";
-import { StatusBadge } from "../components/StatusBadge";
+import { StatusBadge, type TaskBadgeStatus } from "../components/StatusBadge";
 import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { ThinkingBlock } from "../components/ThinkingBlock";
 import { WorkflowEventLine } from "../components/WorkflowEventLine";
 import type { DaemonState } from "../daemon";
 import { daemon } from "../daemon";
+import { buildAttentionQueue, type AttentionItem } from "../lib/attentionRail";
 import type {
   AgentConfig,
   CommandInfo,
@@ -85,6 +87,20 @@ const FOCUS_PANE_RAW_TAIL = 300;
 const GRID_SCROLL_EDGE = 48;
 const GRID_SCROLL_STEP = 24;
 const GRID_SCROLL_GAP = 8;
+
+function attentionStatus(item: AttentionItem): TaskBadgeStatus {
+  if (item.permission) return "permission";
+  if (item.task.workflowRun?.waiting) return "blocked";
+  return item.task.status;
+}
+
+function attentionAction(item: AttentionItem): string {
+  if (item.permission) return "Permission";
+  if (item.task.workflowRun?.waiting?.kind === "question") return "Answer";
+  if (item.task.workflowRun?.waiting?.kind === "limit") return "Choose next step";
+  if (awaitsReview(item.task)) return "Review";
+  return "Unblock";
+}
 
 function pointerClientY(event: Event): number | null {
   if ("clientY" in event && typeof event.clientY === "number") {
@@ -188,9 +204,16 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
     return () => observer.disconnect();
   }, []);
 
+  // `isSettledTask`, not `status !== "done"`: a task the user marked handled is
+  // finished too. Counting only the daemon's `done` made this number disagree
+  // with the sidebar, which hides both — same tasks, two different totals.
   const live = useMemo(
-    () => state.snapshot.tasks.filter((t) => t.status !== "done"),
+    () => state.snapshot.tasks.filter((task) => !isSettledTask(task)),
     [state.snapshot.tasks],
+  );
+  const attentionQueue = useMemo(
+    () => buildAttentionQueue(state.snapshot.tasks, state.sessionUpdates),
+    [state.sessionUpdates, state.snapshot.tasks],
   );
   const groupIndex = useMemo(
     () => buildTaskGroupIndex(state.snapshot.tasks),
@@ -199,6 +222,10 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
   const pinnedGroups = useMemo(
     () => resolvePinnedTaskGroups(groupIndex, pinned),
     [groupIndex, pinned],
+  );
+  const runningCount = useMemo(
+    () => live.filter((task) => task.status === "running" || task.status === "queued").length,
+    [live],
   );
 
   const layout = useMemo<LayoutItem[]>(() => {
@@ -254,68 +281,225 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
 
   return (
     <ScrollArea ref={scrollAreaRef} className="h-full min-h-0">
-      <div className="min-w-0 pb-2 pr-2">
-        <div ref={containerRef} className="flex min-w-0 w-full flex-col gap-2">
-          {pinnedGroups.length > 0 ? (
-            mounted && width > 0 ? (
-              <ReactGridLayout
-                className="layout"
-                layout={layout}
-                width={width}
-                gridConfig={{
-                  cols: 4,
-                  rowHeight,
-                  margin: [8, 0],
-                  containerPadding: [0, 0],
-                }}
-                dragConfig={{ enabled: true }}
-                resizeConfig={{
-                  enabled: true,
-                  handles: ["se", "sw", "ne", "nw", "n", "s", "e", "w"],
-                }}
-                onDragStart={beginGridInteraction}
-                onDragStop={endGridInteraction}
-                onResizeStart={beginResizeInteraction}
-                onResize={handleResize}
-                onResizeStop={revealResizedCard}
-                onLayoutChange={handleLayoutChange}
-              >
-                {pinnedGroups.map((tree) => (
-                  <div key={tree.task.id} className="h-full min-h-0">
-                    <FocusGroupPane
-                      tree={tree}
-                      updatesByTaskId={state.sessionUpdates}
-                      attentionTargetId={attentionTargetId}
-                      attentionTargetNonce={attentionTargetNonce}
-                      onUnpin={handleUnpin}
-                      onOpen={onOpenTask}
-                      agents={(state.snapshot.agents ?? []).filter((a) => a.enabled)}
-                    />
-                  </div>
-                ))}
-              </ReactGridLayout>
-            ) : null
-          ) : live.length > 0 ? (
-            <div className="mt-16 flex flex-col items-center gap-2 text-center text-muted-foreground">
-              <p className="text-foreground">No pinned sessions.</p>
-              <p className="max-w-md text-sm">
-                Pin sessions from the sidebar when you want them on the Mission Control board.
+      {/* `px-1`, matching Projects: `main` in App.tsx already pads the view,
+          so the responsive `px-4 sm:px-6 lg:px-8` this used to carry indented
+          Mission Control well past every other screen. */}
+      <div className="min-w-0 space-y-4 px-1 pb-4">
+        <header className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-primary">
+              Operations / all projects
+            </p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
+              Mission Control
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Decisions first. Live work stays visible.
+            </p>
+          </div>
+          <Button size="sm" onClick={() => onNewTask()}>
+            <Plus className="size-4" />
+            New task
+          </Button>
+        </header>
+
+        {/* Two numbers that mean what they say. "Workstreams" went: it counted
+            root task trees under a word used nowhere else in the product, and
+            "Live work" used to headline `running` while its own caption
+            counted everything unfinished — the number contradicted its label. */}
+        <section aria-label="Workspace summary" className="grid gap-2 sm:grid-cols-2">
+          <OverviewMetric
+            label="Needs you"
+            value={attentionQueue.length}
+            detail="permissions, questions, and blocked work"
+            tone="warn"
+          />
+          <OverviewMetric
+            label="Running now"
+            value={runningCount}
+            detail={`${live.length} unfinished task${live.length === 1 ? "" : "s"}`}
+          />
+        </section>
+
+        {/* Full width, and alone: the per-project task list that used to sit
+            beside it was the sidebar's tree redrawn flat, truncated and
+            without its hierarchy — worse than the thing already on screen. */}
+        <section className="min-w-0">
+          <DecisionQueue items={attentionQueue} onOpenTask={onOpenTask} />
+        </section>
+
+        <section aria-labelledby="pinned-work-heading" className="min-w-0">
+          <div className="mb-2 flex items-end justify-between gap-3">
+            <div>
+              <h2 id="pinned-work-heading" className="text-sm font-semibold text-foreground">
+                Pinned work
+              </h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Live sessions you chose to keep visible.
               </p>
             </div>
-          ) : null}
+            {pinnedGroups.length > 0 && (
+              <span className="tnum text-xs text-muted-foreground">
+                {pinnedGroups.length} session{pinnedGroups.length === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
 
-          {live.length === 0 ? (
-            <div className="mt-16 flex flex-col items-center gap-3 text-muted-foreground">
-              <p>No live sessions.</p>
-              <Button variant="outline" onClick={() => onNewTask()}>
-                <Plus className="size-4" />
-                Start a task
-              </Button>
-            </div>
-          ) : null}
-        </div>
+          <div ref={containerRef} className="min-w-0 w-full">
+            {pinnedGroups.length > 0 ? (
+              mounted && width > 0 ? (
+                <ReactGridLayout
+                  className="layout"
+                  layout={layout}
+                  width={width}
+                  gridConfig={{
+                    cols: 4,
+                    rowHeight,
+                    margin: [8, 0],
+                    containerPadding: [0, 0],
+                  }}
+                  dragConfig={{ enabled: true }}
+                  resizeConfig={{
+                    enabled: true,
+                    handles: ["se", "sw", "ne", "nw", "n", "s", "e", "w"],
+                  }}
+                  onDragStart={beginGridInteraction}
+                  onDragStop={endGridInteraction}
+                  onResizeStart={beginResizeInteraction}
+                  onResize={handleResize}
+                  onResizeStop={revealResizedCard}
+                  onLayoutChange={handleLayoutChange}
+                >
+                  {pinnedGroups.map((tree) => (
+                    <div key={tree.task.id} className="h-full min-h-0">
+                      <FocusGroupPane
+                        tree={tree}
+                        updatesByTaskId={state.sessionUpdates}
+                        attentionTargetId={attentionTargetId}
+                        attentionTargetNonce={attentionTargetNonce}
+                        onUnpin={handleUnpin}
+                        onOpen={onOpenTask}
+                        agents={(state.snapshot.agents ?? []).filter((a) => a.enabled)}
+                      />
+                    </div>
+                  ))}
+                </ReactGridLayout>
+              ) : null
+            ) : live.length > 0 ? (
+              <div className="flex flex-col items-center gap-1 rounded-md border border-dashed border-border/70 px-4 py-8 text-center text-muted-foreground">
+                <p className="text-sm text-foreground">No pinned sessions.</p>
+                <p className="max-w-md text-xs">
+                  Pin sessions from the sidebar when you want them on the Mission Control board.
+                </p>
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        {live.length === 0 && attentionQueue.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-border/70 px-4 py-10 text-center text-muted-foreground">
+            <p>No live sessions.</p>
+            <Button variant="outline" onClick={() => onNewTask()}>
+              <Plus className="size-4" />
+              Start a task
+            </Button>
+          </div>
+        ) : null}
       </div>
     </ScrollArea>
+  );
+}
+
+function OverviewMetric({
+  label,
+  value,
+  detail,
+  tone = "neutral",
+}: {
+  label: string;
+  value: number;
+  detail: string;
+  tone?: "neutral" | "warn";
+}) {
+  return (
+    <Card
+      className={cn(
+        "min-w-0 rounded-md border-border/70 bg-card/35 px-3 py-2.5 shadow-none",
+        tone === "warn" && "border-warn/40 bg-warn/[0.06]",
+      )}
+    >
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-xs text-muted-foreground">{label}</span>
+        <span className={cn("tnum text-xl font-semibold", tone === "warn" && "text-warn")}>
+          {value}
+        </span>
+      </div>
+      <p className="mt-1 truncate text-[11px] text-muted-foreground/80">{detail}</p>
+    </Card>
+  );
+}
+
+function DecisionQueue({
+  items,
+  onOpenTask,
+}: {
+  items: AttentionItem[];
+  onOpenTask: (id: string) => void;
+}) {
+  return (
+    <Card className="min-w-0 overflow-hidden rounded-md border-border/70 bg-card/35 shadow-none">
+      <div className="flex items-start gap-3 border-b border-border/60 px-3 py-3">
+        <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" />
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-foreground">Decision queue</h2>
+            <span className="tnum rounded-full bg-warn/10 px-1.5 py-px text-[11px] text-warn">
+              {items.length}
+            </span>
+          </div>
+          <p className="mt-0.5 text-xs text-muted-foreground">Only work blocked on human input.</p>
+        </div>
+      </div>
+      {items.length === 0 ? (
+        <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+          Nothing is waiting for you.
+        </div>
+      ) : (
+        <div className="max-h-[28rem] overflow-y-auto">
+          {items.map((item) => (
+            <button
+              key={item.task.id}
+              type="button"
+              onClick={() => onOpenTask(item.task.id)}
+              aria-label={`Open ${taskLabel(item.task)}`}
+              className="group flex w-full min-w-0 flex-col gap-1.5 border-b border-border/55 px-3 py-3 text-left transition-colors last:border-b-0 hover:bg-secondary/35 focus-visible:bg-secondary/35 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <StatusBadge status={attentionStatus(item)} size="xs" />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                  {taskLabel(item.task)}
+                </span>
+                <span className="shrink-0 text-[11px] font-medium text-primary">
+                  {attentionAction(item)}
+                </span>
+              </div>
+              <p className="truncate pl-1 text-xs text-muted-foreground" title={item.reason}>
+                {item.reason}
+              </p>
+              <div className="flex min-w-0 items-center gap-2 pl-1 text-[11px] text-muted-foreground/80">
+                <span className="truncate">{item.task.project}</span>
+                <span
+                  aria-hidden
+                  className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40"
+                />
+                <AgentAvatarGroup agentId={item.task.agent} />
+                <span className="tnum ml-auto shrink-0">{elapsed(item.task.updatedAt)} ago</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -396,9 +580,12 @@ function focusGroupPaneEqual(previous: FocusGroupPaneProps, next: FocusGroupPane
   );
 }
 
-/** Collapse a group status onto the StatusBadge vocabulary. */
-function groupStatusKind(status: TaskGroupStatus): StatusKind {
-  return status === "review" ? "needs_review" : status;
+/**
+ * Collapse a group status onto the StatusBadge vocabulary. "review" is a
+ * rollup, not a task status — the underlying tasks are `waiting` with a diff.
+ */
+function groupStatusKind(status: TaskGroupStatus): TaskBadgeStatus {
+  return status === "review" ? "waiting" : status;
 }
 
 function FocusPane({
@@ -432,12 +619,39 @@ function FocusPane({
     queryFn: daemonQuery<ProjectFile[]>("file.list", { task_id: task.id }),
     queryKey: ["fileList", task.id, "tracked"],
   });
-  const projectFiles = Array.isArray(fileListQuery.data) ? fileListQuery.data : [];
+  const projectFiles = useMemo(
+    () => (Array.isArray(fileListQuery.data) ? fileListQuery.data : []),
+    [fileListQuery.data],
+  );
   const capability = [...updates].reverse().find((update) => update.kind === "prompt_capabilities");
   const imageSupported = capability?.kind === "prompt_capabilities" ? capability.image : false;
   const activity = sessionActivity(task, stream);
   const openTask = useUi((s) => s.openTask);
+  const openTaskWithNav = useUi((s) => s.openTaskWithNav);
   const composerRef = useRef<import("../components/Composer").ComposerHandle>(null);
+  const knownFilePaths = useMemo(
+    () => new Set(projectFiles.map((file) => file.path)),
+    [projectFiles],
+  );
+  const resolvePinnedFilePath = useCallback(
+    (value: string): string | null => {
+      let path = value.trim().replace(/^['"`]+|['"`]+$/g, "");
+      path = path.replace(/:\d+(?::\d+)?$/, "");
+      path = path.replace(/[),;]+$/, "");
+      path = path.replace(/^\.\/+/, "");
+      return knownFilePaths.has(path) ? path : null;
+    },
+    [knownFilePaths],
+  );
+  const openFile = useCallback(
+    (path: string) => openTaskWithNav(task.id, { surface: "files", path }),
+    [openTaskWithNav, task.id],
+  );
+  const openFileDiff = useCallback(
+    (path: string, hunks?: EditHunk[]) =>
+      openTaskWithNav(task.id, { surface: "diff", path, hunks }),
+    [openTaskWithNav, task.id],
+  );
 
   return (
     <Card
@@ -534,9 +748,9 @@ function FocusPane({
         files={projectFiles}
         filesLoading={fileListQuery.isLoading}
         imageSupported={imageSupported}
-        onOpenFile={() => {}}
-        onOpenFileDiff={() => {}}
-        resolveFilePath={() => null}
+        onOpenFile={openFile}
+        onOpenFileDiff={openFileDiff}
+        resolveFilePath={resolvePinnedFilePath}
         task={task}
         updates={updates}
         agents={agents}

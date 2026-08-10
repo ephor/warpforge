@@ -36,7 +36,7 @@ export function FileMentionMenu({
           )}
         >
           <span className="min-w-0 flex-1 truncate">{file.path}</span>
-          {file.changed && <span className="text-amber-400">changed</span>}
+          {file.changed && <span className="text-info">changed</span>}
         </button>
       ))}
     </div>

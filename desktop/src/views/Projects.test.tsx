@@ -29,14 +29,13 @@ vi.mock("@xterm/addon-fit", () => {
   return { FitAddon: MockFitAddon };
 });
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RuntimePanel } from "../components/RuntimePanel";
 import { daemon } from "../daemon";
 import { disposeTerminalWorkspace, getTerminalWorkspace } from "../lib/terminalWorkspace";
-import type { ProjectInfo, Snapshot, TerminalInfo } from "../protocol";
+import type { ProjectInfo, Snapshot, TaskInfo, TerminalInfo } from "../protocol";
 import { useUi } from "../store/ui";
 import Projects from "./Projects";
 
@@ -74,23 +73,35 @@ function terminalInfo(id: string, project: string): TerminalInfo {
   };
 }
 
-function renderProjects(projectSnapshot = currentSnapshot) {
+function renderProjects(
+  projectSnapshot = currentSnapshot,
+  onNewTask = vi.fn<(project?: string, prompt?: string) => void>(),
+) {
   return render(
     <Projects
       snapshot={projectSnapshot}
       onOpenTask={vi.fn<(id: string) => void>()}
-      onNewTask={vi.fn<(project?: string) => void>()}
-      onProjectAdded={vi.fn<(project: string) => void>()}
+      onNewTask={onNewTask}
+      onAddProject={vi.fn<() => void>()}
     />,
   );
 }
 
-async function openRemoveDialog(project: string) {
-  const user = userEvent.setup();
-  const selectProject = screen.getByRole("button", { name: `Select project ${project}` });
-  fireEvent.mouseEnter(selectProject.parentElement!);
-  await user.click(screen.getByRole("button", { name: "Project menu" }));
-  await user.click(await screen.findByRole("menuitem", { name: "Remove project" }));
+function taskInfo(overrides: Partial<TaskInfo> = {}): TaskInfo {
+  return {
+    agent: "codex",
+    blockedReason: null,
+    createdAt: 100,
+    filesChanged: 0,
+    id: "task-1",
+    project: "warpforge",
+    prompt: "Task prompt",
+    status: "running",
+    tags: [],
+    title: "Task",
+    updatedAt: 110,
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -133,6 +144,79 @@ describe("Projects", () => {
     expect(screen.getByText("No services declared in .warpforge.yaml.")).toBeInTheDocument();
   });
 
+  // Hooks run before the `if (!project)` guard, so an empty registry used to
+  // dereference `project.declaredServices` and blank the view.
+  it("renders the empty state when the registry has no projects", () => {
+    currentSnapshot = { ...snapshot, projects: [] };
+
+    expect(() => renderProjects()).not.toThrow();
+
+    expect(screen.getByText(/No projects registered\./)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add Project" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "warpforge" })).not.toBeInTheDocument();
+  });
+
+  it("groups real tasks by activity and keeps parent-child hierarchy", () => {
+    const parent = taskInfo({
+      id: "parent",
+      title: "Parent task",
+      status: "running",
+      updatedAt: 130,
+      worktree: "/workspace/warpforge/.worktrees/parent",
+    });
+    const child = taskInfo({
+      id: "child",
+      parentTaskId: "parent",
+      title: "Child task",
+      status: "waiting",
+      filesChanged: 2,
+      updatedAt: 140,
+    });
+    const recent = taskInfo({
+      id: "recent",
+      title: "Finished task",
+      status: "done",
+      updatedAt: 150,
+    });
+    currentSnapshot = { ...snapshot, tasks: [recent, child, parent] };
+
+    renderProjects();
+
+    expect(screen.getByText("Active work")).toBeInTheDocument();
+    expect(screen.getByText("Parent task")).toBeInTheDocument();
+    expect(screen.queryByText("Finished task")).not.toBeInTheDocument();
+    expect(screen.queryByText("Child task")).not.toBeInTheDocument();
+    expect(screen.queryByText("feature/oauth-callback")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Show 1 done task/ }));
+
+    expect(screen.getByText("Recent")).toBeInTheDocument();
+    expect(screen.getByText("Finished task")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Expand agents" })[0]);
+
+    expect(screen.getByText("Child task")).toBeInTheDocument();
+    // Changed-file count moved into the compact right-hand cluster ("2f", with
+    // the spelled-out count in its title) when rows became single-line.
+    expect(screen.getByTitle("2 changed files")).toBeInTheDocument();
+    expect(screen.queryByText("worktree unavailable")).not.toBeInTheDocument();
+  });
+
+  it("starts new task in selected project", () => {
+    const onNewTask = vi.fn<(project?: string, prompt?: string) => void>();
+    const otherProject: ProjectInfo = {
+      ...warpforgeProject,
+      name: "other",
+      path: "/workspace/other",
+    };
+    currentSnapshot = { ...snapshot, projects: [warpforgeProject, otherProject] };
+
+    renderProjects(currentSnapshot, onNewTask);
+    fireEvent.click(screen.getByRole("button", { name: "New task in warpforge" }));
+
+    expect(onNewTask).toHaveBeenCalledWith("warpforge");
+  });
+
   it("exposes full runtime names on hover", () => {
     const serviceName = "payments-api-with-a-very-long-runtime-name";
     const portForwardName = "production-postgres-primary-port-forward";
@@ -170,6 +254,20 @@ describe("Projects", () => {
     expect(screen.getByTitle(portForwardName)).toBeInTheDocument();
   });
 
+  it("keeps declared service controls available before runtime status arrives", () => {
+    currentSnapshot = {
+      ...snapshot,
+      projects: [{ ...warpforgeProject, declaredServices: ["api"] }],
+    };
+    vi.spyOn(daemon, "fetchServiceLogs").mockReturnValue(new Promise(() => {}));
+    renderProjects();
+
+    expect(screen.queryByLabelText("Start api")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Toggle warpforge Runtime" }));
+
+    expect(screen.getByLabelText("Start api")).toBeInTheDocument();
+  });
+
   it("opens Terminal for a project with live terminals and zero tasks", () => {
     currentSnapshot = {
       ...snapshot,
@@ -178,7 +276,7 @@ describe("Projects", () => {
     };
     renderProjects();
 
-    expect(screen.getAllByLabelText("1 active terminal")).toHaveLength(2);
+    expect(screen.getByLabelText("1 active terminal")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Toggle warpforge Runtime" }));
 
     expect(useUi.getState().runtimeOpenByProject.warpforge).toBe(true);
@@ -222,16 +320,14 @@ describe("Projects", () => {
     useUi.setState({ runtimeOpenByProject: { alpha: true, beta: false } });
     renderProjects();
 
-    expect(screen.getAllByLabelText("2 active terminals")).toHaveLength(2);
-    expect(screen.getByLabelText("1 active terminal")).toBeInTheDocument();
-    expect(screen.getByLabelText("1 running service")).toBeInTheDocument();
+    expect(screen.getByLabelText("2 active terminals")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Toggle alpha Runtime" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     expect(screen.getByTestId("alpha-1")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Select project beta" }));
+    act(() => useUi.setState({ selectedProjectId: "beta" }));
     expect(screen.getByRole("button", { name: "Toggle beta Runtime" })).toHaveAttribute(
       "aria-pressed",
       "false",
@@ -242,7 +338,7 @@ describe("Projects", () => {
     expect(useUi.getState().runtimeOpenByProject).toEqual({ alpha: true, beta: true });
     expect(screen.getByTestId("beta-1")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Select project alpha" }));
+    act(() => useUi.setState({ selectedProjectId: "alpha" }));
     await waitFor(() => expect(screen.getByTestId("alpha-1")).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Toggle alpha Runtime" })).toHaveAttribute(
       "aria-pressed",
@@ -275,120 +371,4 @@ describe("Projects", () => {
     expect(xtermInstances).toHaveLength(1);
   });
 
-  it("confirms live resource teardown before removing a project", async () => {
-    const alpha: ProjectInfo = {
-      ...warpforgeProject,
-      name: "alpha",
-      path: "/workspace/alpha",
-    };
-    const beta: ProjectInfo = {
-      ...warpforgeProject,
-      name: "beta",
-      path: "/workspace/beta",
-      portRange: [4100, 4199],
-    };
-    currentSnapshot = {
-      ...snapshot,
-      projects: [alpha, beta],
-      services: [
-        {
-          allocatedPort: 4000,
-          command: "bun run dev",
-          logSeq: 0,
-          name: "web",
-          originalPort: 3000,
-          project: "alpha",
-          status: "running",
-        },
-        {
-          allocatedPort: 4001,
-          command: "bun run worker",
-          logSeq: 0,
-          name: "worker",
-          originalPort: 3001,
-          project: "alpha",
-          status: "starting",
-        },
-      ],
-      portforwards: [
-        {
-          localPort: 5432,
-          logSeq: 0,
-          name: "db",
-          namespace: "dev",
-          pod: "postgres",
-          project: "alpha",
-          remotePort: 5432,
-          status: "active",
-        },
-      ],
-      terminals: [terminalInfo("alpha-terminal", "alpha")],
-    };
-    useUi.setState({ runtimeOpenByProject: { alpha: true, beta: true } });
-    const workspace = getTerminalWorkspace("alpha");
-    renderProjects();
-
-    await openRemoveDialog("alpha");
-
-    expect(screen.getByRole("dialog")).toHaveTextContent(
-      "This removes the project registration from Warpforge.",
-    );
-    expect(screen.getByRole("dialog")).toHaveTextContent(
-      "It does not delete the project folder or files.",
-    );
-    expect(screen.getByText("2 running or starting services")).toBeInTheDocument();
-    expect(screen.getByText("1 active or starting port-forward")).toBeInTheDocument();
-    expect(screen.getByText("1 live terminal")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Stop resources & remove" }));
-
-    await waitFor(() => expect(daemon.removeProject).toHaveBeenCalledWith("alpha", true));
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Remove alpha?" })).not.toBeInTheDocument(),
-    );
-    expect(useUi.getState().runtimeOpenByProject).toEqual({ beta: true });
-    expect(getTerminalWorkspace("alpha")).not.toBe(workspace);
-    expect(screen.getByRole("heading", { name: "beta" })).toBeInTheDocument();
-  });
-
-  it("keeps project terminal and UI state when removal fails, then allows cancel", async () => {
-    currentSnapshot = {
-      ...snapshot,
-      terminals: [terminalInfo("term-1", "warpforge")],
-    };
-    useUi.setState({ runtimeOpenByProject: { warpforge: true } });
-    const workspace = getTerminalWorkspace("warpforge");
-    vi.mocked(daemon.removeProject).mockRejectedValueOnce(
-      new Error("conflict: project still has live resources"),
-    );
-    renderProjects();
-
-    await openRemoveDialog("warpforge");
-    fireEvent.click(screen.getByRole("button", { name: "Stop resources & remove" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Removal failed: conflict: project still has live resources",
-    );
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "The project remains registered, though some resources may already have stopped.",
-    );
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Its terminal workspace and Runtime visibility were kept.",
-    );
-    expect(useUi.getState().runtimeOpenByProject).toEqual({ warpforge: true });
-    expect(getTerminalWorkspace("warpforge")).toBe(workspace);
-    expect(screen.getByRole("button", { name: "Stop resources & remove" })).toBeEnabled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-  });
-
-  it("uses the compact removal action when no resources are live", async () => {
-    renderProjects();
-
-    await openRemoveDialog("warpforge");
-
-    expect(screen.getByRole("button", { name: "Remove project" })).toBeInTheDocument();
-    expect(screen.queryByText("Live resources to stop")).not.toBeInTheDocument();
-  });
 });

@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { toast } from "sonner";
 
 import AppHeader from "@/components/AppHeader";
-import AttentionRail from "@/components/AttentionRail";
 import AttentionToast from "@/components/AttentionToast";
 import BootstrapWizard from "@/components/BootstrapWizard";
 import ErrorBoundary from "@/components/ErrorBoundary";
+import Sidebar from "@/components/Sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { daemon } from "@/daemon";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -17,9 +17,8 @@ import { useFontScaling } from "./hooks/useFontScaling";
 import { usePullShortcut } from "./hooks/usePullShortcut";
 import { usePushShortcut } from "./hooks/usePushShortcut";
 import { useTauriClose } from "./hooks/useTauriClose";
-import { cn } from "./lib/utils";
 import AgentSetupDialog from "./views/AgentSetupDialog";
-import Board from "./views/Board";
+import AddProjectDialog from "./views/AddProjectDialog";
 import MissionControl from "./views/MissionControl";
 import NewTaskDialog from "./views/NewTaskDialog";
 import Projects from "./views/Projects";
@@ -38,9 +37,9 @@ function LiveMissionControl({
   return <MissionControl state={state} onOpenTask={onOpenTask} onNewTask={onNewTask} />;
 }
 
-function LiveAttentionRail({ onOpenTask }: { onOpenTask: (id: string) => void }) {
+function LiveSidebar(props: Omit<React.ComponentProps<typeof Sidebar>, "state">) {
   const state = useSyncExternalStore(daemon.subscribe, daemon.getState);
-  return <AttentionRail state={state} onOpenTask={onOpenTask} />;
+  return <Sidebar state={state} {...props} />;
 }
 
 const getSnapshot = () => daemon.getState().snapshot;
@@ -49,6 +48,8 @@ const getConnectionError = () => daemon.getState().connectionError;
 const getPendingAgentSetup = () => daemon.getState().pendingAgentSetup;
 
 const SIDEBAR_RESIZE_STEP = 10;
+/** Icon-rail width when the sidebar is collapsed. */
+const SIDEBAR_COLLAPSED_WIDTH = 64;
 
 function SidebarResizeHandle({
   width,
@@ -138,20 +139,20 @@ export default function App() {
   const pendingAgentSetup = useSyncExternalStore(daemon.subscribe, getPendingAgentSetup);
   const view = useUi((s) => s.view);
   const setView = useUi((s) => s.setView);
+  const openProject = useUi((s) => s.openProject);
   const openTaskId = useUi((s) => s.openTaskId);
   const setOpenTaskId = useUi((s) => s.openTask);
-  const attentionOpen = useUi((s) => s.attentionOpen);
-  const toggleAttention = useUi((s) => s.toggleAttention);
-  const setAttentionOpen = useUi((s) => s.setAttentionOpen);
   const sidebarWidth = useUi((s) => s.sidebarWidth);
   const setSidebarWidth = useUi((s) => s.setSidebarWidth);
+  const sidebarCollapsed = useUi((s) => s.sidebarCollapsed);
+  const toggleSidebarCollapsed = useUi((s) => s.toggleSidebarCollapsed);
   const isWide = useMediaQuery("(min-width: 1024px)");
-  const showPersistent = isWide && attentionOpen;
+  const showPersistent = isWide;
   const [newTaskProject, setNewTaskProject] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [pushOpen, setPushOpen] = useState(false);
-  const [railMounted, setRailMounted] = useState(attentionOpen);
+  const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [wizardProject, setWizardProject] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -162,124 +163,126 @@ export default function App() {
   const handleOpenTask = useCallback(
     (id: string) => {
       setOpenTaskId(id);
-      if (!isWide) setAttentionOpen(false);
     },
-    [isWide, setAttentionOpen, setOpenTaskId],
+    [setOpenTaskId],
   );
 
   const openTask = snapshot.tasks.find((t) => t.id === openTaskId) ?? null;
 
-  useEffect(() => {
-    if (attentionOpen) {
-      setRailMounted(true);
-      return;
-    }
-    const timer = window.setTimeout(() => setRailMounted(false), 300);
-    return () => window.clearTimeout(timer);
-  }, [attentionOpen]);
-
-  const startNewTask = (project?: string, prompt?: string) => {
+  const startNewTask = useCallback((project?: string, prompt?: string) => {
     setNewTaskProject(project ?? null);
     setNewTaskPrompt(prompt);
     setNewTaskOpen(true);
-  };
+  }, []);
+
+  const handleProjectAdded = useCallback(
+    (name: string) => {
+      openProject(name);
+      toast("Project added", {
+        description: `Run the setup wizard for ${name}`,
+        duration: Number.POSITIVE_INFINITY,
+        action: {
+          label: "Open wizard",
+          onClick: () => setWizardProject(name),
+        },
+      });
+    },
+    [openProject],
+  );
+
+  // The sidebar advertises ⌘N next to New task, so the shortcut lives here
+  // rather than inside the sidebar, which is unmounted while it is closed.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (event.key.toLowerCase() !== "n") return;
+      event.preventDefault();
+      startNewTask();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [startNewTask]);
 
   usePullShortcut(snapshot.tasks);
   usePushShortcut(snapshot.tasks, setPushOpen);
 
+  const sidebarProps = {
+    collapsed: sidebarCollapsed,
+    connection,
+    connectionError,
+    onNewTask: () => startNewTask(),
+    onOpenSettings: () => setSettingsOpen(true),
+    onOpenTask: handleOpenTask,
+    onSelectView: setView,
+    onOpenProject: openProject,
+    onToggleCollapsed: toggleSidebarCollapsed,
+    openTaskId,
+    view,
+  };
+  const persistentWidth = sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth;
+
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="relative flex h-screen flex-col bg-background">
-        <AppHeader
-          view={view}
-          setView={setView}
-          openTask={openTask}
-          setOpenTaskId={setOpenTaskId}
-          attentionOpen={attentionOpen}
-          toggleAttention={toggleAttention}
-          connection={connection}
-          connectionError={connectionError}
-          onNewTask={() => startNewTask()}
-          onOpenSettings={() => setSettingsOpen(true)}
-        />
-
-        <div className="flex min-h-0 flex-1 overflow-hidden p-2">
-          {showPersistent && railMounted && (
-            <>
-              <aside
-                style={{ width: sidebarWidth, minWidth: sidebarWidth, maxWidth: sidebarWidth }}
-                className="flex shrink-0 flex-col overflow-hidden"
-                data-testid="persistent-sidebar"
-              >
-                <LiveAttentionRail onOpenTask={handleOpenTask} />
-              </aside>
+      {/* Prototype shell: full-height sidebar beside a column of topbar + content. */}
+      <div className="relative flex h-screen bg-background">
+        {showPersistent && (
+          <>
+            <aside
+              style={{
+                width: persistentWidth,
+                minWidth: persistentWidth,
+                maxWidth: persistentWidth,
+              }}
+              className="flex shrink-0 flex-col overflow-hidden"
+              data-testid="persistent-sidebar"
+            >
+              <LiveSidebar {...sidebarProps} />
+            </aside>
+            {!sidebarCollapsed && (
               <SidebarResizeHandle width={sidebarWidth} onWidthChange={setSidebarWidth} />
-            </>
-          )}
-          <main className="min-h-0 flex-1 overflow-hidden">
+            )}
+          </>
+        )}
+
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <AppHeader
+            view={view}
+            openTask={openTask}
+            onAddProject={() => setAddProjectOpen(true)}
+            onCloseTask={() => setOpenTaskId(null)}
+          />
+          <main className="min-h-0 flex-1 overflow-hidden p-2">
             <ErrorBoundary>
               {openTask ? (
                 <TaskDetail
                   key={openTask.id}
                   task={openTask}
                   snapshot={snapshot}
-                  onClose={() => setOpenTaskId(null)}
                   onOpenTask={setOpenTaskId}
                   onOpenPush={() => setPushOpen(true)}
                 />
               ) : view === "control" ? (
                 <LiveMissionControl onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
-              ) : view === "board" ? (
-                <Board snapshot={snapshot} onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
               ) : (
                 <Projects
                   snapshot={snapshot}
                   onOpenTask={setOpenTaskId}
                   onNewTask={startNewTask}
-                  onProjectAdded={(name) => {
-                    toast("Project added", {
-                      description: `Run the setup wizard for ${name}`,
-                      duration: Number.POSITIVE_INFINITY,
-                      action: {
-                        label: "Open wizard",
-                        onClick: () => setWizardProject(name),
-                      },
-                    });
-                  }}
+                  onAddProject={() => setAddProjectOpen(true)}
                 />
               )}
             </ErrorBoundary>
           </main>
         </div>
 
-        {!isWide && (
-          <div
-            className={cn(
-              "absolute bottom-0 left-0 right-0 top-11 z-20",
-              attentionOpen ? "pointer-events-auto" : "pointer-events-none",
-            )}
-          >
-            <button
-              type="button"
-              aria-label="Close sessions rail"
-              className="absolute inset-0 cursor-default"
-              disabled={!attentionOpen}
-              onClick={toggleAttention}
-            />
-            <div
-              aria-hidden={!attentionOpen}
-              inert={!attentionOpen}
-              className={cn(
-                "absolute bottom-0 left-0 top-0 w-[340px] transition-transform duration-300 ease-in-out",
-                attentionOpen ? "translate-x-0" : "-translate-x-full",
-              )}
-            >
-              {railMounted && <LiveAttentionRail onOpenTask={handleOpenTask} />}
-            </div>
-          </div>
-        )}
-
         {pushOpen && <PushDialog open onOpenChange={setPushOpen} task={openTask} />}
+        {addProjectOpen && (
+          <AddProjectDialog
+            open
+            onOpenChange={setAddProjectOpen}
+            onAdded={handleProjectAdded}
+          />
+        )}
         {newTaskOpen && (
           <NewTaskDialog
             open
@@ -318,7 +321,7 @@ export default function App() {
                     summary="Agent is writing .warpforge.yaml in background"
                     onDismiss={() => toast.dismiss(sonnerId)}
                     onOpen={() => {
-                      useUi.getState().focusAttentionTask(taskId);
+                      useUi.getState().openTask(taskId);
                       toast.dismiss(sonnerId);
                     }}
                   />

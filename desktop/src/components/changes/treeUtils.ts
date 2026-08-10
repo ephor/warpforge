@@ -72,7 +72,7 @@ export function leaves(node: Node): string[] {
 export const STATUS: Record<FileDiff["status"], { glyph: string; color: string }> = {
   added: { color: "text-ok", glyph: "A" },
   deleted: { color: "text-destructive", glyph: "D" },
-  modified: { color: "text-sky-400", glyph: "M" },
+  modified: { color: "text-info", glyph: "M" },
   renamed: { color: "text-warn", glyph: "R" },
 };
 

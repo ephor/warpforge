@@ -27,6 +27,8 @@ interface Props {
   updates: SessionUpdate[];
   agents: AgentConfig[];
   onOpenTask: (id: string) => void;
+  /** Transcript only, no composer — see `SessionChatProps.readOnly`. */
+  readOnly?: boolean;
 }
 
 export function ChatTranscript(props: Props) {

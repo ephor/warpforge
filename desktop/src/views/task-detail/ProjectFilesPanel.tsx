@@ -182,7 +182,7 @@ export function ProjectFilesPanel({
                       <FileText
                         className={cn(
                           "size-3.5 shrink-0",
-                          row.node.changed ? "text-sky-400" : "text-muted-foreground",
+                          row.node.changed ? "text-info" : "text-muted-foreground",
                         )}
                       />
                     )}

@@ -350,7 +350,7 @@ export default function BootstrapWizard({ project, agents, open, onOpenChange, o
             Step {stepIndex + 1} of {steps.length}
           </div>
           {renderForm()}
-          {error && <p className="text-xs text-red-400">{error}</p>}
+          {error && <p className="text-xs text-destructive">{error}</p>}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={isFirst ? close : () => setStepIndex((i) => i - 1)}>

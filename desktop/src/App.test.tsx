@@ -47,9 +47,6 @@ vi.mock("./views/MissionControl", () => ({
     <div data-testid="mission-control" onClick={() => props.onOpenTask("task-1")} />
   ),
 }));
-vi.mock("./views/Board", () => ({
-  default: vi.fn<() => React.ReactNode>(() => <div data-testid="board" />),
-}));
 vi.mock("./views/Projects", () => ({
   default: vi.fn<() => React.ReactNode>(() => <div data-testid="projects" />),
 }));
@@ -71,8 +68,8 @@ vi.mock("./views/AgentSetupDialog", () => ({
 vi.mock("./views/BootstrapWizard", () => ({
   default: vi.fn<() => React.ReactNode>(() => <div data-testid="bootstrap-wizard" />),
 }));
-vi.mock("./components/AttentionRail", () => ({
-  default: vi.fn<() => React.ReactNode>(() => <div data-testid="attention-rail">Rail</div>),
+vi.mock("./components/Sidebar", () => ({
+  default: vi.fn<() => React.ReactNode>(() => <div data-testid="app-sidebar">Sidebar</div>),
 }));
 vi.mock("./components/AttentionToast", () => ({
   default: vi.fn<() => React.ReactNode>(() => <div data-testid="attention-toast" />),
@@ -94,7 +91,7 @@ function setWide(wide: boolean) {
 beforeEach(() => {
   localStorage.clear();
   useUi.setState({
-    attentionOpen: true,
+    sidebarCollapsed: false,
     sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
     view: "control",
     openTaskId: null,
@@ -110,26 +107,23 @@ afterEach(() => {
 describe("App sidebar layout", () => {
   it("renders exactly one persistent sidebar on wide viewports", () => {
     setWide(true);
-    useUi.setState({ attentionOpen: true });
 
     render(<App />);
 
     expect(screen.getByTestId("persistent-sidebar")).toBeInTheDocument();
     expect(screen.getByTestId("sidebar-resize-handle")).toBeInTheDocument();
-    expect(screen.getAllByTestId("attention-rail")).toHaveLength(1);
+    expect(screen.getAllByTestId("app-sidebar")).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "Close sessions rail" })).not.toBeInTheDocument();
   });
 
-  it("renders exactly one off-canvas sidebar on narrow viewports", () => {
+  it("renders no sidebar on narrow viewports", () => {
     setWide(false);
-    useUi.setState({ attentionOpen: true });
 
     render(<App />);
 
     expect(screen.queryByTestId("persistent-sidebar")).not.toBeInTheDocument();
     expect(screen.queryByTestId("sidebar-resize-handle")).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("attention-rail")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: "Close sessions rail" })).toBeInTheDocument();
+    expect(screen.queryByTestId("app-sidebar")).not.toBeInTheDocument();
   });
 
   it("persistent sidebar uses store width", () => {
@@ -140,6 +134,24 @@ describe("App sidebar layout", () => {
 
     const sidebar = screen.getByTestId("persistent-sidebar");
     expect(sidebar.style.width).toBe("400px");
+  });
+
+  it("collapsed sidebar shrinks to the icon rail and drops the resize handle", () => {
+    setWide(true);
+    useUi.setState({ sidebarCollapsed: true, sidebarWidth: 400 });
+
+    render(<App />);
+
+    expect(screen.getByTestId("persistent-sidebar").style.width).toBe("64px");
+    expect(screen.queryByTestId("sidebar-resize-handle")).not.toBeInTheDocument();
+  });
+
+  it("⌘N opens the new task dialog", () => {
+    render(<App />);
+
+    expect(screen.queryByTestId("new-task-dialog")).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "n", metaKey: true });
+    expect(screen.getByTestId("new-task-dialog")).toBeInTheDocument();
   });
 });
 
@@ -234,8 +246,8 @@ describe("SidebarResizeHandle ARIA", () => {
   });
 });
 
-describe("Responsive transition", () => {
-  it("switches from persistent to off-canvas when viewport narrows", () => {
+describe("Responsive behavior", () => {
+  it("hides the sidebar when viewport narrows", () => {
     setWide(true);
 
     const { rerender } = render(<App />);
@@ -247,7 +259,7 @@ describe("Responsive transition", () => {
     expect(screen.queryByTestId("persistent-sidebar")).not.toBeInTheDocument();
   });
 
-  it("switches from off-canvas to persistent when viewport widens", () => {
+  it("shows the sidebar when viewport widens", () => {
     setWide(false);
 
     const { rerender } = render(<App />);
@@ -259,9 +271,8 @@ describe("Responsive transition", () => {
     expect(screen.getByTestId("persistent-sidebar")).toBeInTheDocument();
   });
 
-  it("no blocking overlay when transitioning from persistent to off-canvas", () => {
+  it("renders no off-canvas overlay on any viewport", () => {
     setWide(true);
-    useUi.setState({ attentionOpen: false });
 
     const { rerender } = render(<App />);
     expect(screen.queryByRole("button", { name: "Close sessions rail" })).not.toBeInTheDocument();
@@ -269,16 +280,14 @@ describe("Responsive transition", () => {
     setWide(false);
     rerender(<App />);
 
-    const overlayButton = screen.getByRole("button", { name: "Close sessions rail" });
-    expect(overlayButton).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Close sessions rail" })).not.toBeInTheDocument();
   });
 });
 
 describe("AppHeader sidebar control", () => {
-  it("has one sidebar control and no legacy beta toggle", () => {
+  it("has no header sidebar toggle (collapse lives in the sidebar)", () => {
     render(<App />);
 
-    expect(screen.getAllByRole("button", { name: "Toggle attention sidebar" })).toHaveLength(1);
-    expect(screen.queryByTestId("persistent-sidebar-toggle")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Toggle attention sidebar" })).not.toBeInTheDocument();
   });
 });

@@ -9,6 +9,7 @@ use tauri_plugin_shell::{
 use warpforge_protocol::DaemonEndpoint;
 
 mod desktop_env;
+mod notifications;
 mod sidecar_log;
 
 use sidecar_log::SidecarLog;
@@ -158,6 +159,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            notifications::init();
             let sidecar_log = match SidecarLog::open() {
                 Ok(log) => log,
                 Err(error) => {
@@ -233,7 +235,7 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![daemon_endpoint])
+        .invoke_handler(tauri::generate_handler![daemon_endpoint, notifications::notify_attention])
         .plugin(tauri_plugin_dialog::init())
         .build(tauri::generate_context!())
         .expect("error building warpforge desktop")

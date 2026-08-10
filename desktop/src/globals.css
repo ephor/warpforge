@@ -3,42 +3,44 @@
 @tailwind utilities;
 
 /*
- * Warpforge desktop theme. Cool steel ground (the forge), a single blue
- * accent, semantic status hues kept separate from that accent. Dark-only for
- * now — this is a developer tool that lives next to a terminal.
+ * Warpforge desktop theme. Warm near-black ground (the forge at rest), a peach
+ * accent for what the user drives, and a small multi-hue status set kept
+ * separate from that accent. Dark-only for now — this is a developer tool that
+ * lives next to a terminal.
  */
 :root {
   /* WebStorm-like depth: the chrome/canvas sits above darker work islands. */
-  --background: 220 9% 11%;
-  --foreground: 220 12% 86%;
+  --background: 120 3% 8%;
+  --foreground: 36 23% 91%;
 
-  --card: 220 11% 7%;
-  --card-foreground: 220 14% 85%;
+  --card: 120 3% 6%;
+  --card-foreground: 36 20% 89%;
 
-  --popover: 220 11% 8%;
-  --popover-foreground: 220 14% 85%;
+  --popover: 120 3% 9%;
+  --popover-foreground: 36 20% 89%;
 
-  --primary: 222 89% 73%;
-  --primary-foreground: 222 47% 11%;
+  --primary: 20 73% 70%;
+  --primary-foreground: 20 40% 10%;
 
-  --secondary: 220 9% 15%;
-  --secondary-foreground: 220 14% 85%;
+  --secondary: 75 5% 15%;
+  --secondary-foreground: 36 20% 89%;
 
-  --muted: 220 9% 13%;
-  --muted-foreground: 220 9% 60%;
+  --muted: 90 3% 11%;
+  --muted-foreground: 34 7% 62%;
 
-  --accent: 220 9% 19%;
-  --accent-foreground: 220 14% 90%;
+  --accent: 72 5% 20%;
+  --accent-foreground: 36 25% 94%;
 
-  --destructive: 348 80% 62%;
-  --destructive-foreground: 0 0% 100%;
+  --destructive: 352 73% 74%;
+  --destructive-foreground: 352 40% 12%;
 
-  --border: 220 9% 19%;
-  --input: 220 9% 22%;
-  --ring: 222 89% 73%;
+  --border: 72 5% 20%;
+  --input: 52 6% 27%;
+  --ring: 20 73% 70%;
 
-  --ok: 92 45% 60%;
-  --warn: 37 62% 62%;
+  --ok: 137 47% 67%;
+  --warn: 39 72% 67%;
+  --info: 172 48% 63%;
 
   --radius: 0.375rem;
 
@@ -89,7 +91,7 @@ textarea {
 
 /* Nested input surfaces stay deeper than both the island and app canvas. */
 .bg-deep-surface {
-  background-color: hsl(220 11% 4%);
+  background-color: hsl(120 4% 4%);
 }
 
 /*

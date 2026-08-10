@@ -30,7 +30,7 @@ describe("TaskAgentSwitcher", () => {
     const [tree] = buildTaskForest([
       task("root", "root-agent", "running"),
       task("child", "child-agent", "running", "root"),
-      task("grandchild", "review-agent", "needs_review", "child"),
+      task("grandchild", "review-agent", "waiting", "child"),
     ]);
     const onOpenTask = vi.fn<(id: string) => void>();
 
@@ -40,7 +40,7 @@ describe("TaskAgentSwitcher", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Lead: running" }));
 
     await user.click(screen.getByRole("button", { name: /current: child-agent/i }));
-    await user.click(await screen.findByRole("menuitem", { name: "review-agent: needs review" }));
+    await user.click(await screen.findByRole("menuitem", { name: "review-agent: waiting" }));
 
     expect(onOpenTask).toHaveBeenNthCalledWith(1, "root");
     expect(onOpenTask).toHaveBeenNthCalledWith(2, "grandchild");
@@ -49,14 +49,14 @@ describe("TaskAgentSwitcher", () => {
   it("does not navigate when the current task tab is selected", async () => {
     const user = userEvent.setup();
     const [tree] = buildTaskForest([
-      task("root", "root-agent", "idle"),
+      task("root", "root-agent", "waiting"),
       task("child", "child-agent", "running", "root"),
     ]);
     const onOpenTask = vi.fn<(id: string) => void>();
 
     render(<TaskAgentSwitcher tree={tree} currentTaskId="root" onOpenTask={onOpenTask} />);
     await user.click(screen.getByRole("button", { name: /current: lead/i }));
-    await user.click(await screen.findByRole("menuitem", { name: "Lead: idle" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Lead: waiting" }));
 
     expect(onOpenTask).not.toHaveBeenCalled();
   });
@@ -110,7 +110,7 @@ describe("TaskAgentSwitcher", () => {
     const [tree] = buildTaskForest([
       task("root", "root-agent", "running"),
       ...Array.from({ length: 30 }, (_, index) =>
-        task(`child-${index}`, `agent-${index}`, "idle", "root"),
+        task(`child-${index}`, `agent-${index}`, "waiting", "root"),
       ),
     ]);
 

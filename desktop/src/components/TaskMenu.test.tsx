@@ -14,7 +14,7 @@ const task: TaskInfo = {
   id: "task-1",
   project: "warpforge",
   prompt: "Improve task detail",
-  status: "idle",
+  status: "waiting",
   tags: [],
   title: "",
   updatedAt: 1,

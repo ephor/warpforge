@@ -104,7 +104,7 @@ pub enum ReaskMode {
 pub enum OnLimit {
     /// Suspend and ask the user (extend / finish / stop).
     Ask,
-    /// Finish as NeedsReview with the open findings in the summary.
+    /// Finish as Waiting with the open findings in the summary.
     Finish,
 }
 

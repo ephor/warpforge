@@ -2964,13 +2964,13 @@ impl Daemon {
                     };
                     self.pending_permissions.cleanup_task(&id);
                     // A finished pipeline's parent keeps its terminal status:
-                    // cancelling it must not rewrite NeedsReview back to Idle.
+                    // cancelling it must not rewrite that back to Waiting.
                     let finished_workflow = self
                         .workflow_runs
                         .get(&id)
                         .is_some_and(|run| !run.is_active());
                     if let Some(task) = self.tasks.get_mut(&id).filter(|_| !finished_workflow) {
-                        task.set_status(TaskStatus::Idle);
+                        task.set_status(TaskStatus::Waiting);
                         let updated = task.clone();
                         self.persist(&updated);
                         self.emit(Event::TaskUpdated(updated));
@@ -4438,23 +4438,20 @@ impl Daemon {
                     return;
                 }
                 self.emit_session(&task_id, update);
-                // Turn over: only NeedsReview if there are actually changes to
-                // review; a pure Q&A turn goes Idle (waiting for the next
-                // message) instead of falsely demanding a review.
+                // Turn over: the ball is in the human's court either way, so the
+                // status is just `Waiting`. This used to branch on
+                // `files_changed` to pick `NeedsReview` vs `Idle` — one
+                // lifecycle state spelled two ways, keyed off a field the task
+                // already carries. Consumers that care whether there is a diff
+                // read `files_changed` directly.
                 //
                 // Workflow children have different semantics: their output is
                 // consumed by the pipeline, so the workflow handler below owns
-                // their terminal/waiting status. File edits made by an
-                // implement/fix stage must not leak into NeedsReview here.
+                // their terminal/waiting status.
                 if !workflow_child {
                     if let Some(task) = self.tasks.get_mut(&task_id) {
                         if task.status == TaskStatus::Running {
-                            let next = if task.files_changed > 0 {
-                                TaskStatus::NeedsReview
-                            } else {
-                                TaskStatus::Idle
-                            };
-                            task.set_status(next);
+                            task.set_status(TaskStatus::Waiting);
                             let updated = task.clone();
                             self.persist(&updated);
                             self.emit(Event::TaskUpdated(updated));
@@ -5017,7 +5014,7 @@ impl Daemon {
                 RunState::Running { .. } => Some(TaskStatus::Running),
                 RunState::AwaitingReply { .. }
                 | RunState::AwaitingLimitDecision
-                | RunState::Paused { .. } => Some(TaskStatus::Idle),
+                | RunState::Paused { .. } => Some(TaskStatus::Waiting),
                 RunState::Done | RunState::Failed => None,
             };
             if let Some(status) = active_status {
@@ -5510,7 +5507,7 @@ impl Daemon {
                             child: child_id.to_string(),
                             question: question.clone(),
                         };
-                        self.workflow_set_child_status(child_id, TaskStatus::Idle);
+                        self.workflow_set_child_status(child_id, TaskStatus::Waiting);
                         let event_agent = run
                             .history
                             .iter()
@@ -5777,7 +5774,7 @@ impl Daemon {
                 run.active_children.remove(child_id);
                 run.reasked.remove(child_id);
                 run.set_record_status(child_id, wire::OrchNodeStatus::Failed);
-                self.workflow_set_child_status(child_id, TaskStatus::Idle);
+                self.workflow_set_child_status(child_id, TaskStatus::Waiting);
                 if run.review_pending.is_empty() {
                     if run.review_collected.is_empty() {
                         self.workflow_runs.insert(parent_id.to_string(), run);
@@ -6017,7 +6014,7 @@ impl Daemon {
 
         if let Some(task) = self.tasks.get_mut(parent_id) {
             match &outcome {
-                WorkflowOutcome::Success { .. } => task.set_status(TaskStatus::NeedsReview),
+                WorkflowOutcome::Success { .. } => task.set_status(TaskStatus::Waiting),
                 WorkflowOutcome::Stopped => task.set_status(TaskStatus::Interrupted),
                 WorkflowOutcome::Error(reason) => {
                     task.blocked_reason = Some(reason.clone());
@@ -6303,7 +6300,7 @@ impl Daemon {
                         RunState::Running { .. } => TaskStatus::Running,
                         RunState::AwaitingReply { .. }
                         | RunState::AwaitingLimitDecision
-                        | RunState::Paused { .. } => TaskStatus::Idle,
+                        | RunState::Paused { .. } => TaskStatus::Waiting,
                         RunState::Done | RunState::Failed => task.status.clone(),
                     };
                     task.set_status(status);
@@ -6553,7 +6550,7 @@ mod lifecycle_action_tests {
     // Settle tests
     #[test]
     fn settle_success_clears_snooze() {
-        let mut task = make_task("t1", TaskStatus::Idle);
+        let mut task = make_task("t1", TaskStatus::Waiting);
         task.snoozed_until = Some(2000);
         task.snoozed_at = Some(1500);
 
@@ -6577,7 +6574,7 @@ mod lifecycle_action_tests {
 
     #[test]
     fn settle_pending_permission_rejected() {
-        let task = make_task("t1", TaskStatus::Idle);
+        let task = make_task("t1", TaskStatus::Waiting);
         let result = apply_lifecycle_action(&task, true, 1100, LifecycleAction::Settle);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("pending permission"));
@@ -6585,7 +6582,7 @@ mod lifecycle_action_tests {
 
     #[test]
     fn settle_duplicate_preserves_timestamp() {
-        let mut task = make_task("t1", TaskStatus::Idle);
+        let mut task = make_task("t1", TaskStatus::Waiting);
         task.settled_override = Some(true);
         task.settled_at = Some(1050);
 
@@ -6595,7 +6592,7 @@ mod lifecycle_action_tests {
 
     #[test]
     fn settle_no_op_when_already_settled_with_snooze_clear() {
-        let mut task = make_task("t1", TaskStatus::Idle);
+        let mut task = make_task("t1", TaskStatus::Waiting);
         task.settled_override = Some(true);
         task.settled_at = Some(1050);
         task.snoozed_until = None;
@@ -6607,7 +6604,7 @@ mod lifecycle_action_tests {
 
     #[test]
     fn settle_from_unsettled_replaces_stale_timestamp() {
-        let mut task = make_task("t1", TaskStatus::Idle);
+        let mut task = make_task("t1", TaskStatus::Waiting);
         task.settled_override = Some(false);
         task.settled_at = Some(500);
 
@@ -6621,7 +6618,7 @@ mod lifecycle_action_tests {
     // Unsettle tests
     #[test]
     fn unsettle_target_state() {
-        let mut task = make_task("t1", TaskStatus::Idle);
+        let mut task = make_task("t1", TaskStatus::Waiting);
         task.settled_override = Some(true);
         task.settled_at = Some(1050);
         task.snoozed_until = Some(2000);
@@ -6639,7 +6636,7 @@ mod lifecycle_action_tests {
 
     #[test]
     fn unsettle_no_op_when_already_clear() {
-        let mut task = make_task("t1", TaskStatus::Idle);
+        let mut task = make_task("t1", TaskStatus::Waiting);
         task.settled_override = Some(false);
         task.settled_at = None;
         task.snoozed_until = None;
@@ -6652,7 +6649,7 @@ mod lifecycle_action_tests {
     // Snooze tests
     #[test]
     fn snooze_future_success() {
-        let task = make_task("t1", TaskStatus::Idle);
+        let task = make_task("t1", TaskStatus::Waiting);
         let result =
             apply_lifecycle_action(&task, false, 1100, LifecycleAction::Snooze { until: 2000 })
                 .unwrap();
@@ -6676,7 +6673,7 @@ mod lifecycle_action_tests {
 
     #[test]
     fn snooze_past_rejected() {
-        let task = make_task("t1", TaskStatus::Idle);
+        let task = make_task("t1", TaskStatus::Waiting);
         let result =
             apply_lifecycle_action(&task, false, 1100, LifecycleAction::Snooze { until: 1000 });
         assert!(result.is_err());
@@ -6685,7 +6682,7 @@ mod lifecycle_action_tests {
 
     #[test]
     fn snooze_now_rejected() {
-        let task = make_task("t1", TaskStatus::Idle);
+        let task = make_task("t1", TaskStatus::Waiting);
         let result =
             apply_lifecycle_action(&task, false, 1100, LifecycleAction::Snooze { until: 1100 });
         assert!(result.is_err());
@@ -6693,7 +6690,7 @@ mod lifecycle_action_tests {
 
     #[test]
     fn snooze_pending_permission_rejected() {
-        let task = make_task("t1", TaskStatus::Idle);
+        let task = make_task("t1", TaskStatus::Waiting);
         let result =
             apply_lifecycle_action(&task, true, 1100, LifecycleAction::Snooze { until: 2000 });
         assert!(result.is_err());
@@ -6702,7 +6699,7 @@ mod lifecycle_action_tests {
 
     #[test]
     fn snooze_same_until_preserves_timestamp() {
-        let mut task = make_task("t1", TaskStatus::Idle);
+        let mut task = make_task("t1", TaskStatus::Waiting);
         task.snoozed_until = Some(2000);
         task.snoozed_at = Some(1050);
         task.settled_override = Some(false);
@@ -6716,7 +6713,7 @@ mod lifecycle_action_tests {
 
     #[test]
     fn snooze_same_until_repairs_missing_snoozed_at() {
-        let mut task = make_task("t1", TaskStatus::Idle);
+        let mut task = make_task("t1", TaskStatus::Waiting);
         task.snoozed_until = Some(2000);
         task.snoozed_at = None; // missing
         task.settled_override = Some(false);
@@ -6733,7 +6730,7 @@ mod lifecycle_action_tests {
 
     #[test]
     fn snooze_clears_settle() {
-        let mut task = make_task("t1", TaskStatus::Idle);
+        let mut task = make_task("t1", TaskStatus::Waiting);
         task.settled_override = Some(true);
         task.settled_at = Some(1050);
 
@@ -6750,7 +6747,7 @@ mod lifecycle_action_tests {
     // Unsnooze tests
     #[test]
     fn unsnooze_change() {
-        let mut task = make_task("t1", TaskStatus::Idle);
+        let mut task = make_task("t1", TaskStatus::Waiting);
         task.snoozed_until = Some(2000);
         task.snoozed_at = Some(1500);
 
@@ -6764,7 +6761,7 @@ mod lifecycle_action_tests {
 
     #[test]
     fn unsnooze_no_op_when_already_clear() {
-        let mut task = make_task("t1", TaskStatus::Idle);
+        let mut task = make_task("t1", TaskStatus::Waiting);
         task.snoozed_until = None;
         task.snoozed_at = None;
 
