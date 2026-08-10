@@ -2514,6 +2514,12 @@ impl Daemon {
                 config_overrides,
                 reply,
             } => {
+                // Conversation branches tag the source task they were forked
+                // from, so the new worktree can inherit its state.
+                let branched_from = tags
+                    .iter()
+                    .find_map(|t| t.strip_prefix("branched-from:"))
+                    .map(str::to_string);
                 let mut task = Task::new(&project, &prompt, &agent, tags);
                 task.parent_task_id = parent_task_id;
                 // Create worktree if requested and project has a git repo.
@@ -2522,7 +2528,11 @@ impl Daemon {
                         let wt_mgr = self.worktrees.entry(project.clone()).or_insert_with(|| {
                             WorktreeManager::new(std::path::PathBuf::from(&path))
                         });
-                        match wt_mgr.create(&task.id, None).await {
+                        let created = match branched_from {
+                            Some(ref src) => wt_mgr.create_branched(&task.id, src).await,
+                            None => wt_mgr.create(&task.id, None).await,
+                        };
+                        match created {
                             Ok(wt) => {
                                 task.worktree = Some(wt.path.to_string_lossy().to_string());
                             }

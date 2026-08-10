@@ -83,6 +83,30 @@ impl WorktreeManager {
         Ok(wt)
     }
 
+    /// Create a worktree for `task_id` that inherits the state of a source
+    /// worktree (used for conversation branches). Branches from the source
+    /// worktree's branch and copies its uncommitted changes so the new task
+    /// starts exactly where the source left off, rather than from a clean HEAD.
+    pub async fn create_branched(
+        &mut self,
+        task_id: &str,
+        source_task_id: &str,
+    ) -> Result<Worktree> {
+        let source = self
+            .worktrees
+            .get(source_task_id)
+            .with_context(|| format!("no worktree for source task {source_task_id}"))?;
+        let base_branch = source.branch.clone();
+        let source_path = source.path.clone();
+        let wt = self.create(task_id, Some(&base_branch)).await?;
+        copy_working_state(&source_path, &wt.path)
+            .await
+            .with_context(|| {
+                format!("failed to copy working state into branched worktree {task_id}")
+            })?;
+        Ok(wt)
+    }
+
     /// Remove a worktree and its branch.
     pub async fn remove(&mut self, task_id: &str) -> Result<()> {
         let wt = self
@@ -243,6 +267,77 @@ impl WorktreeManager {
     }
 }
 
+/// Copy the uncommitted working-tree state of `source` into `target` so a
+/// branched worktree starts from the exact files the source left behind.
+/// Handles tracked modifications/deletions (via a binary diff applied with
+/// `git apply`) and new untracked files (copied directly).
+async fn copy_working_state(source: &Path, target: &Path) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    // 1) Apply tracked changes (modified + deleted) from the source HEAD.
+    let diff = tokio::process::Command::new("git")
+        .args(["diff", "--binary", "HEAD"])
+        .current_dir(source)
+        .output()
+        .await
+        .context("failed to run git diff in source worktree")?;
+    if !diff.status.success() {
+        anyhow::bail!("git diff failed in source worktree");
+    }
+    if !diff.stdout.is_empty() {
+        let mut apply = tokio::process::Command::new("git")
+            .args(["apply", "-"])
+            .current_dir(target)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .context("failed to spawn git apply")?;
+        apply
+            .stdin
+            .take()
+            .expect("git apply stdin should be piped")
+            .write_all(&diff.stdout)
+            .await
+            .context("failed to write diff into git apply")?;
+        let out = apply
+            .wait_with_output()
+            .await
+            .context("git apply did not finish")?;
+        if !out.status.success() {
+            anyhow::bail!("git apply failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+
+    // 2) Copy new (untracked) files, preserving directory structure.
+    let untracked = tokio::process::Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(source)
+        .output()
+        .await
+        .context("failed to list untracked files")?;
+    if !untracked.status.success() {
+        anyhow::bail!("git ls-files failed in source worktree");
+    }
+    for line in String::from_utf8_lossy(&untracked.stdout).lines() {
+        if line.is_empty() {
+            continue;
+        }
+        let src = source.join(line);
+        let dst = target.join(line);
+        if let Some(parent) = dst.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        tokio::fs::copy(&src, &dst)
+            .await
+            .with_context(|| format!("copying {}", line))?;
+    }
+
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum MergeResult {
     Ok { branch: String },
@@ -298,5 +393,48 @@ mod tests {
         mgr.remove("t_abc123").await.unwrap();
         assert!(!mgr.has_worktree("t_abc123"));
         assert_eq!(mgr.list().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn branched_worktree_inherits_source_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().to_path_buf();
+        let git = |args: &[&str], dir: &std::path::Path| {
+            tokio::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .status()
+        };
+
+        // Init a repo with an initial commit.
+        git(&["init"], &repo).await.unwrap();
+        std::fs::write(repo.join("README.md"), "init\n").unwrap();
+        git(&["add", "."], &repo).await.unwrap();
+        git(&["commit", "-m", "init"], &repo).await.unwrap();
+
+        let mut mgr = WorktreeManager::new(repo.clone());
+        let src = mgr.create("t_source", None).await.unwrap();
+
+        // The source agent edits a tracked file and adds a new file, without committing.
+        tokio::fs::write(src.path.join("README.md"), "edited\n")
+            .await
+            .unwrap();
+        tokio::fs::write(src.path.join("NEW.md"), "new file\n")
+            .await
+            .unwrap();
+
+        let branch = mgr.create_branched("t_branch", "t_source").await.unwrap();
+        assert_ne!(branch.path, src.path);
+        assert_eq!(branch.base_branch, src.branch);
+
+        // The tracked edit and the new untracked file must carry over.
+        let readme = tokio::fs::read_to_string(branch.path.join("README.md"))
+            .await
+            .unwrap();
+        assert_eq!(readme, "edited\n");
+        let new = tokio::fs::read_to_string(branch.path.join("NEW.md"))
+            .await
+            .unwrap();
+        assert_eq!(new, "new file\n");
     }
 }

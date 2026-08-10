@@ -8,19 +8,31 @@ export function buildConversationBranchPrompt(
 ): string {
   if (throughIndex < 0 || throughIndex >= updates.length) return "";
   const messages: string[] = [];
+  const filesTouched = new Set<string>();
   for (let index = 0; index <= throughIndex; index += 1) {
     const update = updates[index];
     if (update.kind === "user_message") messages.push(`User:\n${update.text}`);
     if (update.kind === "agent_text") messages.push(`Assistant (${task.agent}):\n${update.text}`);
+    if (update.kind === "file_edit") filesTouched.add(update.path);
   }
 
   const workspace = task.worktree
     ? `The source task uses this worktree: ${task.worktree}`
     : `The source task uses the main ${task.project} project checkout.`;
+
+  const files =
+    filesTouched.size > 0
+      ? [
+          `Files touched in the source session:`,
+          ...[...filesTouched].sort().map((path) => `- ${path}`),
+        ].join("\n")
+      : "";
+
   return [
     `Continue a branched conversation from Warpforge task ${task.id}.`,
     `Original task: ${task.prompt}`,
     workspace,
+    ...(files ? [files] : []),
     "The transcript intentionally ends at the message where the branch was created. The original conversation remains active. Inspect the current repository state before making changes, then continue from this point.",
     "--- Branched conversation ---",
     messages.join("\n\n") || "(No user or assistant text was available before this branch point.)",
