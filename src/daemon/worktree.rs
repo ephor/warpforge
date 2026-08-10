@@ -403,6 +403,10 @@ mod tests {
             tokio::process::Command::new("git")
                 .args(args)
                 .current_dir(dir)
+                .env("GIT_AUTHOR_NAME", "test")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "test")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
                 .status()
         };
 
