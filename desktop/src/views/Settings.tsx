@@ -6,9 +6,14 @@ import AgentSetupPanel from "@/components/AgentSetupPanel";
 import { Button } from "@/components/ui/button";
 import { daemon } from "@/daemon";
 import { configRole } from "@/lib/configRole";
+import { THEMES } from "@/lib/themes";
 import { useUi } from "@/store/ui";
 
 // ── Helpers ──
+
+function hsl(triplet: string): string {
+  return `hsl(${triplet})`;
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -98,6 +103,8 @@ export default function SettingsView({ open, onOpenChange }: Props) {
   const setFontSize = useUi((s) => s.setFontSize);
   const setMonoFontSize = useUi((s) => s.setMonoFontSize);
   const resetFontSizes = useUi((s) => s.resetFontSizes);
+  const theme = useUi((s) => s.theme);
+  const setTheme = useUi((s) => s.setTheme);
   const textGenAgentId = useUi((s) => s.textGenAgentId);
   const setTextGenAgentId = useUi((s) => s.setTextGenAgentId);
   const textGenModel = useUi((s) => s.textGenModel);
@@ -164,6 +171,46 @@ export default function SettingsView({ open, onOpenChange }: Props) {
         <div className="flex flex-col gap-8">
           {/* ── Appearance ── */}
           <Section title="Appearance">
+            <div className="grid grid-cols-4 gap-2 p-4">
+              {THEMES.map((t) => {
+                const active = t.id === theme;
+                const swatch = (key: keyof typeof t.colors) =>
+                  hsl(t.colors[key]);
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setTheme(t.id)}
+                    aria-pressed={active}
+                    className={`flex cursor-pointer flex-col items-start gap-2 rounded-lg border px-3 py-2 text-left transition-colors ${
+                      active
+                        ? "border-ring bg-accent"
+                        : "border-border/70 bg-card hover:border-primary/50"
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <span
+                        className="size-4 rounded-full border border-border"
+                        style={{ background: swatch("background") }}
+                      />
+                      <span
+                        className="size-4 rounded-full border border-border"
+                        style={{ background: swatch("primary") }}
+                      />
+                      <span
+                        className="size-4 rounded-full border border-border"
+                        style={{ background: swatch("muted-foreground") }}
+                      />
+                      <span
+                        className="size-4 rounded-full border border-border"
+                        style={{ background: swatch("accent") }}
+                      />
+                    </span>
+                    <span className="text-xs font-medium text-foreground">{t.name}</span>
+                  </button>
+                );
+              })}
+            </div>
             <SettingRow
               title="UI font size"
               description="Controls labels, chat prose, buttons, and all general chrome. Keyboard: Cmd/Ctrl +/−/0"

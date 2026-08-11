@@ -14,6 +14,7 @@ import { SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX } from "@/store/ui";
 
 import { useDaemonEvents } from "./hooks/useDaemonEvents";
 import { useFontScaling } from "./hooks/useFontScaling";
+import { useTheme } from "./hooks/useTheme";
 import { usePullShortcut } from "./hooks/usePullShortcut";
 import { usePushShortcut } from "./hooks/usePushShortcut";
 import { useTauriClose } from "./hooks/useTauriClose";
@@ -157,6 +158,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   useFontScaling();
+  useTheme();
   useDaemonEvents();
   useTauriClose();
 

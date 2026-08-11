@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import type { EditHunk } from "../protocol";
+import { DEFAULT_THEME } from "@/lib/themes";
 
 /**
  * Client-side UI state (view, panel toggles, prefs) — persisted to localStorage.
@@ -47,6 +48,9 @@ export function clampSidebarWidth(v: unknown): number {
 }
 
 export interface SettingsState {
+  /** Id of the active color theme. See lib/themes. */
+  theme: string;
+  setTheme: (id: string) => void;
   fontSize: number;
   monoFontSize: number;
   setFontSize: (size: number) => void;
@@ -153,6 +157,7 @@ export const useUi = create<UiState>()(
       sidebarCollapsed: false,
       fontSize: DEFAULT_FONT_SIZE,
       monoFontSize: DEFAULT_MONO_FONT_SIZE,
+      theme: DEFAULT_THEME,
       textGenAgentId: null,
       textGenModel: null,
       autoNameTasks: true,
@@ -246,6 +251,7 @@ export const useUi = create<UiState>()(
         })),
       resetFontSizes: () =>
         set({ fontSize: DEFAULT_FONT_SIZE, monoFontSize: DEFAULT_MONO_FONT_SIZE }),
+      setTheme: (theme) => set({ theme }),
       // Models are per-agent, so a stored pick is meaningless once the agent changes.
       setTextGenAgentId: (textGenAgentId) => set({ textGenAgentId, textGenModel: null }),
       setTextGenModel: (textGenModel) => set({ textGenModel }),

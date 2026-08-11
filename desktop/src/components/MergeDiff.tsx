@@ -1,12 +1,13 @@
 import { MergeView } from "@codemirror/merge";
 import type { Extension } from "@codemirror/state";
 import { EditorState } from "@codemirror/state";
-import { oneDark } from "@codemirror/theme-one-dark";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { Check, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { useThemeMode } from "@/hooks/useTheme";
 import { codemirrorLanguageForPath } from "@/lib/codemirrorLanguages";
+import { cmChromeForMode } from "@/lib/codemirrorTheme";
 import { cn } from "@/lib/utils";
 
 import type { FileDoc } from "../protocol";
@@ -34,6 +35,7 @@ export function MergeDiff({
   const onSaveRef = useRef(onSave);
   const originalRef = useRef(doc.newText);
   const [status, setStatus] = useState<SaveStatus>("clean");
+  const themeMode = useThemeMode();
 
   useEffect(() => {
     onSaveRef.current = onSave;
@@ -74,7 +76,7 @@ export function MergeDiff({
 
     void codemirrorLanguageForPath(doc.path).then((lang) => {
       if (disposed) return;
-      const common: Extension[] = [lineNumbers(), oneDark, EditorView.lineWrapping, ...lang];
+      const common: Extension[] = [lineNumbers(), ...cmChromeForMode(themeMode), EditorView.lineWrapping, ...lang];
       view = new MergeView({
         a: {
           doc: doc.oldText,
@@ -113,7 +115,7 @@ export function MergeDiff({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.path, editable]);
+  }, [doc.path, editable, themeMode]);
 
   useEffect(() => {
     const view = viewRef.current;

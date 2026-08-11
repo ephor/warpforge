@@ -1,13 +1,14 @@
 import { lintGutter } from "@codemirror/lint";
 import { EditorState } from "@codemirror/state";
-import { oneDark } from "@codemirror/theme-one-dark";
 import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { Check, Code, Eye, Save } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { codemirrorLanguageForPath } from "@/lib/codemirrorLanguages";
+import { cmChromeForMode } from "@/lib/codemirrorTheme";
 import { cn } from "@/lib/utils";
+import { useThemeMode } from "@/hooks/useTheme";
 
 import type { FileDoc } from "../protocol";
 import { Markdown } from "./Markdown";
@@ -50,6 +51,7 @@ export function CodeEditor({
   const markdown = isMarkdownPath(doc.path);
   const svgImage = isSvgPath(doc.path);
   const binaryImage = isBinaryImagePath(doc.path);
+  const themeMode = useThemeMode();
   const showPreview = (markdown || svgImage) && preview;
   const previewText = viewRef.current?.state.doc.toString() ?? doc.newText;
   const isReadOnly = binaryImage || svgImage;
@@ -86,7 +88,7 @@ export function CodeEditor({
           extensions: [
             basicSetup,
             lintGutter(),
-            oneDark,
+            ...cmChromeForMode(themeMode),
             EditorView.lineWrapping,
             ...language,
             EditorState.readOnly.of(!editable || isReadOnly),
@@ -111,7 +113,7 @@ export function CodeEditor({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.path, editable, binaryImage, isReadOnly]);
+  }, [doc.path, editable, binaryImage, isReadOnly, themeMode]);
 
   useEffect(() => {
     const view = viewRef.current;

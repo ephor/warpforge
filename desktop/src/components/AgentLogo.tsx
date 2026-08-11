@@ -1,17 +1,32 @@
 import { useState } from "react";
 
+import { useThemeMode } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
 
 import claudeLogo from "../assets/app-logos/claude-ai-icon.svg?no-inline";
-import codexLogo from "../assets/app-logos/codex_dark.svg?no-inline";
-import opencodeLogo from "../assets/app-logos/opencode-dark.svg?no-inline";
-import qwenLogo from "../assets/app-logos/qwen_dark.svg?no-inline";
+import codexDark from "../assets/app-logos/codex_dark.svg?no-inline";
+import codexLight from "../assets/app-logos/codex_light.svg?no-inline";
+import opencodeDark from "../assets/app-logos/openCode_dark.svg?no-inline";
+import opencodeLight from "../assets/app-logos/openCode_light.svg?no-inline";
+import qwenDark from "../assets/app-logos/qwen_dark.svg?no-inline";
+import qwenLight from "../assets/app-logos/qwen_light.svg?no-inline";
 
-const AGENT_SVGS: Record<string, string> = {
-  claude: claudeLogo,
-  codex: codexLogo,
-  opencode: opencodeLogo,
-  qwen: qwenLogo,
+/**
+ * Per-agent logo assets, as {dark, light} pairs. These SVGs ship with baked-in
+ * colors — a logo that pops on dark vanishes on light — so each agent carries
+ * both variants and `useThemeMode` picks the right one. A badge fallback covers
+ * any agent without an entry here, so a logo never simply disappears.
+ */
+interface AgentIconAsset {
+  dark: string;
+  light?: string;
+}
+
+const AGENT_ICONS: Record<string, AgentIconAsset> = {
+  claude: { dark: claudeLogo, light: claudeLogo },
+  codex: { dark: codexDark, light: codexLight },
+  opencode: { dark: opencodeDark, light: opencodeLight },
+  qwen: { dark: qwenDark, light: qwenLight },
 };
 
 const AGENT_COLORS: Record<string, string> = {
@@ -40,16 +55,20 @@ export function AgentLogo({
   displayName: string;
   className?: string;
 }) {
-  const svg = AGENT_SVGS[agentId];
+  const mode = useThemeMode();
+  const asset = AGENT_ICONS[agentId];
   const [failedSvg, setFailedSvg] = useState<string | null>(null);
-  if (svg && failedSvg !== svg) {
+
+  const src = asset ? (mode === "light" ? asset.light ?? asset.dark : asset.dark) : undefined;
+
+  if (src && failedSvg !== src) {
     return (
       <img
-        src={svg}
+        src={src}
         alt=""
         className={cn("size-4 shrink-0 rounded-sm object-contain", className)}
         aria-hidden
-        onError={() => setFailedSvg(svg)}
+        onError={() => setFailedSvg(src)}
       />
     );
   }

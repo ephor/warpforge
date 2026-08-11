@@ -91,7 +91,7 @@ textarea {
 
 /* Nested input surfaces stay deeper than both the island and app canvas. */
 .bg-deep-surface {
-  background-color: hsl(120 4% 4%);
+  background-color: hsl(var(--deep-surface, 120 4% 4%));
 }
 
 /*
@@ -122,6 +122,22 @@ textarea {
 .cm-merge-b .cm-changedText {
   background: hsl(var(--ok) / 0.2) !important;
   border-radius: 2px;
+}
+
+/* Collapsed "unchanged lines" bar. CodeMirror's own &dark/&light styles use
+ * hard constants (#222/#f3f3f3) that fight the app theme; clamp it to vars so
+ * it tracks the selected palette on both light and dark themes. */
+.warpforge-merge-diff .cm-collapsedLines {
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted) / 0.5);
+  border-radius: 0.375rem;
+  margin: 0.25rem 0.5rem;
+  border: 1px solid hsl(var(--border));
+}
+.warpforge-merge-diff .cm-collapsedLines:hover {
+  color: hsl(var(--foreground));
+  background: hsl(var(--accent));
+  border-color: hsl(var(--ring));
 }
 
 /*
