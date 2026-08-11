@@ -370,5 +370,4 @@ describe("Projects", () => {
     expect(xterm.open).toHaveBeenCalledTimes(1);
     expect(xtermInstances).toHaveLength(1);
   });
-
 });

@@ -1,6 +1,14 @@
 import { useMutation } from "@tanstack/react-query";
 import { Folder, Loader2 } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 
 import { Card } from "@/components/ui/card";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -312,17 +320,19 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
   const surfaceTabs = useMemo<SurfaceTab[]>(() => {
     const diffCount = diff && diff.files.length > 0 ? diff.files.length : undefined;
     const runtimeCount = services.length + portforwards.length || undefined;
-    return DEFAULT_SURFACE_TABS
-      // Hidden unless this task actually farmed work out: an ordinary
-      // single-agent task has no pipeline, and a permanently empty tab is
-      // just a dead affordance on most of the screens in the app.
-      .filter((tab) => tab.id !== "pipeline" || pipelineCount !== undefined)
-      .map((tab) => {
-        if (tab.id === "diff") return { ...tab, count: diffCount };
-        if (tab.id === "runtime") return { ...tab, count: runtimeCount };
-        if (tab.id === "pipeline") return { ...tab, count: pipelineCount };
-        return tab;
-      });
+    return (
+      DEFAULT_SURFACE_TABS
+        // Hidden unless this task actually farmed work out: an ordinary
+        // single-agent task has no pipeline, and a permanently empty tab is
+        // just a dead affordance on most of the screens in the app.
+        .filter((tab) => tab.id !== "pipeline" || pipelineCount !== undefined)
+        .map((tab) => {
+          if (tab.id === "diff") return { ...tab, count: diffCount };
+          if (tab.id === "runtime") return { ...tab, count: runtimeCount };
+          if (tab.id === "pipeline") return { ...tab, count: pipelineCount };
+          return tab;
+        })
+    );
   }, [diff, pipelineCount, portforwards.length, services.length]);
 
   return (

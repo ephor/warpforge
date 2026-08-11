@@ -115,7 +115,11 @@ describe("TaskAgentSwitcher", () => {
     ]);
 
     render(
-      <TaskAgentSwitcher tree={tree} currentTaskId="root" onOpenTask={vi.fn<(id: string) => void>()} />,
+      <TaskAgentSwitcher
+        tree={tree}
+        currentTaskId="root"
+        onOpenTask={vi.fn<(id: string) => void>()}
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /current: lead/i }));

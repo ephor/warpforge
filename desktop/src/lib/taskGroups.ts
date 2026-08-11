@@ -163,4 +163,3 @@ export function taskGroupStatus(
   if (tasks.some((task) => task.status === "running" || task.status === "queued")) return "running";
   return tree.task.status;
 }
-

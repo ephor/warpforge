@@ -452,10 +452,7 @@ function Sidebar({
     [pinned, setPinnedTaskIds, taskGroupIndex],
   );
 
-  const handleOpenProjects = useCallback(
-    (name: string) => onOpenProject(name),
-    [onOpenProject],
-  );
+  const handleOpenProjects = useCallback((name: string) => onOpenProject(name), [onOpenProject]);
   const navCount = useCallback(
     (id: View) => (id === "control" ? blockingCount : id === "projects" ? names.length : 0),
     [blockingCount, names.length],

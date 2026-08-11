@@ -336,8 +336,8 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
           <div className="p-3">
             {running.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                Nothing running yet. Start services and new tasks will know the app is up, on
-                which ports, and can run tests against it.
+                Nothing running yet. Start services and new tasks will know the app is up, on which
+                ports, and can run tests against it.
               </p>
             ) : (
               <div className="flex flex-col gap-1 font-mono text-xs">

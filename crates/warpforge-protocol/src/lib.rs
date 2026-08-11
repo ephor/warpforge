@@ -386,9 +386,15 @@ pub enum Method {
     /// Any conflict rolls the working tree back to the exact prior state.
     #[serde(rename = "git.update")]
     GitUpdate { task_id: String },
-    /// List local branches of the task's project repo.
+    /// List local branches of a repo, identified either by a task or — before
+    /// a task exists, as in New Task — by project name directly.
     #[serde(rename = "git.branches")]
-    GitBranches { task_id: String },
+    GitBranches {
+        #[serde(default)]
+        task_id: Option<String>,
+        #[serde(default)]
+        project: Option<String>,
+    },
     /// Switch the task's project repo to `branch`, carrying uncommitted changes
     /// across (stash → checkout → unstash). A conflict rolls back to the branch
     /// you were on with your changes intact.

@@ -17,8 +17,8 @@ import { useFontScaling } from "./hooks/useFontScaling";
 import { usePullShortcut } from "./hooks/usePullShortcut";
 import { usePushShortcut } from "./hooks/usePushShortcut";
 import { useTauriClose } from "./hooks/useTauriClose";
-import AgentSetupDialog from "./views/AgentSetupDialog";
 import AddProjectDialog from "./views/AddProjectDialog";
+import AgentSetupDialog from "./views/AgentSetupDialog";
 import MissionControl from "./views/MissionControl";
 import NewTaskDialog from "./views/NewTaskDialog";
 import Projects from "./views/Projects";
@@ -160,12 +160,20 @@ export default function App() {
   useDaemonEvents();
   useTauriClose();
 
-  const handleOpenTask = useCallback(
-    (id: string) => {
-      setOpenTaskId(id);
-    },
-    [setOpenTaskId],
-  );
+  const handleOpenTask = (id: string) => {
+    setNewTaskOpen(false);
+    setOpenTaskId(id);
+  };
+
+  const handleSelectView = (nextView: typeof view) => {
+    setNewTaskOpen(false);
+    setView(nextView);
+  };
+
+  const handleOpenProject = (name: string) => {
+    setNewTaskOpen(false);
+    openProject(name);
+  };
 
   const openTask = snapshot.tasks.find((t) => t.id === openTaskId) ?? null;
 
@@ -213,8 +221,8 @@ export default function App() {
     onNewTask: () => startNewTask(),
     onOpenSettings: () => setSettingsOpen(true),
     onOpenTask: handleOpenTask,
-    onSelectView: setView,
-    onOpenProject: openProject,
+    onSelectView: handleSelectView,
+    onOpenProject: handleOpenProject,
     onToggleCollapsed: toggleSidebarCollapsed,
     openTaskId,
     view,
@@ -245,15 +253,29 @@ export default function App() {
         )}
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <AppHeader
-            view={view}
-            openTask={openTask}
-            onAddProject={() => setAddProjectOpen(true)}
-            onCloseTask={() => setOpenTaskId(null)}
-          />
-          <main className="min-h-0 flex-1 overflow-hidden p-2">
+          {!newTaskOpen && (
+            <AppHeader
+              view={view}
+              openTask={openTask}
+              onAddProject={() => setAddProjectOpen(true)}
+              onCloseTask={() => setOpenTaskId(null)}
+            />
+          )}
+          <main
+            className={
+              newTaskOpen ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-hidden p-2"
+            }
+          >
             <ErrorBoundary>
-              {openTask ? (
+              {newTaskOpen ? (
+                <NewTaskDialog
+                  open
+                  onOpenChange={setNewTaskOpen}
+                  snapshot={snapshot}
+                  defaultProject={newTaskProject}
+                  initialPrompt={newTaskPrompt}
+                />
+              ) : openTask ? (
                 <TaskDetail
                   key={openTask.id}
                   task={openTask}
@@ -277,20 +299,7 @@ export default function App() {
 
         {pushOpen && <PushDialog open onOpenChange={setPushOpen} task={openTask} />}
         {addProjectOpen && (
-          <AddProjectDialog
-            open
-            onOpenChange={setAddProjectOpen}
-            onAdded={handleProjectAdded}
-          />
-        )}
-        {newTaskOpen && (
-          <NewTaskDialog
-            open
-            onOpenChange={setNewTaskOpen}
-            snapshot={snapshot}
-            defaultProject={newTaskProject}
-            initialPrompt={newTaskPrompt}
-          />
+          <AddProjectDialog open onOpenChange={setAddProjectOpen} onAdded={handleProjectAdded} />
         )}
         <SettingsView open={settingsOpen} onOpenChange={setSettingsOpen} />
         {pendingAgentSetup && (

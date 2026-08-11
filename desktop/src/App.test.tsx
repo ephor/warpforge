@@ -288,6 +288,8 @@ describe("AppHeader sidebar control", () => {
   it("has no header sidebar toggle (collapse lives in the sidebar)", () => {
     render(<App />);
 
-    expect(screen.queryByRole("button", { name: "Toggle attention sidebar" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Toggle attention sidebar" }),
+    ).not.toBeInTheDocument();
   });
 });

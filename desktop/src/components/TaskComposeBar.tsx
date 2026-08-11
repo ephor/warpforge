@@ -2,26 +2,46 @@ import {
   AlertTriangle,
   Check,
   ChevronDown,
-  Copy,
+  FileDown,
+  Folder,
   GitBranch,
-  GitMerge,
   Route,
   Share2,
 } from "lucide-react";
-import { Fragment } from "react";
+import { useRef } from "react";
 
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { agentDisplayName } from "@/lib/agentNames";
 import { cn } from "@/lib/utils";
 
 import type { AgentConfig, ProjectInfo, ServiceInfo, WorkflowMeta } from "../protocol";
-import { AgentBadge } from "./AgentBadge";
+import { AgentLogo } from "./AgentLogo";
+
+/**
+ * How a task executes. `single` and `orchestrator` differ in *who decides* the
+ * plan; `workflow` replaces the decision with a fixed pipeline. They are one
+ * three-way choice rather than independent toggles because a task runs exactly
+ * one of them. (An orchestrator can still spawn a pipeline mid-run — that is
+ * the lead's runtime call, not this pre-flight choice.)
+ */
+export type TaskMode = "single" | "orchestrator" | "workflow";
+
+/**
+ * Every control in this bar is one shape at one height. The bar mixes single
+ * buttons, dropdowns and segmented groups, and letting each pick its own pill
+ * radius made the row read as unrelated widgets rather than one context strip.
+ */
+const CONTROL =
+  "flex h-8 shrink-0 items-center rounded-lg border-border px-2.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40";
+const ACTIVE_CONTROL = "border-primary/40 bg-primary/10 text-foreground";
+/** Segmented groups wrap their items, so the border+height sit on the wrapper. */
+const GROUP = "flex h-8 shrink-0 items-center gap-0.5 rounded-lg border border-border p-0.5";
 
 interface TaskComposeBarProps {
   projects: ProjectInfo[];
@@ -32,30 +52,33 @@ interface TaskComposeBarProps {
   agent: string;
   shareContext: boolean;
   useWorktree: boolean;
-  orchChat: boolean;
+  mode: TaskMode;
+  /** Current branch of the project repo; null while loading or when not a repo. */
+  branch: string | null;
   /** Available workflow templates for the selected project. */
   workflows: WorkflowMeta[];
-  /** Selected workflow id, or null for a plain single-agent task. */
+  /** Selected workflow id, or null when no pipeline is chosen. */
   workflow: string | null;
 
   onProjectChange: (v: string) => void;
   onAgentChange: (v: string) => void;
   onShareContextChange: (v: boolean) => void;
   onUseWorktreeChange: (v: boolean) => void;
-  onOrchChatChange: (v: boolean) => void;
+  onModeChange: (v: TaskMode) => void;
   onWorkflowChange: (v: string | null) => void;
   onEjectWorkflow: (id: string) => void;
 }
 
 /**
- * Config chips above the Composer in the New Task view. Model + effort
- * selectors are intentionally NOT here — they live inside the Composer's
- * `toolbar` slot via `AgentConfigBar` so New Task's composer looks identical
- * to MissionControl's ("running" agent with the model chip attached).
+ * A single row of run context above the New Task composer: where it runs, which
+ * harness drives it, and which execution mode. Model + effort selectors are
+ * intentionally NOT here — they live inside the Composer's `toolbar` slot via
+ * `AgentConfigBar`, so this bar answers "where/how" and the composer answers
+ * "with what settings".
  *
- * Project + agent (harness) use horizontal chips rather than `<Select>` because
- * the lists are short and chips read cleaner inline. The harness (agent) can
- * only be picked here — once a task is running its agent is locked.
+ * Everything stays on one line and nothing hides behind an "advanced" flyout:
+ * orchestration and pipelines are the product's differentiators, so burying
+ * them would be the wrong trade even though it would look tidier.
  */
 export function TaskComposeBar({
   projects,
@@ -65,14 +88,15 @@ export function TaskComposeBar({
   agent,
   shareContext,
   useWorktree,
-  orchChat,
+  mode,
+  branch,
   workflows,
   workflow,
   onProjectChange,
   onAgentChange,
   onShareContextChange,
   onUseWorktreeChange,
-  onOrchChatChange,
+  onModeChange,
   onWorkflowChange,
   onEjectWorkflow,
 }: TaskComposeBarProps) {
@@ -83,116 +107,190 @@ export function TaskComposeBar({
     (s) => s.project === project && s.status === "running" && s.allocatedPort > 0,
   );
   const selectedWorkflow = workflows.find((w) => w.id === workflow) ?? null;
+  const hasWorkflows = workflows.some((w) => w.valid);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <FieldLabel>Project</FieldLabel>
-        {projects.length === 0 ? (
-          <span className="text-xs text-muted-foreground">No projects added.</span>
-        ) : (
-          projects.map((p) => (
-            <Chip key={p.name} active={project === p.name} onClick={() => onProjectChange(p.name)}>
-              {p.name}
-            </Chip>
-          ))
+        <ProjectPicker projects={projects} project={project} onChange={onProjectChange} />
+
+        <Divider />
+
+        <div role="radiogroup" aria-label="Agent" className={GROUP}>
+          {agentChoices.map((a) => {
+            const name = agentDisplayName(a.id, a.displayName);
+            return (
+              <button
+                key={a.id}
+                type="button"
+                role="radio"
+                aria-checked={agent === a.id}
+                aria-label={name}
+                title={name}
+                onClick={() => onAgentChange(a.id)}
+                className={cn(
+                  "flex h-full items-center rounded-md px-2 transition-colors",
+                  agent === a.id ? "bg-secondary" : "opacity-50 hover:opacity-100",
+                )}
+              >
+                <AgentLogo agentId={a.id} displayName={name} className="size-4" />
+              </button>
+            );
+          })}
+        </div>
+
+        <Divider />
+
+        <div role="radiogroup" aria-label="Execution mode" className={GROUP}>
+          <ModeButton mode="single" current={mode} onSelect={onModeChange}>
+            Single
+          </ModeButton>
+          <ModeButton mode="orchestrator" current={mode} onSelect={onModeChange}>
+            Orchestrator
+          </ModeButton>
+          <ModeButton
+            mode="workflow"
+            current={mode}
+            onSelect={onModeChange}
+            disabled={!hasWorkflows}
+            title={hasWorkflows ? undefined : "No pipelines defined in this project"}
+          >
+            Workflow
+          </ModeButton>
+        </div>
+
+        {mode === "workflow" && (
+          <WorkflowPicker
+            workflows={workflows}
+            selected={selectedWorkflow}
+            onSelect={onWorkflowChange}
+            onEject={onEjectWorkflow}
+          />
         )}
+
+        <Divider />
+
+        {/* No `ml-auto` here: pushing these right fought `flex-wrap`, so a row
+            that did not fit left them stranded on a line of their own. */}
+        <div className="flex items-center gap-2">
+          <PillToggle
+            active={shareContext}
+            onClick={() => onShareContextChange(!shareContext)}
+            icon={<Share2 className="size-3.5 shrink-0" />}
+            label="Share services"
+            tooltip={
+              runningForProject.length > 0
+                ? `Agent sees ${runningForProject.map((s) => `${s.name}:${s.allocatedPort}`).join(", ")}`
+                : "No services running for this project."
+            }
+          />
+          <PillToggle
+            active={useWorktree && mode !== "orchestrator"}
+            disabled={mode === "orchestrator"}
+            onClick={() => onUseWorktreeChange(!useWorktree)}
+            icon={<GitBranch className="size-3.5 shrink-0" />}
+            label="Worktree"
+            tooltip={
+              mode === "orchestrator"
+                ? "An orchestrator and its workers share your current checkout."
+                : "Run in an isolated git worktree. Remembered for the next task."
+            }
+          />
+        </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <FieldLabel>{orchChat ? "Lead agent" : workflow ? "Default agent" : "Agent"}</FieldLabel>
-        {agentChoices.map((a) => (
-          <Chip key={a.id} active={agent === a.id} onClick={() => onAgentChange(a.id)}>
-            <AgentBadge agentId={a.id} displayName={a.displayName} size="md" />
-          </Chip>
-        ))}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <PillToggle
-          active={shareContext}
-          onClick={() => onShareContextChange(!shareContext)}
-          icon={<Share2 className="size-3" />}
-          label="Share services"
-          tooltip={
-            runningForProject.length > 0
-              ? `Agent sees ${runningForProject.map((s) => `${s.name}:${s.allocatedPort}`).join(", ")}`
-              : "No services running for this project."
-          }
-        />
-        <PillToggle
-          active={useWorktree && !orchChat}
-          disabled={orchChat}
-          onClick={() => onUseWorktreeChange(!useWorktree)}
-          icon={<GitBranch className="size-3" />}
-          label="Worktree"
-          tooltip="Isolated git worktree"
-        />
-        <PillToggle
-          active={orchChat}
-          disabled={!!workflow}
-          onClick={() => onOrchChatChange(!orchChat)}
-          icon={<GitMerge className="size-3" />}
-          label="Orchestrator"
-          tooltip={workflow ? "Not available with a workflow selected" : "Chat + sub-agents"}
-        />
-        <WorkflowPicker
-          workflows={workflows}
-          selected={selectedWorkflow}
-          disabled={orchChat}
-          onSelect={onWorkflowChange}
-          onEject={onEjectWorkflow}
-        />
-      </div>
-      {selectedWorkflow && (
-        <p className="-mt-2 text-xs text-muted-foreground">
-          {selectedWorkflow.description ? `${selectedWorkflow.description} ` : ""}
-          {(selectedWorkflow.stages ?? []).length > 0 &&
-            `Stages: ${(selectedWorkflow.stages ?? []).join(" \u2192 ")}${
-              selectedWorkflow.maxRounds
-                ? ` (up to ${selectedWorkflow.maxRounds} review round${
-                    selectedWorkflow.maxRounds === 1 ? "" : "s"
-                  })`
-                : ""
-            }. `}
-          {"Stages that don\u2019t name their own agent use the one selected above."}
-        </p>
-      )}
+      <p className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+        {branch && (
+          <span className="inline-flex items-center gap-1">
+            <GitBranch className="size-3 shrink-0" />
+            <span className="max-w-64 truncate font-medium text-foreground/80">{branch}</span>
+            <span aria-hidden>·</span>
+          </span>
+        )}
+        <span>
+          {mode === "orchestrator"
+            ? "The lead and its workers all run in your current checkout."
+            : useWorktree
+              ? "Runs in an isolated git worktree, so your current checkout stays untouched."
+              : "Runs in your current checkout."}
+        </span>
+      </p>
     </div>
   );
 }
 
-function FieldLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="mr-1 text-[11px] uppercase tracking-wider text-muted-foreground">
-      {children}
-    </span>
-  );
+function Divider() {
+  return <span aria-hidden className="h-5 w-px shrink-0 bg-border" />;
 }
 
-function Chip({
-  active,
-  onClick,
+function ModeButton({
+  mode,
+  current,
+  disabled,
+  title,
+  onSelect,
   children,
 }: {
-  active: boolean;
-  onClick: () => void;
+  mode: TaskMode;
+  current: TaskMode;
+  disabled?: boolean;
+  title?: string;
+  onSelect: (v: TaskMode) => void;
   children: React.ReactNode;
 }) {
   return (
     <button
       type="button"
-      onClick={onClick}
-      aria-pressed={active}
+      role="radio"
+      aria-checked={current === mode}
+      disabled={disabled}
+      title={title}
+      onClick={() => onSelect(mode)}
       className={cn(
-        "flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors",
-        active
-          ? "border-primary bg-primary/10 text-foreground"
-          : "border-border text-muted-foreground hover:text-foreground",
+        "h-full rounded-md px-2.5 text-sm transition-colors",
+        current === mode
+          ? "bg-primary/15 text-foreground"
+          : "text-muted-foreground hover:text-foreground",
+        disabled && "cursor-not-allowed opacity-40 hover:text-muted-foreground",
       )}
     >
       {children}
     </button>
+  );
+}
+
+function ProjectPicker({
+  projects,
+  project,
+  onChange,
+}: {
+  projects: ProjectInfo[];
+  project: string;
+  onChange: (v: string) => void;
+}) {
+  if (projects.length === 0) {
+    return <span className="text-xs text-muted-foreground">No projects added.</span>;
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" aria-label="Project" className={cn(CONTROL, "gap-1.5 border")}>
+          <Folder className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="max-w-44 truncate font-medium">{project}</span>
+          <ChevronDown className="size-3 shrink-0 opacity-60" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        {projects.map((p) => (
+          <DropdownMenuItem key={p.name} onSelect={() => onChange(p.name)}>
+            <span className="flex w-full items-center gap-2">
+              <Check className={cn("size-3.5", project === p.name ? "opacity-100" : "opacity-0")} />
+              <span className="truncate">{p.name}</span>
+            </span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -218,13 +316,7 @@ function PillToggle({
       disabled={disabled}
       title={tooltip}
       aria-pressed={active}
-      className={cn(
-        "flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
-        active
-          ? "border-primary/40 bg-primary/10 text-foreground"
-          : "border-border text-muted-foreground",
-        disabled && "cursor-not-allowed opacity-40",
-      )}
+      className={cn(CONTROL, "gap-1.5 border", active ? ACTIVE_CONTROL : "text-muted-foreground")}
     >
       {icon}
       {label}
@@ -233,112 +325,103 @@ function PillToggle({
 }
 
 /**
- * Workflow template picker. A workflow replaces the single-agent run with a
- * daemon-driven pipeline, so it is mutually exclusive with the orchestrator
- * chat. Invalid templates stay listed (with their parse error) so a typo in a
- * project's YAML is visible here rather than silently missing.
+ * Workflow template picker, shown only in `workflow` mode. Invalid templates
+ * stay listed (with their parse error) so a typo in a project's YAML is visible
+ * here rather than silently missing.
  */
-function WorkflowPicker({
+export function WorkflowPicker({
   workflows,
   selected,
-  disabled,
   onSelect,
   onEject,
 }: {
   workflows: WorkflowMeta[];
   selected: WorkflowMeta | null;
-  disabled?: boolean;
   onSelect: (id: string | null) => void;
   onEject: (id: string) => void;
 }) {
-  if (workflows.length === 0) return null;
+  // Radix closes the menu on pointer-up, so a nested <button> unmounts before
+  // its click ever fires — the eject affordance has to be part of the menu
+  // item and tell `onSelect` which of the two actions was aimed at. Keyboard
+  // selection never sets this, so Enter always means "pick this pipeline".
+  const ejecting = useRef(false);
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          disabled={disabled}
-          title={
-            disabled
-              ? "Not available with the orchestrator enabled"
-              : "Run this task as a configured pipeline"
-          }
+          title="Which pipeline to run"
           className={cn(
-            "flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
-            selected
-              ? "border-primary/40 bg-primary/10 text-foreground"
-              : "border-border text-muted-foreground",
-            disabled && "cursor-not-allowed opacity-40",
+            "flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors",
+            selected ? ACTIVE_CONTROL : "border-border text-muted-foreground",
           )}
         >
-          <Route className="size-3 shrink-0" />
+          <Route className="size-3.5 shrink-0" />
           <span className="max-w-40 truncate" title={selected?.name}>
-            {selected ? selected.name : "Workflow"}
+            {selected ? selected.name : "Pick a pipeline"}
           </span>
           <ChevronDown className="size-3 shrink-0 opacity-60" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-80">
-        <DropdownMenuItem onSelect={() => onSelect(null)}>
-          <span className="flex w-full items-center gap-2">
-            <Check className={cn("size-3.5", selected ? "opacity-0" : "opacity-100")} />
-            <span className="flex flex-col">
-              <span>No workflow</span>
-              <span className="text-xs text-muted-foreground">
-                One agent works the task directly.
-              </span>
-            </span>
-          </span>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-[11px] uppercase tracking-wider text-muted-foreground">
+      <DropdownMenuContent align="start" className="w-72">
+        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">
           Pipelines
         </DropdownMenuLabel>
         {workflows.map((w) => (
-          <Fragment key={w.id}>
-            <DropdownMenuItem
-              disabled={!w.valid}
-              title={w.valid ? (w.warnings ?? []).join("\n") || undefined : (w.error ?? undefined)}
-              onSelect={() => onSelect(w.id)}
-            >
-              <span className="flex w-full items-start gap-2">
-                <Check
-                  className={cn(
-                    "mt-0.5 size-3.5 shrink-0",
-                    selected?.id === w.id ? "opacity-100" : "opacity-0",
+          <DropdownMenuItem
+            key={w.id}
+            disabled={!w.valid}
+            title={w.valid ? (w.warnings ?? []).join("\n") || undefined : (w.error ?? undefined)}
+            onPointerDownCapture={(event) => {
+              ejecting.current = !!(event.target as HTMLElement).closest("[data-eject]");
+            }}
+            onSelect={(event) => {
+              if (!ejecting.current) {
+                onSelect(w.id);
+                return;
+              }
+              ejecting.current = false;
+              // Stay open: the row redraws as a project workflow once the copy
+              // lands, which is the confirmation that it worked.
+              event.preventDefault();
+              onEject(w.id);
+            }}
+          >
+            <span className="flex w-full items-start gap-2">
+              <Check
+                className={cn(
+                  "mt-0.5 size-3.5 shrink-0",
+                  selected?.id === w.id ? "opacity-100" : "opacity-0",
+                )}
+              />
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="flex items-center gap-1.5">
+                  <span className="truncate text-xs">{w.name}</span>
+                  {w.source === "builtin" && (
+                    <span className="shrink-0 rounded bg-secondary px-1 text-[10px] text-muted-foreground">
+                      built-in
+                    </span>
                   )}
-                />
-                <span className="flex min-w-0 flex-col">
-                  <span className="flex items-center gap-1.5">
-                    <span className="truncate">{w.name}</span>
-                    {w.source === "builtin" && (
-                      <span className="shrink-0 rounded bg-secondary px-1 text-[10px] text-muted-foreground">
-                        built-in
-                      </span>
-                    )}
-                    {!w.valid && <AlertTriangle className="size-3 shrink-0 text-destructive" />}
-                  </span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {w.valid ? (w.stages ?? []).join(" \u2192 ") : (w.error ?? "invalid workflow")}
-                  </span>
+                  {!w.valid && <AlertTriangle className="size-3 shrink-0 text-destructive" />}
+                </span>
+                <span className="truncate text-[11px] text-muted-foreground">
+                  {w.valid ? (w.stages ?? []).join(" → ") : (w.error ?? "invalid workflow")}
                 </span>
               </span>
-            </DropdownMenuItem>
-            {/* Ejecting is its own row: a nested button inside a menu item
-                never receives the click, because Radix closes the menu first. */}
-            {w.source === "builtin" && w.valid && (
-              <DropdownMenuItem
-                title="Write a copy into .warpforge/workflows/ so you can edit it"
-                onSelect={() => onEject(w.id)}
-                aria-label={`Copy ${w.name} to this project`}
-              >
-                <span className="flex items-center gap-2 pl-5 text-xs text-muted-foreground">
-                  <Copy className="size-3" />
-                  Copy to project
+              {w.source === "builtin" && w.valid && (
+                <span
+                  data-eject
+                  role="button"
+                  title="Save an editable copy in .warpforge/workflows/"
+                  aria-label={`Save ${w.name} into this project`}
+                  className="ml-auto flex shrink-0 items-center self-center rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                >
+                  <FileDown className="size-3.5" />
                 </span>
-              </DropdownMenuItem>
-            )}
-          </Fragment>
+              )}
+            </span>
+          </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
     </DropdownMenu>

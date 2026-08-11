@@ -63,6 +63,13 @@ export interface SettingsState {
   /** When true and a text-gen agent is selected, auto-generate a task title after creation. */
   autoNameTasks: boolean;
   setAutoNameTasks: (v: boolean) => void;
+  /**
+   * Whether New Task starts in an isolated git worktree. Persisted so the
+   * choice survives across task creations instead of resetting every time.
+   * Off by default — most tasks run in the checkout the user is already in.
+   */
+  newTaskWorktree: boolean;
+  setNewTaskWorktree: (v: boolean) => void;
 }
 
 interface UiState extends SettingsState {
@@ -149,6 +156,7 @@ export const useUi = create<UiState>()(
       textGenAgentId: null,
       textGenModel: null,
       autoNameTasks: true,
+      newTaskWorktree: false,
 
       setView: (view) => set({ openTaskId: null, openTaskNav: null, view }),
       openProject: (selectedProjectId) =>
@@ -156,7 +164,12 @@ export const useUi = create<UiState>()(
       // Contextual task tools must not leak from one task into the next.
       // Project-scoped Runtime visibility and other layout preferences remain persisted.
       openTask: (openTaskId) =>
-        set({ openTaskId, openTaskNav: null, rightPanel: null, activeSurface: DEFAULT_TASK_SURFACE }),
+        set({
+          openTaskId,
+          openTaskNav: null,
+          rightPanel: null,
+          activeSurface: DEFAULT_TASK_SURFACE,
+        }),
       openTaskWithNav: (openTaskId, openTaskNav) =>
         set({ openTaskId, openTaskNav, rightPanel: null, activeSurface: openTaskNav.surface }),
       clearOpenTaskNav: () => set({ openTaskNav: null }),
@@ -237,6 +250,7 @@ export const useUi = create<UiState>()(
       setTextGenAgentId: (textGenAgentId) => set({ textGenAgentId, textGenModel: null }),
       setTextGenModel: (textGenModel) => set({ textGenModel }),
       setAutoNameTasks: (autoNameTasks) => set({ autoNameTasks }),
+      setNewTaskWorktree: (newTaskWorktree) => set({ newTaskWorktree }),
     }),
     {
       name: "wf-ui",

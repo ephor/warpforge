@@ -21,8 +21,7 @@ import type { AccountInfo, AgentConfig } from "@/protocol";
  * process on the next message — which is worth saying, because the alternative
  * reading ("my task just died") is the wrong one.
  */
-const SWITCH_NOTE =
-  "Open sessions resume on the new account with your next message.";
+const SWITCH_NOTE = "Open sessions resume on the new account with your next message.";
 
 function accountLabel(account: AccountInfo): string {
   return account.label || account.email || account.id;

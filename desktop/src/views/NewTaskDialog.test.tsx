@@ -16,6 +16,13 @@ const project = {
   portRange: [4000, 4099] as [number, number],
 };
 
+const otherProject = {
+  ...project,
+  name: "lingoverse",
+  path: "/workspace/lingoverse",
+  portRange: [4100, 4199] as [number, number],
+};
+
 const modelOption: ConfigOption = {
   category: "model",
   currentValue: "default-model",
@@ -46,10 +53,18 @@ const agent: AgentConfig = {
   models: [modelOption, effortOption],
 };
 
+const codex: AgentConfig = {
+  acpCommand: "codex",
+  displayName: "Codex",
+  enabled: true,
+  id: "codex",
+  models: [],
+};
+
 const snapshot: Snapshot = {
-  agents: [agent],
+  agents: [agent, codex],
   portforwards: [],
-  projects: [project],
+  projects: [project, otherProject],
   services: [],
   tasks: [],
   terminals: [],
@@ -78,6 +93,7 @@ beforeEach(() => {
   localStorage.clear();
   useUi.setState({
     autoNameTasks: false,
+    newTaskWorktree: false,
     openTaskId: null,
     textGenAgentId: null,
     textGenModel: null,
@@ -88,7 +104,6 @@ beforeEach(() => {
     if (method === "task.create") return { taskId: "created-task" };
     return {};
   });
-  vi.spyOn(daemon, "listSessions").mockResolvedValue([]);
   vi.spyOn(daemon, "workflowList").mockResolvedValue([]);
 });
 
@@ -98,16 +113,42 @@ afterEach(() => {
 });
 
 describe("NewTaskDialog", () => {
-  it("puts prompt before execution settings while keeping model controls available", () => {
+  it("puts run context above the prompt while keeping model controls in the composer", () => {
     renderDialog();
 
-    const prompt = screen.getByRole("heading", { name: "What are you trying to ship?" });
-    const execution = screen.getByRole("heading", { name: "Where and how should it run?" });
-    expect(
-      prompt.compareDocumentPosition(execution) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    const modes = screen.getByRole("radiogroup", { name: "Execution mode" });
+    const prompt = screen.getByPlaceholderText("What should the agent do?");
+    expect(modes.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: "Model: Default" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reasoning effort: Default" })).toBeInTheDocument();
+  });
+
+  it("keeps the new-task surface focused when the mode changes", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole("radio", { name: "Orchestrator" }));
+    expect(
+      screen.getByPlaceholderText("What should the orchestrator coordinate?"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("How this run works")).not.toBeInTheDocument();
+  });
+
+  it("tags an orchestrator task and keeps it out of a worktree", async () => {
+    const user = userEvent.setup();
+    useUi.setState({ newTaskWorktree: true });
+    renderDialog();
+
+    await user.click(screen.getByRole("radio", { name: "Orchestrator" }));
+    await user.type(screen.getByPlaceholderText("What should the orchestrator coordinate?"), "Go");
+    await user.click(screen.getByRole("button", { name: "Start orchestrator" }));
+
+    await waitFor(() =>
+      expect(daemon.request).toHaveBeenCalledWith(
+        "task.create",
+        expect.objectContaining({ tags: ["orchestrator-chat"], worktree: false }),
+      ),
+    );
   });
 
   it("preserves create payload and opens returned task", async () => {
@@ -143,32 +184,81 @@ describe("NewTaskDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it("opens resumed session task after daemon returns its id", async () => {
+  it("keeps the prompt and harness when the project changes", async () => {
     const user = userEvent.setup();
-    const onOpenChange = vi.fn<(open: boolean) => void>();
-    vi.mocked(daemon.listSessions).mockResolvedValueOnce([
-      {
-        agent: "claude",
-        messageCount: 4,
-        sessionId: "session-1",
-        title: "Continue API review",
-        updatedAt: 1,
-      },
-    ]);
-    vi.spyOn(daemon, "resumeTask").mockResolvedValue("resumed-task");
-    renderDialog(onOpenChange);
+    renderDialog();
 
-    await user.click(await screen.findByRole("button", { name: /Continue API review/ }));
+    await user.click(screen.getByRole("button", { name: "Harness" }));
+    await user.click(screen.getByRole("menuitem", { name: "Codex" }));
+    await user.type(screen.getByPlaceholderText("What should the agent do?"), "Ship it");
 
+    await user.click(screen.getByRole("button", { name: "Project" }));
+    await user.click(screen.getByRole("menuitem", { name: "lingoverse" }));
+
+    // Realising the project was wrong must not cost the rest of the setup.
+    expect(screen.getByRole("button", { name: "Harness" })).toHaveTextContent("Codex");
+    expect(screen.getByPlaceholderText("What should the agent do?")).toHaveValue("Ship it");
+
+    await user.click(screen.getByRole("button", { name: "Start task" }));
     await waitFor(() =>
-      expect(daemon.resumeTask).toHaveBeenCalledWith(
-        "warpforge",
-        "claude",
-        "session-1",
-        "Continue API review",
+      expect(daemon.request).toHaveBeenCalledWith(
+        "task.create",
+        expect.objectContaining({ agent: "codex", project: "lingoverse", prompt: "Ship it" }),
       ),
     );
-    expect(useUi.getState().openTaskId).toBe("resumed-task");
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps the harness's model picks when the project changes", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole("button", { name: "Model: Default" }));
+    await user.click(screen.getByRole("button", { name: "Sonnet" }));
+
+    await user.click(screen.getByRole("button", { name: "Project" }));
+    await user.click(screen.getByRole("menuitem", { name: "lingoverse" }));
+
+    expect(screen.getByRole("button", { name: "Model: Sonnet" })).toBeInTheDocument();
+  });
+
+  it("drops the harness's own config picks when the harness changes", async () => {
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole("button", { name: "Model: Default" }));
+    await user.click(screen.getByRole("button", { name: "Sonnet" }));
+    expect(screen.getByRole("button", { name: "Model: Sonnet" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Harness" }));
+    await user.click(screen.getByRole("menuitem", { name: "Codex" }));
+
+    expect(screen.queryByRole("button", { name: "Model: Sonnet" })).not.toBeInTheDocument();
+  });
+
+  it("remembers the worktree toggle across dialog opens", async () => {
+    const user = userEvent.setup();
+    const first = renderDialog();
+    expect(useUi.getState().newTaskWorktree).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Worktree" }));
+    expect(useUi.getState().newTaskWorktree).toBe(true);
+    first.unmount();
+
+    // Reopening must not reset the choice back to the default.
+    renderDialog();
+    expect(screen.getByRole("button", { name: "Worktree" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await user.type(screen.getByPlaceholderText("What should the agent do?"), "Ship it");
+    await user.click(screen.getByRole("button", { name: "Start task" }));
+
+    await waitFor(() =>
+      expect(daemon.request).toHaveBeenCalledWith(
+        "task.create",
+        expect.objectContaining({ worktree: true }),
+      ),
+    );
   });
 });

@@ -11,8 +11,8 @@ import { useTaskSessionUpdates } from "@/hooks/useTaskSessionUpdates";
 import { sessionActivity } from "@/lib/sessionActivity";
 import type { TaskTree } from "@/lib/taskGroups";
 import { taskLabel } from "@/lib/taskLabel";
-import { workflowStageLabel } from "@/lib/workflow";
 import { cn } from "@/lib/utils";
+import { workflowStageLabel } from "@/lib/workflow";
 
 import type { AgentConfig, OrchNodeInfo, TaskInfo } from "../../protocol";
 

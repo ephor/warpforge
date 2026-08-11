@@ -759,9 +759,10 @@ pub enum Command {
         task_id: String,
         reply: oneshot::Sender<wire::GitOpResult>,
     },
-    /// List local branches of the task's repo.
+    /// List local branches of a repo, located by task or by project name.
     GitBranches {
-        task_id: String,
+        task_id: Option<String>,
+        project: Option<String>,
         reply: oneshot::Sender<wire::GitBranchList>,
     },
     /// Switch the task's repo to `branch` (smart checkout, rollback on conflict).
@@ -1242,10 +1243,15 @@ impl DaemonHandle {
         })
     }
 
-    pub async fn git_branches(&self, task_id: &str) -> wire::GitBranchList {
+    pub async fn git_branches(
+        &self,
+        task_id: Option<String>,
+        project: Option<String>,
+    ) -> wire::GitBranchList {
         let (tx, rx) = oneshot::channel();
         self.send(Command::GitBranches {
-            task_id: task_id.to_string(),
+            task_id,
+            project,
             reply: tx,
         })
         .await;
@@ -2813,11 +2819,20 @@ impl Daemon {
                 }
                 let _ = reply.send(result);
             }
-            Command::GitBranches { task_id, reply } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+            Command::GitBranches {
+                task_id,
+                project,
+                reply,
+            } => {
+                // A task pins its own project; without one, New Task passes the
+                // project directly because no task exists yet.
+                let repo = match task_id {
+                    Some(id) => self
+                        .tasks
+                        .get(&id)
+                        .and_then(|t| self.project_path(&t.project)),
+                    None => project.as_deref().and_then(|p| self.project_path(p)),
+                };
                 let list = match repo {
                     Some(p) => super::diff::list_branches(&p).await.unwrap_or_default(),
                     None => wire::GitBranchList::default(),

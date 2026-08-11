@@ -42,12 +42,7 @@ interface AppHeaderProps {
  * conversation itself. Navigating to another view (sidebar nav, or clicking
  * another task) closes this one — no separate back control needed.
  */
-export default function AppHeader({
-  view,
-  openTask,
-  onAddProject,
-  onCloseTask,
-}: AppHeaderProps) {
+export default function AppHeader({ view, openTask, onAddProject, onCloseTask }: AppHeaderProps) {
   // Accounts come straight from the daemon rather than through App: the chip is
   // the only consumer, and threading them through every render of the shell
   // would couple unrelated views to account state.
@@ -62,7 +57,9 @@ export default function AppHeader({
       ? (snapshot.projects.find((p) => p.name === selectedProjectId) ?? snapshot.projects[0])
       : null;
   const taskGroupIndex = useMemo(() => buildTaskGroupIndex(snapshot.tasks), [snapshot.tasks]);
-  const taskPinned = openTask ? isTaskGroupPinned(taskGroupIndex, pinnedTaskIds, openTask.id) : false;
+  const taskPinned = openTask
+    ? isTaskGroupPinned(taskGroupIndex, pinnedTaskIds, openTask.id)
+    : false;
 
   return (
     <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border/70 bg-card/80 px-2.5">

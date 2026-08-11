@@ -1,13 +1,14 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { WorkflowMeta } from "../protocol";
+import type { TaskMode } from "./TaskComposeBar";
 import { TaskComposeBar } from "./TaskComposeBar";
 
 const onWorkflowChange = vi.fn<(v: string | null) => void>();
 const onEjectWorkflow = vi.fn<(id: string) => void>();
-const onOrchChatChange = vi.fn<(v: boolean) => void>();
+const onModeChange = vi.fn<(v: TaskMode) => void>();
 
 const workflows: WorkflowMeta[] = [
   {
@@ -41,14 +42,15 @@ function renderBar(props: Partial<Parameters<typeof TaskComposeBar>[0]> = {}) {
         },
       ]}
       agent="claude"
+      branch="main"
+      mode="workflow"
       onAgentChange={vi.fn<(v: string) => void>()}
       onEjectWorkflow={onEjectWorkflow}
-      onOrchChatChange={onOrchChatChange}
+      onModeChange={onModeChange}
       onProjectChange={vi.fn<(v: string) => void>()}
       onShareContextChange={vi.fn<(v: boolean) => void>()}
       onUseWorktreeChange={vi.fn<(v: boolean) => void>()}
       onWorkflowChange={onWorkflowChange}
-      orchChat={false}
       project="warpforge"
       projects={[
         {
@@ -72,15 +74,10 @@ function renderBar(props: Partial<Parameters<typeof TaskComposeBar>[0]> = {}) {
 describe("TaskComposeBar — workflow picker", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("hides the picker when a project has no workflows", () => {
-    renderBar({ workflows: [] });
-    expect(screen.queryByRole("button", { name: /workflow/i })).not.toBeInTheDocument();
-  });
-
   it("selects a workflow from the menu", async () => {
     const user = userEvent.setup();
     renderBar();
-    await user.click(screen.getByRole("button", { name: /workflow/i }));
+    await user.click(screen.getByRole("button", { name: "Pick a pipeline" }));
     await user.click(screen.getByRole("menuitem", { name: /implement → review×2 → fix/ }));
     expect(onWorkflowChange).toHaveBeenCalledWith("review-loop");
   });
@@ -88,7 +85,7 @@ describe("TaskComposeBar — workflow picker", () => {
   it("lists an invalid workflow with its error but does not select it", async () => {
     const user = userEvent.setup();
     renderBar();
-    await user.click(screen.getByRole("button", { name: /workflow/i }));
+    await user.click(screen.getByRole("button", { name: "Pick a pipeline" }));
     const broken = screen.getByRole("menuitem", { name: /`name` is required/ });
     expect(broken).toHaveAttribute("aria-disabled", "true");
     await user.click(broken);
@@ -98,27 +95,52 @@ describe("TaskComposeBar — workflow picker", () => {
   it("copies a built-in into the project without selecting it", async () => {
     const user = userEvent.setup();
     renderBar();
-    await user.click(screen.getByRole("button", { name: /workflow/i }));
-    await user.click(screen.getByRole("menuitem", { name: /copy review loop to this project/i }));
+    await user.click(screen.getByRole("button", { name: "Pick a pipeline" }));
+    await user.click(screen.getByRole("button", { name: /save review loop into this project/i }));
     expect(onEjectWorkflow).toHaveBeenCalledWith("review-loop");
     expect(onWorkflowChange).not.toHaveBeenCalled();
   });
 
-  it("summarizes the selected workflow and labels the agent as the per-stage default", () => {
-    renderBar({ workflow: "review-loop" });
-    expect(screen.getByText(/Stages: implement → review×2 → fix/)).toBeInTheDocument();
-    expect(screen.getByText(/up to 2 review rounds/)).toBeInTheDocument();
-    // Nothing is "led": the parent has no session, this is just the fallback.
-    expect(screen.getByText("Default agent")).toBeInTheDocument();
+  it("hides the picker outside workflow mode", () => {
+    renderBar({ mode: "single" });
+    expect(screen.queryByRole("button", { name: "Pick a pipeline" })).not.toBeInTheDocument();
+  });
+});
+
+describe("TaskComposeBar — execution mode", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("offers the three modes as one exclusive choice", () => {
+    renderBar({ mode: "orchestrator" });
+    const group = screen.getByRole("radiogroup", { name: "Execution mode" });
+    const modes = within(group).getAllByRole("radio");
+    expect(modes.map((m) => m.textContent)).toEqual(["Single", "Orchestrator", "Workflow"]);
+    // Exclusivity is structural now — picking one cannot leave another checked.
+    expect(modes.filter((m) => m.getAttribute("aria-checked") === "true")).toHaveLength(1);
+    expect(screen.getByRole("radio", { name: "Orchestrator" })).toBeChecked();
   });
 
-  it("locks the orchestrator toggle while a workflow is selected", () => {
-    renderBar({ workflow: "review-loop" });
-    expect(screen.getByRole("button", { name: /orchestrator/i })).toBeDisabled();
+  it("reports the picked mode", async () => {
+    const user = userEvent.setup();
+    renderBar({ mode: "single" });
+    await user.click(screen.getByRole("radio", { name: "Orchestrator" }));
+    expect(onModeChange).toHaveBeenCalledWith("orchestrator");
   });
 
-  it("locks the workflow picker while the orchestrator is on", () => {
-    renderBar({ orchChat: true });
-    expect(screen.getByRole("button", { name: /workflow/i })).toBeDisabled();
+  it("disables workflow mode when the project defines no valid pipeline", () => {
+    renderBar({ mode: "single", workflows: [] });
+    expect(screen.getByRole("radio", { name: "Workflow" })).toBeDisabled();
+  });
+
+  it("locks the worktree toggle for an orchestrator, which shares the checkout", () => {
+    renderBar({ mode: "orchestrator", useWorktree: true });
+    const worktree = screen.getByRole("button", { name: /worktree/i });
+    expect(worktree).toBeDisabled();
+    expect(worktree).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("shows the current branch", () => {
+    renderBar({ branch: "feature/oauth" });
+    expect(screen.getByText("feature/oauth")).toBeInTheDocument();
   });
 });

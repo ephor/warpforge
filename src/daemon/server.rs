@@ -590,8 +590,8 @@ async fn dispatch(
                 message: e.to_string(),
             })
         }
-        GitBranches { task_id } => {
-            let list = handle.git_branches(&task_id).await;
+        GitBranches { task_id, project } => {
+            let list = handle.git_branches(task_id, project).await;
             serde_json::to_value(list).map_err(|e| wire::RpcError {
                 code: wire::ErrorCode::Internal,
                 message: e.to_string(),

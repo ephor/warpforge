@@ -231,9 +231,10 @@ describe("projectNames", () => {
   // group — it's registered projects only, full stop. Such a task stays
   // reachable elsewhere (Mission Control), just not here.
   it("returns registered projects only, in snapshot order", () => {
-    expect(
-      projectNames({ projects: [{ name: "warpforge" }, { name: "website" }] }),
-    ).toEqual(["warpforge", "website"]);
+    expect(projectNames({ projects: [{ name: "warpforge" }, { name: "website" }] })).toEqual([
+      "warpforge",
+      "website",
+    ]);
   });
 
   it("is empty when nothing is registered", () => {

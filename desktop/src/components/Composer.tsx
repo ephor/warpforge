@@ -75,6 +75,7 @@ export const Composer = forwardRef<
     hideSendButton?: boolean;
     compact?: boolean;
     contextUsage?: ContextUsage;
+    className?: string;
   }
 >(
   (
@@ -93,6 +94,7 @@ export const Composer = forwardRef<
       hideSendButton = false,
       compact = false,
       contextUsage,
+      className,
     },
     ref,
   ) => {
@@ -318,7 +320,7 @@ export const Composer = forwardRef<
     const action = onCancel && !hasSubmission ? "stop" : "send";
     return (
       <div
-        className={cn("relative", compact ? "p-1.5" : "p-2")}
+        className={cn("relative", compact ? "p-1.5" : "p-2", className)}
         onDragEnter={(e) => {
           e.preventDefault();
           if (imageSupported) setDragging(true);
