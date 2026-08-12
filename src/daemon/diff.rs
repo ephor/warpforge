@@ -291,7 +291,7 @@ pub async fn update_project(repo: &str) -> Result<wire::GitOpResult> {
         return Ok(op_conflict(
             format!("update rolled back — '{branch}' and its upstream have conflicting commits"),
             conflicts,
-            Some(branch),
+            Some(branch.to_string()),
         ));
     }
 
@@ -308,7 +308,7 @@ pub async fn update_project(repo: &str) -> Result<wire::GitOpResult> {
             return Ok(op_conflict(
                 format!("update rolled back — your uncommitted changes conflict with the incoming update on '{branch}'"),
                 conflicts,
-                Some(branch),
+                Some(branch.to_string()),
             ));
         }
     }
@@ -865,10 +865,11 @@ pub async fn branch_create(
     })
 }
 
-/// `git.rebase`: rebase the current branch onto `onto`, stashing and restoring
-/// uncommitted changes around it. Any conflict rolls back to the prior tree.
-pub async fn rebase(repo: &str, onto: &str) -> Result<wire::GitOpResult> {
-    let branch = match current_branch(repo).await {
+/// `git.rebase`: rebase `branch` onto `onto` without checking it out. The
+/// current working tree is stashed and restored, so selecting another branch
+/// never changes the user's checkout.
+pub async fn rebase(repo: &str, branch: &str, onto: &str) -> Result<wire::GitOpResult> {
+    let _current = match current_branch(repo).await {
         Some(b) => b,
         None => {
             return Ok(op_error(
@@ -881,10 +882,32 @@ pub async fn rebase(repo: &str, onto: &str) -> Result<wire::GitOpResult> {
             status: wire::GitOpStatus::UpToDate,
             message: format!("'{branch}' is already on '{onto}'"),
             conflicts: Vec::new(),
-            branch: Some(branch),
+            branch: Some(branch.to_string()),
         });
     }
-    let (start, dirty) = (rev_parse_head(repo).await?, is_dirty(repo).await?);
+
+    let verify = git(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
+    .await?;
+    if !verify.status.success() {
+        return Ok(op_error(format!("no local branch '{branch}'")));
+    }
+    let base = git(repo, &["merge-base", branch, onto]).await?;
+    if !base.status.success() {
+        return Ok(op_error(format!(
+            "could not find common base for '{branch}' and '{onto}'"
+        )));
+    }
+    let base = String::from_utf8_lossy(&base.stdout).trim().to_string();
+    let start = rev_parse_head(repo).await?;
+    let dirty = is_dirty(repo).await?;
     if dirty {
         let st = git(repo, &["stash", "push", "-u", "-m", "warpforge-rebase"]).await?;
         if !st.status.success() {
@@ -892,7 +915,7 @@ pub async fn rebase(repo: &str, onto: &str) -> Result<wire::GitOpResult> {
         }
     }
 
-    let out = git(repo, &["rebase", onto]).await?;
+    let out = git(repo, &["rebase", "--onto", onto, &base, branch]).await?;
     if !out.status.success() {
         let conflicts = unmerged_files(repo).await;
         let _ = git(repo, &["rebase", "--abort"]).await;
@@ -902,7 +925,7 @@ pub async fn rebase(repo: &str, onto: &str) -> Result<wire::GitOpResult> {
         return Ok(op_conflict(
             format!("rebase rolled back — '{branch}' conflicts with '{onto}'"),
             conflicts,
-            Some(branch),
+            Some(branch.to_string()),
         ));
     }
 
@@ -915,7 +938,7 @@ pub async fn rebase(repo: &str, onto: &str) -> Result<wire::GitOpResult> {
             return Ok(op_conflict(
                 format!("rebase rolled back — your uncommitted changes conflict with '{onto}'"),
                 conflicts,
-                Some(branch),
+                Some(branch.to_string()),
             ));
         }
     }
@@ -924,7 +947,7 @@ pub async fn rebase(repo: &str, onto: &str) -> Result<wire::GitOpResult> {
         status: wire::GitOpStatus::Ok,
         message: format!("rebased '{branch}' onto '{onto}'"),
         conflicts: Vec::new(),
-        branch: Some(branch),
+        branch: Some(branch.to_string()),
     })
 }
 

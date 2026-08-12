@@ -264,7 +264,7 @@ function BranchActionSubmenu({
       : [
           ["checkout", "Checkout"],
           ["create", `New Branch from '${branch}'…`],
-          ["checkout-rebase", "Checkout and Rebase onto…"],
+          ["rebase", `Rebase '${branch}' onto…`],
           ["checkout-update", "Checkout and Update"],
           ["push", "Push…"],
           ["rename", "Rename…"],

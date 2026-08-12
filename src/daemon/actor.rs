@@ -795,6 +795,7 @@ pub enum Command {
     /// Rebase the current branch onto `target`.
     GitRebase {
         task_id: String,
+        branch: String,
         target: String,
         reply: oneshot::Sender<wire::GitOpResult>,
     },
@@ -1354,10 +1355,11 @@ impl DaemonHandle {
         op_result_or_dropped(rx.await, "daemon dropped the delete request")
     }
 
-    pub async fn git_rebase(&self, task_id: &str, target: &str) -> wire::GitOpResult {
+    pub async fn git_rebase(&self, task_id: &str, branch: &str, target: &str) -> wire::GitOpResult {
         let (tx, rx) = oneshot::channel();
         self.send(Command::GitRebase {
             task_id: task_id.to_string(),
+            branch: branch.to_string(),
             target: target.to_string(),
             reply: tx,
         })
@@ -3084,6 +3086,7 @@ impl Daemon {
             }
             Command::GitRebase {
                 task_id,
+                branch,
                 target,
                 reply,
             } => {
@@ -3092,14 +3095,14 @@ impl Daemon {
                     .get(&task_id)
                     .and_then(|t| self.project_path(&t.project));
                 let result = match repo {
-                    Some(p) => super::diff::rebase(&p, &target).await.unwrap_or_else(|e| {
-                        wire::GitOpResult {
+                    Some(p) => super::diff::rebase(&p, &branch, &target)
+                        .await
+                        .unwrap_or_else(|e| wire::GitOpResult {
                             status: wire::GitOpStatus::Error,
                             message: e.to_string(),
                             conflicts: Vec::new(),
                             branch: None,
-                        }
-                    }),
+                        }),
                     None => wire::GitOpResult {
                         status: wire::GitOpStatus::Error,
                         message: format!("no repo for task {task_id}"),

@@ -637,8 +637,12 @@ async fn dispatch(
                 message: e.to_string(),
             })
         }
-        GitRebase { task_id, target } => {
-            let result = handle.git_rebase(&task_id, &target).await;
+        GitRebase {
+            task_id,
+            branch,
+            target,
+        } => {
+            let result = handle.git_rebase(&task_id, &branch, &target).await;
             serde_json::to_value(result).map_err(|e| wire::RpcError {
                 code: wire::ErrorCode::Internal,
                 message: e.to_string(),
