@@ -27,8 +27,8 @@ export type BranchAction =
   | { kind: "rename"; branch: string }
   | { kind: "delete"; branch: string }
   | { kind: "create"; from: string; defaultName?: string }
-  | { kind: "rebase"; branch: string }
-  | { kind: "merge" }
+  | { kind: "rebase"; branch: string; target?: string }
+  | { kind: "merge"; target?: string }
   | { kind: "checkout-update"; branch: string }
 
 interface DialogProps {
@@ -74,7 +74,7 @@ export function BranchActionsDialog({
 
   useEffect(() => {
     setNewName(action?.kind === "create" ? action.defaultName ?? "" : "");
-    setTarget("");
+    setTarget(action?.kind === "rebase" || action?.kind === "merge" ? action.target ?? "" : "");
   }, [action]);
 
   const mutate = useMutation<GitOpResult, Error>({
