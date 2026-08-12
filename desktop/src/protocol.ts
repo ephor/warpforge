@@ -458,6 +458,14 @@ export interface ProjectFile {
   changed: boolean;
 }
 
+/** One line-level match from `file.search` — path plus 1-based line/column. */
+export interface SymbolMatch {
+  path: string;
+  line: number;
+  column: number;
+  text: string;
+}
+
 // ── Git ops (update / branch switch) ────────────────────────────────────────
 
 export type GitOpStatus = "up_to_date" | "ok" | "conflict" | "error";

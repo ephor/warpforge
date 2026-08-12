@@ -447,6 +447,8 @@ export class DaemonClient {
         const files = diff.files.map((f) => ({ changed: true, path: f.path }));
         return Promise.resolve(files);
       }
+      case "file.search":
+        return Promise.resolve([]);
       case "file.save":
         return Promise.resolve({});
       case "git.pushInfo": {

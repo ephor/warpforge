@@ -3,14 +3,14 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { Check, Code, Eye, Save } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { codemirrorLanguageForPath } from "@/lib/codemirrorLanguages";
 import { cmChromeForMode } from "@/lib/codemirrorTheme";
 import { cn } from "@/lib/utils";
 import { useThemeMode } from "@/hooks/useTheme";
 
-import type { FileDoc } from "../protocol";
+import type { FileDoc, SymbolMatch } from "../protocol";
 import { Markdown } from "./Markdown";
 
 type SaveStatus = "clean" | "unsaved" | "saved";
@@ -38,16 +38,27 @@ export function CodeEditor({
   doc,
   editable,
   onSave,
+  onGotoDefinition,
+  onOpenSymbol,
 }: {
   doc: FileDoc;
   editable: boolean;
   onSave: (content: string) => void;
+  /** Resolve a symbol under the cursor to project lines (go-to-definition).
+   *  When provided, ⌘/Ctrl-click and ⌘B run it. */
+  onGotoDefinition?: (query: string) => Promise<SymbolMatch[]>;
+  /** Open a found symbol's file at its line/column. */
+  onOpenSymbol?: (path: string, line: number, column: number) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onSaveRef = useRef(onSave);
+  const onGotoRef = useRef(onGotoDefinition);
+  const onOpenSymbolRef = useRef(onOpenSymbol);
   const [status, setStatus] = useState<SaveStatus>("clean");
   const [preview, setPreview] = useState(false);
+  const [gotoResults, setGotoResults] = useState<SymbolMatch[]>([]);
+  const [gotoActive, setGotoActive] = useState(0);
   const markdown = isMarkdownPath(doc.path);
   const svgImage = isSvgPath(doc.path);
   const binaryImage = isBinaryImagePath(doc.path);
@@ -59,6 +70,10 @@ export function CodeEditor({
   useEffect(() => {
     onSaveRef.current = onSave;
   }, [onSave]);
+  useEffect(() => {
+    onGotoRef.current = onGotoDefinition;
+    onOpenSymbolRef.current = onOpenSymbol;
+  }, [onGotoDefinition, onOpenSymbol]);
 
   const flushSave = () => {
     const view = viewRef.current;
@@ -70,6 +85,45 @@ export function CodeEditor({
     setStatus("saved");
     return true;
   };
+
+  const runGoto = useCallback((): boolean => {
+    const view = viewRef.current;
+    const save = onGotoRef.current;
+    if (!view || !save) {
+      return false;
+    }
+    const head = view.state.selection.main.head;
+    const word = view.state.wordAt(head);
+    if (!word) {
+      return false;
+    }
+    const query = view.state.sliceDoc(word.from, word.to).trim();
+    if (!query) {
+      return false;
+    }
+    setGotoResults([]);
+    void save(query).then((results) => {
+      if (!results.length) {
+        return;
+      }
+      setGotoResults(results.slice(0, 12));
+      setGotoActive(0);
+    });
+    return true;
+  }, []);
+
+  const pickGoto = useCallback(
+    (index: number) => {
+      const hit = gotoResults[index];
+      if (!hit) {
+        return;
+      }
+      const open = onOpenSymbolRef.current;
+      setGotoResults([]);
+      open?.(hit.path, hit.line, hit.column);
+    },
+    [gotoResults],
+  );
 
   useEffect(() => {
     const parent = host.current;
@@ -92,7 +146,31 @@ export function CodeEditor({
             EditorView.lineWrapping,
             ...language,
             EditorState.readOnly.of(!editable || isReadOnly),
-            keymap.of([{ key: "Mod-s", run: flushSave }]),
+keymap.of([
+              { key: "Mod-s", run: flushSave },
+              ...(onGotoDefinition
+                ? [{ key: "Mod-b", run: runGoto, preventDefault: true }]
+                : []),
+            ]),
+            ...(onGotoDefinition
+              ? [
+                  EditorView.domEventHandlers({
+                    mousedown(event, cv) {
+                      if (!(event.metaKey || event.ctrlKey) || event.button !== 0) {
+                        return false;
+                      }
+                      event.preventDefault();
+                      const pos = cv.posAtCoords({ x: event.clientX, y: event.clientY });
+                      if (pos === null) {
+                        return false;
+                      }
+                      cv.dispatch({ selection: { anchor: pos } });
+                      runGoto();
+                      return true;
+                    },
+                  }),
+                ]
+              : []),
             EditorView.updateListener.of((u) => {
               if (!u.docChanged) {
                 return;
@@ -206,6 +284,37 @@ export function CodeEditor({
               )}
               style={{ fontSize: "var(--app-mono-font-size)" }}
             />
+            {gotoResults.length > 0 && !showPreview && (
+              <div className="absolute left-6 top-2 z-20 w-96 overflow-hidden rounded-md border bg-popover shadow-lg">
+                <div className="border-b px-3 py-1.5 text-xs font-semibold">
+                  Go to definition
+                </div>
+                <div className="max-h-64 overflow-y-auto py-1">
+                  {gotoResults.map((hit, index) => (
+                    <button
+                      key={`${hit.path}:${hit.line}`}
+                      type="button"
+                      onMouseEnter={() => setGotoActive(index)}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        pickGoto(index);
+                      }}
+                      className={cn(
+                        "flex w-full items-baseline gap-2 px-3 py-1 text-left font-mono text-xs",
+                        index === gotoActive
+                          ? "bg-accent text-accent-foreground"
+                          : "text-foreground",
+                      )}
+                    >
+                      <span className="shrink-0 text-muted-foreground">
+                        {hit.path}:{hit.line}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">{hit.text.trim()}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             {showPreview && (
               <div className="h-full overflow-auto px-4 py-3">
                 {svgImage ? (

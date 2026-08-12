@@ -173,6 +173,17 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
     },
     [setActiveSurface, setShowDiff],
   );
+  const searchSymbol = useCallback(
+    (query: string): Promise<import("../protocol").SymbolMatch[]> => {
+      return daemon.request("file.search", {
+        limit: 50,
+        query,
+        task_id: task.id,
+      }) as Promise<import("../protocol").SymbolMatch[]>;
+    },
+    [task.id],
+  );
+  const openSymbol = useCallback((path: string) => openFileTab(path), [openFileTab]);
   const openDiffFile = useCallback(
     (path: string, hunks: EditHunk[] = []) => {
       setSelectedDiffFile(path);
@@ -436,6 +447,8 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
                           task_id: task.id,
                         })
                       }
+                      onGotoDefinition={searchSymbol}
+                      onOpenSymbol={openSymbol}
                     />
                   )}
                   {activeSurface === "diff" && (
