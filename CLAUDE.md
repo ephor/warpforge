@@ -183,6 +183,13 @@ A pre-commit hook (`.githooks/pre-commit`, enabled via
 `git config core.hooksPath .githooks`) runs these; do not rely on it — run them
 yourself before committing, and never `--no-verify` to dodge a real failure.
 
-User-facing changes also need a changeset (`bun run changeset` at the repo
-root). Never hand-edit versions or `CHANGELOG.md` — the **Version release**
-workflow owns both. See `docs/RELEASING.md`.
+Every commit must carry a changeset (`bun run changeset` produces one — add
+it in the same commit as the change). Never hand-edit versions or
+`CHANGELOG.md` — the **Version release** workflow owns both. See
+`docs/RELEASING.md`.
+
+Keep commits small and focused, not huge sweeping changes. Each commit should
+briefly describe the essence of what changed (one logical change per commit).
+
+Keep source files small — at most 400–500 lines of code per file. That is the
+hard maximum; split larger files rather than growing past it.
