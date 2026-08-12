@@ -34,12 +34,20 @@ vi.mock("@/components/ui/dropdown-menu", async () => {
   function DropdownMenuPortal({ children }: { children: React.ReactNode }) {
     return children;
   }
+  function DropdownMenuLabel({ children }: { children: React.ReactNode }) {
+    return React.createElement("div", { role: "label" }, children);
+  }
+  function DropdownMenuSeparator() {
+    return React.createElement("div", { role: "separator" });
+  }
   return {
     DropdownMenu,
     DropdownMenuTrigger,
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuPortal,
+    DropdownMenuLabel,
+    DropdownMenuSeparator,
   };
 });
 
