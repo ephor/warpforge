@@ -256,7 +256,9 @@ function BranchActionSubmenu({
     : current
       ? [
           ["update", "Update"],
+          ["rebase-main", "Rebase onto 'main'"],
           ["rebase", "Rebase onto…"],
+          ["merge-main", "Merge 'main' into current"],
           ["merge", "Merge branch into…"],
           ["push", "Push…"],
           ["rename", "Rename…"],
@@ -264,6 +266,7 @@ function BranchActionSubmenu({
       : [
           ["checkout", "Checkout"],
           ["create", `New Branch from '${branch}'…`],
+          ["rebase-main", `Rebase '${branch}' onto 'main'`],
           ["rebase", `Rebase '${branch}' onto…`],
           ["checkout-update", "Checkout and Update"],
           ["push", "Push…"],
