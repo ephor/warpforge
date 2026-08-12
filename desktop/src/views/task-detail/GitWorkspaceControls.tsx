@@ -121,7 +121,13 @@ export function GitWorkspaceControls({
       return;
     }
     const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (
+        !menuRef.current?.contains(target) &&
+        !(target instanceof Element && target.closest("[data-radix-popper-content-wrapper]"))
+      ) {
+        setOpen(false);
+      }
     };
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
