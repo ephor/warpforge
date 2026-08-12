@@ -626,6 +626,34 @@ async fn dispatch(
                 message: e.to_string(),
             })
         }
+        GitBranchCreate {
+            task_id,
+            name,
+            from,
+        } => {
+            let result = handle.git_branch_create(&task_id, &name, from).await;
+            serde_json::to_value(result).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        GitCompareBranches {
+            task_id,
+            base,
+            head,
+        } => {
+            let stats = handle
+                .git_compare_branches(&task_id, &base, &head)
+                .await
+                .map_err(|message| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message,
+                })?;
+            serde_json::to_value(stats).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
         GitRebase { task_id, target } => {
             let result = handle.git_rebase(&task_id, &target).await;
             serde_json::to_value(result).map_err(|e| wire::RpcError {

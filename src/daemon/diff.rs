@@ -424,9 +424,20 @@ pub async fn list_branches(repo: &str) -> Result<wire::GitBranchList> {
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty())
         .collect();
+    let remote_out = git(repo, &["branch", "-r", "--format=%(refname:short)"]).await?;
+    let remotes = if remote_out.status.success() {
+        String::from_utf8_lossy(&remote_out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    } else {
+        Vec::new()
+    };
     Ok(wire::GitBranchList {
         current: current_branch(repo).await,
         branches,
+        remotes,
     })
 }
 
@@ -761,6 +772,111 @@ pub async fn delete_branch(repo: &str, branch: &str, force: bool) -> Result<wire
         conflicts: Vec::new(),
         branch: None,
     })
+}
+
+/// `git.branchCreate`: create `name` from `from` (defaults to the current
+/// HEAD) and check it out, carrying uncommitted changes across with the same
+/// stash/rollback discipline as `switch_branch`.
+pub async fn branch_create(
+    repo: &str,
+    name: &str,
+    from: Option<&str>,
+) -> Result<wire::GitOpResult> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(op_error("new branch name is empty"));
+    }
+    if name.contains(" ") {
+        return Ok(op_error("branch name must not contain spaces"));
+    }
+    let exists = git(
+        repo,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{name}"),
+        ],
+    )
+    .await?;
+    if exists.status.success() {
+        return Ok(op_error(format!("a branch named '{name}' already exists")));
+    }
+    let original = match current_branch(repo).await {
+        Some(b) => b,
+        None => {
+            return Ok(op_error(
+                "not on a branch (detached HEAD or not a git repo)",
+            ))
+        }
+    };
+    if let Some(from) = from {
+        let verify = git(repo, &["rev-parse", "--verify", "--quiet", from]).await?;
+        if !verify.status.success() {
+            return Ok(op_error(format!("no ref '{from}' to branch from")));
+        }
+    }
+
+    let dirty = is_dirty(repo).await?;
+    if dirty {
+        let st = git(repo, &["stash", "push", "-u", "-m", "warpforge-branch"]).await?;
+        if !st.status.success() {
+            return Ok(op_error(format!("git stash failed: {}", errline(&st))));
+        }
+    }
+
+    let mut args = vec!["switch", "-c", name];
+    if let Some(from) = from {
+        args.push(from);
+    }
+    let create = git(repo, &args).await?;
+    if !create.status.success() {
+        if dirty {
+            let _ = git(repo, &["stash", "pop"]).await;
+        }
+        return Ok(op_error(format!(
+            "git switch -c failed: {}",
+            errline(&create)
+        )));
+    }
+
+    if dirty {
+        let pop = git(repo, &["stash", "pop"]).await?;
+        if !pop.status.success() {
+            let conflicts = unmerged_files(repo).await;
+            let _ = git(repo, &["switch", "-f", &original]).await;
+            let _ = git(repo, &["stash", "pop"]).await;
+            return Ok(op_conflict(
+                format!("stayed on '{original}' — your uncommitted changes conflict with '{name}'"),
+                conflicts,
+                Some(original),
+            ));
+        }
+    }
+
+    Ok(wire::GitOpResult {
+        status: wire::GitOpStatus::Ok,
+        message: match from {
+            Some(from) => format!("created '{name}' from '{from}'"),
+            None => format!("created branch '{name}'"),
+        },
+        conflicts: Vec::new(),
+        branch: Some(name.to_string()),
+    })
+}
+
+/// `git.compareBranches`: `git diff --stat` between `base` and `head` — the
+/// "Compare with" view.
+pub async fn compare_stats(repo: &str, base: &str, head: &str) -> Result<wire::GitCompareStats> {
+    let out = git(repo, &["diff", "--stat", &format!("{base}...{head}")]).await?;
+    if !out.status.success() {
+        bail!("git diff failed: {}", errline(&out));
+    }
+    let lines = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.trim_end().to_string())
+        .collect();
+    Ok(wire::GitCompareStats { lines })
 }
 
 /// `git.rebase`: rebase the current branch onto `onto`, stashing and restoring
