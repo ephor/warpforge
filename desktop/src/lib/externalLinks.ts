@@ -1,3 +1,7 @@
+/** Repository changelog for the desktop/daemon release notes. */
+export const externalChangelogUrl =
+  "https://github.com/ephor/warpforge/blob/main/CHANGELOG.md";
+
 /** Open an HTTP(S) link outside Warpforge instead of navigating the app webview. */
 export async function openExternalLink(url: string): Promise<void> {
   if (!isExternalLink(url)) return;
