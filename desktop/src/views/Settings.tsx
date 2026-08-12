@@ -111,6 +111,8 @@ export default function SettingsView({ open, onOpenChange }: Props) {
   const setTextGenModel = useUi((s) => s.setTextGenModel);
   const autoNameTasks = useUi((s) => s.autoNameTasks);
   const setAutoNameTasks = useUi((s) => s.setAutoNameTasks);
+  const teoMod = useUi((s) => s.teoMod);
+  const setTeoMod = useUi((s) => s.setTeoMod);
   const state = useSyncExternalStore(daemon.subscribe, daemon.getState);
   const enabledAgents = (state.snapshot.agents ?? []).filter((a) => a.enabled);
   // The daemon caches an agent's config options after probing it over ACP; the
@@ -321,6 +323,29 @@ export default function SettingsView({ open, onOpenChange }: Props) {
             )}
           </Section>
         </div>
+
+        {/* ── Fun ── */}
+        <Section title="Fun">
+          <SettingRow
+            title="TeoMod"
+            description="For when you might share your screen. Blurs email addresses everywhere they appear. Hover to peek — copy still works."
+            control={
+              <label
+                htmlFor="teo-mod"
+                className="relative inline-flex cursor-pointer items-center"
+              >
+                <input
+                  id="teo-mod"
+                  type="checkbox"
+                  className="peer sr-only"
+                  checked={teoMod}
+                  onChange={(e) => setTeoMod(e.target.checked)}
+                />
+                <div className="h-5 w-9 rounded-full bg-muted-foreground/30 transition-colors peer-checked:bg-foreground/80 after:absolute after:left-0.5 after:top-0.5 after:size-4 after:rounded-full after:bg-background after:transition-transform peer-checked:after:translate-x-4" />
+              </label>
+            }
+          />
+        </Section>
       </div>
     </div>
   );

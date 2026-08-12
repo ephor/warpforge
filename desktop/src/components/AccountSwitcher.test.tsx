@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AccountInfo, AgentConfig } from "@/protocol";
+import { useUi } from "@/store/ui";
 
 const { setActiveAccount } = vi.hoisted(() => ({
   setActiveAccount: vi.fn<(agentId: string, accountId: string) => Promise<AccountInfo[]>>(),
@@ -38,6 +39,7 @@ describe("AccountSwitcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setActiveAccount.mockResolvedValue([]);
+    useUi.getState().setTeoMod(false);
   });
 
   it("shows nothing when there is nothing to switch between", () => {
@@ -111,5 +113,36 @@ describe("AccountSwitcher", () => {
     await user.click(await screen.findByRole("menuitem", { name: /work/ }));
 
     expect(await screen.findByRole("status")).toHaveTextContent("no stored credentials");
+  });
+
+  it("blurs the account email in the menu when TeoMod is on", async () => {
+    useUi.getState().setTeoMod(true);
+    const user = userEvent.setup();
+    const { container } = render(
+      <AccountSwitcher
+        agents={[agent("claude")]}
+        accounts={[
+          account("personal", "claude", { active: true, email: "me@example.com" }),
+          account("work", "claude"),
+        ]}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Claude Code account" }));
+    const menu = await screen.findByRole("menu");
+    expect(menu).toHaveTextContent("me@example.com");
+    expect(container.querySelector(".blur-\\[3px\\]")).not.toBeNull();
+  });
+
+  it("shows emails unblurred by default", () => {
+    const { container } = render(
+      <AccountSwitcher
+        agents={[agent("claude")]}
+        accounts={[
+          account("personal", "claude", { active: true, email: "me@example.com" }),
+          account("work", "claude"),
+        ]}
+      />,
+    );
+    expect(container.querySelector(".blur-\\[3px\\]")).toBeNull();
   });
 });
