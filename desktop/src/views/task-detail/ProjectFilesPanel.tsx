@@ -1,10 +1,21 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDown, FileText } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 
 import { getFileIconUrl } from "@/lib/fileIcon";
 import { cn } from "@/lib/utils";
 
+import {
+  showContextMenu,
+  useNativeContextMenu,
+} from "../../hooks/useNativeContextMenu";
 import type { ProjectFile } from "../../protocol";
 import { projectFileParentFolders } from "./projectFileTree";
 
@@ -147,6 +158,67 @@ export function ProjectFilesPanel({
     });
   }, []);
 
+  const requestId = useRef(`project-files`).current;
+  const targetRef = useRef<{ path?: string; fKey?: string }>({});
+
+  const menuHandlers = useMemo(
+    () =>
+      new Map<string, () => void>([
+        [
+          "open",
+          () => {
+            const t = targetRef.current;
+            if (t.path) onSelect(t.path);
+          },
+        ],
+        [
+          "copy",
+          () => {
+            const t = targetRef.current;
+            if (t.path) void navigator.clipboard.writeText(t.path);
+          },
+        ],
+        [
+          "expand",
+          () => {
+            const t = targetRef.current;
+            if (t.fKey && !openFolders.has(t.fKey)) toggleFolder(t.fKey);
+          },
+        ],
+        [
+          "collapse",
+          () => {
+            const t = targetRef.current;
+            if (t.fKey && openFolders.has(t.fKey)) toggleFolder(t.fKey);
+          },
+        ],
+      ]),
+    [onSelect, openFolders, toggleFolder],
+  );
+  useNativeContextMenu(requestId, menuHandlers);
+
+  const onRowContextMenu = (e: MouseEvent, path?: string, fKey?: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    targetRef.current = { path, fKey };
+    const items: { type: "item"; id: string; label: string }[] = path
+      ? [
+          { type: "item", id: "open", label: "Open" },
+          { type: "item", id: "copy", label: "Copy Path" },
+        ]
+      : fKey
+        ? [
+            {
+              type: "item",
+              id: openFolders.has(fKey) ? "collapse" : "expand",
+              label: openFolders.has(fKey) ? "Collapse" : "Expand",
+            },
+            { type: "item", id: "copy", label: "Copy Path" },
+          ]
+        : [];
+    void showContextMenu({ requestId, items });
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-11 items-center border-b px-3 text-sm font-semibold">Files</div>
@@ -168,6 +240,7 @@ export function ProjectFilesPanel({
                     type="button"
                     style={{ ...pad, transform: `translateY(${vi.start}px)` }}
                     onClick={() => onSelect(row.node.path!)}
+                    onContextMenu={(e) => onRowContextMenu(e, row.node.path)}
                     title={row.node.path}
                     className={cn(
                       "absolute left-0 top-0 flex h-7 w-full min-w-0 items-center gap-1.5 pr-2 text-left text-xs",
@@ -198,6 +271,7 @@ export function ProjectFilesPanel({
                   type="button"
                   style={{ ...pad, transform: `translateY(${vi.start}px)` }}
                   onClick={() => toggleFolder(row.fKey!)}
+                  onContextMenu={(e) => onRowContextMenu(e, undefined, row.fKey)}
                   className="absolute left-0 top-0 flex h-7 w-full min-w-0 items-center gap-1.5 pr-2 text-left text-xs text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
                 >
                   <ChevronDown

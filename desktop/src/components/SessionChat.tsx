@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MouseEvent,
 } from "react";
 
 import type { FileLinkResolver } from "@/components/Markdown";
@@ -28,6 +29,10 @@ import { latestContextUsage } from "@/lib/sessionUsage";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
+import {
+  showContextMenu,
+  useNativeContextMenu,
+} from "../hooks/useNativeContextMenu";
 import { useWorkflowSend } from "../hooks/useWorkflowSend";
 import type {
   AgentConfig,
@@ -168,8 +173,28 @@ const TranscriptRow = memo(function TranscriptRow({
   const messageText =
     update.kind === "user_message" || update.kind === "agent_text" ? update.text : null;
 
+  const requestId = useRef(`message-${crypto.randomUUID()}`).current;
+  const copyHandler = useMemo(
+    () =>
+      messageText
+        ? new Map([["copy", () => void navigator.clipboard.writeText(messageText)]])
+        : new Map<string, () => void>(),
+    [messageText],
+  );
+  useNativeContextMenu(requestId, copyHandler);
+
+  const onRowContextMenu = (e: MouseEvent) => {
+    if (!messageText) return;
+    e.preventDefault();
+    e.stopPropagation();
+    void showContextMenu({
+      requestId,
+      items: [{ type: "item", id: "copy", label: "Copy Message" }],
+    });
+  };
+
   return (
-    <div className="group/message relative">
+    <div className="group/message relative" onContextMenu={onRowContextMenu}>
       <StreamLine
         update={update}
         thinkingActive={thinkingActive}
