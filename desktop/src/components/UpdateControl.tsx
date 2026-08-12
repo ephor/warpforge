@@ -1,4 +1,4 @@
-import { Download, LoaderCircle, RefreshCw } from "lucide-react";
+import { Download, ExternalLink, LoaderCircle, RefreshCw } from "lucide-react";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { externalChangelogUrl, openExternalLink } from "@/lib/externalLinks";
 import { updater } from "@/lib/updater";
 
 interface UpdateControlProps {
@@ -113,6 +114,9 @@ export default function UpdateControl({ daemonConnected }: UpdateControlProps) {
               <Button onClick={() => void updater.installAndRestart()}>Restart and update</Button>
             )}
             {state.status === "installing" && <Button disabled>Preparing safe restart…</Button>}
+            <Button onClick={() => void openExternalLink(externalChangelogUrl)} variant="outline">
+              <ExternalLink /> View changelog
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
