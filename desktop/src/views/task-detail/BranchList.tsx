@@ -212,6 +212,7 @@ function BranchRowLine({
       </div>
       <DropdownMenu
         open={menuOpen}
+        modal={false}
         onOpenChange={(open) => onToggleMenu(open ? branch : null)}
       >
         <DropdownMenuTrigger asChild>
