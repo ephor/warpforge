@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 
 import { daemon } from "../../daemon";
-import type { GitCompareStats, GitOpResult } from "../../protocol";
+import type { GitOpResult } from "../../protocol";
 
 export type BranchAction =
   | { kind: "rename"; branch: string }
@@ -31,7 +31,6 @@ export type BranchAction =
   | { kind: "merge" }
   | { kind: "checkout-rebase"; branch: string }
   | { kind: "checkout-update"; branch: string }
-  | { kind: "compare"; branch: string };
 
 interface DialogProps {
   action: BranchAction | null;
@@ -73,15 +72,13 @@ export function BranchActionsDialog({
 }: DialogProps) {
   const [newName, setNewName] = useState("");
   const [target, setTarget] = useState("");
-  const [compareStats, setCompareStats] = useState<GitCompareStats | null>(null);
 
   useEffect(() => {
     setNewName(action?.kind === "create" ? action.defaultName ?? "" : "");
     setTarget("");
-    setCompareStats(null);
   }, [action]);
 
-  const mutate = useMutation<GitOpResult | GitCompareStats | null, Error>({
+  const mutate = useMutation<GitOpResult, Error>({
     mutationFn: async () => {
       if (!action) throw new Error("no action");
       switch (action.kind) {
@@ -138,21 +135,11 @@ export function BranchActionsDialog({
             task_id: taskId,
           })) as GitOpResult;
         }
-        case "compare":
-          return (await daemon.request("git.compareBranches", {
-            task_id: taskId,
-            base: target,
-            head: action.branch,
-          })) as GitCompareStats;
       }
     },
     onError: handleOpError,
     onSuccess: (result) => {
       if (!action) return;
-      if (action.kind === "compare") {
-        setCompareStats(result as GitCompareStats | null);
-        return;
-      }
       handleOpResult(result as GitOpResult);
       onComplete();
       setNewName("");
@@ -168,8 +155,7 @@ export function BranchActionsDialog({
   const targetBranch = action.kind === "checkout-rebase" ? action.branch : current;
   const candidates = branches.filter((b) => b !== targetBranch);
   const needsTarget =
-    action.kind === "rebase" || action.kind === "merge" || action.kind === "checkout-rebase" ||
-    action.kind === "compare";
+    action.kind === "rebase" || action.kind === "merge" || action.kind === "checkout-rebase";
   const canRun =
     action.kind === "rename"
       ? newName.trim().length > 0 && newName.trim() !== action.branch
@@ -182,58 +168,6 @@ export function BranchActionsDialog({
             : true;
 
   const title = getTitle(action);
-
-  if (action.kind === "compare") {
-    const compareCandidates = branches.filter((b) => b !== action.branch);
-    return (
-      <Dialog open onOpenChange={(open) => !open && onClose()}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Compare</DialogTitle>
-            <DialogDescription>
-              {compareStats
-                ? `${action.branch} vs ${target}`
-                : `Pick a branch to compare ${action.branch} against.`}
-            </DialogDescription>
-          </DialogHeader>
-          {!compareStats ? (
-            <>
-              <Select value={target} onValueChange={setTarget}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Choose a branch" />
-                </SelectTrigger>
-                <SelectContent>
-                  {compareCandidates.map((b) => (
-                    <SelectItem key={b} value={b}>
-                      <span className="font-mono">{b}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <DialogFooter>
-                <Button variant="ghost" onClick={onClose}>
-                  Cancel
-                </Button>
-                <Button disabled={!canRun || mutate.isPending} onClick={() => mutate.mutate()}>
-                  {mutate.isPending ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    "Compare"
-                  )}
-                </Button>
-              </DialogFooter>
-            </>
-          ) : compareStats.lines.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No differences between the branches.</p>
-          ) : (
-            <pre className="max-h-80 overflow-auto rounded-md border bg-background/60 p-3 font-mono text-xs">
-              {compareStats.lines.join("\n")}
-            </pre>
-          )}
-        </DialogContent>
-      </Dialog>
-    );
-  }
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -308,8 +242,6 @@ function getTitle(action: BranchAction): string {
       return "Checkout and rebase";
     case "checkout-update":
       return "Checkout and update";
-    case "compare":
-      return "Compare branches";
   }
 }
 
@@ -354,8 +286,6 @@ function getDescription(action: BranchAction, current: string): ReactNode {
           Checkout <span className="font-mono">{action.branch}</span> and update from its upstream.
         </>
       );
-    case "compare":
-      return <>Diff <span className="font-mono">{action.branch}</span> against another.</>;
   }
 }
 
@@ -375,7 +305,5 @@ function getConfirmLabel(action: BranchAction): string {
       return "Checkout and rebase";
     case "checkout-update":
       return "Checkout and update";
-    case "compare":
-      return "Compare";
   }
 }

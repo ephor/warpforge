@@ -216,14 +216,6 @@ export function GitWorkspaceControls({
         openActionDialogRef.current({ kind: "checkout-update", branch: t.branch });
       },
     ],
-    [
-      "compare",
-      () => {
-        const t = actionRef.current;
-        if (!t) return;
-        openActionDialogRef.current({ kind: "compare", branch: t.branch });
-      },
-    ],
     ["rebase", () => openActionDialogRef.current({ kind: "rebase" })],
     ["merge", () => openActionDialogRef.current({ kind: "merge" })],
     ["update", () => updateMut.mutate()],

@@ -252,7 +252,6 @@ function BranchActionSubmenu({
     ? [
         ["checkout-as-remote", "Checkout as local…"],
         ["create", `New Branch from '${branch}'…`],
-        ["compare", "Compare or Show Diff with…"],
       ]
     : current
       ? [
@@ -267,7 +266,6 @@ function BranchActionSubmenu({
           ["create", `New Branch from '${branch}'…`],
           ["checkout-rebase", "Checkout and Rebase onto…"],
           ["checkout-update", "Checkout and Update"],
-          ["compare", "Compare or Show Diff with…"],
           ["push", "Push…"],
           ["rename", "Rename…"],
           ["delete", "Delete…"],
