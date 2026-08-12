@@ -1,7 +1,14 @@
 import { Check, ChevronRight, GitBranch } from "lucide-react";
-import { createPortal } from "react-dom";
-import { useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useState } from "react";
 import { cn } from "@/lib/utils";
+
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 import type { BranchRow } from "./branchTree";
 
@@ -166,12 +173,10 @@ function BranchRowLine({
 }) {
   const isCurrent = !remote && row.branch === current;
   const branch = row.branch ?? "";
-  const rowRef = useRef<HTMLDivElement>(null);
   const openMenu = () => onToggleMenu(menuOpen ? null : branch);
   return (
     <div className="relative">
       <div
-        ref={rowRef}
         className={cn(
           "group/row flex w-full items-center gap-1 rounded px-1 py-1 text-left text-xs",
           isCurrent ? "bg-accent text-foreground" : "hover:bg-accent/50",
@@ -205,10 +210,20 @@ function BranchRowLine({
           {row.label}
         </button>
       </div>
-      {menuOpen && row.branch && (
+      <DropdownMenu
+        open={menuOpen}
+        onOpenChange={(open) => onToggleMenu(open ? branch : null)}
+      >
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            title={row.branch}
+            className="absolute inset-0 z-10 cursor-pointer opacity-0"
+            aria-label={`Actions for ${branch}`}
+          />
+        </DropdownMenuTrigger>
         <BranchActionSubmenu
           branch={branch}
-          anchorRef={rowRef}
           remote={remote}
           current={isCurrent}
           onAction={(action) => {
@@ -216,37 +231,22 @@ function BranchRowLine({
             onAction(action, branch, remote);
           }}
         />
-      )}
+      </DropdownMenu>
     </div>
   );
 }
 
 function BranchActionSubmenu({
   branch,
-  anchorRef,
   remote,
   current,
   onAction,
 }: {
   branch: string;
-  anchorRef: RefObject<HTMLDivElement | null>;
   remote: boolean;
   current: boolean;
   onAction: (action: string) => void;
 }) {
-  const [position, setPosition] = useState({ top: 0, left: 0 });
-
-  useLayoutEffect(() => {
-    const rect = anchorRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const width = 280;
-    const left = rect.right + 6 + width <= window.innerWidth
-      ? rect.right + 6
-      : Math.max(8, rect.left - width - 6);
-    const top = Math.min(rect.top, Math.max(8, window.innerHeight - 420));
-    setPosition({ top, left });
-  }, [anchorRef]);
-
   const actions = remote
     ? [
         ["checkout-as-remote", "Checkout as local…"],
@@ -271,26 +271,25 @@ function BranchActionSubmenu({
           ["rename", "Rename…"],
           ["delete", "Delete…"],
         ];
-  return createPortal(
-    <div
-      data-branch-submenu
-      className="fixed z-[100] max-h-[min(420px,calc(100vh-1rem))] w-70 overflow-y-auto rounded-md border border-border bg-popover px-1 py-1 shadow-2xl"
-      style={position}
-    >
-      {actions.map(([id, label]) => (
-        <button
-          type="button"
-          key={id}
-          onClick={() => onAction(id)}
-          className={cn(
-            "block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground",
-            id === "delete" && "text-destructive hover:text-destructive",
-          )}
-        >
-          {label}
-        </button>
-      ))}
-    </div>,
-    document.body,
+  return (
+    <DropdownMenuPortal>
+      <DropdownMenuContent
+        side="right"
+        align="start"
+        sideOffset={6}
+        collisionPadding={8}
+        className="w-72"
+      >
+        {actions.map(([id, label]) => (
+          <DropdownMenuItem
+            key={id}
+            onSelect={() => onAction(id)}
+            className={id === "delete" ? "text-destructive focus:text-destructive" : undefined}
+          >
+            {label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenuPortal>
   );
 }
