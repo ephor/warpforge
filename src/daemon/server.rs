@@ -638,6 +638,17 @@ async fn dispatch(
                     message,
                 })
         }
+        FileSearch {
+            task_id,
+            query,
+            limit,
+        } => {
+            let matches = handle.search_files(&task_id, &query, limit).await;
+            serde_json::to_value(matches).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
         GitCommit {
             task_id,
             message,
@@ -1334,6 +1345,7 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | DiffGet { .. }
             | FileContents { .. }
             | FileList { .. }
+            | FileSearch { .. }
             | GitBranches { .. }
             | GitPushInfo { .. }
             | OrchestrateList {}

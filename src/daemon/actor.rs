@@ -756,6 +756,13 @@ pub enum Command {
         path: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Plain-text search across the task's project working tree.
+    SearchFiles {
+        task_id: String,
+        query: String,
+        limit: u32,
+        reply: oneshot::Sender<Vec<wire::SymbolMatch>>,
+    },
     /// Accept (keep) or reject (revert) a single hunk in the working tree.
     ResolveHunk {
         task_id: String,
@@ -1268,6 +1275,23 @@ impl DaemonHandle {
             task_id: task_id.to_string(),
             project,
             include_ignored,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_default()
+    }
+
+    pub async fn search_files(
+        &self,
+        task_id: &str,
+        query: &str,
+        limit: u32,
+    ) -> Vec<wire::SymbolMatch> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::SearchFiles {
+            task_id: task_id.to_string(),
+            query: query.to_string(),
+            limit,
             reply: tx,
         })
         .await;
@@ -2864,6 +2888,22 @@ impl Daemon {
                     None => Vec::new(),
                 };
                 let _ = reply.send(files);
+            }
+            Command::SearchFiles {
+                task_id,
+                query,
+                limit,
+                reply,
+            } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let matches = match repo {
+                    Some(p) => super::diff::search_files(&p, &query, limit).unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                let _ = reply.send(matches);
             }
             Command::SaveFile {
                 task_id,
