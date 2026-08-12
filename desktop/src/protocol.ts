@@ -100,7 +100,16 @@ export type DaemonEvent =
   | {
       event: "orchestration.allComplete";
       data: { graph_id: string; project: string };
-    };
+    }
+  // ── LSP ──
+  | { event: "lsp.message"; data: { server_id: string; payload: unknown } }
+  | { event: "lsp.exit"; data: { server_id: string; code: number | null } };
+
+export interface LspStartResult {
+  serverId: string;
+  available: boolean;
+  rootPath: string;
+}
 
 export function isEvent(msg: ServerMessage): msg is DaemonEvent {
   return "event" in msg;

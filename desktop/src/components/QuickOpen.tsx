@@ -49,6 +49,15 @@ export function QuickOpen({
     setActiveIndex(0);
   }, [query]);
 
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const active = el.querySelector<HTMLElement>("[data-active='true']");
+    if (active && typeof active.scrollIntoView === "function") {
+      active.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeIndex]);
+
   if (!open) return null;
 
   const choose = (path: string) => {
@@ -80,15 +89,6 @@ export function QuickOpen({
     }
   };
 
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el) return;
-    const active = el.querySelector<HTMLElement>("[data-active='true']");
-    if (active && typeof active.scrollIntoView === "function") {
-      active.scrollIntoView({ block: "nearest" });
-    }
-  }, [activeIndex]);
-
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[15vh]">
       <div className="w-full max-w-xl overflow-hidden rounded-lg border bg-popover shadow-xl">
@@ -96,6 +96,7 @@ export function QuickOpen({
           <Search className="size-4 shrink-0 text-muted-foreground" />
           <input
             ref={inputRef}
+            aria-label="Jump to file"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onKeyDown}

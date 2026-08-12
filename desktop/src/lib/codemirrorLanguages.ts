@@ -1,5 +1,42 @@
 import type { Extension } from "@codemirror/state";
 
+/**
+ * LSP language id for a path, or null when warpforge has no language server for
+ * it. Ids match the daemon's server_command table (src/daemon/lsp.rs).
+ */
+export function lspLanguageForPath(path: string): string | null {
+  const ext = path.split(/[\\/]/).pop()?.toLowerCase().split(".").pop();
+  switch (ext) {
+    case "ts":
+    case "tsx":
+    case "js":
+    case "jsx":
+    case "mjs":
+    case "cjs":
+      return "typescript";
+    case "rs":
+      return "rust";
+    case "go":
+      return "go";
+    case "py":
+    case "pyi":
+    case "pyw":
+      return "python";
+    case "json":
+      return "json";
+    case "yaml":
+    case "yml":
+      return "yaml";
+    case "css":
+      return "css";
+    case "html":
+    case "htm":
+      return "html";
+    default:
+      return null;
+  }
+}
+
 export async function codemirrorLanguageForPath(path: string): Promise<Extension[]> {
   const filename = path.split(/[\\/]/).pop()?.toLowerCase() ?? "";
   const ext = filename.split(".").pop();

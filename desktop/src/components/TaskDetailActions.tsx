@@ -5,6 +5,7 @@ import {
   ListTodo,
   MessageSquare,
   SquareTerminal,
+  Zap,
 } from "lucide-react";
 import { memo } from "react";
 
@@ -23,6 +24,8 @@ export const TaskDetailActions = memo(function TaskDetailActions({ task }: { tas
   const setShowDiff = useUi((state) => state.setShowDiff);
   const setRightPanel = useUi((state) => state.setRightPanel);
   const setRuntimeOpen = useUi((state) => state.setRuntimeOpen);
+  const lspEnabled = useUi((state) => state.lspEnabled);
+  const toggleLsp = useUi((state) => state.toggleLsp);
 
   const togglePanel = (panel: "files" | "changes" | "subtasks") => {
     setShowDiff(true);
@@ -31,6 +34,21 @@ export const TaskDetailActions = memo(function TaskDetailActions({ task }: { tas
 
   return (
     <div className="flex shrink-0 items-center gap-1 text-muted-foreground">
+      <button
+        type="button"
+        aria-label={lspEnabled ? "Disable language servers" : "Enable language servers"}
+        aria-pressed={lspEnabled}
+        title="Language servers (autocomplete, diagnostics, hover)"
+        onClick={toggleLsp}
+        className={cn(
+          "flex items-center gap-1 rounded-sm px-1 text-[11px] hover:bg-secondary hover:text-foreground",
+          lspEnabled ? "text-foreground" : "text-muted-foreground",
+        )}
+      >
+        <Zap className={cn("size-3.5", lspEnabled && "fill-current")} />
+        LSP {lspEnabled ? "on" : "off"}
+      </button>
+      <div className="mx-1 h-4 w-px bg-border" />
       <ActionButton
         label="Toggle chat"
         active={showChat}

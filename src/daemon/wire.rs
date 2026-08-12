@@ -229,6 +229,14 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
         Event::ProjectConfigChanged(state) => {
             Some(wire::Event::ProjectConfigChanged(state.clone()))
         }
+        Event::LspMessage { server_id, payload } => Some(wire::Event::LspMessage {
+            server_id: server_id.clone(),
+            payload: payload.clone(),
+        }),
+        Event::LspExit { server_id, code } => Some(wire::Event::LspExit {
+            server_id: server_id.clone(),
+            code: *code,
+        }),
         // Internal-only: the wire conveys terminals via screen/exited events.
         Event::AgentSpawned { .. } | Event::AgentStatus { .. } => None,
         // Orchestration events forwarded from the orchestrator actor.

@@ -37,6 +37,7 @@ export function FilesSurface({
   onCloseTab,
   fileDoc,
   editable,
+  taskId,
   onSave,
   rootPath,
   onRefresh,
@@ -53,6 +54,7 @@ export function FilesSurface({
   onCloseTab: (path: string) => void;
   fileDoc: FileDoc | null;
   editable: boolean;
+  taskId: string;
   onSave: (content: string) => void;
   rootPath?: string;
   onRefresh: () => void;
@@ -118,6 +120,7 @@ export function FilesSurface({
                 key={`${fileDoc.path}:${editable}`}
                 doc={fileDoc}
                 editable={editable}
+                taskId={taskId}
                 onSave={onSave}
                 onGotoDefinition={onGotoDefinition}
                 onOpenSymbol={onOpenSymbol}

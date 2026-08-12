@@ -954,6 +954,21 @@ pub enum Command {
         stop_resources: bool,
         reply: oneshot::Sender<Result<(), ProjectRemovalError>>,
     },
+    /// Ensure a language server is running for a task's workspace + language.
+    LspStart {
+        task_id: String,
+        language: String,
+        reply: oneshot::Sender<wire::LspStartResult>,
+    },
+    /// Forward an opaque LSP message to a running server's stdin.
+    LspSend {
+        server_id: String,
+        payload: serde_json::Value,
+    },
+    /// Release one editor's reference to a language server.
+    LspStop {
+        server_id: String,
+    },
     Shutdown {
         reply: oneshot::Sender<()>,
     },
@@ -1043,6 +1058,16 @@ pub enum Event {
     /// Orchestration pipeline event (plan created, node dispatched, etc.)
     #[allow(clippy::enum_variant_names)]
     OrchestrationEvent(crate::orchestration::OrchEvent),
+    /// An opaque LSP message from a language server's stdout.
+    LspMessage {
+        server_id: String,
+        payload: serde_json::Value,
+    },
+    /// A language server exited.
+    LspExit {
+        server_id: String,
+        code: Option<i32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1837,6 +1862,8 @@ pub struct Daemon {
     agents: AgentManager,
     services: ServiceManager,
     portforwards: PortForwardManager,
+    /// Language-server proxy: spawns and tunnels LSP servers per workspace.
+    lsp: super::lsp::LspManager,
     event_tx: broadcast::Sender<Event>,
     acp_tx: mpsc::UnboundedSender<(String, AcpUpdate)>,
     /// Sender back to this actor's command channel — used so background tasks
@@ -1966,6 +1993,7 @@ impl Daemon {
             agents: AgentManager::new(agent_tx),
             services: ServiceManager::new(service_tx),
             portforwards: PortForwardManager::new(pf_tx),
+            lsp: super::lsp::LspManager::new(event_tx.clone()),
             event_tx: event_tx.clone(),
             acp_tx,
             cmd_tx: cmd_tx.clone(),
@@ -2509,6 +2537,35 @@ impl Daemon {
                 let result = self.remove_project(&name, stop_resources).await;
                 let _ = reply.send(result);
             }
+            Command::LspStart {
+                task_id,
+                language,
+                reply,
+            } => {
+                let root = self.tasks.get(&task_id).and_then(|task| {
+                    task.worktree
+                        .clone()
+                        .or_else(|| self.project_path(&task.project))
+                });
+                let result = match root {
+                    Some(root) => {
+                        let (server_id, available) = self.lsp.start(root.clone(), language);
+                        wire::LspStartResult {
+                            server_id,
+                            available,
+                            root_path: if available { root } else { String::new() },
+                        }
+                    }
+                    None => wire::LspStartResult {
+                        server_id: String::new(),
+                        available: false,
+                        root_path: String::new(),
+                    },
+                };
+                let _ = reply.send(result);
+            }
+            Command::LspSend { server_id, payload } => self.lsp.send(&server_id, payload),
+            Command::LspStop { server_id } => self.lsp.stop(&server_id),
             Command::Shutdown { .. } => unreachable!(
                 "Shutdown commands are intercepted by the actor loop before handle_command"
             ),
