@@ -28,6 +28,11 @@ export function BranchList({
   onAction: (action: string, branch: string, remote: boolean) => void;
   onToggleFolder: (key: string) => void;
 }) {
+  const [openBranch, setOpenBranch] = useState<string | null>(null);
+  const toggleBranch = (branch: string | null) => {
+    setOpenBranch((open) => (open === branch ? null : branch));
+  };
+
   if (searching) {
     return (
       <div className="space-y-0.5">
@@ -37,7 +42,9 @@ export function BranchList({
             row={row}
             remote={row.remote}
             current={current}
+            menuOpen={row.branch === openBranch}
             onAction={onAction}
+            onToggleMenu={toggleBranch}
           />
         ))}
       </div>
@@ -52,7 +59,9 @@ export function BranchList({
         openFolders={openFolders}
         onToggleFolder={onToggleFolder}
         current={current}
+        openBranch={openBranch}
         onAction={onAction}
+        onToggleMenu={toggleBranch}
       />
       {remoteRows.length > 0 && (
         <BranchSection
@@ -62,7 +71,9 @@ export function BranchList({
           onToggleFolder={onToggleFolder}
           remote
           current={current}
+          openBranch={openBranch}
           onAction={onAction}
+          onToggleMenu={toggleBranch}
         />
       )}
     </div>
@@ -76,7 +87,9 @@ function BranchSection({
   onToggleFolder,
   remote = false,
   current,
+  openBranch,
   onAction,
+  onToggleMenu,
 }: {
   title: string;
   rows: BranchRow[];
@@ -84,7 +97,9 @@ function BranchSection({
   onToggleFolder: (key: string) => void;
   remote?: boolean;
   current: string | null;
+  openBranch: string | null;
   onAction: (action: string, branch: string, remote: boolean) => void;
+  onToggleMenu: (branch: string | null) => void;
 }) {
   return (
     <div>
@@ -122,7 +137,9 @@ function BranchSection({
                 row={row}
                 remote={remote}
                 current={current}
+                menuOpen={row.branch === openBranch}
                 onAction={onAction}
+                onToggleMenu={onToggleMenu}
               />
             );
           })}
@@ -136,18 +153,21 @@ function BranchRowLine({
   row,
   remote = false,
   current,
+  menuOpen,
   onAction,
+  onToggleMenu,
 }: {
   row: BranchRow;
   remote?: boolean;
   current: string | null;
+  menuOpen: boolean;
   onAction: (action: string, branch: string, remote: boolean) => void;
+  onToggleMenu: (branch: string | null) => void;
 }) {
   const isCurrent = !remote && row.branch === current;
-  const [menuOpen, setMenuOpen] = useState(false);
   const branch = row.branch ?? "";
   const rowRef = useRef<HTMLDivElement>(null);
-  const openMenu = () => setMenuOpen((open) => !open);
+  const openMenu = () => onToggleMenu(menuOpen ? null : branch);
   return (
     <div className="relative">
       <div
@@ -192,7 +212,7 @@ function BranchRowLine({
           remote={remote}
           current={isCurrent}
           onAction={(action) => {
-            setMenuOpen(false);
+            onToggleMenu(null);
             onAction(action, branch, remote);
           }}
         />
