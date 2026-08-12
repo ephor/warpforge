@@ -104,6 +104,8 @@ interface UiState extends SettingsState {
   sidebarWidth: number;
   /** Sidebar shrunk to its icon rail. */
   sidebarCollapsed: boolean;
+  // Editor: language-server (LSP) features — persisted, user-toggled.
+  lspEnabled: boolean;
 
   setView: (v: View) => void;
   openTask: (id: string | null) => void;
@@ -128,6 +130,7 @@ interface UiState extends SettingsState {
   setPinnedLayout: (id: string, layout: PinnedTileLayout) => void;
   setSidebarWidth: (w: number) => void;
   toggleSidebarCollapsed: () => void;
+  toggleLsp: () => void;
 }
 
 function clampFontSize(v: number): number {
@@ -166,6 +169,7 @@ export const useUi = create<UiState>()(
       autoNameTasks: true,
       newTaskWorktree: false,
       theoMod: false,
+      lspEnabled: true,
 
       setView: (view) => set({ openTaskId: null, openTaskNav: null, view }),
       openProject: (selectedProjectId) =>
@@ -262,6 +266,7 @@ export const useUi = create<UiState>()(
       setAutoNameTasks: (autoNameTasks) => set({ autoNameTasks }),
       setNewTaskWorktree: (newTaskWorktree) => set({ newTaskWorktree }),
       setTheoMod: (theoMod) => set({ theoMod }),
+      toggleLsp: () => set((s) => ({ lspEnabled: !s.lspEnabled })),
     }),
     {
       name: "wf-ui",

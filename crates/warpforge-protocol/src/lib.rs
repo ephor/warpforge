@@ -614,6 +614,34 @@ pub enum Method {
     /// `{ ok, path }`.
     #[serde(rename = "bootstrap.writeConfig")]
     BootstrapWriteConfig { project: String, yaml: String },
+
+    // ── LSP ──
+    /// Ensure a language server is running for a task's workspace + language.
+    /// Reuses an existing server for the same (workspace, language). Returns
+    /// [`LspStartResult`]; `available: false` when no server binary is on PATH.
+    #[serde(rename = "lsp.start")]
+    LspStart { task_id: String, language: String },
+    /// Forward an opaque LSP JSON-RPC message to a running server's stdin.
+    #[serde(rename = "lsp.send")]
+    LspSend {
+        server_id: String,
+        payload: serde_json::Value,
+    },
+    /// Release one reference to a server; the process is killed once the last
+    /// editor using it closes.
+    #[serde(rename = "lsp.stop")]
+    LspStop { server_id: String },
+}
+
+/// Reply to [`Method::LspStart`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LspStartResult {
+    pub server_id: String,
+    pub available: bool,
+    /// Absolute workspace root the server was rooted at. Clients build
+    /// `file://` document URIs from it. Empty when unavailable.
+    pub root_path: String,
 }
 
 /// Answers collected by the desktop bootstrap wizard. Mirrors the daemon's
@@ -785,6 +813,20 @@ pub enum Event {
     /// All nodes in the orchestration are done.
     #[serde(rename = "orchestration.allComplete")]
     OrchestrationAllComplete { graph_id: String, project: String },
+
+    // ── LSP ──
+    /// An opaque LSP JSON-RPC message from a server's stdout.
+    #[serde(rename = "lsp.message")]
+    LspMessage {
+        server_id: String,
+        payload: serde_json::Value,
+    },
+    /// A language server exited (crashed or was stopped).
+    #[serde(rename = "lsp.exit")]
+    LspExit {
+        server_id: String,
+        code: Option<i32>,
+    },
 }
 
 // ─── State DTOs ──────────────────────────────────────────────────────────────

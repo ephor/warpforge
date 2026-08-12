@@ -1,14 +1,20 @@
 import { lintGutter } from "@codemirror/lint";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { Check, Code, Eye, Save } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { codemirrorLanguageForPath } from "@/lib/codemirrorLanguages";
+import {
+  codemirrorLanguageForPath,
+  lspLanguageForPath,
+} from "@/lib/codemirrorLanguages";
 import { cmChromeForMode } from "@/lib/codemirrorTheme";
+import { acquireLspClient, releaseLspClient } from "@/lib/lspClients";
 import { cn } from "@/lib/utils";
 import { useThemeMode } from "@/hooks/useTheme";
+
+import { useUi } from "../store/ui";
 
 import type { FileDoc, SymbolMatch } from "../protocol";
 import { Markdown } from "./Markdown";
@@ -37,12 +43,14 @@ function getMimeType(path: string): string {
 export function CodeEditor({
   doc,
   editable,
+  taskId,
   onSave,
   onGotoDefinition,
   onOpenSymbol,
 }: {
   doc: FileDoc;
   editable: boolean;
+  taskId: string;
   onSave: (content: string) => void;
   /** Resolve a symbol under the cursor to project lines (go-to-definition).
    *  When provided, ⌘/Ctrl-click and ⌘B run it. */
@@ -52,11 +60,17 @@ export function CodeEditor({
 }) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const lspCompartment = useRef(new Compartment());
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSaved = useRef<string | null>(null);
   const onSaveRef = useRef(onSave);
   const onGotoRef = useRef(onGotoDefinition);
   const onOpenSymbolRef = useRef(onOpenSymbol);
+  const lspEnabled = useUi((s) => s.lspEnabled);
   const [status, setStatus] = useState<SaveStatus>("clean");
   const [preview, setPreview] = useState(false);
+  const [text, setText] = useState(doc.newText);
+  const [editorReady, setEditorReady] = useState(false);
   const [gotoResults, setGotoResults] = useState<SymbolMatch[]>([]);
   const [gotoActive, setGotoActive] = useState(0);
   const markdown = isMarkdownPath(doc.path);
@@ -64,7 +78,7 @@ export function CodeEditor({
   const binaryImage = isBinaryImagePath(doc.path);
   const themeMode = useThemeMode();
   const showPreview = (markdown || svgImage) && preview;
-  const previewText = viewRef.current?.state.doc.toString() ?? doc.newText;
+  const previewText = text;
   const isReadOnly = binaryImage || svgImage;
 
   useEffect(() => {
@@ -80,7 +94,13 @@ export function CodeEditor({
     if (!view) {
       return true;
     }
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
     const current = view.state.doc.toString();
+    lastSaved.current = current;
+    setText(current);
     onSaveRef.current(current);
     setStatus("saved");
     return true;
@@ -135,6 +155,10 @@ export function CodeEditor({
 
     void codemirrorLanguageForPath(doc.path).then((language) => {
       if (disposed) return;
+      setStatus("clean");
+      setText(doc.newText);
+      setPreview(false);
+      lastSaved.current = null;
       view = new EditorView({
         parent,
         state: EditorState.create({
@@ -145,8 +169,9 @@ export function CodeEditor({
             ...cmChromeForMode(themeMode),
             EditorView.lineWrapping,
             ...language,
+            lspCompartment.current.of([]),
             EditorState.readOnly.of(!editable || isReadOnly),
-keymap.of([
+            keymap.of([
               { key: "Mod-s", run: flushSave },
               ...(onGotoDefinition
                 ? [{ key: "Mod-b", run: runGoto, preventDefault: true }]
@@ -176,15 +201,31 @@ keymap.of([
                 return;
               }
               setStatus("unsaved");
+              const next = u.state.doc.toString();
+              setText(next);
+              if (saveTimer.current) {
+                clearTimeout(saveTimer.current);
+              }
+              saveTimer.current = setTimeout(() => {
+                lastSaved.current = next;
+                onSaveRef.current(next);
+                setStatus("saved");
+              }, 600);
             }),
           ],
         }),
       });
       viewRef.current = view;
+      setEditorReady(true);
     });
 
     return () => {
       disposed = true;
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+      setEditorReady(false);
       view?.destroy();
       if (viewRef.current === view) {
         viewRef.current = null;
@@ -196,15 +237,58 @@ keymap.of([
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
+    if (doc.newText === lastSaved.current) {
+      return;
+    }
     if (status === "clean") {
       const current = view.state.doc.toString();
-      if (current !== doc.newText) {
-        view.dispatch({
-          changes: { from: 0, insert: doc.newText, to: current.length },
-        });
+      if (current === doc.newText) {
+        return;
       }
+      view.dispatch({
+        changes: { from: 0, insert: doc.newText, to: current.length },
+      });
+      setText(doc.newText);
+      lastSaved.current = null;
     }
   }, [doc.newText, status]);
+
+  // Attach a language server to the editor when one is available for this file.
+  // Servers are shared per (workspace, language) and spawned lazily by the
+  // daemon; disabled files (diffs/history) and the LSP-off toggle skip this.
+  useEffect(() => {
+    const language = lspLanguageForPath(doc.path);
+    if (!editable || !editorReady || !lspEnabled || !language) {
+      return;
+    }
+    let cancelled = false;
+    let detach: (() => void) | null = null;
+    void acquireLspClient(taskId, language).then((acquired) => {
+      if (!acquired) {
+        return;
+      }
+      const view = viewRef.current;
+      if (cancelled || !view) {
+        releaseLspClient(acquired.key);
+        return;
+      }
+      const uri = `file://${acquired.rootPath}/${doc.path}`;
+      view.dispatch({
+        effects: lspCompartment.current.reconfigure(
+          acquired.client.plugin(uri, language),
+        ),
+      });
+      detach = () => {
+        viewRef.current?.dispatch({ effects: lspCompartment.current.reconfigure([]) });
+        releaseLspClient(acquired.key);
+      };
+    });
+    return () => {
+      cancelled = true;
+      detach?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc.path, editable, editorReady, lspEnabled, taskId]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">

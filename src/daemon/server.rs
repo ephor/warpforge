@@ -383,6 +383,31 @@ async fn dispatch(
             handle.send(Command::StopRuntime).await;
             Ok(json!(null))
         }
+        LspStart { task_id, language } => {
+            let (tx, rx) = oneshot::channel();
+            handle
+                .send(Command::LspStart {
+                    task_id,
+                    language,
+                    reply: tx,
+                })
+                .await;
+            match rx.await {
+                Ok(result) => Ok(json!(result)),
+                Err(_) => Err(wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message: "daemon dropped the lsp.start reply".into(),
+                }),
+            }
+        }
+        LspSend { server_id, payload } => {
+            handle.send(Command::LspSend { server_id, payload }).await;
+            Ok(json!(null))
+        }
+        LspStop { server_id } => {
+            handle.send(Command::LspStop { server_id }).await;
+            Ok(json!(null))
+        }
         ServiceLogs {
             project,
             service,
@@ -1353,6 +1378,9 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | WorkflowList { .. }
             | BootstrapFinalize { .. }
             | BootstrapReadConfig { .. }
+            | LspStart { .. }
+            | LspSend { .. }
+            | LspStop { .. }
     )
 }
 
