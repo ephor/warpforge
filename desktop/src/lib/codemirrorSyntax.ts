@@ -15,8 +15,10 @@ export const appSyntaxHighlighting = syntaxHighlighting(
       tag: [t.keyword, t.controlKeyword, t.operatorKeyword, t.self],
       color: "hsl(var(--syntax-keyword))",
     },
-    { tag: [t.string, t.special(t.string), t.character, t.regexp, t.labelName, t.literal],
-      color: "hsl(var(--syntax-string))" },
+    {
+      tag: [t.string, t.special(t.string), t.character, t.regexp, t.labelName, t.literal],
+      color: "hsl(var(--syntax-string))",
+    },
     {
       tag: [t.number, t.integer, t.float, t.bool, t.atom, t.null],
       color: "hsl(var(--syntax-const))",

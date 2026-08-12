@@ -33,6 +33,25 @@ Object.defineProperty(globalThis, "crypto", {
 });
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
+// Radix's Select/Popover primitives drive keyboard focus through APIs jsdom
+// does not implement. Without these the components throw on open.
+Object.defineProperty(Element.prototype, "scrollIntoView", {
+  value: vi.fn<() => void>(),
+  writable: true,
+});
+Object.defineProperty(Element.prototype, "hasPointerCapture", {
+  value: vi.fn<() => boolean>(() => false),
+  writable: true,
+});
+Object.defineProperty(Element.prototype, "setPointerCapture", {
+  value: vi.fn<() => void>(),
+  writable: true,
+});
+Object.defineProperty(Element.prototype, "releasePointerCapture", {
+  value: vi.fn<() => void>(),
+  writable: true,
+});
+
 class MockResizeObserver {
   observe() {}
   unobserve() {}

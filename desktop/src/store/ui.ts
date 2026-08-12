@@ -1,8 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import type { EditHunk } from "../protocol";
 import { DEFAULT_THEME } from "@/lib/themes";
+
+import type { EditHunk } from "../protocol";
 
 /**
  * Client-side UI state (view, panel toggles, prefs) — persisted to localStorage.
@@ -77,6 +78,12 @@ export interface SettingsState {
    */
   newTaskWorktree: boolean;
   setNewTaskWorktree: (v: boolean) => void;
+  /**
+   * Whether the New Work Item dialog opens expanded (tall prompt) or compact.
+   * Persisted so the choice survives across creates instead of resetting.
+   */
+  newWorkItemExpanded: boolean;
+  setNewWorkItemExpanded: (v: boolean) => void;
 }
 
 interface UiState extends SettingsState {
@@ -168,6 +175,7 @@ export const useUi = create<UiState>()(
       textGenModel: null,
       autoNameTasks: true,
       newTaskWorktree: false,
+      newWorkItemExpanded: false,
       theoMod: false,
       lspEnabled: true,
 
@@ -265,6 +273,7 @@ export const useUi = create<UiState>()(
       setTextGenModel: (textGenModel) => set({ textGenModel }),
       setAutoNameTasks: (autoNameTasks) => set({ autoNameTasks }),
       setNewTaskWorktree: (newTaskWorktree) => set({ newTaskWorktree }),
+      setNewWorkItemExpanded: (newWorkItemExpanded) => set({ newWorkItemExpanded }),
       setTheoMod: (theoMod) => set({ theoMod }),
       toggleLsp: () => set((s) => ({ lspEnabled: !s.lspEnabled })),
     }),

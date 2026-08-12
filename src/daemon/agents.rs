@@ -22,6 +22,10 @@ pub struct KnownAgent {
     pub npm_package: Option<&'static str>,
     /// Homebrew formula, when brew is the canonical install (None otherwise).
     pub homebrew_formula: Option<&'static str>,
+    /// A self-managed install (e.g. opencode's own `~/.opencode/bin`) that ships
+    /// its own upgrade command. Set when the binary is neither npm- nor
+    /// brew-managed and cannot be upgraded via the package manager.
+    pub custom_upgrade_command: Option<&'static str>,
     /// Human-readable install hint shown when the agent is missing.
     pub install_hint: &'static str,
 }
@@ -34,6 +38,7 @@ pub static KNOWN_AGENTS: &[KnownAgent] = &[
         default_acp_command: "claude-agent-acp --acp",
         npm_package: Some("@agentclientprotocol/claude-agent-acp"),
         homebrew_formula: None,
+        custom_upgrade_command: None,
         install_hint: "npm install -g @agentclientprotocol/claude-agent-acp",
     },
     KnownAgent {
@@ -43,6 +48,7 @@ pub static KNOWN_AGENTS: &[KnownAgent] = &[
         default_acp_command: "codex-acp",
         npm_package: Some("@agentclientprotocol/codex-acp"),
         homebrew_formula: None,
+        custom_upgrade_command: None,
         install_hint: "npm install -g @agentclientprotocol/codex-acp",
     },
     KnownAgent {
@@ -52,6 +58,7 @@ pub static KNOWN_AGENTS: &[KnownAgent] = &[
         default_acp_command: "opencode acp",
         npm_package: Some("opencode-ai"),
         homebrew_formula: None,
+        custom_upgrade_command: Some("opencode upgrade"),
         install_hint: "npm install -g opencode-ai",
     },
     KnownAgent {
@@ -61,6 +68,7 @@ pub static KNOWN_AGENTS: &[KnownAgent] = &[
         default_acp_command: "qwen --acp",
         npm_package: Some("@qwen-code/qwen-code"),
         homebrew_formula: None,
+        custom_upgrade_command: None,
         install_hint: "npm install -g @qwen-code/qwen-code",
     },
     KnownAgent {
@@ -70,6 +78,7 @@ pub static KNOWN_AGENTS: &[KnownAgent] = &[
         default_acp_command: "goose acp",
         npm_package: None,
         homebrew_formula: Some("block-goose-cli"),
+        custom_upgrade_command: None,
         install_hint: "brew install block-goose-cli",
     },
 ];
@@ -106,7 +115,9 @@ fn update_command(agent: &KnownAgent, resolved_path: Option<&str>) -> Option<Str
         }
         // npm global, or a bare binary name with no path info → assume npm.
         Some(PackageManager::Npm) | None => Some(format!("npm install -g {pkg}@latest")),
-        Some(PackageManager::Unknown) => None,
+        // Unrecognised install dir: use the agent's own upgrade command (e.g.
+        // opencode's self-installed `~/.opencode/bin`), if it has one.
+        Some(PackageManager::Unknown) => agent.custom_upgrade_command.map(|cmd| cmd.to_string()),
     }
 }
 
@@ -202,12 +213,20 @@ pub(crate) async fn latest_npm_version(pkg: &str) -> Option<String> {
     version
 }
 
-/// Installed version of an agent: its global npm package version, or the
-/// binary's `--version` output as a fallback.
-async fn installed_version(agent: &KnownAgent) -> Option<String> {
-    if let Some(pkg) = agent.npm_package {
-        if let Some(v) = npm_global_version(pkg).await {
-            return Some(v);
+/// Installed version of an agent: the npm/bun/pnpm global package version when
+/// the binary is package-manager-managed, or the binary's `--version` output
+/// otherwise. The npm lookup is only trusted for npm-managed install paths so a
+/// stale/duplicate npm copy can't shadow the version of the binary on PATH.
+async fn installed_version(agent: &KnownAgent, resolved_path: Option<&str>) -> Option<String> {
+    let manager = resolved_path.map(package_manager_for_path);
+    if matches!(
+        manager,
+        Some(PackageManager::Npm | PackageManager::Bun | PackageManager::Pnpm)
+    ) {
+        if let Some(pkg) = agent.npm_package {
+            if let Some(v) = npm_global_version(pkg).await {
+                return Some(v);
+            }
         }
     }
     // Fallback: `<binary> --version`, take the first version-looking token.
@@ -290,7 +309,7 @@ async fn detect_one(agent: &'static KnownAgent, check_latest: bool) -> wire::Det
         };
     }
 
-    let version = installed_version(agent).await;
+    let version = installed_version(agent, path.as_deref()).await;
     let latest = if check_latest {
         match agent.npm_package {
             Some(pkg) => latest_npm_version(pkg).await,

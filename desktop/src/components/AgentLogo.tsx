@@ -59,7 +59,7 @@ export function AgentLogo({
   const asset = AGENT_ICONS[agentId];
   const [failedSvg, setFailedSvg] = useState<string | null>(null);
 
-  const src = asset ? (mode === "light" ? asset.light ?? asset.dark : asset.dark) : undefined;
+  const src = asset ? (mode === "light" ? (asset.light ?? asset.dark) : asset.dark) : undefined;
 
   if (src && failedSvg !== src) {
     return (

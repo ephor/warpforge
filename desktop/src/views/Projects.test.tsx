@@ -29,6 +29,7 @@ vi.mock("@xterm/addon-fit", () => {
   return { FitAddon: MockFitAddon };
 });
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -77,13 +78,20 @@ function renderProjects(
   projectSnapshot = currentSnapshot,
   onNewTask = vi.fn<(project?: string, prompt?: string) => void>(),
 ) {
+  // The backlog reads its tracker links through TanStack Query; a fresh client
+  // per render keeps tests from sharing cached daemon reads.
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
-    <Projects
-      snapshot={projectSnapshot}
-      onOpenTask={vi.fn<(id: string) => void>()}
-      onNewTask={onNewTask}
-      onAddProject={vi.fn<() => void>()}
-    />,
+    <QueryClientProvider client={queryClient}>
+      <Projects
+        snapshot={projectSnapshot}
+        onOpenTask={vi.fn<(id: string) => void>()}
+        onNewTask={onNewTask}
+        onAddProject={vi.fn<() => void>()}
+      />
+    </QueryClientProvider>,
   );
 }
 
@@ -117,6 +125,13 @@ beforeEach(() => {
   vi.spyOn(daemon, "resizeTerminal").mockImplementation(() => {});
   vi.spyOn(daemon, "sendTerminalInput").mockImplementation(() => {});
   vi.spyOn(daemon, "removeProject").mockResolvedValue();
+  vi.spyOn(daemon, "listBacklog").mockImplementation(async (input) => ({
+    items: input.pageSize === 1 ? [] : [],
+    page: 0,
+    pageSize: input.pageSize,
+    total: 0,
+    hasNextPage: false,
+  }));
   vi.spyOn(daemon, "getState").mockImplementation(() => ({
     connection: "connected",
     connectionError: null,
@@ -156,54 +171,45 @@ describe("Projects", () => {
     expect(screen.queryByRole("heading", { name: "warpforge" })).not.toBeInTheDocument();
   });
 
-  it("groups real tasks by activity and keeps parent-child hierarchy", () => {
-    const parent = taskInfo({
-      id: "parent",
-      title: "Parent task",
+  it("shows local backlog items and hides daemon task trees", async () => {
+    vi.mocked(daemon.listBacklog).mockImplementation(async (input) => ({
+      items:
+        input.pageSize === 1
+          ? []
+          : [
+              {
+                id: "item-1",
+                number: 1,
+                project: "warpforge",
+                title: "Local backlog item",
+                body: "",
+                status: "todo",
+                priority: "none",
+                source: "local",
+                createdAt: 100,
+                updatedAt: 110,
+              },
+            ],
+      page: 0,
+      pageSize: input.pageSize,
+      total: input.pageSize === 1 ? 0 : 1,
+      hasNextPage: false,
+    }));
+    const daemonTask = taskInfo({
+      id: "task-1",
+      title: "Daemon task",
       status: "running",
       updatedAt: 130,
-      worktree: "/workspace/warpforge/.worktrees/parent",
     });
-    const child = taskInfo({
-      id: "child",
-      parentTaskId: "parent",
-      title: "Child task",
-      status: "waiting",
-      filesChanged: 2,
-      updatedAt: 140,
-    });
-    const recent = taskInfo({
-      id: "recent",
-      title: "Finished task",
-      status: "done",
-      updatedAt: 150,
-    });
-    currentSnapshot = { ...snapshot, tasks: [recent, child, parent] };
+    currentSnapshot = { ...snapshot, tasks: [daemonTask] };
 
     renderProjects();
 
-    expect(screen.getByText("Active work")).toBeInTheDocument();
-    expect(screen.getByText("Parent task")).toBeInTheDocument();
-    expect(screen.queryByText("Finished task")).not.toBeInTheDocument();
-    expect(screen.queryByText("Child task")).not.toBeInTheDocument();
-    expect(screen.queryByText("feature/oauth-callback")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /Show 1 done task/ }));
-
-    expect(screen.getByText("Recent")).toBeInTheDocument();
-    expect(screen.getByText("Finished task")).toBeInTheDocument();
-
-    fireEvent.click(screen.getAllByRole("button", { name: "Expand agents" })[0]);
-
-    expect(screen.getByText("Child task")).toBeInTheDocument();
-    // Changed-file count moved into the compact right-hand cluster ("2f", with
-    // the spelled-out count in its title) when rows became single-line.
-    expect(screen.getByTitle("2 changed files")).toBeInTheDocument();
-    expect(screen.queryByText("worktree unavailable")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Local backlog item")).toBeInTheDocument());
+    expect(screen.queryByText("Daemon task")).not.toBeInTheDocument();
   });
 
-  it("starts new task in selected project", () => {
-    const onNewTask = vi.fn<(project?: string, prompt?: string) => void>();
+  it("opens the new work item drawer for the selected project", () => {
     const otherProject: ProjectInfo = {
       ...warpforgeProject,
       name: "other",
@@ -211,10 +217,12 @@ describe("Projects", () => {
     };
     currentSnapshot = { ...snapshot, projects: [warpforgeProject, otherProject] };
 
-    renderProjects(currentSnapshot, onNewTask);
-    fireEvent.click(screen.getByRole("button", { name: "New task in warpforge" }));
+    renderProjects(currentSnapshot);
+    fireEvent.click(screen.getByRole("button", { name: "New work item in warpforge" }));
 
-    expect(onNewTask).toHaveBeenCalledWith("warpforge");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("New work item")).toBeInTheDocument();
+    expect(screen.getByText(/Create a task in warpforge/)).toBeInTheDocument();
   });
 
   it("exposes full runtime names on hover", () => {
@@ -268,7 +276,7 @@ describe("Projects", () => {
     expect(screen.getByLabelText("Start api")).toBeInTheDocument();
   });
 
-  it("opens Terminal for a project with live terminals and zero tasks", () => {
+  it("opens Terminal for a project with live terminals and zero tasks", async () => {
     currentSnapshot = {
       ...snapshot,
       tasks: [],
@@ -282,7 +290,8 @@ describe("Projects", () => {
     expect(useUi.getState().runtimeOpenByProject.warpforge).toBe(true);
     expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute("data-state", "active");
     expect(screen.getByTestId("term-1")).toBeInTheDocument();
-    expect(screen.getByText("No tasks yet.")).toBeInTheDocument();
+    // The backlog waits for its tracker pull before it can say it is empty.
+    expect(await screen.findByText("Nothing here yet.")).toBeInTheDocument();
   });
 
   it("isolates terminal counts and persisted Runtime visibility by project", async () => {

@@ -38,6 +38,9 @@ interface Props {
   snapshot: Snapshot;
   defaultProject: string | null;
   initialPrompt?: string;
+  /** Backlog item this task is being started from, if any. The created task is
+   *  linked to it so the board can show (and reopen) the run it produced. */
+  backlogItemId?: string | null;
 }
 
 /**
@@ -52,6 +55,7 @@ export default function NewTaskDialog({
   snapshot,
   defaultProject,
   initialPrompt,
+  backlogItemId,
 }: Props) {
   const queryClient = useQueryClient();
   const openTask = useUi((s) => s.openTask);
@@ -195,6 +199,7 @@ export default function NewTaskDialog({
         default_model: modelPick,
         config_overrides: configOverrides,
         workflow: workflow ?? undefined,
+        backlog_item_id: backlogItemId ?? undefined,
       });
     } catch (error) {
       // A workflow can fail validation daemon-side after the list loads; keep
@@ -209,37 +214,49 @@ export default function NewTaskDialog({
       (response as { taskId?: string } | null)?.taskId ??
       (response as { result?: { taskId?: string } } | null)?.result?.taskId ??
       null;
-    if (taskId) {
-      openTask(taskId);
-      toast.success(selectedWorkflow ? "Workflow started" : "Task started", {
-        description: selectedWorkflow
-          ? selectedWorkflow.name + " pipeline running in " + project
-          : (mode === "orchestrator" ? "Orchestrator" : "Agent") +
-            " session created for " +
-            project,
-        action: {
-          label: "Open task",
-          onClick: () => openTask(taskId),
-        },
-        duration: 8000,
-      });
-      if (autoNameTasks && textGenAgentId) {
-        void (async () => {
-          try {
-            const generated = await daemon.generateText(
-              taskId,
-              textGenAgentId,
-              "task_title",
-              textGenModel ?? undefined,
-            );
-            if (generated?.trim()) {
-              await daemon.setTaskTitle(taskId, generated.trim().slice(0, 80));
-            }
-          } catch {
-            // Task creation should never feel slow or noisy.
-          }
-        })();
+    if (!taskId) {
+      close();
+      return;
+    }
+    if (backlogItemId) {
+      try {
+        await daemon.linkWorkItemTask(backlogItemId, taskId);
+        void queryClient.invalidateQueries({ queryKey: ["backlog", project] });
+      } catch (error) {
+        // The task itself succeeded; a failed link must not strand the user
+        // on a still-open dialog with no task opened. Report it and continue.
+        toast.error("Task started, but linking it to the backlog item failed", {
+          description: error instanceof Error ? error.message : String(error),
+        });
       }
+    }
+    openTask(taskId);
+    toast.success(selectedWorkflow ? "Workflow started" : "Task started", {
+      description: selectedWorkflow
+        ? selectedWorkflow.name + " pipeline running in " + project
+        : (mode === "orchestrator" ? "Orchestrator" : "Agent") + " session created for " + project,
+      action: {
+        label: "Open task",
+        onClick: () => openTask(taskId),
+      },
+      duration: 8000,
+    });
+    if (autoNameTasks && textGenAgentId) {
+      void (async () => {
+        try {
+          const generated = await daemon.generateText(
+            taskId,
+            textGenAgentId,
+            "task_title",
+            textGenModel ?? undefined,
+          );
+          if (generated?.trim()) {
+            await daemon.setTaskTitle(taskId, generated.trim().slice(0, 80));
+          }
+        } catch {
+          // Task creation should never feel slow or noisy.
+        }
+      })();
     }
     close();
   };

@@ -16,12 +16,12 @@ import { SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX } from "@/store/ui";
 
 import { useDaemonEvents } from "./hooks/useDaemonEvents";
 import { useFontScaling } from "./hooks/useFontScaling";
-import { useTheme } from "./hooks/useTheme";
 import { usePullShortcut } from "./hooks/usePullShortcut";
 import { usePushShortcut } from "./hooks/usePushShortcut";
 import { useQuickOpenShortcut } from "./hooks/useQuickOpenShortcut";
 import { useTauriClose } from "./hooks/useTauriClose";
 import { queryClient, useProjectFileListQuery } from "./query";
+import { useTheme } from "./hooks/useTheme";
 import AddProjectDialog from "./views/AddProjectDialog";
 import AgentSetupDialog from "./views/AgentSetupDialog";
 import MissionControl from "./views/MissionControl";
@@ -185,6 +185,9 @@ export default function App() {
   const showPersistent = isWide;
   const [newTaskProject, setNewTaskProject] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
+  // Set when the new-task surface was opened from a backlog item, so the
+  // created task can be linked back to it.
+  const [newTaskBacklogItemId, setNewTaskBacklogItemId] = useState<string | null>(null);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [pushOpen, setPushOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
@@ -213,9 +216,10 @@ export default function App() {
 
   const openTask = snapshot.tasks.find((t) => t.id === openTaskId) ?? null;
 
-  const startNewTask = useCallback((project?: string, prompt?: string) => {
+  const startNewTask = useCallback((project?: string, prompt?: string, backlogItemId?: string) => {
     setNewTaskProject(project ?? null);
     setNewTaskPrompt(prompt);
+    setNewTaskBacklogItemId(backlogItemId ?? null);
     setNewTaskOpen(true);
   }, []);
 
@@ -311,6 +315,7 @@ export default function App() {
                   snapshot={snapshot}
                   defaultProject={newTaskProject}
                   initialPrompt={newTaskPrompt}
+                  backlogItemId={newTaskBacklogItemId}
                 />
               ) : openTask ? (
                 <TaskDetail

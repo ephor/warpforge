@@ -26,6 +26,7 @@ use uuid::Uuid;
 use warpforge_protocol as wire;
 
 use super::actor::{Command, DaemonHandle};
+use super::tracker;
 use super::wire as wireconv;
 
 fn daemon_json_path() -> PathBuf {
@@ -482,6 +483,7 @@ async fn dispatch(
             default_model,
             config_overrides,
             workflow,
+            backlog_item_id,
         } => {
             if let Some(workflow) = workflow {
                 let (tx, rx) = oneshot::channel();
@@ -522,6 +524,7 @@ async fn dispatch(
                     attachments,
                     default_model,
                     config_overrides,
+                    backlog_item_id,
                 )
                 .await;
             Ok(json!({ "taskId": id }))
@@ -827,6 +830,21 @@ async fn dispatch(
         } => {
             let text = handle
                 .generate_text(&task_id, &agent_id, kind, model)
+                .await
+                .map_err(|message| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message,
+                })?;
+            Ok(json!({ "text": text }))
+        }
+        TextEnhance {
+            project,
+            agent_id,
+            prompt,
+            model,
+        } => {
+            let text = handle
+                .enhance_text(&project, &agent_id, &prompt, model)
                 .await
                 .map_err(|message| wire::RpcError {
                     code: wire::ErrorCode::Internal,
@@ -1209,6 +1227,7 @@ async fn dispatch(
                     Vec::new(),
                     None,
                     std::collections::HashMap::new(),
+                    None,
                 )
                 .await;
             Ok(json!({ "taskId": id }))
@@ -1239,6 +1258,296 @@ async fn dispatch(
                 message: format!("write {}: {e}", target.display()),
             })?;
             Ok(json!({ "ok": true, "path": target.to_string_lossy() }))
+        }
+        // The tracker calls below run on this request task, never inside the
+        // actor: the actor loop is single-threaded and awaits its handlers
+        // inline, so a `gh` spawn made in there stalls every project until the
+        // network answers. Only the store writes go through the actor.
+        TrackerStatus {} => {
+            let status = tracker::status().await;
+            serde_json::to_value(status).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        TrackerConnectLinear { api_key } => {
+            tracker::connect_linear(&api_key)
+                .await
+                .map_err(|e| rpc_err(format!("{e:#}")))?;
+            serde_json::to_value(tracker::status().await).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        TrackerDisconnectLinear {} => {
+            tracker::disconnect_linear()
+                .await
+                .map_err(|e| rpc_err(format!("{e:#}")))?;
+            serde_json::to_value(tracker::status().await).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        TrackerConnectGithub {} => {
+            if tracker::github_login().await.is_none() {
+                return Err(rpc_err(
+                    "GitHub CLI is not authenticated. Run `gh auth login` first.".to_string(),
+                ));
+            }
+            serde_json::to_value(tracker::status().await).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        TrackerDisconnectGithub {} => {
+            // GitHub rides on the `gh` CLI session; nothing daemon-owned to
+            // delete except links, which belong to backlog items (kept).
+            serde_json::to_value(tracker::status().await).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        TrackerLinks {} => {
+            let links = handle.tracker_links().await.map_err(rpc_err)?;
+            Ok(json!({ "links": links }))
+        }
+        WorkItemCreateExternal {
+            item_id,
+            provider,
+            project,
+            title,
+            body,
+            priority: _priority,
+            status: _status,
+        } => {
+            let repo_dir = if provider == "github" {
+                Some(project_path(handle, &project).await?)
+            } else {
+                None
+            };
+            // A project pointed at a Linear team creates there; otherwise Linear
+            // picks the account's first team, as it did before mapping existed.
+            let linear_team = handle
+                .tracker_project_settings(&project)
+                .await
+                .ok()
+                .and_then(|settings| settings.linear_team_id);
+            let (external_id, url) = tracker::create_external(
+                &provider,
+                repo_dir.as_deref(),
+                &title,
+                &body,
+                linear_team.as_deref(),
+            )
+            .await
+            .map_err(|e| rpc_err(format!("{e:#}")))?;
+            let link = tracker::make_link(&item_id, &provider, &project, &external_id, &url, false);
+            handle.tracker_persist_link(link).await.map_err(rpc_err)?;
+            let result = wire::CreateExternalResult {
+                item_id,
+                provider,
+                external_id,
+                url,
+                status: "todo".into(),
+            };
+            serde_json::to_value(result).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        TrackerLinearTeams {} => {
+            let teams = tracker::linear_teams()
+                .await
+                .map_err(|e| rpc_err(format!("{e:#}")))?;
+            Ok(json!({ "teams": teams }))
+        }
+        TrackerProjectSettings { project } => {
+            let settings = handle
+                .tracker_project_settings(&project)
+                .await
+                .map_err(rpc_err)?;
+            serde_json::to_value(settings).map_err(|e| rpc_err(e.to_string()))
+        }
+        TrackerSetProjectLinearTeam {
+            project,
+            team_id,
+            team_name,
+        } => {
+            let settings = handle
+                .tracker_set_project_linear_team(project, team_id, team_name)
+                .await
+                .map_err(rpc_err)?;
+            serde_json::to_value(settings).map_err(|e| rpc_err(e.to_string()))
+        }
+        WorkItemSyncExternal { ids } => {
+            // Three phases, and the middle one deliberately runs here rather
+            // than in the actor: the actor loop is single-threaded and awaits
+            // its handlers inline, so a tracker call made inside it stalls
+            // every project until the network answers.
+            let (links, repo_dirs, linear_teams) = handle.tracker_sync_inputs(ids).await;
+            let synced = tracker::fetch_links_status(&links, &repo_dirs, &linear_teams).await;
+            let items: Vec<wire::SyncedExternalItem> =
+                synced.iter().map(|(_, item)| item.clone()).collect();
+            handle
+                .tracker_persist_synced(synced.into_iter().map(|(link, _)| link).collect())
+                .await;
+            serde_json::to_value(wire::SyncExternalResult { items }).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        WorkItemImportExternal { project, provider } => {
+            // Unknown project is not fatal: a Linear-only import needs no repo.
+            let repo_dir = project_path(handle, &project).await.ok();
+            // No mapped team means no Linear import for this project: an API key
+            // sees the whole account, so an unscoped pull would adopt the same
+            // issues into every project the user opens.
+            let linear_team = handle
+                .tracker_project_settings(&project)
+                .await
+                .ok()
+                .and_then(|settings| settings.linear_team_id);
+            let fetched = tracker::fetch_importable(
+                provider.as_deref(),
+                repo_dir.as_deref(),
+                linear_team.as_deref(),
+            )
+            .await
+            .map_err(|e| rpc_err(format!("{e:#}")))?;
+            let (items, synced) = handle
+                .tracker_adopt_imported(&project, fetched)
+                .await
+                .map_err(rpc_err)?;
+            serde_json::to_value(wire::ImportExternalResult { items, synced }).map_err(|e| {
+                wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message: e.to_string(),
+                }
+            })
+        }
+        WorkItemList {
+            project,
+            provider,
+            page,
+            page_size,
+            sort_by,
+            sort_desc,
+            search,
+            status,
+        } => {
+            let repo_dir = if provider == "github" {
+                Some(project_path(handle, &project).await?)
+            } else {
+                None
+            };
+            let query = crate::daemon::backlog::Query {
+                page,
+                page_size,
+                sort_by,
+                sort_desc,
+                search,
+                status,
+                ..Default::default()
+            };
+            let result = tracker::fetch_page(&provider, &project, repo_dir.as_deref(), &query)
+                .await
+                .map_err(|e| rpc_err(format!("{e:#}")))?;
+            serde_json::to_value(result).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        BacklogGetSettings {} => {
+            let settings = handle.backlog_get_settings().await.map_err(rpc_err)?;
+            serde_json::to_value(settings).map_err(|e| rpc_err(e.to_string()))
+        }
+        BacklogSetStorage { mode } => {
+            let settings = handle.backlog_set_storage(mode).await.map_err(rpc_err)?;
+            serde_json::to_value(settings).map_err(|e| rpc_err(e.to_string()))
+        }
+        BacklogList {
+            project,
+            page,
+            page_size,
+            sort_by,
+            sort_desc,
+            search,
+            status,
+            source,
+            priority,
+            assignee,
+        } => {
+            let query = crate::daemon::backlog::Query {
+                page,
+                page_size,
+                sort_by,
+                sort_desc,
+                search,
+                status,
+                source,
+                priority,
+                assignee,
+            };
+            let page = handle.backlog_list(project, query).await.map_err(rpc_err)?;
+            serde_json::to_value(page).map_err(|e| rpc_err(e.to_string()))
+        }
+        BacklogCreate {
+            project,
+            title,
+            body,
+            status,
+            priority,
+            source,
+            assignee,
+        } => {
+            let item = handle
+                .backlog_create(crate::daemon::backlog::NewItem {
+                    project,
+                    title,
+                    body,
+                    status,
+                    priority,
+                    source,
+                    assignee,
+                })
+                .await
+                .map_err(rpc_err)?;
+            serde_json::to_value(item).map_err(|e| rpc_err(e.to_string()))
+        }
+        BacklogAttachExternal {
+            item_id,
+            project,
+            provider,
+            external_id,
+            url,
+            remote_status,
+        } => {
+            handle
+                .backlog_attach_external(
+                    item_id,
+                    project,
+                    provider,
+                    external_id,
+                    url,
+                    remote_status,
+                )
+                .await
+                .map_err(rpc_err)?;
+            Ok(json!({ "ok": true }))
+        }
+        BacklogDelete { item_id, project } => {
+            handle
+                .backlog_delete(item_id, project)
+                .await
+                .map_err(rpc_err)?;
+            Ok(json!({ "ok": true }))
+        }
+        WorkItemLinkTask { item_id, task_id } => {
+            handle
+                .work_item_link_task(&item_id, &task_id)
+                .await
+                .map_err(rpc_err)?;
+            Ok(json!({ "ok": true }))
         }
     }
 }
@@ -1325,6 +1634,14 @@ async fn project_path(handle: &DaemonHandle, project: &str) -> Result<String, wi
         })
 }
 
+/// Map an anyhow error to a wire `Internal` RPC error.
+fn rpc_err(e: impl std::fmt::Display) -> wire::RpcError {
+    wire::RpcError {
+        code: wire::ErrorCode::Internal,
+        message: e.to_string(),
+    }
+}
+
 /// Build a [`BootstrapContext`] by scanning the repo and reading its current
 /// config, combined with the wizard answers.
 fn bootstrap_context(
@@ -1397,6 +1714,7 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | WorkflowList { .. }
             | BootstrapFinalize { .. }
             | BootstrapReadConfig { .. }
+            | WorkItemList { .. }
             | LspStart { .. }
             | LspSend { .. }
             | LspStop { .. }
@@ -1570,6 +1888,7 @@ mod tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await;
         let demo_child = handle
@@ -1584,6 +1903,7 @@ mod tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await;
         let _other_project_child = handle
@@ -1598,6 +1918,7 @@ mod tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await;
         let unrelated = handle
@@ -1612,6 +1933,7 @@ mod tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await;
 
@@ -1987,6 +2309,7 @@ mod tests {
                 Vec::new(),
                 None,
                 std::collections::HashMap::new(),
+                None,
             )
             .await;
         handle

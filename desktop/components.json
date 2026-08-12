@@ -13,5 +13,8 @@
     "components": "@/components",
     "ui": "@/components/ui",
     "utils": "@/lib/utils"
+  },
+  "registries": {
+    "@diceui": "https://diceui.com/r/{name}.json"
   }
 }
