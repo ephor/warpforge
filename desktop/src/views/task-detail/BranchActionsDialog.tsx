@@ -82,6 +82,7 @@ export function BranchActionsDialog({
           return (await daemon.request("git.branchDelete", {
             task_id: taskId,
             branch: action.branch,
+            force: true,
           })) as GitOpResult;
         case "rebase":
           return (await daemon.request("git.rebase", {
