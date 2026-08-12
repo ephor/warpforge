@@ -5,15 +5,15 @@ import { useUi } from "@/store/ui";
 const EMAIL_RE = /[^\s@·]+@[^\s@·]+\.[^\s@·]+/g;
 
 /**
- * Renders `text` with any email addresses blurred while TeoMod is on.
+ * Renders `text` with any email addresses blurred while TheoMod is on.
  *
  * The blur is cosmetic only — the real address stays in the DOM, so
  * selecting and copying gets the actual string. Hover (or focus) un-blurs
  * it, in case you actually need to read it and you're nobody's broadcast.
  */
 export default function EmailBlur({ text, className }: { text: string; className?: string }) {
-  const teoMod = useUi((s) => s.teoMod);
-  if (!teoMod) return <span className={className}>{text}</span>;
+  const theoMod = useUi((s) => s.theoMod);
+  if (!theoMod) return <span className={className}>{text}</span>;
 
   const parts: ReactNode[] = [];
   let cursor = 0;

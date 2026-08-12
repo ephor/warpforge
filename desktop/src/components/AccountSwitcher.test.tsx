@@ -39,7 +39,7 @@ describe("AccountSwitcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setActiveAccount.mockResolvedValue([]);
-    useUi.getState().setTeoMod(false);
+    useUi.getState().setTheoMod(false);
   });
 
   it("shows nothing when there is nothing to switch between", () => {
@@ -115,8 +115,8 @@ describe("AccountSwitcher", () => {
     expect(await screen.findByRole("status")).toHaveTextContent("no stored credentials");
   });
 
-  it("blurs the account email in the menu when TeoMod is on", async () => {
-    useUi.getState().setTeoMod(true);
+  it("blurs the account email in the menu when TheoMod is on", async () => {
+    useUi.getState().setTheoMod(true);
     const user = userEvent.setup();
     const { container } = render(
       <AccountSwitcher

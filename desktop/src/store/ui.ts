@@ -68,8 +68,8 @@ export interface SettingsState {
   autoNameTasks: boolean;
   setAutoNameTasks: (v: boolean) => void;
   /** Easter egg: blur email addresses wherever they render. */
-  teoMod: boolean;
-  setTeoMod: (v: boolean) => void;
+  theoMod: boolean;
+  setTheoMod: (v: boolean) => void;
   /**
    * Whether New Task starts in an isolated git worktree. Persisted so the
    * choice survives across task creations instead of resetting every time.
@@ -165,7 +165,7 @@ export const useUi = create<UiState>()(
       textGenModel: null,
       autoNameTasks: true,
       newTaskWorktree: false,
-      teoMod: false,
+      theoMod: false,
 
       setView: (view) => set({ openTaskId: null, openTaskNav: null, view }),
       openProject: (selectedProjectId) =>
@@ -261,7 +261,7 @@ export const useUi = create<UiState>()(
       setTextGenModel: (textGenModel) => set({ textGenModel }),
       setAutoNameTasks: (autoNameTasks) => set({ autoNameTasks }),
       setNewTaskWorktree: (newTaskWorktree) => set({ newTaskWorktree }),
-      setTeoMod: (teoMod) => set({ teoMod }),
+      setTheoMod: (theoMod) => set({ theoMod }),
     }),
     {
       name: "wf-ui",
