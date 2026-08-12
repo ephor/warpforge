@@ -14,7 +14,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type MouseEvent,
 } from "react";
 import { toast } from "sonner";
 
@@ -22,11 +21,6 @@ import { daemon } from "../../daemon";
 import type { GitBranchList, GitOpResult } from "../../protocol";
 import { daemonQuery } from "../../query";
 import { useUi } from "../../store/ui";
-import {
-  type ContextMenuItemOrSeparator,
-  showContextMenu,
-  useNativeContextMenu,
-} from "../../hooks/useNativeContextMenu";
 import {
   buildBranchTree,
   defaultOpenFolders,
@@ -168,7 +162,6 @@ export function GitWorkspaceControls({
   const busy = Boolean(repositoryOperation) || updating || switchMut.isPending;
 
   const [action, setAction] = useState<BranchAction | null>(null);
-  const requestId = useRef(`branches-${taskId}`).current;
   const actionRef = useRef<{ branch: string; remote: boolean }>(null);
 
   const remoteBranches = useMemo(() => branchData?.remotes ?? [], [branchData]);
@@ -246,55 +239,10 @@ export function GitWorkspaceControls({
       },
     ],
   ]);
-  useNativeContextMenu(requestId, menuHandlers);
-
-  const branchesRef = useRef(branches);
-  branchesRef.current = branches;
-  const openBranchMenu = useCallback(
-    (e: MouseEvent, item: string) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const locals = branchesRef.current;
-      actionRef.current = { branch: item, remote: !locals.includes(item) };
-      const { remote } = actionRef.current;
-      const items: ContextMenuItemOrSeparator[] = [];
-      if (remote) {
-        const localName = item.split("/").slice(1).join("/") || "new-branch";
-        items.push(
-          { type: "item", id: "checkout-as-remote", label: `Checkout as '${localName}'…` },
-          { type: "item", id: "create", label: "New Branch from…" },
-          { type: "separator" },
-          { type: "item", id: "compare", label: "Compare or Show Diff with…" },
-        );
-      } else if (item === branchRef.current) {
-        items.push(
-          { type: "item", id: "update", label: "Update" },
-          { type: "item", id: "rebase", label: "Rebase onto…" },
-          { type: "item", id: "merge", label: "Merge branch into…" },
-          { type: "separator" },
-          { type: "item", id: "push", label: "Push…" },
-          { type: "item", id: "rename", label: "Rename…" },
-        );
-      } else {
-        items.push(
-          { type: "item", id: "checkout", label: "Checkout" },
-          { type: "item", id: "create", label: `New Branch from '${item}'…` },
-          { type: "separator" },
-          { type: "item", id: "checkout-rebase", label: "Checkout and Rebase onto…" },
-          { type: "item", id: "checkout-update", label: "Checkout and Update" },
-          { type: "item", id: "compare", label: "Compare or Show Diff with…" },
-          { type: "separator" },
-          { type: "item", id: "push", label: "Push…" },
-          { type: "item", id: "rename", label: "Rename…" },
-          { type: "item", id: "delete", label: "Delete…" },
-        );
-      }
-      void showContextMenu({ requestId, items });
-    },
-    [requestId],
-  );
-  const branchRef = useRef(branch);
-  branchRef.current = branch;
+  const handleBranchAction = (actionId: string, item: string, remote: boolean) => {
+    actionRef.current = { branch: item, remote };
+    menuHandlers.get(actionId)?.();
+  };
 
   const localTree = useMemo(() => buildBranchTree(branches), [branches]);
   const remoteTree = useMemo(() => buildBranchTree(remoteBranches), [remoteBranches]);
@@ -461,8 +409,7 @@ export function GitWorkspaceControls({
                   searchRows={searchRows}
                   openFolders={openFolders}
                   current={branch}
-                  onSwitch={switchTo}
-                  onOpenMenu={openBranchMenu}
+                  onAction={handleBranchAction}
                   onToggleFolder={toggleFolder}
                 />
               )}
