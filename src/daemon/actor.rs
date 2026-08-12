@@ -785,6 +785,20 @@ pub enum Command {
         force: bool,
         reply: oneshot::Sender<wire::GitOpResult>,
     },
+    /// Create a branch from a ref and check it out.
+    GitBranchCreate {
+        task_id: String,
+        name: String,
+        from: Option<String>,
+        reply: oneshot::Sender<wire::GitOpResult>,
+    },
+    /// Diff statistics between two refs.
+    GitCompareBranches {
+        task_id: String,
+        base: String,
+        head: String,
+        reply: oneshot::Sender<Result<wire::GitCompareStats, String>>,
+    },
     /// Rebase the current branch onto `target`.
     GitRebase {
         task_id: String,
@@ -1356,6 +1370,41 @@ impl DaemonHandle {
         })
         .await;
         op_result_or_dropped(rx.await, "daemon dropped the rebase request")
+    }
+
+    pub async fn git_branch_create(
+        &self,
+        task_id: &str,
+        name: &str,
+        from: Option<String>,
+    ) -> wire::GitOpResult {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitBranchCreate {
+            task_id: task_id.to_string(),
+            name: name.to_string(),
+            from,
+            reply: tx,
+        })
+        .await;
+        op_result_or_dropped(rx.await, "daemon dropped the create-branch request")
+    }
+
+    pub async fn git_compare_branches(
+        &self,
+        task_id: &str,
+        base: &str,
+        head: &str,
+    ) -> Result<wire::GitCompareStats, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitCompareBranches {
+            task_id: task_id.to_string(),
+            base: base.to_string(),
+            head: head.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the compare request".into()))
     }
 
     pub async fn git_merge(&self, task_id: &str, target: &str) -> wire::GitOpResult {
@@ -3025,6 +3074,55 @@ impl Daemon {
                 if result.status == wire::GitOpStatus::Ok {
                     self.bump_task(&task_id);
                 }
+                let _ = reply.send(result);
+            }
+            Command::GitBranchCreate {
+                task_id,
+                name,
+                from,
+                reply,
+            } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let result = match repo {
+                    Some(p) => super::diff::branch_create(&p, &name, from.as_deref())
+                        .await
+                        .unwrap_or_else(|e| wire::GitOpResult {
+                            status: wire::GitOpStatus::Error,
+                            message: e.to_string(),
+                            conflicts: Vec::new(),
+                            branch: None,
+                        }),
+                    None => wire::GitOpResult {
+                        status: wire::GitOpStatus::Error,
+                        message: format!("no repo for task {task_id}"),
+                        conflicts: Vec::new(),
+                        branch: None,
+                    },
+                };
+                if result.status == wire::GitOpStatus::Ok {
+                    self.bump_task(&task_id);
+                }
+                let _ = reply.send(result);
+            }
+            Command::GitCompareBranches {
+                task_id,
+                base,
+                head,
+                reply,
+            } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let result = match repo {
+                    Some(p) => super::diff::compare_stats(&p, &base, &head)
+                        .await
+                        .map_err(|e| e.to_string()),
+                    None => Err(format!("no repo for task {task_id}")),
+                };
                 let _ = reply.send(result);
             }
             Command::GitRebase {

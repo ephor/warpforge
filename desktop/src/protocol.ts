@@ -476,6 +476,13 @@ export interface GitOpResult {
 export interface GitBranchList {
   current?: string | null;
   branches: string[];
+  /** Remote-tracking refs, e.g. `origin/main`. */
+  remotes?: string[];
+}
+
+/** Lines of `git diff --stat` between two refs, for "Compare with". */
+export interface GitCompareStats {
+  lines: string[];
 }
 
 export interface GitPushFile {

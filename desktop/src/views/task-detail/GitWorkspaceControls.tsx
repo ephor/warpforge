@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Check,
   ChevronDown,
   Download,
   GitBranch,
@@ -9,10 +8,15 @@ import {
   Search,
   Send,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  useEffect,
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 import { toast } from "sonner";
-
-import { cn } from "@/lib/utils";
 
 import { daemon } from "../../daemon";
 import type { GitBranchList, GitOpResult } from "../../protocol";
@@ -23,7 +27,14 @@ import {
   showContextMenu,
   useNativeContextMenu,
 } from "../../hooks/useNativeContextMenu";
+import {
+  buildBranchTree,
+  defaultOpenFolders,
+  flattenBranchTree,
+  type BranchRow,
+} from "./branchTree";
 import { BranchActionsDialog, type BranchAction } from "./BranchActionsDialog";
+import { BranchList } from "./BranchList";
 
 function handleGitOpResult(r: GitOpResult) {
   switch (r.status) {
@@ -102,11 +113,9 @@ export function GitWorkspaceControls({
     queryFn: daemonQuery<GitBranchList>("git.branches", { task_id: taskId }),
     queryKey: ["branches", taskId],
   });
-  const branches = branchesQuery.data?.branches ?? [];
+  const branchData = branchesQuery.data;
+  const branches = useMemo(() => branchData?.branches ?? [], [branchData]);
   const normalizedSearch = search.trim().toLowerCase();
-  const filteredBranches = normalizedSearch
-    ? branches.filter((item) => item.toLowerCase().includes(normalizedSearch))
-    : branches;
   const showSync =
     !normalizedSearch || "sync with remote update project".includes(normalizedSearch);
   const showCommit = !normalizedSearch || "commit changes".includes(normalizedSearch);
@@ -160,68 +169,193 @@ export function GitWorkspaceControls({
 
   const [action, setAction] = useState<BranchAction | null>(null);
   const requestId = useRef(`branches-${taskId}`).current;
-  const actionRef = useRef<{ kind: "rename" | "delete" | "rebase" | "merge"; branch: string }>(
-    null,
-  );
+  const actionRef = useRef<{ branch: string; remote: boolean }>(null);
 
-  const menuHandlers = useMemo(
-    () =>
-      new Map<string, () => void>([
-        [
-          "rename",
-          () => {
-            const t = actionRef.current;
-            if (!t) return;
-            setAction({ kind: "rename", branch: t.branch });
-          },
-        ],
-        [
-          "delete",
-          () => {
-            const t = actionRef.current;
-            if (!t) return;
-            setAction({ kind: "delete", branch: t.branch });
-          },
-        ],
-        [
-          "rebase",
-          () => {
-            const t = actionRef.current;
-            if (!t) return;
-            setAction({ kind: "rebase" });
-          },
-        ],
-        [
-          "merge",
-          () => {
-            const t = actionRef.current;
-            if (!t) return;
-            setAction({ kind: "merge" });
-          },
-        ],
-      ]),
-    [],
-  );
+  const remoteBranches = useMemo(() => branchData?.remotes ?? [], [branchData]);
+
+  const openActionDialog = (a: BranchAction) => {
+    setOpen(false);
+    setAction(a);
+  };
+
+  const switchToRef = useRef<(target: string) => void>(() => {});
+  const openActionDialogRef = useRef(openActionDialog);
+  openActionDialogRef.current = openActionDialog;
+
+  const menuHandlers = new Map<string, () => void>([
+    ["checkout", () => switchToRef.current(actionRef.current?.branch ?? "")],
+    [
+      "checkout-as-remote",
+      () => {
+        const t = actionRef.current;
+        if (!t) return;
+        const localName = t.branch.split("/").slice(1).join("/") || "new-branch";
+        openActionDialogRef.current({ kind: "create", from: t.branch, defaultName: localName });
+      },
+    ],
+    [
+      "create",
+      () => {
+        const t = actionRef.current;
+        if (!t) return;
+        openActionDialogRef.current({ kind: "create", from: t.branch });
+      },
+    ],
+    [
+      "checkout-rebase",
+      () => {
+        const t = actionRef.current;
+        if (!t) return;
+        openActionDialogRef.current({ kind: "checkout-rebase", branch: t.branch });
+      },
+    ],
+    [
+      "checkout-update",
+      () => {
+        const t = actionRef.current;
+        if (!t) return;
+        openActionDialogRef.current({ kind: "checkout-update", branch: t.branch });
+      },
+    ],
+    [
+      "compare",
+      () => {
+        const t = actionRef.current;
+        if (!t) return;
+        openActionDialogRef.current({ kind: "compare", branch: t.branch });
+      },
+    ],
+    ["rebase", () => openActionDialogRef.current({ kind: "rebase" })],
+    ["merge", () => openActionDialogRef.current({ kind: "merge" })],
+    ["update", () => updateMut.mutate()],
+    ["push", () => { setOpen(false); onOpenPush(); }],
+    [
+      "rename",
+      () => {
+        const t = actionRef.current;
+        if (!t) return;
+        openActionDialogRef.current({ kind: "rename", branch: t.branch });
+      },
+    ],
+    [
+      "delete",
+      () => {
+        const t = actionRef.current;
+        if (!t) return;
+        openActionDialogRef.current({ kind: "delete", branch: t.branch });
+      },
+    ],
+  ]);
   useNativeContextMenu(requestId, menuHandlers);
 
-  const openBranchMenu = (e: MouseEvent, item: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const isCurrent = item === branch;
-    actionRef.current = { kind: "rebase", branch: item };
-    const items: ContextMenuItemOrSeparator[] = [
-      { type: "item", id: "rename", label: "Rename Branch…" },
-    ];
-    if (isCurrent) {
-      items.push(
-        { type: "item", id: "rebase", label: "Rebase Onto…" },
-        { type: "item", id: "merge", label: "Merge Branch Into…" },
-      );
-    } else {
-      items.push({ type: "item", id: "delete", label: "Delete Branch…" });
+  const branchesRef = useRef(branches);
+  branchesRef.current = branches;
+  const openBranchMenu = useCallback(
+    (e: MouseEvent, item: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const locals = branchesRef.current;
+      actionRef.current = { branch: item, remote: !locals.includes(item) };
+      const { remote } = actionRef.current;
+      const items: ContextMenuItemOrSeparator[] = [];
+      if (remote) {
+        const localName = item.split("/").slice(1).join("/") || "new-branch";
+        items.push(
+          { type: "item", id: "checkout-as-remote", label: `Checkout as '${localName}'…` },
+          { type: "item", id: "create", label: "New Branch from…" },
+          { type: "separator" },
+          { type: "item", id: "compare", label: "Compare or Show Diff with…" },
+        );
+      } else if (item === branchRef.current) {
+        items.push(
+          { type: "item", id: "update", label: "Update" },
+          { type: "item", id: "rebase", label: "Rebase onto…" },
+          { type: "item", id: "merge", label: "Merge branch into…" },
+          { type: "separator" },
+          { type: "item", id: "push", label: "Push…" },
+          { type: "item", id: "rename", label: "Rename…" },
+        );
+      } else {
+        items.push(
+          { type: "item", id: "checkout", label: "Checkout" },
+          { type: "item", id: "create", label: `New Branch from '${item}'…` },
+          { type: "separator" },
+          { type: "item", id: "checkout-rebase", label: "Checkout and Rebase onto…" },
+          { type: "item", id: "checkout-update", label: "Checkout and Update" },
+          { type: "item", id: "compare", label: "Compare or Show Diff with…" },
+          { type: "separator" },
+          { type: "item", id: "push", label: "Push…" },
+          { type: "item", id: "rename", label: "Rename…" },
+          { type: "item", id: "delete", label: "Delete…" },
+        );
+      }
+      void showContextMenu({ requestId, items });
+    },
+    [requestId],
+  );
+  const branchRef = useRef(branch);
+  branchRef.current = branch;
+
+  const localTree = useMemo(() => buildBranchTree(branches), [branches]);
+  const remoteTree = useMemo(() => buildBranchTree(remoteBranches), [remoteBranches]);
+  const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
+  const toggleFolder = useCallback((key: string) => {
+    setOpenFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+  useEffect(() => {
+    if (open && openFolders.size === 0) {
+      setOpenFolders((prev) => {
+        const next = new Set([
+          ...prev,
+          ...defaultOpenFolders(localTree),
+          ...defaultOpenFolders(remoteTree),
+        ]);
+        return next.size === prev.size ? prev : next;
+      });
     }
-    void showContextMenu({ requestId, items });
-  };
+  }, [open, openFolders.size, localTree, remoteTree]);
+  const localRows = useMemo(() => {
+    const out: BranchRow[] = [];
+    flattenBranchTree(localTree, 0, "", openFolders, out);
+    return out;
+  }, [localTree, openFolders]);
+  const remoteRows = useMemo(() => {
+    const out: BranchRow[] = [];
+    flattenBranchTree(remoteTree, 0, "", openFolders, out);
+    return out;
+  }, [remoteTree, openFolders]);
+
+  const filteredLocal = useMemo(
+    () =>
+      normalizedSearch
+        ? branches.filter((item) => item.toLowerCase().includes(normalizedSearch))
+        : [],
+    [branches, normalizedSearch],
+  );
+  const filteredRemote = useMemo(
+    () =>
+      normalizedSearch
+        ? remoteBranches.filter((item) => item.toLowerCase().includes(normalizedSearch))
+        : [],
+    [remoteBranches, normalizedSearch],
+  );
+  const searching = normalizedSearch.length > 0;
+  const searchRows = useMemo(() => {
+    if (!searching) return [];
+    const out: BranchRow[] = [];
+    for (const b of filteredLocal) {
+      out.push({ key: b, depth: 0, label: b.split("/").pop()!, branch: b });
+    }
+    for (const b of filteredRemote) {
+      out.push({ key: b, depth: 0, label: b.split("/").pop()!, branch: b, remote: true });
+    }
+    return out;
+  }, [searching, filteredLocal, filteredRemote]);
 
   const switchTo = (target: string) => {
     setOpen(false);
@@ -230,6 +364,7 @@ export function GitWorkspaceControls({
     }
     switchMut.mutate(target);
   };
+  switchToRef.current = switchTo;
 
   return (
     <span className="flex min-w-0 items-center">
@@ -309,7 +444,7 @@ export function GitWorkspaceControls({
                 </div>
               )}
 
-              {(showSync || showCommit || showPush) && filteredBranches.length > 0 && (
+              {(showSync || showCommit || showPush) && (
                 <div className="mx-1 border-t" />
               )}
               <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -318,31 +453,26 @@ export function GitWorkspaceControls({
               {branchesQuery.isLoading && (
                 <div className="px-2 py-1.5 text-xs text-muted-foreground">Loading…</div>
               )}
-              {!branchesQuery.isLoading && filteredBranches.length === 0 && (
-                <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                  {branches.length === 0 ? "No branches" : "No matching branches or actions"}
-                </div>
+              {!branchesQuery.isLoading && (
+                <BranchList
+                  localRows={localRows}
+                  remoteRows={remoteRows}
+                  searching={searching}
+                  searchRows={searchRows}
+                  openFolders={openFolders}
+                  current={branch}
+                  onSwitch={switchTo}
+                  onOpenMenu={openBranchMenu}
+                  onToggleFolder={toggleFolder}
+                />
               )}
-              {filteredBranches.map((item) => (
-                <button
-                  type="button"
-                  key={item}
-                  onClick={() => switchTo(item)}
-                  onContextMenu={(e) => openBranchMenu(e, item)}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left font-mono text-xs",
-                    item === branch ? "bg-accent text-foreground" : "hover:bg-accent/50",
-                  )}
-                >
-                  <Check
-                    className={cn(
-                      "size-3.5 shrink-0",
-                      item === branch ? "opacity-100" : "opacity-0",
-                    )}
-                  />
-                  <span className="min-w-0 flex-1 truncate">{item}</span>
-                </button>
-              ))}
+              {!branchesQuery.isLoading &&
+                searching &&
+                searchRows.length === 0 && (
+                  <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                    No matching branches
+                  </p>
+                )}
             </div>
           </div>
         )}
@@ -352,7 +482,7 @@ export function GitWorkspaceControls({
         branches={branches}
         current={branch ?? ""}
         taskId={taskId}
-        onResult={() => invalidateAll(queryClient, taskId)}
+        onComplete={() => invalidateAll(queryClient, taskId)}
         onClose={() => setAction(null)}
       />
     </span>
