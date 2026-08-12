@@ -1,3 +1,4 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
@@ -5,6 +6,7 @@ import AppHeader from "@/components/AppHeader";
 import AttentionToast from "@/components/AttentionToast";
 import BootstrapWizard from "@/components/BootstrapWizard";
 import ErrorBoundary from "@/components/ErrorBoundary";
+import { QuickOpen } from "@/components/QuickOpen";
 import Sidebar from "@/components/Sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { daemon } from "@/daemon";
@@ -17,7 +19,9 @@ import { useFontScaling } from "./hooks/useFontScaling";
 import { useTheme } from "./hooks/useTheme";
 import { usePullShortcut } from "./hooks/usePullShortcut";
 import { usePushShortcut } from "./hooks/usePushShortcut";
+import { useQuickOpenShortcut } from "./hooks/useQuickOpenShortcut";
 import { useTauriClose } from "./hooks/useTauriClose";
+import { queryClient, useProjectFileListQuery } from "./query";
 import AddProjectDialog from "./views/AddProjectDialog";
 import AgentSetupDialog from "./views/AgentSetupDialog";
 import MissionControl from "./views/MissionControl";
@@ -41,6 +45,36 @@ function LiveMissionControl({
 function LiveSidebar(props: Omit<React.ComponentProps<typeof Sidebar>, "state">) {
   const state = useSyncExternalStore(daemon.subscribe, daemon.getState);
   return <Sidebar state={state} {...props} />;
+}
+
+/** Hosts the quick-open palette: owns the file-list query and the double-Shift
+ *  trigger. Rendered as a child of the QueryClientProvider so its hook sees the
+ *  client (App's own hooks must not query — they'd render before the provider). */
+function QuickOpenHost({
+  openTaskId,
+  hasOpenTask,
+}: {
+  openTaskId: string | null;
+  hasOpenTask: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const filesQuery = useProjectFileListQuery(hasOpenTask ? openTaskId : null);
+  const openTaskThroughNav = useUi((s) => s.openTaskWithNav);
+  useQuickOpenShortcut(() => {
+    if (hasOpenTask) setOpen(true);
+  });
+  return (
+    <QuickOpen
+      open={open}
+      files={filesQuery.data ?? []}
+      loading={filesQuery.isLoading}
+      error={filesQuery.error?.message ?? null}
+      onPick={(path) => {
+        if (openTaskId) openTaskThroughNav(openTaskId, { surface: "files", path });
+      }}
+      onClose={() => setOpen(false)}
+    />
+  );
 }
 
 const getSnapshot = () => daemon.getState().snapshot;
@@ -232,6 +266,7 @@ export default function App() {
   const persistentWidth = sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth;
 
   return (
+    <QueryClientProvider client={queryClient}>
     <TooltipProvider delayDuration={300}>
       {/* Prototype shell: full-height sidebar beside a column of topbar + content. */}
       <div className="relative flex h-screen bg-background">
@@ -300,6 +335,10 @@ export default function App() {
         </div>
 
         {pushOpen && <PushDialog open onOpenChange={setPushOpen} task={openTask} />}
+        <QuickOpenHost
+          openTaskId={openTask ? openTask.id : null}
+          hasOpenTask={!!openTask && !newTaskOpen}
+        />
         {addProjectOpen && (
           <AddProjectDialog open onOpenChange={setAddProjectOpen} onAdded={handleProjectAdded} />
         )}
@@ -353,5 +392,6 @@ export default function App() {
         )}
       </div>
     </TooltipProvider>
+    </QueryClientProvider>
   );
 }

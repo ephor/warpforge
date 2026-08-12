@@ -1,6 +1,7 @@
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, useQuery } from "@tanstack/react-query";
 
 import { daemon } from "./daemon";
+import type { ProjectFile } from "./protocol";
 
 /**
  * TanStack Query is used ONLY for on-demand daemon *reads* — diff, file
@@ -30,3 +31,17 @@ export const daemonQuery =
   <T>(method: string, params?: unknown) =>
   () =>
     daemon.request(method, params) as Promise<T>;
+
+/** Project file list for a task, shared with the editor tree's query key so
+ *  the quick-open palette and FilesSurface stay in the same cache. */
+export function useProjectFileListQuery(taskId: string | null, includeIgnored = true) {
+  return useQuery({
+    enabled: Boolean(taskId),
+    placeholderData: (prev: ProjectFile[] | undefined) => prev,
+    queryFn: daemonQuery<ProjectFile[]>("file.list", {
+      include_ignored: includeIgnored,
+      task_id: taskId,
+    }),
+    queryKey: ["fileList", taskId ?? "", includeIgnored ? "all" : "tracked"],
+  });
+}
