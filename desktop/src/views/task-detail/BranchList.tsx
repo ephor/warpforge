@@ -1,6 +1,5 @@
-import { Check, ChevronRight, GitBranch, MoreHorizontal } from "lucide-react";
-import type { MouseEvent } from "react";
-
+import { Check, ChevronRight, GitBranch } from "lucide-react";
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 
 import type { BranchRow } from "./branchTree";
@@ -16,8 +15,7 @@ export function BranchList({
   searchRows,
   openFolders,
   current,
-  onSwitch,
-  onOpenMenu,
+  onAction,
   onToggleFolder,
 }: {
   localRows: BranchRow[];
@@ -26,8 +24,7 @@ export function BranchList({
   searchRows: BranchRow[];
   openFolders: Set<string>;
   current: string | null;
-  onSwitch: (branch: string) => void;
-  onOpenMenu: (e: MouseEvent, branch: string) => void;
+  onAction: (action: string, branch: string, remote: boolean) => void;
   onToggleFolder: (key: string) => void;
 }) {
   if (searching) {
@@ -39,8 +36,7 @@ export function BranchList({
             row={row}
             remote={row.remote}
             current={current}
-            onSwitch={onSwitch}
-            onOpenMenu={onOpenMenu}
+            onAction={onAction}
           />
         ))}
       </div>
@@ -55,8 +51,7 @@ export function BranchList({
         openFolders={openFolders}
         onToggleFolder={onToggleFolder}
         current={current}
-        onSwitch={onSwitch}
-        onOpenMenu={onOpenMenu}
+        onAction={onAction}
       />
       {remoteRows.length > 0 && (
         <BranchSection
@@ -66,8 +61,7 @@ export function BranchList({
           onToggleFolder={onToggleFolder}
           remote
           current={current}
-          onSwitch={onSwitch}
-          onOpenMenu={onOpenMenu}
+          onAction={onAction}
         />
       )}
     </div>
@@ -81,8 +75,7 @@ function BranchSection({
   onToggleFolder,
   remote = false,
   current,
-  onSwitch,
-  onOpenMenu,
+  onAction,
 }: {
   title: string;
   rows: BranchRow[];
@@ -90,8 +83,7 @@ function BranchSection({
   onToggleFolder: (key: string) => void;
   remote?: boolean;
   current: string | null;
-  onSwitch: (branch: string) => void;
-  onOpenMenu: (e: MouseEvent, branch: string) => void;
+  onAction: (action: string, branch: string, remote: boolean) => void;
 }) {
   return (
     <div>
@@ -129,8 +121,7 @@ function BranchSection({
                 row={row}
                 remote={remote}
                 current={current}
-                onSwitch={onSwitch}
-                onOpenMenu={onOpenMenu}
+                onAction={onAction}
               />
             );
           })}
@@ -144,55 +135,118 @@ function BranchRowLine({
   row,
   remote = false,
   current,
-  onSwitch,
-  onOpenMenu,
+  onAction,
 }: {
   row: BranchRow;
   remote?: boolean;
   current: string | null;
-  onSwitch: (branch: string) => void;
-  onOpenMenu: (e: MouseEvent, branch: string) => void;
+  onAction: (action: string, branch: string, remote: boolean) => void;
 }) {
   const isCurrent = !remote && row.branch === current;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const branch = row.branch ?? "";
+  const openMenu = () => setMenuOpen((open) => !open);
   return (
-    <div
-      className={cn(
-        "group/row flex w-full items-center gap-1 rounded px-1 py-1 text-left text-xs",
-        isCurrent ? "bg-accent text-foreground" : "hover:bg-accent/50",
-      )}
-      style={{ paddingLeft: `${row.depth * 12 + 6}px` }}
-      onContextMenu={(e) => row.branch && onOpenMenu(e, row.branch)}
-    >
-      {remote ? (
-        <GitBranch className="size-3.5 shrink-0 text-muted-foreground/60" />
-      ) : (
-        <Check
-          className={cn(
-            "size-3.5 shrink-0",
-            isCurrent ? "opacity-100" : "opacity-0",
-          )}
-        />
-      )}
-      <button
-        type="button"
-        disabled={remote}
-        onClick={() => row.branch && !remote && onSwitch(row.branch)}
-        title={row.branch}
-        className="min-w-0 flex-1 truncate font-mono text-left disabled:cursor-default"
+    <div className="relative">
+      <div
+        className={cn(
+          "group/row flex w-full items-center gap-1 rounded px-1 py-1 text-left text-xs",
+          isCurrent ? "bg-accent text-foreground" : "hover:bg-accent/50",
+        )}
+        style={{ paddingLeft: `${row.depth * 12 + 6}px` }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          openMenu();
+        }}
       >
-        {row.label}
-      </button>
-      {row.branch && (
+        {remote ? (
+          <GitBranch className="size-3.5 shrink-0 text-muted-foreground/60" />
+        ) : (
+          <Check
+            className={cn(
+              "size-3.5 shrink-0",
+              isCurrent ? "opacity-100" : "opacity-0",
+            )}
+          />
+        )}
+        <ChevronRight
+          aria-hidden="true"
+          className={cn("size-3.5 shrink-0 transition-transform", menuOpen && "rotate-90")}
+        />
         <button
           type="button"
-          aria-label={`Actions for ${row.branch}`}
-          title="Actions"
-          onClick={(e) => onOpenMenu(e, row.branch!)}
-          className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 hover:bg-secondary hover:text-foreground group-hover/row:opacity-100"
+          onClick={openMenu}
+          title={row.branch}
+          className="min-w-0 flex-1 truncate font-mono text-left"
         >
-          <MoreHorizontal className="size-3.5" />
+          {row.label}
         </button>
+      </div>
+      {menuOpen && row.branch && (
+        <BranchActionSubmenu
+          branch={branch}
+          remote={remote}
+          current={isCurrent}
+          onAction={(action) => {
+            setMenuOpen(false);
+            onAction(action, branch, remote);
+          }}
+        />
       )}
+    </div>
+  );
+}
+
+function BranchActionSubmenu({
+  branch,
+  remote,
+  current,
+  onAction,
+}: {
+  branch: string;
+  remote: boolean;
+  current: boolean;
+  onAction: (action: string) => void;
+}) {
+  const actions = remote
+    ? [
+        ["checkout-as-remote", "Checkout as local…"],
+        ["create", `New Branch from '${branch}'…`],
+        ["compare", "Compare or Show Diff with…"],
+      ]
+    : current
+      ? [
+          ["update", "Update"],
+          ["rebase", "Rebase onto…"],
+          ["merge", "Merge branch into…"],
+          ["push", "Push…"],
+          ["rename", "Rename…"],
+        ]
+      : [
+          ["checkout", "Checkout"],
+          ["create", `New Branch from '${branch}'…`],
+          ["checkout-rebase", "Checkout and Rebase onto…"],
+          ["checkout-update", "Checkout and Update"],
+          ["compare", "Compare or Show Diff with…"],
+          ["push", "Push…"],
+          ["rename", "Rename…"],
+          ["delete", "Delete…"],
+        ];
+  return (
+    <div className="ml-8 border-l border-border/70 bg-popover px-1 py-1 shadow-lg">
+      {actions.map(([id, label]) => (
+        <button
+          type="button"
+          key={id}
+          onClick={() => onAction(id)}
+          className={cn(
+            "block w-full rounded px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground",
+            id === "delete" && "text-destructive hover:text-destructive",
+          )}
+        >
+          {label}
+        </button>
+      ))}
     </div>
   );
 }
