@@ -3,7 +3,7 @@ import { lazy, Suspense } from "react";
 
 import { cn } from "@/lib/utils";
 
-import type { FileDoc, ProjectFile } from "../../protocol";
+import type { FileDoc, ProjectFile, SymbolMatch } from "../../protocol";
 import { ProjectFilesPanel } from "./ProjectFilesPanel";
 
 const CodeEditor = lazy(async () => ({
@@ -41,6 +41,8 @@ export function FilesSurface({
   rootPath,
   onRefresh,
   taskId,
+  onGotoDefinition,
+  onOpenSymbol,
 }: {
   projectFiles: ProjectFile[];
   fileListError: string | null;
@@ -55,6 +57,8 @@ export function FilesSurface({
   rootPath?: string;
   onRefresh: () => void;
   taskId: string;
+  onGotoDefinition?: (query: string) => Promise<SymbolMatch[]>;
+  onOpenSymbol?: (path: string, line: number, column: number) => void;
 }) {
   return (
     <div className="flex h-full min-h-0 min-w-0">
@@ -115,6 +119,8 @@ export function FilesSurface({
                 doc={fileDoc}
                 editable={editable}
                 onSave={onSave}
+                onGotoDefinition={onGotoDefinition}
+                onOpenSymbol={onOpenSymbol}
               />
             </Suspense>
           ) : (
