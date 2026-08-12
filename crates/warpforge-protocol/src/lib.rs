@@ -400,6 +400,31 @@ pub enum Method {
     /// you were on with your changes intact.
     #[serde(rename = "git.switchBranch")]
     GitSwitchBranch { task_id: String, branch: String },
+    /// Rename a local branch to `new_name`. Works on the checked-out branch or
+    /// any other; errors if `new_name` already exists.
+    #[serde(rename = "git.branchRename")]
+    GitBranchRename {
+        task_id: String,
+        branch: String,
+        new_name: String,
+    },
+    /// Delete a local branch. Refuses the checked-out branch; without `force`
+    /// also refuses unmerged branches.
+    #[serde(rename = "git.branchDelete")]
+    GitBranchDelete {
+        task_id: String,
+        branch: String,
+        #[serde(default)]
+        force: bool,
+    },
+    /// Rebase the current branch onto `target`, carrying uncommitted changes
+    /// across. A conflict rolls back to the prior tree.
+    #[serde(rename = "git.rebase")]
+    GitRebase { task_id: String, target: String },
+    /// Merge `target` into the current branch, carrying uncommitted changes.
+    /// A conflict rolls back to the prior tree.
+    #[serde(rename = "git.merge")]
+    GitMerge { task_id: String, target: String },
     /// Describe the commits and files that would be sent by `git.push`.
     #[serde(rename = "git.pushInfo")]
     GitPushInfo { task_id: String },

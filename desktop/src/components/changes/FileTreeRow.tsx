@@ -1,5 +1,6 @@
 import type { VirtualItem } from "@tanstack/react-virtual";
 import { ChevronRight } from "lucide-react";
+import type { MouseEvent } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -14,6 +15,7 @@ interface FileTreeRowProps {
   onToggle: (paths: string[], on: boolean) => void;
   onToggleFolder: (fk: string) => void;
   onSelect: (path: string) => void;
+  onContextMenu: (e: MouseEvent, row: FlatRow) => void;
 }
 
 export function FileTreeRow({
@@ -25,6 +27,7 @@ export function FileTreeRow({
   onToggle,
   onToggleFolder,
   onSelect,
+  onContextMenu,
 }: FileTreeRowProps) {
   const pad = { paddingLeft: `${row.depth * 12 + 8}px` };
 
@@ -40,6 +43,7 @@ export function FileTreeRow({
           selected === row.node.path ? "bg-secondary text-foreground" : "hover:bg-secondary/50",
         )}
         style={{ ...pad, transform: `translateY(${vi.start}px)` }}
+        onContextMenu={(e) => onContextMenu(e, row)}
       >
         <input
           aria-label={`Stage ${row.node.path}`}
@@ -79,6 +83,7 @@ export function FileTreeRow({
       key={vi.key}
       className="absolute left-0 top-0 flex h-7 w-full items-center gap-1.5 pr-2 text-xs text-muted-foreground"
       style={{ ...pad, transform: `translateY(${vi.start}px)` }}
+      onContextMenu={(e) => onContextMenu(e, row)}
     >
       <input
         aria-label={`Stage ${row.node.name}`}

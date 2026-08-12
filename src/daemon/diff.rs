@@ -691,6 +691,204 @@ pub async fn switch_branch(repo: &str, target: &str) -> Result<wire::GitOpResult
     })
 }
 
+/// `git.branchRename`: rename a local branch to `new_name` (works on the branch
+/// you're on or any other). Errors if `new_name` already exists.
+pub async fn rename_branch(repo: &str, branch: &str, new_name: &str) -> Result<wire::GitOpResult> {
+    let new_name = new_name.trim();
+    if new_name.is_empty() {
+        return Ok(op_error("new branch name is empty"));
+    }
+    if new_name == branch {
+        return Ok(wire::GitOpResult {
+            status: wire::GitOpStatus::UpToDate,
+            message: "branch name already matches".to_string(),
+            conflicts: Vec::new(),
+            branch: Some(branch.to_string()),
+        });
+    }
+    if new_name.contains(" ") {
+        return Ok(op_error("branch name must not contain spaces"));
+    }
+    let exists = git(
+        repo,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{new_name}"),
+        ],
+    )
+    .await?;
+    if exists.status.success() {
+        return Ok(op_error(format!(
+            "a branch named '{new_name}' already exists"
+        )));
+    }
+
+    let out = git(repo, &["branch", "-m", branch, new_name]).await?;
+    if !out.status.success() {
+        return Ok(op_error(format!("git branch -m failed: {}", errline(&out))));
+    }
+    let is_current = current_branch(repo).await.as_deref() == Some(branch);
+    Ok(wire::GitOpResult {
+        status: wire::GitOpStatus::Ok,
+        message: format!("renamed '{branch}' to '{new_name}'"),
+        conflicts: Vec::new(),
+        // The active branch's name changed — reflect it so clients can update.
+        branch: is_current.then(|| new_name.to_string()),
+    })
+}
+
+/// `git.branchDelete`: delete a local branch. Refuses the checked-out branch;
+/// without `force` also refuses unmerged branches (matches `git branch -d`).
+pub async fn delete_branch(repo: &str, branch: &str, force: bool) -> Result<wire::GitOpResult> {
+    if current_branch(repo).await.as_deref() == Some(branch) {
+        return Ok(op_error(format!(
+            "cannot delete the branch you are currently on ('{branch}'); switch first"
+        )));
+    }
+    let flag = if force { "-D" } else { "-d" };
+    let out = git(repo, &["branch", flag, branch]).await?;
+    if !out.status.success() {
+        return Ok(op_error(format!(
+            "could not delete '{branch}': {}",
+            errline(&out)
+        )));
+    }
+    Ok(wire::GitOpResult {
+        status: wire::GitOpStatus::Ok,
+        message: format!("deleted branch '{branch}'"),
+        conflicts: Vec::new(),
+        branch: None,
+    })
+}
+
+/// `git.rebase`: rebase the current branch onto `onto`, stashing and restoring
+/// uncommitted changes around it. Any conflict rolls back to the prior tree.
+pub async fn rebase(repo: &str, onto: &str) -> Result<wire::GitOpResult> {
+    let branch = match current_branch(repo).await {
+        Some(b) => b,
+        None => {
+            return Ok(op_error(
+                "not on a branch (detached HEAD or not a git repo)",
+            ))
+        }
+    };
+    if onto == branch {
+        return Ok(wire::GitOpResult {
+            status: wire::GitOpStatus::UpToDate,
+            message: format!("'{branch}' is already on '{onto}'"),
+            conflicts: Vec::new(),
+            branch: Some(branch),
+        });
+    }
+    let (start, dirty) = (rev_parse_head(repo).await?, is_dirty(repo).await?);
+    if dirty {
+        let st = git(repo, &["stash", "push", "-u", "-m", "warpforge-rebase"]).await?;
+        if !st.status.success() {
+            return Ok(op_error(format!("git stash failed: {}", errline(&st))));
+        }
+    }
+
+    let out = git(repo, &["rebase", onto]).await?;
+    if !out.status.success() {
+        let conflicts = unmerged_files(repo).await;
+        let _ = git(repo, &["rebase", "--abort"]).await;
+        if dirty {
+            let _ = git(repo, &["stash", "pop"]).await;
+        }
+        return Ok(op_conflict(
+            format!("rebase rolled back — '{branch}' conflicts with '{onto}'"),
+            conflicts,
+            Some(branch),
+        ));
+    }
+
+    if dirty {
+        let pop = git(repo, &["stash", "pop"]).await?;
+        if !pop.status.success() {
+            let conflicts = unmerged_files(repo).await;
+            let _ = git(repo, &["reset", "--hard", &start]).await;
+            let _ = git(repo, &["stash", "pop"]).await;
+            return Ok(op_conflict(
+                format!("rebase rolled back — your uncommitted changes conflict with '{onto}'"),
+                conflicts,
+                Some(branch),
+            ));
+        }
+    }
+
+    Ok(wire::GitOpResult {
+        status: wire::GitOpStatus::Ok,
+        message: format!("rebased '{branch}' onto '{onto}'"),
+        conflicts: Vec::new(),
+        branch: Some(branch),
+    })
+}
+
+/// `git.merge`: merge `target` into the current branch, stashing and restoring
+/// uncommitted changes. Any conflict rolls back to the prior tree.
+pub async fn merge(repo: &str, target: &str) -> Result<wire::GitOpResult> {
+    let branch = match current_branch(repo).await {
+        Some(b) => b,
+        None => {
+            return Ok(op_error(
+                "not on a branch (detached HEAD or not a git repo)",
+            ))
+        }
+    };
+    if target == branch {
+        return Ok(wire::GitOpResult {
+            status: wire::GitOpStatus::UpToDate,
+            message: format!("'{branch}' is already up to date with itself"),
+            conflicts: Vec::new(),
+            branch: Some(branch),
+        });
+    }
+    let (start, dirty) = (rev_parse_head(repo).await?, is_dirty(repo).await?);
+    if dirty {
+        let st = git(repo, &["stash", "push", "-u", "-m", "warpforge-merge"]).await?;
+        if !st.status.success() {
+            return Ok(op_error(format!("git stash failed: {}", errline(&st))));
+        }
+    }
+
+    let out = git(repo, &["merge", "--no-edit", target]).await?;
+    if !out.status.success() {
+        let conflicts = unmerged_files(repo).await;
+        let _ = git(repo, &["merge", "--abort"]).await;
+        if dirty {
+            let _ = git(repo, &["stash", "pop"]).await;
+        }
+        return Ok(op_conflict(
+            format!("merge rolled back — '{target}' conflicts with '{branch}'"),
+            conflicts,
+            Some(branch),
+        ));
+    }
+
+    if dirty {
+        let pop = git(repo, &["stash", "pop"]).await?;
+        if !pop.status.success() {
+            let conflicts = unmerged_files(repo).await;
+            let _ = git(repo, &["reset", "--hard", &start]).await;
+            let _ = git(repo, &["stash", "pop"]).await;
+            return Ok(op_conflict(
+                format!("merge rolled back — your uncommitted changes conflict with '{target}'"),
+                conflicts,
+                Some(branch),
+            ));
+        }
+    }
+
+    Ok(wire::GitOpResult {
+        status: wire::GitOpStatus::Ok,
+        message: format!("merged '{target}' into '{branch}'"),
+        conflicts: Vec::new(),
+        branch: Some(branch),
+    })
+}
+
 /// A file's old (HEAD) and new (working-tree) text, for the editable review.
 pub async fn file_doc(repo: &str, path: &str) -> Result<wire::FileDoc> {
     if path.contains("..") {
