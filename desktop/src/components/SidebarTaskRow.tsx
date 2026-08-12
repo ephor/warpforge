@@ -1,6 +1,7 @@
 import {
   AlarmClock,
   AlarmClockOff,
+  Archive,
   Check,
   ChevronRight,
   Circle,
@@ -16,6 +17,7 @@ import {
   MessageCircleQuestion,
   MoreHorizontal,
   Pin,
+  Trash2,
   Undo2,
   Unplug,
   type LucideIcon,
@@ -29,6 +31,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuPortal,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -303,6 +306,25 @@ function RowActions({
             <DropdownMenuItem onSelect={() => onPin(task.id)}>
               <Pin className="size-3.5 opacity-70" />
               {pinned ? "Unpin from Mission Control" : "Pin to Mission Control"}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={() => void daemon.archiveTask(task.id)}
+            >
+              <Archive className="size-3.5 opacity-70" />
+              Archive task
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onSelect={() => {
+                if (window.confirm(`Delete "${label}"? This cannot be undone.`)) {
+                  void daemon.deleteTask(task.id);
+                }
+              }}
+            >
+              <Trash2 className="size-3.5 opacity-70" />
+              Delete task
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenuPortal>
