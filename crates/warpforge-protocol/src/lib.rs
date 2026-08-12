@@ -27,6 +27,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_search_limit() -> u32 {
+    200
+}
+
 fn default_terminal_cols() -> u16 {
     80
 }
@@ -386,6 +390,18 @@ pub enum Method {
     },
     #[serde(rename = "file.delete")]
     FileDelete { task_id: String, path: String },
+    /// Plain-text search across the task's project working tree (grep). Powers
+    /// "go to definition" (a symbol under the cursor resolved to its definition
+    /// lines) and quick symbol lookup, without needing a full LSP server.
+    #[serde(rename = "file.search")]
+    FileSearch {
+        task_id: String,
+        /// Case-insensitive substring matched against each line.
+        query: String,
+        /// Cap on the number of matches returned (cheap safety valve).
+        #[serde(default = "default_search_limit")]
+        limit: u32,
+    },
     /// Stage files and commit them in the task's repo. `files=None` stages all
     /// changes; `amend` rewrites the previous commit.
     #[serde(rename = "git.commit")]
@@ -1323,6 +1339,17 @@ pub struct ProjectFile {
     pub path: String,
     #[serde(default)]
     pub changed: bool,
+}
+
+/// One line-level match from `file.search` — a project path plus 1-based line and
+/// column where `query` appears, with the matching source line for context.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolMatch {
+    pub path: String,
+    pub line: u32,
+    pub column: u32,
+    pub text: String,
 }
 
 // ─── Terminal agents (legacy PTY path) ───────────────────────────────────────
