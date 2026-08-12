@@ -865,20 +865,6 @@ pub async fn branch_create(
     })
 }
 
-/// `git.compareBranches`: `git diff --stat` between `base` and `head` — the
-/// "Compare with" view.
-pub async fn compare_stats(repo: &str, base: &str, head: &str) -> Result<wire::GitCompareStats> {
-    let out = git(repo, &["diff", "--stat", &format!("{base}...{head}")]).await?;
-    if !out.status.success() {
-        bail!("git diff failed: {}", errline(&out));
-    }
-    let lines = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(|l| l.trim_end().to_string())
-        .collect();
-    Ok(wire::GitCompareStats { lines })
-}
-
 /// `git.rebase`: rebase the current branch onto `onto`, stashing and restoring
 /// uncommitted changes around it. Any conflict rolls back to the prior tree.
 pub async fn rebase(repo: &str, onto: &str) -> Result<wire::GitOpResult> {

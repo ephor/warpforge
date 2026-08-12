@@ -480,10 +480,6 @@ export interface GitBranchList {
   remotes?: string[];
 }
 
-/** Lines of `git diff --stat` between two refs, for "Compare with". */
-export interface GitCompareStats {
-  lines: string[];
-}
 
 export interface GitPushFile {
   path: string;

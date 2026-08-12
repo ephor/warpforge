@@ -426,14 +426,6 @@ pub enum Method {
         #[serde(default)]
         from: Option<String>,
     },
-    /// Diff statistics between `head` and `base` refs (like WebStorm's
-    /// "Compare with"). Returns `{ lines }` of `git diff --stat` output.
-    #[serde(rename = "git.compareBranches")]
-    GitCompareBranches {
-        task_id: String,
-        base: String,
-        head: String,
-    },
     /// Rebase the current branch onto `target`, carrying uncommitted changes
     /// across. A conflict rolls back to the prior tree.
     #[serde(rename = "git.rebase")]
@@ -1195,12 +1187,6 @@ pub struct GitBranchList {
     /// Remote-tracking refs, e.g. `["origin/main", "origin/feature/x"]`.
     #[serde(default)]
     pub remotes: Vec<String>,
-}
-
-/// Lines of `git diff --stat` between two refs, for "Compare with".
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct GitCompareStats {
-    pub lines: Vec<String>,
 }
 
 /// One file contained in an outgoing commit.
