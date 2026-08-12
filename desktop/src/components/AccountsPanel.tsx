@@ -2,6 +2,7 @@ import { Check, Loader2, Plus, Trash2 } from "lucide-react";
 import { useState, useSyncExternalStore } from "react";
 
 import { AgentLogo } from "@/components/AgentLogo";
+import EmailBlur from "@/components/EmailBlur";
 import { Button } from "@/components/ui/button";
 import { daemon } from "@/daemon";
 import { cn } from "@/lib/utils";
@@ -154,7 +155,7 @@ function AccountRow({
           <span className="truncate font-medium">{account.label}</span>
           {(account.email || account.plan) && (
             <span className="truncate text-[11px] text-muted-foreground">
-              {[account.email, account.plan].filter(Boolean).join(" · ")}
+              <EmailBlur text={[account.email, account.plan].filter(Boolean).join(" · ")} />
             </span>
           )}
         </span>

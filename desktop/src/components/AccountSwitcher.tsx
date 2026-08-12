@@ -2,6 +2,7 @@ import { Check, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 
 import { AgentLogo } from "@/components/AgentLogo";
+import EmailBlur from "@/components/EmailBlur";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -98,7 +99,7 @@ export default function AccountSwitcher({
             >
               <AgentLogo agentId={agent.id} displayName={agent.displayName} />
               <span className="max-w-28 truncate">
-                {active ? accountLabel(active) : "Select account"}
+                <EmailBlur text={active ? accountLabel(active) : "Select account"} />
               </span>
               {pending !== null && agentAccounts.some((a) => a.id === pending) && (
                 <LoaderCircle className="size-3 animate-spin" />
@@ -121,10 +122,14 @@ export default function AccountSwitcher({
                     aria-hidden
                   />
                   <span className="flex min-w-0 flex-col">
-                    <span className="truncate">{accountLabel(account)}</span>
+                    <span className="truncate">
+                      <EmailBlur text={accountLabel(account)} />
+                    </span>
                     {(account.email || account.plan) && (
                       <span className="truncate text-[11px] text-muted-foreground">
-                        {[account.email, account.plan].filter(Boolean).join(" · ")}
+                        <EmailBlur
+                          text={[account.email, account.plan].filter(Boolean).join(" · ")}
+                        />
                       </span>
                     )}
                   </span>
