@@ -9,7 +9,7 @@ import {
   Search,
   Send,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
@@ -18,6 +18,12 @@ import { daemon } from "../../daemon";
 import type { GitBranchList, GitOpResult } from "../../protocol";
 import { daemonQuery } from "../../query";
 import { useUi } from "../../store/ui";
+import {
+  type ContextMenuItemOrSeparator,
+  showContextMenu,
+  useNativeContextMenu,
+} from "../../hooks/useNativeContextMenu";
+import { BranchActionsDialog, type BranchAction } from "./BranchActionsDialog";
 
 function handleGitOpResult(r: GitOpResult) {
   switch (r.status) {
@@ -152,6 +158,71 @@ export function GitWorkspaceControls({
   const switching = switchMut.isPending ? switchMut.variables : null;
   const busy = Boolean(repositoryOperation) || updating || switchMut.isPending;
 
+  const [action, setAction] = useState<BranchAction | null>(null);
+  const requestId = useRef(`branches-${taskId}`).current;
+  const actionRef = useRef<{ kind: "rename" | "delete" | "rebase" | "merge"; branch: string }>(
+    null,
+  );
+
+  const menuHandlers = useMemo(
+    () =>
+      new Map<string, () => void>([
+        [
+          "rename",
+          () => {
+            const t = actionRef.current;
+            if (!t) return;
+            setAction({ kind: "rename", branch: t.branch });
+          },
+        ],
+        [
+          "delete",
+          () => {
+            const t = actionRef.current;
+            if (!t) return;
+            setAction({ kind: "delete", branch: t.branch });
+          },
+        ],
+        [
+          "rebase",
+          () => {
+            const t = actionRef.current;
+            if (!t) return;
+            setAction({ kind: "rebase" });
+          },
+        ],
+        [
+          "merge",
+          () => {
+            const t = actionRef.current;
+            if (!t) return;
+            setAction({ kind: "merge" });
+          },
+        ],
+      ]),
+    [],
+  );
+  useNativeContextMenu(requestId, menuHandlers);
+
+  const openBranchMenu = (e: MouseEvent, item: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const isCurrent = item === branch;
+    actionRef.current = { kind: "rebase", branch: item };
+    const items: ContextMenuItemOrSeparator[] = [
+      { type: "item", id: "rename", label: "Rename Branch…" },
+    ];
+    if (isCurrent) {
+      items.push(
+        { type: "item", id: "rebase", label: "Rebase Onto…" },
+        { type: "item", id: "merge", label: "Merge Branch Into…" },
+      );
+    } else {
+      items.push({ type: "item", id: "delete", label: "Delete Branch…" });
+    }
+    void showContextMenu({ requestId, items });
+  };
+
   const switchTo = (target: string) => {
     setOpen(false);
     if (busy || target === branch) {
@@ -257,6 +328,7 @@ export function GitWorkspaceControls({
                   type="button"
                   key={item}
                   onClick={() => switchTo(item)}
+                  onContextMenu={(e) => openBranchMenu(e, item)}
                   className={cn(
                     "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left font-mono text-xs",
                     item === branch ? "bg-accent text-foreground" : "hover:bg-accent/50",
@@ -275,6 +347,14 @@ export function GitWorkspaceControls({
           </div>
         )}
       </div>
+      <BranchActionsDialog
+        action={action}
+        branches={branches}
+        current={branch ?? ""}
+        taskId={taskId}
+        onResult={() => invalidateAll(queryClient, taskId)}
+        onClose={() => setAction(null)}
+      />
     </span>
   );
 }

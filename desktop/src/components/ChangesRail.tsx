@@ -1,11 +1,22 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { RefreshCw, Undo2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 
 import { cn } from "@/lib/utils";
 import { useUi } from "@/store/ui";
 
 import { daemon } from "../daemon";
+import {
+  showContextMenu,
+  useNativeContextMenu,
+} from "../hooks/useNativeContextMenu";
 import type { FileDiff } from "../protocol";
 import { CommitBox } from "./changes/CommitBox";
 import { FileTreeRow } from "./changes/FileTreeRow";
@@ -14,6 +25,7 @@ import {
   collectFolderKeys,
   compact,
   flattenNode,
+  leaves,
   type FlatRow,
   type Node,
 } from "./changes/treeUtils";
@@ -143,6 +155,82 @@ export function ChangesRail({
       return next;
     });
   }, []);
+
+  const requestId = useRef(`changes-${taskId}`).current;
+  const targetRef = useRef<{ kind: "file" | "folder"; path?: string; paths: string[] } | null>(
+    null,
+  );
+
+  const handleContextMenu = useCallback(
+    (e: MouseEvent, row: FlatRow) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const path = row.node.path;
+      if (path) {
+        targetRef.current = { kind: "file", path, paths: [path] };
+        void showContextMenu({
+          requestId,
+          items: [
+            {
+              type: "item",
+              id: "toggle",
+              label: staged.has(path) ? "Unstage" : "Stage",
+            },
+            { type: "item", id: "open", label: "Open in Diff" },
+            { type: "separator" },
+            { type: "item", id: "copy", label: "Copy Path" },
+          ],
+        });
+        return;
+      }
+      const paths = leaves(row.node);
+      targetRef.current = { kind: "folder", paths };
+      const allStaged = paths.every((p) => staged.has(p));
+      void showContextMenu({
+        requestId,
+        items: [
+          { type: "item", id: "toggle", label: allStaged ? "Unstage folder" : "Stage folder" },
+          { type: "separator" },
+          { type: "item", id: "copy", label: "Copy Path" },
+        ],
+      });
+    },
+    [requestId, staged],
+  );
+
+  const menuHandlers = useMemo(
+    () =>
+      new Map<string, () => void>([
+        [
+          "toggle",
+          () => {
+            const t = targetRef.current;
+            if (!t) return;
+            const on =
+              t.kind === "file"
+                ? !staged.has(t.path!)
+                : !t.paths.every((p) => staged.has(p));
+            toggle(t.paths, on);
+          },
+        ],
+        [
+          "open",
+          () => {
+            const t = targetRef.current;
+            if (t && t.path) onSelect(t.path);
+          },
+        ],
+        [
+          "copy",
+          () => {
+            const t = targetRef.current;
+            if (t) void navigator.clipboard.writeText(t.paths.join("\n"));
+          },
+        ],
+      ]),
+    [onSelect, staged, toggle],
+  );
+  useNativeContextMenu(requestId, menuHandlers);
 
   const canCommit = !busy && staged.size > 0 && (message.trim().length > 0 || amend);
   const canRollback = !rollbackBusy && staged.size > 0;
@@ -289,6 +377,7 @@ export function ChangesRail({
                   onToggle={toggle}
                   onToggleFolder={toggleFolder}
                   onSelect={onSelect}
+                  onContextMenu={handleContextMenu}
                 />
               );
             })}

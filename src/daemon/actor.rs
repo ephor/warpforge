@@ -771,6 +771,32 @@ pub enum Command {
         branch: String,
         reply: oneshot::Sender<wire::GitOpResult>,
     },
+    /// Rename a local branch.
+    GitBranchRename {
+        task_id: String,
+        branch: String,
+        new_name: String,
+        reply: oneshot::Sender<wire::GitOpResult>,
+    },
+    /// Delete a local branch.
+    GitBranchDelete {
+        task_id: String,
+        branch: String,
+        force: bool,
+        reply: oneshot::Sender<wire::GitOpResult>,
+    },
+    /// Rebase the current branch onto `target`.
+    GitRebase {
+        task_id: String,
+        target: String,
+        reply: oneshot::Sender<wire::GitOpResult>,
+    },
+    /// Merge `target` into the current branch.
+    GitMerge {
+        task_id: String,
+        target: String,
+        reply: oneshot::Sender<wire::GitOpResult>,
+    },
     GitPushInfo {
         task_id: String,
         reply: oneshot::Sender<Result<wire::GitPushInfo, String>>,
@@ -1052,6 +1078,19 @@ fn plural(count: usize) -> &'static str {
     }
 }
 
+/// Collapse a failed oneshot into an error `GitOpResult` instead of panicking.
+fn op_result_or_dropped(
+    received: Result<wire::GitOpResult, oneshot::error::RecvError>,
+    message: &str,
+) -> wire::GitOpResult {
+    received.unwrap_or_else(|_| wire::GitOpResult {
+        status: wire::GitOpStatus::Error,
+        message: message.to_string(),
+        conflicts: Vec::new(),
+        branch: None,
+    })
+}
+
 /// Cloneable handle clients use to talk to the daemon.
 #[derive(Clone)]
 pub struct DaemonHandle {
@@ -1272,6 +1311,62 @@ impl DaemonHandle {
             conflicts: Vec::new(),
             branch: None,
         })
+    }
+
+    pub async fn git_branch_rename(
+        &self,
+        task_id: &str,
+        branch: &str,
+        new_name: &str,
+    ) -> wire::GitOpResult {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitBranchRename {
+            task_id: task_id.to_string(),
+            branch: branch.to_string(),
+            new_name: new_name.to_string(),
+            reply: tx,
+        })
+        .await;
+        op_result_or_dropped(rx.await, "daemon dropped the rename request")
+    }
+
+    pub async fn git_branch_delete(
+        &self,
+        task_id: &str,
+        branch: &str,
+        force: bool,
+    ) -> wire::GitOpResult {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitBranchDelete {
+            task_id: task_id.to_string(),
+            branch: branch.to_string(),
+            force,
+            reply: tx,
+        })
+        .await;
+        op_result_or_dropped(rx.await, "daemon dropped the delete request")
+    }
+
+    pub async fn git_rebase(&self, task_id: &str, target: &str) -> wire::GitOpResult {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitRebase {
+            task_id: task_id.to_string(),
+            target: target.to_string(),
+            reply: tx,
+        })
+        .await;
+        op_result_or_dropped(rx.await, "daemon dropped the rebase request")
+    }
+
+    pub async fn git_merge(&self, task_id: &str, target: &str) -> wire::GitOpResult {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitMerge {
+            task_id: task_id.to_string(),
+            target: target.to_string(),
+            reply: tx,
+        })
+        .await;
+        op_result_or_dropped(rx.await, "daemon dropped the merge request")
     }
 
     pub async fn git_push_info(&self, task_id: &str) -> Result<wire::GitPushInfo, String> {
@@ -2865,6 +2960,128 @@ impl Daemon {
                     },
                 };
                 // Switching branches changes the whole working tree — refetch.
+                if result.status == wire::GitOpStatus::Ok {
+                    self.bump_task(&task_id);
+                }
+                let _ = reply.send(result);
+            }
+            Command::GitBranchRename {
+                task_id,
+                branch,
+                new_name,
+                reply,
+            } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let result = match repo {
+                    Some(p) => super::diff::rename_branch(&p, &branch, &new_name)
+                        .await
+                        .unwrap_or_else(|e| wire::GitOpResult {
+                            status: wire::GitOpStatus::Error,
+                            message: e.to_string(),
+                            conflicts: Vec::new(),
+                            branch: None,
+                        }),
+                    None => wire::GitOpResult {
+                        status: wire::GitOpStatus::Error,
+                        message: format!("no repo for task {task_id}"),
+                        conflicts: Vec::new(),
+                        branch: None,
+                    },
+                };
+                if result.status == wire::GitOpStatus::Ok {
+                    self.bump_task(&task_id);
+                }
+                let _ = reply.send(result);
+            }
+            Command::GitBranchDelete {
+                task_id,
+                branch,
+                force,
+                reply,
+            } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let result = match repo {
+                    Some(p) => super::diff::delete_branch(&p, &branch, force)
+                        .await
+                        .unwrap_or_else(|e| wire::GitOpResult {
+                            status: wire::GitOpStatus::Error,
+                            message: e.to_string(),
+                            conflicts: Vec::new(),
+                            branch: None,
+                        }),
+                    None => wire::GitOpResult {
+                        status: wire::GitOpStatus::Error,
+                        message: format!("no repo for task {task_id}"),
+                        conflicts: Vec::new(),
+                        branch: None,
+                    },
+                };
+                if result.status == wire::GitOpStatus::Ok {
+                    self.bump_task(&task_id);
+                }
+                let _ = reply.send(result);
+            }
+            Command::GitRebase {
+                task_id,
+                target,
+                reply,
+            } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let result = match repo {
+                    Some(p) => super::diff::rebase(&p, &target).await.unwrap_or_else(|e| {
+                        wire::GitOpResult {
+                            status: wire::GitOpStatus::Error,
+                            message: e.to_string(),
+                            conflicts: Vec::new(),
+                            branch: None,
+                        }
+                    }),
+                    None => wire::GitOpResult {
+                        status: wire::GitOpStatus::Error,
+                        message: format!("no repo for task {task_id}"),
+                        conflicts: Vec::new(),
+                        branch: None,
+                    },
+                };
+                if result.status == wire::GitOpStatus::Ok {
+                    self.bump_task(&task_id);
+                }
+                let _ = reply.send(result);
+            }
+            Command::GitMerge {
+                task_id,
+                target,
+                reply,
+            } => {
+                let repo = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project));
+                let result = match repo {
+                    Some(p) => super::diff::merge(&p, &target).await.unwrap_or_else(|e| {
+                        wire::GitOpResult {
+                            status: wire::GitOpStatus::Error,
+                            message: e.to_string(),
+                            conflicts: Vec::new(),
+                            branch: None,
+                        }
+                    }),
+                    None => wire::GitOpResult {
+                        status: wire::GitOpStatus::Error,
+                        message: format!("no repo for task {task_id}"),
+                        conflicts: Vec::new(),
+                        branch: None,
+                    },
+                };
                 if result.status == wire::GitOpStatus::Ok {
                     self.bump_task(&task_id);
                 }

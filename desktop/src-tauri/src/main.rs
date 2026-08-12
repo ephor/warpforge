@@ -2,12 +2,14 @@
 
 use std::process::{Child, Command};
 use std::sync::Mutex;
+use tauri::Emitter;
 use tauri::Manager;
 use tauri_plugin_shell::{
     process::Command as ShellCommand, process::CommandChild, process::CommandEvent, ShellExt,
 };
 use warpforge_protocol::DaemonEndpoint;
 
+mod context_menu;
 mod desktop_env;
 mod notifications;
 mod sidecar_log;
@@ -235,7 +237,26 @@ fn main() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![daemon_endpoint, notifications::notify_attention])
+        .on_menu_event(|app, event| {
+            let event_id = event.id().0.as_str();
+            if let Some(rest) = event_id.strip_prefix("ctx:") {
+                let mut parts = rest.splitn(2, ':');
+                if let (Some(request_id), Some(item_id)) = (parts.next(), parts.next()) {
+                    let _ = app.emit(
+                        "context-menu:clicked",
+                        serde_json::json!({
+                            "requestId": request_id,
+                            "itemId": item_id,
+                        }),
+                    );
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            daemon_endpoint,
+            notifications::notify_attention,
+            context_menu::show_context_menu
+        ])
         .plugin(tauri_plugin_dialog::init())
         .build(tauri::generate_context!())
         .expect("error building warpforge desktop")

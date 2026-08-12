@@ -604,6 +604,42 @@ async fn dispatch(
                 message: e.to_string(),
             })
         }
+        GitBranchRename {
+            task_id,
+            branch,
+            new_name,
+        } => {
+            let result = handle.git_branch_rename(&task_id, &branch, &new_name).await;
+            serde_json::to_value(result).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        GitBranchDelete {
+            task_id,
+            branch,
+            force,
+        } => {
+            let result = handle.git_branch_delete(&task_id, &branch, force).await;
+            serde_json::to_value(result).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        GitRebase { task_id, target } => {
+            let result = handle.git_rebase(&task_id, &target).await;
+            serde_json::to_value(result).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        GitMerge { task_id, target } => {
+            let result = handle.git_merge(&task_id, &target).await;
+            serde_json::to_value(result).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
         GitPushInfo { task_id } => {
             let info = handle
                 .git_push_info(&task_id)

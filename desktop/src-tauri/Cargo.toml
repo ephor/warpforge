@@ -1,6 +1,10 @@
 # Deliberately outside the main cargo workspace (see root Cargo.toml `exclude`):
 # building Tauri requires GUI system libraries (webkit2gtk on Linux, etc.) that
 # the daemon/TUI build must never depend on.
+# An explicit empty workspace keeps this crate standalone even when the parent
+# directory tree nests inside another cargo workspace (e.g. a git worktree).
+[workspace]
+
 [package]
 name = "warpforge-desktop"
 version = "0.4.2"
@@ -11,7 +15,7 @@ description = "Warpforge desktop shell — a thin Tauri client for the warpforge
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2" }
 tauri-plugin-dialog = "2"
 tauri-plugin-process = "2"
 tauri-plugin-shell = "2"
