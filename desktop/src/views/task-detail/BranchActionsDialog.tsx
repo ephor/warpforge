@@ -27,9 +27,8 @@ export type BranchAction =
   | { kind: "rename"; branch: string }
   | { kind: "delete"; branch: string }
   | { kind: "create"; from: string; defaultName?: string }
-  | { kind: "rebase" }
+  | { kind: "rebase"; branch: string }
   | { kind: "merge" }
-  | { kind: "checkout-rebase"; branch: string }
   | { kind: "checkout-update"; branch: string }
 
 interface DialogProps {
@@ -103,6 +102,7 @@ export function BranchActionsDialog({
         case "rebase":
           return (await daemon.request("git.rebase", {
             task_id: taskId,
+            branch: action.branch,
             target,
           })) as GitOpResult;
         case "merge":
@@ -110,19 +110,6 @@ export function BranchActionsDialog({
             task_id: taskId,
             target,
           })) as GitOpResult;
-        case "checkout-rebase": {
-          const switched = (await daemon.request("git.switchBranch", {
-            task_id: taskId,
-            branch: action.branch,
-          })) as GitOpResult;
-          if (switched.status === "error" || switched.status === "conflict") {
-            return switched;
-          }
-          return (await daemon.request("git.rebase", {
-            task_id: taskId,
-            target,
-          })) as GitOpResult;
-        }
         case "checkout-update": {
           const switched = (await daemon.request("git.switchBranch", {
             task_id: taskId,
@@ -152,10 +139,10 @@ export function BranchActionsDialog({
     return null;
   }
 
-  const targetBranch = action.kind === "checkout-rebase" ? action.branch : current;
+  const targetBranch = action.kind === "rebase" ? action.branch : current;
   const candidates = branches.filter((b) => b !== targetBranch);
   const needsTarget =
-    action.kind === "rebase" || action.kind === "merge" || action.kind === "checkout-rebase";
+    action.kind === "rebase" || action.kind === "merge";
   const canRun =
     action.kind === "rename"
       ? newName.trim().length > 0 && newName.trim() !== action.branch
@@ -235,11 +222,9 @@ function getTitle(action: BranchAction): string {
     case "create":
       return "New branch";
     case "rebase":
-      return "Rebase onto";
+      return `Rebase '${action.branch}' onto`;
     case "merge":
       return "Merge into current";
-    case "checkout-rebase":
-      return "Checkout and rebase";
     case "checkout-update":
       return "Checkout and update";
   }
@@ -265,19 +250,14 @@ function getDescription(action: BranchAction, current: string): ReactNode {
     case "rebase":
       return (
         <>
-          Rebase the current branch (<span className="font-mono">{current}</span>) onto another.
+          Rebase <span className="font-mono">{action.branch}</span> onto another branch without
+          checking it out.
         </>
       );
     case "merge":
       return (
         <>
           Merge another branch into <span className="font-mono">{current}</span>.
-        </>
-      );
-    case "checkout-rebase":
-      return (
-        <>
-          Checkout <span className="font-mono">{action.branch}</span> and rebase it onto another.
         </>
       );
     case "checkout-update":
@@ -301,8 +281,6 @@ function getConfirmLabel(action: BranchAction): string {
       return "Rebase";
     case "merge":
       return "Merge";
-    case "checkout-rebase":
-      return "Checkout and rebase";
     case "checkout-update":
       return "Checkout and update";
   }

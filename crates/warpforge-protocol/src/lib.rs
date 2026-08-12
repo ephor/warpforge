@@ -429,7 +429,11 @@ pub enum Method {
     /// Rebase the current branch onto `target`, carrying uncommitted changes
     /// across. A conflict rolls back to the prior tree.
     #[serde(rename = "git.rebase")]
-    GitRebase { task_id: String, target: String },
+    GitRebase {
+        task_id: String,
+        branch: String,
+        target: String,
+    },
     /// Merge `target` into the current branch, carrying uncommitted changes.
     /// A conflict rolls back to the prior tree.
     #[serde(rename = "git.merge")]

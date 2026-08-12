@@ -201,14 +201,6 @@ export function GitWorkspaceControls({
       },
     ],
     [
-      "checkout-rebase",
-      () => {
-        const t = actionRef.current;
-        if (!t) return;
-        openActionDialogRef.current({ kind: "checkout-rebase", branch: t.branch });
-      },
-    ],
-    [
       "checkout-update",
       () => {
         const t = actionRef.current;
@@ -216,7 +208,10 @@ export function GitWorkspaceControls({
         openActionDialogRef.current({ kind: "checkout-update", branch: t.branch });
       },
     ],
-    ["rebase", () => openActionDialogRef.current({ kind: "rebase" })],
+    ["rebase", () => {
+      const t = actionRef.current;
+      if (t) openActionDialogRef.current({ kind: "rebase", branch: t.branch });
+    }],
     ["merge", () => openActionDialogRef.current({ kind: "merge" })],
     ["update", () => updateMut.mutate()],
     ["push", () => { setOpen(false); onOpenPush(); }],
