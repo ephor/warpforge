@@ -188,6 +188,16 @@ it in the same commit as the change). Never hand-edit versions or
 `CHANGELOG.md` — the **Version release** workflow owns both. See
 `docs/RELEASING.md`.
 
+Changeset text is customer-facing release-note copy. Write it for users, not
+maintainers or changelog tooling: lead with outcome and product value, explain
+how the feature helps and include a shortcut or action when useful. Use plain,
+confident language and describe one coherent user-visible improvement per
+changeset; combine related implementation commits when they ship as one
+experience. Avoid internal names and implementation details such as RPCs,
+packages, daemon processes, file paths, protocol names, or compiler flags.
+Mention limitations only when they affect what users can do. Never claim
+behavior the product does not provide.
+
 Keep commits small and focused, not huge sweeping changes. Each commit should
 briefly describe the essence of what changed (one logical change per commit).
 
