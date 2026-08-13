@@ -1,5 +1,98 @@
 # Changelog
 
+## 0.5.0
+
+### Minor Changes
+
+- [#32](https://github.com/ephor/warpforge/pull/32) [`956a6af`](https://github.com/ephor/warpforge/commit/956a6afde0e86396851e12ae1aacf09863226507) Thanks [@ephor](https://github.com/ephor)! - Code editing in Warpforge just got a major upgrade. The editor now brings intelligent language support into your workspace: jump from any symbol to its definition with Cmd/Ctrl-click or Cmd+B, see errors and warnings directly in your code, inspect documentation on hover, get completions as you type, find references, rename symbols, and format code. Double-Shift or Cmd/Ctrl+P opens any project file instantly, making large codebases much faster to navigate. Your work stays under your control too: edits are saved only when you explicitly press Save or Cmd/Ctrl+S.
+
+### Patch Changes
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`eceb85d`](https://github.com/ephor/warpforge/commit/eceb85dccbf11d8f34b9e698365aee39a72adb8e) Thanks [@ephor](https://github.com/ephor)! - Branch Delete now force-deletes (`git branch -D`, equivalent), so deleting an
+  unmerged local branch from the branch-switcher context menu no longer fails
+  with "not fully merged". The dialog already confirms the action is
+  irreversible, matching the force semantics.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`65ed890`](https://github.com/ephor/warpforge/commit/65ed8906e6c3017fc1f2383e055158b3eaa04566) Thanks [@ephor](https://github.com/ephor)! - Branch actions now open as a detached dark submenu beside the branch row,
+  rather than expanding the branch list vertically. Branch names are action
+  triggers instead of implicit checkouts, and the submenu keeps its position
+  clear while preserving the IDE-style branch actions.
+
+- [#27](https://github.com/ephor/warpforge/pull/27) [`8498f21`](https://github.com/ephor/warpforge/commit/8498f21a614fb2ff8cdb030fca5db344fcea957b) Thanks [@ephor](https://github.com/ephor)! - Add a "View changelog" link to the desktop update dialog that opens the repository changelog in the browser.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`0cd394c`](https://github.com/ephor/warpforge/commit/0cd394c48281f2b31115e4674110075f48a6b3e1) Thanks [@ephor](https://github.com/ephor)! - File listing, reading, saving, and filesystem actions now resolve task
+  worktrees before falling back to the project checkout. This keeps Project
+  Files, diff state, editor writes, Finder actions, and delete/rename/create
+  operations pointed at the same working copy.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`5c027d6`](https://github.com/ephor/warpforge/commit/5c027d61fceb75eb932bc1bfc74b2795910109a0) Thanks [@ephor](https://github.com/ephor)! - Expand native file context menus:
+
+  - Project Files: Open, Copy Path, Reveal in Finder, Open in Default App, and
+    Refresh.
+  - Changes rail: Show Diff, Jump to Source, Stage/Unstage, Rollback File, Copy
+    Path, and Refresh.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`13524d5`](https://github.com/ephor/warpforge/commit/13524d5e4cad999bed9f9149fb5a751c08c1e896) Thanks [@ephor](https://github.com/ephor)! - Project Files now removes physically deleted tracked files from its listing.
+  The file list explicitly refetches after filesystem mutations instead of only
+  marking the query stale.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`08c6acb`](https://github.com/ephor/warpforge/commit/08c6acb92a905ce13d25fddda4651e90c6ffec49) Thanks [@ephor](https://github.com/ephor)! - Project Files now supports real filesystem actions from its native context
+  menu: New File, New Folder, Rename, and Delete. Operations are daemon-backed,
+  validate relative paths, refresh the tree after success, and require an
+  explicit dialog confirmation for deletes.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`a0bff5f`](https://github.com/ephor/warpforge/commit/a0bff5fcf914f9b7941f0b6a402c70eec4ddf801) Thanks [@ephor](https://github.com/ephor)! - Add a global `New Branch…` action to the branch dropdown. It creates a branch
+  from the current branch and checks it out after creation, while branch-specific
+  `New Branch from…` actions remain available in each branch submenu.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`5fed599`](https://github.com/ephor/warpforge/commit/5fed599222e80c2c6ec4d4b0c8fb762377d2e998) Thanks [@ephor](https://github.com/ephor)! - More native right-click menus, extending the context-menu foundation to the rest of the desktop surfaces:
+
+  - **Project files panel** — right-click a file for Open or Copy Path; right-click a folder to Expand/Collapse or Copy Path.
+  - **Chat transcript** — right-click any user or assistant message to Copy it as plain text.
+
+  Infra unchanged: all three surfaces reuse the existing Tauri `show_context_menu` command and `useNativeContextMenu` hook.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`400efbe`](https://github.com/ephor/warpforge/commit/400efbe99ae34a3a3a8848d7d1dce3e090d86b66) Thanks [@ephor](https://github.com/ephor)! - Native OS context menus now back the two main git surfaces, so the desktop app finally feels like an IDE:
+
+  - **Changes rail** — right-click a changed file/folder for Stage/Unstage, Open in Diff, and Copy Path.
+  - **Branch switcher** — right-click any branch for Rename Branch…, Delete Branch… (non-checked-out only), Rebase Onto…, and Merge Branch Into…, each via a small dialog. New daemon ops: `git.branchRename`, `git.branchDelete`, `git.rebase`, `git.merge`, all rollback-safe (stash/abort/restore on conflict) like the existing `git.switchBranch`.
+
+  Reusable infra underneath: a Tauri `show_context_menu` command + `useNativeContextMenu` hook for wiring future right-click menus.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`97ae62c`](https://github.com/ephor/warpforge/commit/97ae62c6d328afcbd9e563cb8fa7ac0c3fd7e141) Thanks [@ephor](https://github.com/ephor)! - New Branch now includes Checkout branch and Override existing branch options.
+  Branch names that already exist on a remote are highlighted and require the
+  override option before creation. The daemon honors both options.
+
+- [#29](https://github.com/ephor/warpforge/pull/29) [`bd4b384`](https://github.com/ephor/warpforge/commit/bd4b384ffca4782c7628796876ff55ae775dd09a) Thanks [@ephor](https://github.com/ephor)! - Task rows in the sidebar now expose Archive and Delete from their overflow menu, matching the action menu inside a task's detail view — so a task can be archived or removed without opening it first.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`26aec23`](https://github.com/ephor/warpforge/commit/26aec233696f7ff0411ba6aad92075c1092b89f6) Thanks [@ephor](https://github.com/ephor)! - Rebase actions now update the selected branch without checking it out first,
+  matching WebStorm's `Rebase '<branch>' onto '<target>'` behavior. The daemon
+  uses `git rebase --onto ... ... <branch>` and restores the current working tree.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`b0190d9`](https://github.com/ephor/warpforge/commit/b0190d99d765001e09f86250b11e106bf7c7fddc) Thanks [@ephor](https://github.com/ephor)! - Remote branch submenus now expose supported integration actions: rebase the
+  current branch onto a remote ref, merge a remote ref into the current branch,
+  and pull using either rebase or merge. Remote branches remain non-checkout
+  rows; checkout-as-local is still available separately.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`c85f7a6`](https://github.com/ephor/warpforge/commit/c85f7a685f95e5fb4c912953bbb6dbfb186243ba) Thanks [@ephor](https://github.com/ephor)! - Remove the non-functional branch "Compare or Show Diff with" action and its
+  unused daemon RPC. Branch menus now only expose supported operations.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`647796d`](https://github.com/ephor/warpforge/commit/647796dc1b98491b2f7797313158bf6192c0d8f9) Thanks [@ephor](https://github.com/ephor)! - Rollback and git operations (commit, update, switch, branch, rebase, merge)
+  now run against the task's worktree instead of the project root, so changes
+  are applied where the diff is shown.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`a77ace9`](https://github.com/ephor/warpforge/commit/a77ace91eb01fdcd7a1f3d8808d05d281f968aa7) Thanks [@ephor](https://github.com/ephor)! - Show remote-tracking branches correctly in the branch tree. Git can emit the
+  remote name itself (for example `origin`) alongside `origin/main`; the branch
+  list now filters that namespace marker so remote branches are not hidden.
+
+- [#30](https://github.com/ephor/warpforge/pull/30) [`fa829f0`](https://github.com/ephor/warpforge/commit/fa829f079a849470394b27d282c9deab6de6d22e) Thanks [@ephor](https://github.com/ephor)! - TheoMod, a Settings easter egg (Socket → Settings → Fun): blurs email addresses everywhere they render — agent account chips, the account switches on the Claude/Codex bar, and the Accounts panel. Hover (or focus) un-blurs; copy still returns the real address.
+
+- [#31](https://github.com/ephor/warpforge/pull/31) [`38cddb8`](https://github.com/ephor/warpforge/commit/38cddb8c076334615836ffbe58e89f863a38d833) Thanks [@ephor](https://github.com/ephor)! - Rework the branch switcher into an IDE-style tree: local and remote branches
+  are separated, slash-prefixed names form expandable folders, and each branch
+  has a visible actions button. Branch actions now include checkout, creating a
+  branch from a ref, checkout-and-rebase/update, compare stats, update, push,
+  rename, delete, rebase, and merge.
+
 ## 0.4.2
 
 ### Patch Changes
