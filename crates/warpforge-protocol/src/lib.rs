@@ -1155,12 +1155,23 @@ pub struct EditHunk {
     pub lines: Vec<String>,
 }
 
+/// 1-based, inclusive source line span.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LineRange {
+    pub start: u32,
+    pub end: u32,
+}
+
 /// A transient attachment sent with a prompt. Image data is never persisted.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PromptAttachment {
     File {
         path: String,
+        /// When present, only the inclusive line span is attached as context.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        range: Option<LineRange>,
     },
     Image {
         name: String,
@@ -1888,6 +1899,11 @@ mod tests {
         for attachment in [
             PromptAttachment::File {
                 path: "src/main.rs".into(),
+                range: None,
+            },
+            PromptAttachment::File {
+                path: "src/main.rs".into(),
+                range: Some(LineRange { start: 4, end: 12 }),
             },
             PromptAttachment::Image {
                 name: "shot.png".into(),

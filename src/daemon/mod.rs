@@ -388,6 +388,7 @@ mod tests {
                 vec![
                     PromptAttachment::File {
                         path: "note.txt".into(),
+                        range: None,
                     },
                     PromptAttachment::Image {
                         name: "tiny.png".into(),
@@ -422,6 +423,7 @@ mod tests {
                 "follow up",
                 vec![PromptAttachment::File {
                     path: "note.txt".into(),
+                    range: None,
                 }],
             )
             .await
@@ -473,6 +475,7 @@ mod tests {
                 None,
                 vec![PromptAttachment::File {
                     path: "note.txt".into(),
+                    range: None,
                 }],
                 None,
                 std::collections::HashMap::new(),

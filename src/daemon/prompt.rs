@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use serde_json::{json, Value};
-use warpforge_protocol::{PromptAttachment, PromptAttachmentSummary};
+use warpforge_protocol::{LineRange, PromptAttachment, PromptAttachmentSummary};
 
 const MAX_FILES: usize = 20;
 const MAX_FILE_BYTES: u64 = 512 * 1024;
@@ -79,19 +79,23 @@ pub fn prepare_prompt(
 
     for attachment in attachments {
         match attachment {
-            PromptAttachment::File { path } => {
+            PromptAttachment::File { path, range } => {
                 let (canonical, display) = secure_file(&root, path)?;
                 let meta =
                     fs::metadata(&canonical).map_err(|e| format!("cannot read {path}: {e}"))?;
                 if !meta.is_file() {
                     return Err(format!("attachment is not a file: {path}"));
                 }
-                if meta.len() > MAX_FILE_BYTES {
+                let bytes = fs::read(&canonical).map_err(|e| format!("cannot read {path}: {e}"))?;
+                let whole_text =
+                    String::from_utf8(bytes).map_err(|_| format!("file is not UTF-8: {path}"))?;
+                let file_text = match range {
+                    Some(r) => slice_lines(&whole_text, r)?,
+                    None => whole_text,
+                };
+                if (file_text.len() as u64) > MAX_FILE_BYTES {
                     return Err(format!("file exceeds 512 KiB: {path}"));
                 }
-                let bytes = fs::read(&canonical).map_err(|e| format!("cannot read {path}: {e}"))?;
-                let file_text =
-                    String::from_utf8(bytes).map_err(|_| format!("file is not UTF-8: {path}"))?;
                 text_total = text_total
                     .checked_add(file_text.len())
                     .ok_or("file context is too large")?;
@@ -102,7 +106,22 @@ pub fn prepare_prompt(
                     uri: file_uri(&canonical),
                     text: file_text,
                 });
-                summaries.push(PromptAttachmentSummary::File { path: display });
+                let summary_path = match range {
+                    Some(r) => {
+                        let (s, e) = if r.start == r.end {
+                            (r.start, 0)
+                        } else {
+                            (r.start, r.end)
+                        };
+                        if e == 0 {
+                            format!("{display}#L{}", s)
+                        } else {
+                            format!("{display}#L{s}-{e}")
+                        }
+                    }
+                    None => display.clone(),
+                };
+                summaries.push(PromptAttachmentSummary::File { path: summary_path });
             }
             PromptAttachment::Image {
                 name,
@@ -148,6 +167,24 @@ pub fn prepare_prompt(
         summaries,
         has_images: image_count > 0,
     })
+}
+
+/// Extract an inclusive, 1-based line span from source text. Out-of-range
+/// bounds are clamped to the file instead of rejected, so a selection that
+/// drifted past EOF still resolves to the last real line.
+fn slice_lines(text: &str, range: &LineRange) -> Result<String, String> {
+    if range.start == 0 {
+        return Err("line range start must be 1-based".into());
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return Ok(String::new());
+    }
+    let start = (range.start as usize).saturating_sub(1).min(lines.len());
+    let end = (range.end as usize)
+        .max(range.start as usize)
+        .min(lines.len());
+    Ok(lines[start..end].join("\n"))
 }
 
 fn secure_file(root: &Path, supplied: &str) -> Result<(PathBuf, String), String> {
@@ -196,6 +233,7 @@ mod tests {
             "review".into(),
             &[PromptAttachment::File {
                 path: "src/a.rs".into(),
+                range: None,
             }],
         )
         .unwrap();
@@ -205,7 +243,10 @@ mod tests {
                 prepare_prompt(
                     dir.path(),
                     String::new(),
-                    &[PromptAttachment::File { path: path.into() }]
+                    &[PromptAttachment::File {
+                        path: path.into(),
+                        range: None
+                    }]
                 )
                 .is_err(),
                 "{path}"
@@ -215,10 +256,61 @@ mod tests {
         assert!(prepare_prompt(
             dir.path(),
             String::new(),
-            &[PromptAttachment::File { path: "bad".into() }]
+            &[PromptAttachment::File {
+                path: "bad".into(),
+                range: None
+            }]
         )
         .unwrap_err()
         .contains("UTF-8"));
+    }
+
+    #[test]
+    fn slices_files_to_a_line_range() {
+        let dir = root();
+        fs::write(dir.path().join("f.txt"), "l1\nl2\nl3\nl4\nl5\n").unwrap();
+        for (range, expected, summary) in [
+            (LineRange { start: 2, end: 4 }, "l2\nl3\nl4", "f.txt#L2-4"),
+            (LineRange { start: 3, end: 3 }, "l3", "f.txt#L3"),
+            (LineRange { start: 4, end: 99 }, "l4\nl5", "f.txt#L4-99"),
+            (LineRange { start: 6, end: 8 }, "", "f.txt#L6-8"),
+        ] {
+            let ok = prepare_prompt(
+                dir.path(),
+                String::new(),
+                &[PromptAttachment::File {
+                    path: "f.txt".into(),
+                    range: Some(range),
+                }],
+            )
+            .unwrap_or_else(|e| panic!("{summary}: {e}"));
+            match ok
+                .content
+                .iter()
+                .find(|c| matches!(c, PromptContent::Resource { .. }))
+            {
+                Some(PromptContent::Resource { text, .. }) => {
+                    assert_eq!(text, &expected, "{summary}")
+                }
+                _ => unreachable!("{summary}"),
+            }
+            assert_eq!(
+                ok.summaries[0],
+                PromptAttachmentSummary::File {
+                    path: summary.into()
+                }
+            );
+        }
+
+        assert!(prepare_prompt(
+            dir.path(),
+            String::new(),
+            &[PromptAttachment::File {
+                path: "f.txt".into(),
+                range: Some(LineRange { start: 0, end: 2 }),
+            }]
+        )
+        .is_err());
     }
 
     #[test]
@@ -296,7 +388,8 @@ mod tests {
             dir.path(),
             String::new(),
             &[PromptAttachment::File {
-                path: "large".into()
+                path: "large".into(),
+                range: None,
             }]
         )
         .is_err());
@@ -304,7 +397,10 @@ mod tests {
         for index in 0..5 {
             let name = format!("part-{index}");
             fs::write(dir.path().join(&name), vec![b'a'; 500 * 1024]).unwrap();
-            many.push(PromptAttachment::File { path: name });
+            many.push(PromptAttachment::File {
+                path: name,
+                range: None,
+            });
         }
         assert!(prepare_prompt(dir.path(), String::new(), &many)
             .unwrap_err()
@@ -312,6 +408,7 @@ mod tests {
         let repeated = (0..21)
             .map(|_| PromptAttachment::File {
                 path: "part-0".into(),
+                range: None,
             })
             .collect::<Vec<_>>();
         assert!(prepare_prompt(dir.path(), String::new(), &repeated)
@@ -348,7 +445,8 @@ mod tests {
             dir.path(),
             String::new(),
             &[PromptAttachment::File {
-                path: "link".into()
+                path: "link".into(),
+                range: None,
             }]
         )
         .is_err());
