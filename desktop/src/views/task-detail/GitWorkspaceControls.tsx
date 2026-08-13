@@ -5,6 +5,7 @@ import {
   GitBranch,
   GitCommitVertical,
   Loader2,
+  Plus,
   Search,
   Send,
 } from "lucide-react";
@@ -114,6 +115,7 @@ export function GitWorkspaceControls({
     !normalizedSearch || "sync with remote update project".includes(normalizedSearch);
   const showCommit = !normalizedSearch || "commit changes".includes(normalizedSearch);
   const showPush = !normalizedSearch || "push changes".includes(normalizedSearch);
+  const showNewBranch = !normalizedSearch || "new branch".includes(normalizedSearch);
 
   useEffect(() => {
     if (!open) {
@@ -182,6 +184,9 @@ export function GitWorkspaceControls({
   openActionDialogRef.current = openActionDialog;
 
   const menuHandlers = new Map<string, () => void>([
+    ["new-branch", () => {
+      if (branch) openActionDialogRef.current({ kind: "create", from: branch });
+    }],
     ["checkout", () => switchToRef.current(actionRef.current?.branch ?? "")],
     [
       "checkout-as-remote",
@@ -368,8 +373,17 @@ export function GitWorkspaceControls({
               </label>
             </div>
             <div className="min-h-0 overflow-y-auto p-1.5">
-              {(showSync || showCommit || showPush) && (
+              {(showNewBranch || showSync || showCommit || showPush) && (
                 <div className="space-y-0.5 pb-1.5">
+                  {showNewBranch && (
+                    <GitMenuAction
+                      icon={<Plus className="size-4" />}
+                      label="New Branch…"
+                      shortcut="⌥⌘N"
+                      disabled={busy || !branch}
+                      onClick={() => openActionDialog({ kind: "create", from: branch })}
+                    />
+                  )}
                   {showSync && (
                     <GitMenuAction
                       icon={
@@ -410,7 +424,7 @@ export function GitWorkspaceControls({
                 </div>
               )}
 
-              {(showSync || showCommit || showPush) && (
+              {(showNewBranch || showSync || showCommit || showPush) && (
                 <div className="mx-1 border-t" />
               )}
               <div className="px-2 pb-1 pt-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
