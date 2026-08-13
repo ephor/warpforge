@@ -1,6 +1,6 @@
 {
   "name": "warpforge",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "type": "module",
   "description": "Release metadata for the Warpforge product. Changesets versions this package; scripts/sync-version.mjs propagates the result to the Rust, Tauri, and desktop manifests.",
