@@ -26,3 +26,9 @@ desktop/src-tauri/binaries/*
 
 # Reference projects (study-only clones)
 ref-projects/
+
+# Personal drafts / scratch notes (untracked by design)
+scratch/
+
+# Task worktree submodules (runtime state, never tracked as gitlinks)
+.worktrees/
