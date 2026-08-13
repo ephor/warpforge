@@ -13,6 +13,7 @@ import { getFileIconUrl } from "@/lib/fileIcon";
 import { cn } from "@/lib/utils";
 
 import {
+  type ContextMenuItemOrSeparator,
   showContextMenu,
   useNativeContextMenu,
 } from "../../hooks/useNativeContextMenu";
@@ -90,11 +91,15 @@ export function ProjectFilesPanel({
   error,
   selected,
   onSelect,
+  rootPath,
+  onRefresh,
 }: {
   files: ProjectFile[];
   error: string | null;
   selected: string | null;
   onSelect: (path: string) => void;
+  rootPath?: string;
+  onRefresh?: () => void;
 }) {
   const root = useMemo(() => buildProjectTree(files), [files]);
   const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
@@ -161,6 +166,14 @@ export function ProjectFilesPanel({
   const requestId = useRef(`project-files`).current;
   const targetRef = useRef<{ path?: string; fKey?: string }>({});
 
+  const openExternalPath = useCallback(async (path: string, reveal: boolean) => {
+    if (!("__TAURI_INTERNALS__" in window) || !rootPath) return;
+    const absolute = `${rootPath.replace(/\/+$/, "")}/${path}`;
+    const { openPath, revealItemInDir } = await import("@tauri-apps/plugin-opener");
+    if (reveal) await revealItemInDir(absolute);
+    else await openPath(absolute);
+  }, [rootPath]);
+
   const menuHandlers = useMemo(
     () =>
       new Map<string, () => void>([
@@ -178,6 +191,15 @@ export function ProjectFilesPanel({
             if (t.path) void navigator.clipboard.writeText(t.path);
           },
         ],
+        ["reveal", () => {
+          const t = targetRef.current;
+          if (t.path) void openExternalPath(t.path, true);
+        }],
+        ["terminal", () => {
+          const t = targetRef.current;
+          if (t.path) void openExternalPath(t.path, false);
+        }],
+        ["refresh", () => onRefresh?.()],
         [
           "expand",
           () => {
@@ -193,7 +215,7 @@ export function ProjectFilesPanel({
           },
         ],
       ]),
-    [onSelect, openFolders, toggleFolder],
+    [onRefresh, onSelect, openExternalPath, openFolders, toggleFolder],
   );
   useNativeContextMenu(requestId, menuHandlers);
 
@@ -201,10 +223,14 @@ export function ProjectFilesPanel({
     e.preventDefault();
     e.stopPropagation();
     targetRef.current = { path, fKey };
-    const items: { type: "item"; id: string; label: string }[] = path
+    const items: ContextMenuItemOrSeparator[] = path
       ? [
           { type: "item", id: "open", label: "Open" },
           { type: "item", id: "copy", label: "Copy Path" },
+          { type: "item", id: "reveal", label: "Reveal in Finder" },
+          { type: "item", id: "terminal", label: "Open in Default App" },
+          { type: "separator" },
+          { type: "item", id: "refresh", label: "Refresh" },
         ]
       : fKey
         ? [
@@ -214,6 +240,10 @@ export function ProjectFilesPanel({
               label: openFolders.has(fKey) ? "Collapse" : "Expand",
             },
             { type: "item", id: "copy", label: "Copy Path" },
+            { type: "item", id: "reveal", label: "Reveal in Finder" },
+            { type: "item", id: "terminal", label: "Open in Default App" },
+            { type: "separator" },
+            { type: "item", id: "refresh", label: "Refresh" },
           ]
         : [];
     void showContextMenu({ requestId, items });
