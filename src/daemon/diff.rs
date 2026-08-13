@@ -429,7 +429,7 @@ pub async fn list_branches(repo: &str) -> Result<wire::GitBranchList> {
         String::from_utf8_lossy(&remote_out.stdout)
             .lines()
             .map(|l| l.trim().to_string())
-            .filter(|l| !l.is_empty())
+            .filter(|l| !l.is_empty() && l.contains('/'))
             .collect()
     } else {
         Vec::new()
