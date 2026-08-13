@@ -424,6 +424,10 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
                       onCloseTab={closeFileTab}
                       fileDoc={fileDoc}
                       editable={editable}
+                      rootPath={projectRoot}
+                      onRefresh={() => {
+                        void queryClient.invalidateQueries({ queryKey: ["fileList", task.id] });
+                      }}
                       onSave={(content) =>
                         void daemon.request("file.save", {
                           content,

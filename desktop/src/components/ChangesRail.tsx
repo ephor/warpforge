@@ -176,9 +176,14 @@ export function ChangesRail({
               id: "toggle",
               label: staged.has(path) ? "Unstage" : "Stage",
             },
-            { type: "item", id: "open", label: "Open in Diff" },
+            { type: "item", id: "open", label: "Show Diff" },
+            { type: "item", id: "jump", label: "Jump to Source" },
+            { type: "separator" },
+            { type: "item", id: "toggle", label: staged.has(path) ? "Unstage" : "Stage" },
+            { type: "item", id: "rollback", label: "Rollback File" },
             { type: "separator" },
             { type: "item", id: "copy", label: "Copy Path" },
+            { type: "item", id: "refresh", label: "Refresh" },
           ],
         });
         return;
@@ -190,8 +195,9 @@ export function ChangesRail({
         requestId,
         items: [
           { type: "item", id: "toggle", label: allStaged ? "Unstage folder" : "Stage folder" },
-          { type: "separator" },
-          { type: "item", id: "copy", label: "Copy Path" },
+            { type: "separator" },
+            { type: "item", id: "copy", label: "Copy Path" },
+            { type: "item", id: "refresh", label: "Refresh" },
         ],
       });
     },
@@ -221,14 +227,42 @@ export function ChangesRail({
           },
         ],
         [
+          "jump",
+          () => {
+            const t = targetRef.current;
+            if (t?.path) onSelect(t.path);
+          },
+        ],
+        [
           "copy",
           () => {
             const t = targetRef.current;
             if (t) void navigator.clipboard.writeText(t.paths.join("\n"));
           },
         ],
+        ["refresh", onRefresh],
+        [
+          "rollback",
+          () => {
+            const t = targetRef.current;
+            if (!t?.path) return;
+            const file = filesByPath.get(t.path);
+            if (!file) return;
+            const indices = file.status === "added" ? [0] : file.hunks.map((_, i) => i).reverse();
+            void Promise.all(
+              indices.map((hunkIndex) =>
+                daemon.request("diff.resolveHunk", {
+                  file: t.path,
+                  hunk_index: hunkIndex,
+                  resolution: "reject",
+                  task_id: taskId,
+                }),
+              ),
+            ).then(onRefresh);
+          },
+        ],
       ]),
-    [onSelect, staged, toggle],
+    [filesByPath, onRefresh, onSelect, staged, taskId, toggle],
   );
   useNativeContextMenu(requestId, menuHandlers);
 
