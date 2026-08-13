@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent,
   type MouseEvent,
 } from "react";
 
@@ -18,6 +19,7 @@ import {
   useNativeContextMenu,
 } from "../../hooks/useNativeContextMenu";
 import type { ProjectFile } from "../../protocol";
+import { FILE_REF_MIME } from "../../lib/composerMentions";
 import { projectFileParentFolders } from "./projectFileTree";
 import {
   FileSystemActionDialog,
@@ -282,6 +284,38 @@ export function ProjectFilesPanel({
     void showContextMenu({ requestId, items });
   };
 
+  const onRowDragStart = (e: DragEvent, path: string) => {
+    e.dataTransfer.setData(FILE_REF_MIME, path);
+    e.dataTransfer.setData("text/plain", path);
+    e.dataTransfer.effectAllowed = "copy";
+    const tile = document.createElement("div");
+    tile.textContent = path.split("/").pop() ?? path;
+    Object.assign(tile.style, {
+      position: "fixed",
+      left: "0",
+      top: "0",
+      zIndex: "9999",
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+      padding: "4px 10px",
+      borderRadius: "6px",
+      background: "var(--accent)",
+      color: "var(--accent-foreground)",
+      border: "1px solid var(--border)",
+      boxShadow: "0 4px 12px rgba(0,0,0,0.2)",
+      fontSize: "12px",
+      fontWeight: "500",
+      fontFamily: "var(--font-mono, monospace)",
+      whiteSpace: "nowrap",
+      pointerEvents: "none",
+      userSelect: "none",
+    });
+    document.body.appendChild(tile);
+    e.dataTransfer.setDragImage(tile, 12, 12);
+    e.currentTarget.addEventListener("dragend", () => tile.remove(), { once: true });
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-11 items-center border-b px-3 text-sm font-semibold">Files</div>
@@ -304,6 +338,8 @@ export function ProjectFilesPanel({
                     style={{ ...pad, transform: `translateY(${vi.start}px)` }}
                     onClick={() => onSelect(row.node.path!)}
                     onContextMenu={(e) => onRowContextMenu(e, row.node.path)}
+                    draggable
+                    onDragStart={(e) => onRowDragStart(e, row.node.path!)}
                     title={row.node.path}
                     className={cn(
                       "absolute left-0 top-0 flex h-7 w-full min-w-0 items-center gap-1.5 pr-2 text-left text-xs",

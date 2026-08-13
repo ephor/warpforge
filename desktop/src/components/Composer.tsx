@@ -21,9 +21,13 @@ import { cn } from "@/lib/utils";
 
 import {
   extractFileReferences,
+  FILE_REF_MIME,
   findMentionAtCaret,
+  insertFileRef,
+  isFileRefDrag,
   rankFiles,
   replaceMention,
+  splitFileReference,
 } from "../lib/composerMentions";
 import type { ImageAttachmentDraft } from "../lib/imageAttachments";
 import {
@@ -107,6 +111,7 @@ export const Composer = forwardRef<
     const [stopping, setStopping] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [dragging, setDragging] = useState(false);
+    const [refDrag, setRefDrag] = useState(false);
     const textRef = useRef<HTMLTextAreaElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const imagesRef = useRef(images);
@@ -192,7 +197,9 @@ export const Composer = forwardRef<
     useEffect(() => setMenuIndex(0), [value]);
 
     const fileSet = useMemo(() => new Set(files.map((file) => file.path)), [files]);
-    const fileAttachments = extractFileReferences(value).filter((path) => fileSet.has(path));
+    const fileAttachments = extractFileReferences(value)
+      .map(splitFileReference)
+      .filter((fileRef) => fileSet.has(fileRef.path));
 
     const addImages = async (incoming: File[]) => {
       setError(null);
@@ -221,7 +228,11 @@ export const Composer = forwardRef<
         await onSend({
           text: parts.join("\n\n"),
           attachments: [
-            ...fileAttachments.map((path) => ({ type: "file" as const, path })),
+            ...fileAttachments.map((fileRef) => ({
+              type: "file" as const,
+              path: fileRef.path,
+              ...(fileRef.range ? { range: fileRef.range } : {}),
+            })),
             ...images.map((image) => image.attachment),
           ],
         });
@@ -323,15 +334,41 @@ export const Composer = forwardRef<
         className={cn("relative", compact ? "p-1.5" : "p-2", className)}
         onDragEnter={(e) => {
           e.preventDefault();
-          if (imageSupported) setDragging(true);
+          const isRef = isFileRefDrag(Array.from(e.dataTransfer.types));
+          if (imageSupported || isRef) {
+            setRefDrag(isRef);
+            setDragging(true);
+          }
         }}
         onDragOver={(e) => e.preventDefault()}
         onDragLeave={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false);
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setDragging(false);
+            setRefDrag(false);
+          }
         }}
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
+          setRefDrag(false);
+          const mimePath = e.dataTransfer.getData?.(FILE_REF_MIME) ?? "";
+          const plainPath = e.dataTransfer.getData?.("text/plain") ?? "";
+          const refPath = mimePath && fileSet.has(mimePath)
+            ? mimePath
+            : plainPath && fileSet.has(plainPath)
+              ? plainPath
+              : "";
+          if (refPath) {
+            const dropCaret = textRef.current?.selectionStart ?? value.length;
+            const result = insertFileRef(value, dropCaret, refPath);
+            setValue(result.value);
+            setCaret(result.caret);
+            requestAnimationFrame(() => {
+              textRef.current?.focus();
+              textRef.current?.setSelectionRange(result.caret, result.caret);
+            });
+            return;
+          }
           if (imageSupported) void addImages([...e.dataTransfer.files]);
         }}
       >
@@ -355,7 +392,7 @@ export const Composer = forwardRef<
         <div className="bg-deep-surface relative flex flex-col rounded-lg border border-input focus-within:ring-2 focus-within:ring-ring">
           {dragging && (
             <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-background/90 text-sm font-medium">
-              Drop PNG or JPEG images
+              {refDrag ? "Drop to attach file as context" : "Drop PNG or JPEG images"}
             </div>
           )}
           {(diffs.length > 0 || images.length > 0) && (

@@ -27,10 +27,12 @@ import type {
   CommandInfo,
   EditHunk,
   FileDiff,
+  FileRange,
   HunkResolution,
   Snapshot,
   TaskInfo,
 } from "../protocol";
+import { mentionToken } from "../lib/composerMentions";
 import { useUi } from "../store/ui";
 import { DiffSurface } from "./task-detail/DiffSurface";
 import { type DiffWorkspaceHandle } from "./task-detail/DiffWorkspace";
@@ -287,6 +289,9 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
   const appendLogsToChat = useCallback((text: string) => {
     composerRef.current?.appendDraft(text);
   }, []);
+  const sendSelectionToChat = useCallback((path: string, range: FileRange) => {
+    composerRef.current?.appendDraft(mentionToken(path, range));
+  }, []);
   const diffError = diffQuery.error?.message ?? resolveHunkMut.error?.message ?? null;
 
   const openTabs = useMemo(() => {
@@ -461,6 +466,7 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
                       onOpenSymbol={openSymbol}
                       gotoLocation={gotoLocation}
                       onGotoLocationHandled={clearGotoLocation}
+                      onAskFile={sendSelectionToChat}
                     />
                   )}
                   {activeSurface === "diff" && (

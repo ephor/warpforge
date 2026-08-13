@@ -334,8 +334,13 @@ export interface CommandInfo {
   description: string;
 }
 
+export interface FileRange {
+  start: number;
+  end: number;
+}
+
 export type PromptAttachment =
-  | { type: "file"; path: string }
+  | { type: "file"; path: string; range?: FileRange }
   | { type: "image"; name: string; mimeType: "image/png" | "image/jpeg"; data: string };
 
 export interface PromptSubmission {

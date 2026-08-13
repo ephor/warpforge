@@ -3,7 +3,7 @@ import { lazy, Suspense } from "react";
 
 import { cn } from "@/lib/utils";
 
-import type { FileDoc, ProjectFile, SymbolMatch } from "../../protocol";
+import type { FileDoc, FileRange, ProjectFile, SymbolMatch } from "../../protocol";
 import { ProjectFilesPanel } from "./ProjectFilesPanel";
 
 const CodeEditor = lazy(async () => ({
@@ -45,6 +45,7 @@ export function FilesSurface({
   onOpenSymbol,
   gotoLocation,
   onGotoLocationHandled,
+  onAskFile,
 }: {
   projectFiles: ProjectFile[];
   fileListError: string | null;
@@ -63,6 +64,8 @@ export function FilesSurface({
   onOpenSymbol?: (path: string, line: number, column: number) => void;
   gotoLocation?: { path: string; line: number; column: number } | null;
   onGotoLocationHandled?: () => void;
+  /** Send a selected editor line range to the task chat as a file reference. */
+  onAskFile?: (path: string, range: FileRange) => void;
 }) {
   return (
     <div className="flex h-full min-h-0 min-w-0">
@@ -128,6 +131,7 @@ export function FilesSurface({
                 onOpenSymbol={onOpenSymbol}
                 gotoLocation={gotoLocation?.path === fileDoc.path ? gotoLocation : undefined}
                 onGotoLocationHandled={onGotoLocationHandled}
+                onAskFile={onAskFile}
               />
             </Suspense>
           ) : (

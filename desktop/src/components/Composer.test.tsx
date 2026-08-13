@@ -4,6 +4,7 @@ import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { PromptSubmission } from "../protocol";
+import { FILE_REF_MIME } from "../lib/composerMentions";
 import type { ComposerHandle } from "./Composer";
 import { Composer } from "./Composer";
 
@@ -172,5 +173,33 @@ describe("Composer", () => {
       dataTransfer: { files: [png] },
     });
     await expect(screen.findByText("drop.png")).resolves.toBeInTheDocument();
+  });
+
+  it("inserts a file reference when a project file is dragged in", () => {
+    render(<Composer files={files} onSend={vi.fn<OnSend>()} />);
+
+    fireEvent.drop(screen.getByRole("textbox").parentElement!.parentElement!, {
+      dataTransfer: {
+        getData: vi.fn<() => string>(() => "src/app.ts"),
+        files: [],
+        types: [FILE_REF_MIME],
+      },
+    });
+
+    expect(screen.getByRole("textbox")).toHaveValue("@src/app.ts ");
+  });
+
+  it("inserts a quoted file reference for paths with spaces", () => {
+    render(<Composer files={files} onSend={vi.fn<OnSend>()} />);
+
+    fireEvent.drop(screen.getByRole("textbox").parentElement!.parentElement!, {
+      dataTransfer: {
+        getData: vi.fn<() => string>(() => "docs/my file.md"),
+        files: [],
+        types: [FILE_REF_MIME],
+      },
+    });
+
+    expect(screen.getByRole("textbox")).toHaveValue('@"docs/my file.md" ');
   });
 });
