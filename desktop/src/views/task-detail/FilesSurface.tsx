@@ -40,6 +40,7 @@ export function FilesSurface({
   onSave,
   rootPath,
   onRefresh,
+  taskId,
 }: {
   projectFiles: ProjectFile[];
   fileListError: string | null;
@@ -53,6 +54,7 @@ export function FilesSurface({
   onSave: (content: string) => void;
   rootPath?: string;
   onRefresh: () => void;
+  taskId: string;
 }) {
   return (
     <div className="flex h-full min-h-0 min-w-0">
@@ -128,6 +130,7 @@ export function FilesSurface({
           onSelect={onSelectTreeFile}
           rootPath={rootPath}
           onRefresh={onRefresh}
+          taskId={taskId}
         />
       </div>
     </div>

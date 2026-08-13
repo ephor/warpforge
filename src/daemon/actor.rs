@@ -739,6 +739,23 @@ pub enum Command {
         path: String,
         content: String,
     },
+    CreateFile {
+        task_id: String,
+        path: String,
+        directory: bool,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    RenameFile {
+        task_id: String,
+        path: String,
+        new_path: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    DeleteFile {
+        task_id: String,
+        path: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Accept (keep) or reject (revert) a single hunk in the working tree.
     ResolveHunk {
         task_id: String,
@@ -2860,6 +2877,53 @@ impl Daemon {
                         }
                     }
                 }
+            }
+            Command::CreateFile {
+                task_id,
+                path,
+                directory,
+                reply,
+            } => {
+                let result = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project))
+                    .ok_or_else(|| format!("no repo for task {task_id}"))
+                    .and_then(|repo| {
+                        super::diff::create_file(&repo, &path, directory).map_err(|e| e.to_string())
+                    });
+                let _ = reply.send(result);
+            }
+            Command::RenameFile {
+                task_id,
+                path,
+                new_path,
+                reply,
+            } => {
+                let result = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project))
+                    .ok_or_else(|| format!("no repo for task {task_id}"))
+                    .and_then(|repo| {
+                        super::diff::rename_file(&repo, &path, &new_path).map_err(|e| e.to_string())
+                    });
+                let _ = reply.send(result);
+            }
+            Command::DeleteFile {
+                task_id,
+                path,
+                reply,
+            } => {
+                let result = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|t| self.project_path(&t.project))
+                    .ok_or_else(|| format!("no repo for task {task_id}"))
+                    .and_then(|repo| {
+                        super::diff::delete_file(&repo, &path).map_err(|e| e.to_string())
+                    });
+                let _ = reply.send(result);
             }
             Command::ResolveHunk {
                 task_id,

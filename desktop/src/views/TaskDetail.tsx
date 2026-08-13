@@ -428,6 +428,7 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
                       onRefresh={() => {
                         void queryClient.invalidateQueries({ queryKey: ["fileList", task.id] });
                       }}
+                      taskId={task.id}
                       onSave={(content) =>
                         void daemon.request("file.save", {
                           content,

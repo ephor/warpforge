@@ -19,6 +19,10 @@ import {
 } from "../../hooks/useNativeContextMenu";
 import type { ProjectFile } from "../../protocol";
 import { projectFileParentFolders } from "./projectFileTree";
+import {
+  FileSystemActionDialog,
+  type FileSystemAction,
+} from "./FileSystemActionDialog";
 
 export interface ProjectTreeNode {
   name: string;
@@ -91,6 +95,7 @@ export function ProjectFilesPanel({
   error,
   selected,
   onSelect,
+  taskId,
   rootPath,
   onRefresh,
 }: {
@@ -98,6 +103,7 @@ export function ProjectFilesPanel({
   error: string | null;
   selected: string | null;
   onSelect: (path: string) => void;
+  taskId?: string;
   rootPath?: string;
   onRefresh?: () => void;
 }) {
@@ -165,6 +171,7 @@ export function ProjectFilesPanel({
 
   const requestId = useRef(`project-files`).current;
   const targetRef = useRef<{ path?: string; fKey?: string }>({});
+  const [fileAction, setFileAction] = useState<FileSystemAction | null>(null);
 
   const openExternalPath = useCallback(async (path: string, reveal: boolean) => {
     if (!("__TAURI_INTERNALS__" in window) || !rootPath) return;
@@ -200,6 +207,22 @@ export function ProjectFilesPanel({
           if (t.path) void openExternalPath(t.path, false);
         }],
         ["refresh", () => onRefresh?.()],
+        ["new-file", () => {
+          const t = targetRef.current;
+          setFileAction({ kind: "create-file", parent: t.fKey ?? t.path?.split("/").slice(0, -1).join("/") ?? "" });
+        }],
+        ["new-folder", () => {
+          const t = targetRef.current;
+          setFileAction({ kind: "create-folder", parent: t.fKey ?? t.path?.split("/").slice(0, -1).join("/") ?? "" });
+        }],
+        ["rename", () => {
+          const t = targetRef.current;
+          if (t.path) setFileAction({ kind: "rename", path: t.path });
+        }],
+        ["delete", () => {
+          const t = targetRef.current;
+          if (t.path || t.fKey) setFileAction({ kind: "delete", path: t.path ?? t.fKey! });
+        }],
         [
           "expand",
           () => {
@@ -230,6 +253,11 @@ export function ProjectFilesPanel({
           { type: "item", id: "reveal", label: "Reveal in Finder" },
           { type: "item", id: "terminal", label: "Open in Default App" },
           { type: "separator" },
+          { type: "item", id: "new-file", label: "New File…" },
+          { type: "item", id: "new-folder", label: "New Folder…" },
+          { type: "item", id: "rename", label: "Rename…" },
+          { type: "item", id: "delete", label: "Delete…" },
+          { type: "separator" },
           { type: "item", id: "refresh", label: "Refresh" },
         ]
       : fKey
@@ -242,6 +270,11 @@ export function ProjectFilesPanel({
             { type: "item", id: "copy", label: "Copy Path" },
             { type: "item", id: "reveal", label: "Reveal in Finder" },
             { type: "item", id: "terminal", label: "Open in Default App" },
+            { type: "separator" },
+            { type: "item", id: "new-file", label: "New File…" },
+            { type: "item", id: "new-folder", label: "New Folder…" },
+            { type: "item", id: "rename", label: "Rename…" },
+            { type: "item", id: "delete", label: "Delete…" },
             { type: "separator" },
             { type: "item", id: "refresh", label: "Refresh" },
           ]
@@ -317,6 +350,12 @@ export function ProjectFilesPanel({
           </div>
         )}
       </div>
+      <FileSystemActionDialog
+        action={fileAction}
+        taskId={taskId ?? ""}
+        onComplete={() => onRefresh?.()}
+        onClose={() => setFileAction(null)}
+      />
     </div>
   );
 }

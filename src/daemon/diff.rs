@@ -1135,14 +1135,61 @@ fn is_image_path(path: &str) -> bool {
 
 /// Write new contents to a file in the working tree (an in-review edit).
 pub fn save_file(repo: &str, path: &str, content: &str) -> Result<()> {
-    if path.contains("..") {
-        bail!("refusing path with ..: {path}");
-    }
+    validate_relative_path(path)?;
     let full = std::path::Path::new(repo).join(path);
     if let Some(dir) = full.parent() {
         std::fs::create_dir_all(dir).ok();
     }
     std::fs::write(full, content)?;
+    Ok(())
+}
+
+fn validate_relative_path(path: &str) -> Result<()> {
+    let p = std::path::Path::new(path);
+    if path.is_empty() || p.is_absolute() || path.split('/').any(|part| part == "..") {
+        bail!("refusing unsafe relative path: {path}");
+    }
+    Ok(())
+}
+
+pub fn create_file(repo: &str, path: &str, directory: bool) -> Result<()> {
+    validate_relative_path(path)?;
+    let full = std::path::Path::new(repo).join(path);
+    if directory {
+        std::fs::create_dir_all(full)?;
+    } else {
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(full)?;
+    }
+    Ok(())
+}
+
+pub fn rename_file(repo: &str, path: &str, new_path: &str) -> Result<()> {
+    validate_relative_path(path)?;
+    validate_relative_path(new_path)?;
+    let from = std::path::Path::new(repo).join(path);
+    let to = std::path::Path::new(repo).join(new_path);
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::rename(from, to)?;
+    Ok(())
+}
+
+pub fn delete_file(repo: &str, path: &str) -> Result<()> {
+    validate_relative_path(path)?;
+    let full = std::path::Path::new(repo).join(path);
+    let metadata = std::fs::symlink_metadata(&full)?;
+    if metadata.is_dir() {
+        std::fs::remove_dir_all(full)?;
+    } else {
+        std::fs::remove_file(full)?;
+    }
     Ok(())
 }
 

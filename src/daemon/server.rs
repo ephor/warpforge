@@ -568,6 +568,76 @@ async fn dispatch(
                 .await;
             Ok(json!(null))
         }
+        FileCreate {
+            task_id,
+            path,
+            directory,
+        } => {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            handle
+                .send(Command::CreateFile {
+                    task_id,
+                    path,
+                    directory,
+                    reply: tx,
+                })
+                .await;
+            rx.await
+                .map_err(|_| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message: "daemon dropped file create request".into(),
+                })?
+                .map(|_| json!(null))
+                .map_err(|message| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message,
+                })
+        }
+        FileRename {
+            task_id,
+            path,
+            new_path,
+        } => {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            handle
+                .send(Command::RenameFile {
+                    task_id,
+                    path,
+                    new_path,
+                    reply: tx,
+                })
+                .await;
+            rx.await
+                .map_err(|_| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message: "daemon dropped file rename request".into(),
+                })?
+                .map(|_| json!(null))
+                .map_err(|message| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message,
+                })
+        }
+        FileDelete { task_id, path } => {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            handle
+                .send(Command::DeleteFile {
+                    task_id,
+                    path,
+                    reply: tx,
+                })
+                .await;
+            rx.await
+                .map_err(|_| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message: "daemon dropped file delete request".into(),
+                })?
+                .map(|_| json!(null))
+                .map_err(|message| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message,
+                })
+        }
         GitCommit {
             task_id,
             message,
