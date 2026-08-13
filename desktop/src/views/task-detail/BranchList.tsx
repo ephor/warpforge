@@ -223,10 +223,11 @@ function BranchRowLine({
             aria-label={`Actions for ${branch}`}
           />
         </DropdownMenuTrigger>
-        <BranchActionSubmenu
-          branch={branch}
-          remote={remote}
-          current={isCurrent}
+          <BranchActionSubmenu
+            branch={branch}
+            remote={remote}
+            current={isCurrent}
+            currentBranch={current}
           onAction={(action) => {
             onToggleMenu(null);
             onAction(action, branch, remote);
@@ -241,17 +242,26 @@ function BranchActionSubmenu({
   branch,
   remote,
   current,
+  currentBranch,
   onAction,
 }: {
   branch: string;
   remote: boolean;
   current: boolean;
+  currentBranch: string | null;
   onAction: (action: string) => void;
 }) {
   const actions = remote
     ? [
         ["checkout-as-remote", "Checkout as local…"],
         ["create", `New Branch from '${branch}'…`],
+        [
+          "rebase-remote",
+          `Rebase '${currentBranch ?? "current"}' onto '${branch}'`,
+        ],
+        ["merge-remote", `Merge '${branch}' into '${currentBranch ?? "current"}'`],
+        ["pull-rebase", `Pull into '${currentBranch ?? "current"}' Using Rebase`],
+        ["pull-merge", `Pull into '${currentBranch ?? "current"}' Using Merge`],
       ]
     : current
       ? [

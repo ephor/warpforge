@@ -103,12 +103,12 @@ export function BranchActionsDialog({
           return (await daemon.request("git.rebase", {
             task_id: taskId,
             branch: action.branch,
-            target,
+            target: action.target ?? target,
           })) as GitOpResult;
         case "merge":
           return (await daemon.request("git.merge", {
             task_id: taskId,
-            target,
+            target: action.target ?? target,
           })) as GitOpResult;
         case "checkout-update": {
           const switched = (await daemon.request("git.switchBranch", {
@@ -142,7 +142,7 @@ export function BranchActionsDialog({
   const targetBranch = action.kind === "rebase" ? action.branch : current;
   const candidates = branches.filter((b) => b !== targetBranch);
   const needsTarget =
-    action.kind === "rebase" || action.kind === "merge";
+    (action.kind === "rebase" || action.kind === "merge") && !action.target;
   const canRun =
     action.kind === "rename"
       ? newName.trim().length > 0 && newName.trim() !== action.branch
@@ -151,7 +151,7 @@ export function BranchActionsDialog({
         : action.kind === "create"
           ? newName.trim().length > 0
           : needsTarget
-            ? target.length > 0
+            ? Boolean(action.target ?? target)
             : true;
 
   const title = getTitle(action);
