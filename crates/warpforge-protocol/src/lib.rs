@@ -371,6 +371,21 @@ pub enum Method {
         path: String,
         content: String,
     },
+    #[serde(rename = "file.create")]
+    FileCreate {
+        task_id: String,
+        path: String,
+        #[serde(default)]
+        directory: bool,
+    },
+    #[serde(rename = "file.rename")]
+    FileRename {
+        task_id: String,
+        path: String,
+        new_path: String,
+    },
+    #[serde(rename = "file.delete")]
+    FileDelete { task_id: String, path: String },
     /// Stage files and commit them in the task's repo. `files=None` stages all
     /// changes; `amend` rewrites the previous commit.
     #[serde(rename = "git.commit")]
