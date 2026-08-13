@@ -2205,6 +2205,14 @@ impl Daemon {
             .map(|p| p.path.clone())
     }
 
+    fn task_repo_path(&self, task_id: &str) -> Option<String> {
+        self.tasks.get(task_id).and_then(|task| {
+            task.worktree
+                .clone()
+                .or_else(|| self.project_path(&task.project))
+        })
+    }
+
     /// Bump a task's `updated_at`, persist, and emit `TaskUpdated` so every
     /// client refetches its diff/branch (used after git ops change the tree).
     fn bump_task(&mut self, task_id: &str) {
@@ -2809,7 +2817,7 @@ impl Daemon {
                 let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                    .and_then(|_| self.task_repo_path(&task_id));
                 let (files, branch) = match repo {
                     Some(path) => (
                         super::diff::working_diff(&path).await.unwrap_or_default(),
@@ -2831,7 +2839,7 @@ impl Daemon {
                 let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                    .and_then(|_| self.task_repo_path(&task_id));
                 let doc = match repo {
                     Some(p) => super::diff::file_doc(&p, &path).await.ok(),
                     None => None,
@@ -2847,7 +2855,7 @@ impl Daemon {
                 let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project))
+                    .and_then(|_| self.task_repo_path(&task_id))
                     .or_else(|| project.as_deref().and_then(|name| self.project_path(name)));
                 let files = match repo {
                     Some(p) => super::diff::list_files(&p, include_ignored)
@@ -2865,7 +2873,7 @@ impl Daemon {
                 let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                    .and_then(|_| self.task_repo_path(&task_id));
                 if let Some(p) = repo {
                     if super::diff::save_file(&p, &path, &content).is_ok() {
                         // Nudge clients so the diff/file list refetches.
@@ -2887,7 +2895,7 @@ impl Daemon {
                 let result = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project))
+                    .and_then(|_| self.task_repo_path(&task_id))
                     .ok_or_else(|| format!("no repo for task {task_id}"))
                     .and_then(|repo| {
                         super::diff::create_file(&repo, &path, directory).map_err(|e| e.to_string())
@@ -2903,7 +2911,7 @@ impl Daemon {
                 let result = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project))
+                    .and_then(|_| self.task_repo_path(&task_id))
                     .ok_or_else(|| format!("no repo for task {task_id}"))
                     .and_then(|repo| {
                         super::diff::rename_file(&repo, &path, &new_path).map_err(|e| e.to_string())
@@ -2918,7 +2926,7 @@ impl Daemon {
                 let result = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project))
+                    .and_then(|_| self.task_repo_path(&task_id))
                     .ok_or_else(|| format!("no repo for task {task_id}"))
                     .and_then(|repo| {
                         super::diff::delete_file(&repo, &path).map_err(|e| e.to_string())
