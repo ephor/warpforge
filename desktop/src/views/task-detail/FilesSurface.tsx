@@ -41,7 +41,6 @@ export function FilesSurface({
   onSave,
   rootPath,
   onRefresh,
-  taskId,
   onGotoDefinition,
   onOpenSymbol,
   gotoLocation,
@@ -60,7 +59,6 @@ export function FilesSurface({
   onSave: (content: string) => void;
   rootPath?: string;
   onRefresh: () => void;
-  taskId: string;
   onGotoDefinition?: (query: string) => Promise<SymbolMatch[]>;
   onOpenSymbol?: (path: string, line: number, column: number) => void;
   gotoLocation?: { path: string; line: number; column: number } | null;
