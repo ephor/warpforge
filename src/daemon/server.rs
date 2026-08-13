@@ -630,8 +630,12 @@ async fn dispatch(
             task_id,
             name,
             from,
+            checkout,
+            overwrite,
         } => {
-            let result = handle.git_branch_create(&task_id, &name, from).await;
+            let result = handle
+                .git_branch_create(&task_id, &name, from, checkout, overwrite)
+                .await;
             serde_json::to_value(result).map_err(|e| wire::RpcError {
                 code: wire::ErrorCode::Internal,
                 message: e.to_string(),

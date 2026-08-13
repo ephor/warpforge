@@ -460,6 +460,7 @@ export function GitWorkspaceControls({
         action={action}
         branches={branches}
         current={branch ?? ""}
+        remotes={remoteBranches}
         taskId={taskId}
         onComplete={() => invalidateAll(queryClient, taskId)}
         onClose={() => setAction(null)}

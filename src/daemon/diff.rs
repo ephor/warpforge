@@ -781,6 +781,8 @@ pub async fn branch_create(
     repo: &str,
     name: &str,
     from: Option<&str>,
+    checkout: bool,
+    overwrite: bool,
 ) -> Result<wire::GitOpResult> {
     let name = name.trim();
     if name.is_empty() {
@@ -799,7 +801,7 @@ pub async fn branch_create(
         ],
     )
     .await?;
-    if exists.status.success() {
+    if exists.status.success() && !overwrite {
         return Ok(op_error(format!("a branch named '{name}' already exists")));
     }
     let original = match current_branch(repo).await {
@@ -825,11 +827,29 @@ pub async fn branch_create(
         }
     }
 
-    let mut args = vec!["switch", "-c", name];
+    let mut args = vec!["switch"];
+    if checkout {
+        args.push("-C");
+    } else {
+        args.push("-c");
+    }
+    args.push(name);
     if let Some(from) = from {
         args.push(from);
     }
-    let create = git(repo, &args).await?;
+    let create = if checkout {
+        git(repo, &args).await?
+    } else {
+        let mut branch_args = vec!["branch"];
+        if overwrite {
+            branch_args.push("-f");
+        }
+        branch_args.push(name);
+        if let Some(from) = from {
+            branch_args.push(from);
+        }
+        git(repo, &branch_args).await?
+    };
     if !create.status.success() {
         if dirty {
             let _ = git(repo, &["stash", "pop"]).await;

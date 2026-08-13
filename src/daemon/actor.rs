@@ -790,6 +790,8 @@ pub enum Command {
         task_id: String,
         name: String,
         from: Option<String>,
+        checkout: bool,
+        overwrite: bool,
         reply: oneshot::Sender<wire::GitOpResult>,
     },
     /// Rebase the current branch onto `target`.
@@ -1372,12 +1374,16 @@ impl DaemonHandle {
         task_id: &str,
         name: &str,
         from: Option<String>,
+        checkout: bool,
+        overwrite: bool,
     ) -> wire::GitOpResult {
         let (tx, rx) = oneshot::channel();
         self.send(Command::GitBranchCreate {
             task_id: task_id.to_string(),
             name: name.to_string(),
             from,
+            checkout,
+            overwrite,
             reply: tx,
         })
         .await;
@@ -3057,6 +3063,8 @@ impl Daemon {
                 task_id,
                 name,
                 from,
+                checkout,
+                overwrite,
                 reply,
             } => {
                 let repo = self
@@ -3064,14 +3072,16 @@ impl Daemon {
                     .get(&task_id)
                     .and_then(|t| self.project_path(&t.project));
                 let result = match repo {
-                    Some(p) => super::diff::branch_create(&p, &name, from.as_deref())
-                        .await
-                        .unwrap_or_else(|e| wire::GitOpResult {
-                            status: wire::GitOpStatus::Error,
-                            message: e.to_string(),
-                            conflicts: Vec::new(),
-                            branch: None,
-                        }),
+                    Some(p) => {
+                        super::diff::branch_create(&p, &name, from.as_deref(), checkout, overwrite)
+                            .await
+                            .unwrap_or_else(|e| wire::GitOpResult {
+                                status: wire::GitOpStatus::Error,
+                                message: e.to_string(),
+                                conflicts: Vec::new(),
+                                branch: None,
+                            })
+                    }
                     None => wire::GitOpResult {
                         status: wire::GitOpStatus::Error,
                         message: format!("no repo for task {task_id}"),

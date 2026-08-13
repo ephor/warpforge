@@ -34,6 +34,7 @@ export type BranchAction =
 interface DialogProps {
   action: BranchAction | null;
   branches: string[];
+  remotes: string[];
   current: string;
   taskId: string;
   onComplete: () => void;
@@ -64,6 +65,7 @@ const handleOpError = (e: Error) => toast.error(e.message);
 export function BranchActionsDialog({
   action,
   branches,
+  remotes,
   current,
   taskId,
   onComplete,
@@ -71,10 +73,14 @@ export function BranchActionsDialog({
 }: DialogProps) {
   const [newName, setNewName] = useState("");
   const [target, setTarget] = useState("");
+  const [checkout, setCheckout] = useState(true);
+  const [overwrite, setOverwrite] = useState(false);
 
   useEffect(() => {
     setNewName(action?.kind === "create" ? action.defaultName ?? "" : "");
     setTarget(action?.kind === "rebase" || action?.kind === "merge" ? action.target ?? "" : "");
+    setCheckout(true);
+    setOverwrite(false);
   }, [action]);
 
   const mutate = useMutation<GitOpResult, Error>({
@@ -98,6 +104,8 @@ export function BranchActionsDialog({
             task_id: taskId,
             name: newName.trim(),
             from: action.from,
+            checkout,
+            overwrite,
           })) as GitOpResult;
         case "rebase":
           return (await daemon.request("git.rebase", {
@@ -141,6 +149,8 @@ export function BranchActionsDialog({
 
   const targetBranch = action.kind === "rebase" ? action.branch : current;
   const candidates = branches.filter((b) => b !== targetBranch);
+  const remoteName = newName.trim();
+  const remoteConflict = remotes.some((ref) => ref.split("/").slice(1).join("/") === remoteName);
   const needsTarget =
     (action.kind === "rebase" || action.kind === "merge") && !action.target;
   const canRun =
@@ -150,6 +160,7 @@ export function BranchActionsDialog({
         ? true
         : action.kind === "create"
           ? newName.trim().length > 0
+            && (!remoteConflict || overwrite)
           : needsTarget
             ? Boolean(action.target ?? target)
             : true;
@@ -165,14 +176,31 @@ export function BranchActionsDialog({
         </DialogHeader>
 
         {(action.kind === "rename" || action.kind === "create") && (
-          <input
-            autoFocus
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && canRun && mutate.mutate()}
-            placeholder={action.kind === "create" ? action.defaultName ?? "new-branch" : action.branch}
-            className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-          />
+          <div className="space-y-3">
+            <input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && canRun && mutate.mutate()}
+              placeholder={action.kind === "create" ? action.defaultName ?? "new-branch" : action.branch}
+              className={`h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring ${remoteConflict ? "border-warn" : "border-input"}`}
+            />
+            {action.kind === "create" && (
+              <div className="flex items-center gap-5 text-sm">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={checkout} onChange={(e) => setCheckout(e.target.checked)} />
+                  Checkout branch
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
+                  <span className={remoteConflict ? "text-warn" : undefined}>Override existing branch</span>
+                </label>
+              </div>
+            )}
+            {remoteConflict && !overwrite && (
+              <p className="text-xs text-warn">Remote branch with this name already exists. Enable override to continue.</p>
+            )}
+          </div>
         )}
 
         {needsTarget && (
