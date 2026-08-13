@@ -426,7 +426,7 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
                       editable={editable}
                       rootPath={projectRoot}
                       onRefresh={() => {
-                        void queryClient.invalidateQueries({ queryKey: ["fileList", task.id] });
+                        void queryClient.refetchQueries({ queryKey: ["fileList", task.id] });
                       }}
                       taskId={task.id}
                       onSave={(content) =>
