@@ -212,12 +212,32 @@ export function GitWorkspaceControls({
       const t = actionRef.current;
       if (t) openActionDialogRef.current({ kind: "rebase", branch: t.branch });
     }],
+    ["rebase-remote", () => {
+      const t = actionRef.current;
+      if (t && branch) {
+        openActionDialogRef.current({ kind: "rebase", branch, target: t.branch });
+      }
+    }],
     ["rebase-main", () => {
       const t = actionRef.current;
       if (t) openActionDialogRef.current({ kind: "rebase", branch: t.branch, target: "main" });
     }],
     ["merge", () => openActionDialogRef.current({ kind: "merge" })],
     ["merge-main", () => openActionDialogRef.current({ kind: "merge", target: "main" })],
+    ["merge-remote", () => {
+      const t = actionRef.current;
+      if (t) openActionDialogRef.current({ kind: "merge", target: t.branch });
+    }],
+    ["pull-rebase", () => {
+      const t = actionRef.current;
+      if (t && branch) {
+        openActionDialogRef.current({ kind: "rebase", branch, target: t.branch });
+      }
+    }],
+    ["pull-merge", () => {
+      const t = actionRef.current;
+      if (t) openActionDialogRef.current({ kind: "merge", target: t.branch });
+    }],
     ["update", () => updateMut.mutate()],
     ["push", () => { setOpen(false); onOpenPush(); }],
     [
