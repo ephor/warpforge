@@ -7,7 +7,7 @@
 
 [package]
 name = "warpforge-desktop"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "Warpforge desktop shell — a thin Tauri client for the warpforge daemon"
 
