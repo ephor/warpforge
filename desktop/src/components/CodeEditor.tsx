@@ -3,10 +3,11 @@ import { jumpToDefinition } from "@codemirror/lsp-client";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
-import { Check, Code, Eye, Save } from "lucide-react";
+import { Check, Code, Eye, Loader2, Save, Wand2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useThemeMode } from "@/hooks/useTheme";
+import { daemon } from "../daemon";
 import {
   codemirrorLanguageForPath,
   lspDocumentLanguageForPath,
@@ -23,6 +24,16 @@ import { Markdown } from "./Markdown";
 type SaveStatus = "clean" | "unsaved" | "saved";
 
 const isMarkdownPath = (path: string) => /\.(md|markdown|mdx)$/i.test(path);
+const LSP_LABELS: Record<string, string> = {
+  typescript: "TypeScript/JavaScript",
+  rust: "Rust",
+  go: "Go",
+  python: "Python",
+  json: "JSON",
+  css: "CSS",
+  html: "HTML",
+  yaml: "YAML",
+};
 const isSvgPath = (path: string) => /\.svg$/i.test(path);
 const isBinaryImagePath = (path: string) => /\.(png|jpg|jpeg|gif|webp|ico|bmp)$/i.test(path);
 // Guard for SSR/test (navigator may be undefined).
@@ -86,6 +97,9 @@ export function CodeEditor({
   const [preview, setPreview] = useState(false);
   const [text, setText] = useState(doc.newText);
   const [editorReady, setEditorReady] = useState(false);
+  const [lspMissing, setLspMissing] = useState<string | null>(null);
+  const [lspInstallBusy, setLspInstallBusy] = useState(false);
+  const [lspRetry, setLspRetry] = useState(0);
   const [gotoResults, setGotoResults] = useState<SymbolMatch[]>([]);
   const [gotoActive, setGotoActive] = useState(0);
   const [gotoPending, setGotoPending] = useState(false);
@@ -362,12 +376,14 @@ export function CodeEditor({
     const language = lspLanguageForPath(doc.path);
     const documentLanguage = lspDocumentLanguageForPath(doc.path);
     if (!editable || !editorReady || !lspEnabled || !language || !documentLanguage) {
+      setLspMissing(null);
       return;
     }
     let cancelled = false;
     let detach: (() => void) | null = null;
     void acquireLspClient(taskId, language).then((acquired) => {
       if (!acquired) {
+        if (!cancelled) setLspMissing(language);
         return;
       }
       const view = viewRef.current;
@@ -375,6 +391,7 @@ export function CodeEditor({
         releaseLspClient(acquired.key);
         return;
       }
+      setLspMissing(null);
       const uri = `file://${acquired.rootPath}/${doc.path}`;
       view.dispatch({
         effects: lspCompartment.current.reconfigure(
@@ -391,7 +408,19 @@ export function CodeEditor({
       detach?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.path, editable, editorReady, lspEnabled, taskId]);
+  }, [doc.path, editable, editorReady, lspEnabled, taskId, lspRetry]);
+
+  const installLsp = async () => {
+    if (!lspMissing) return;
+    setLspInstallBusy(true);
+    try {
+      await daemon.installLanguageServer(lspMissing);
+    } finally {
+      setLspInstallBusy(false);
+    }
+    setLspMissing(null);
+    setLspRetry((n) => n + 1);
+  };
 
   useEffect(() => {
     const view = viewRef.current;
@@ -465,6 +494,23 @@ export function CodeEditor({
           </button>
         )}
       </div>
+      {lspMissing && (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-warn/10 px-3 py-1.5 text-[11px]">
+          <Wand2 className="size-3 shrink-0 text-warn" />
+          <span className="min-w-0 flex-1 text-muted-foreground">
+            {LSP_LABELS[lspMissing] ?? lspMissing} IntelliSense isn&apos;t installed
+          </span>
+          <button
+            type="button"
+            onClick={() => void installLsp()}
+            disabled={lspInstallBusy}
+            className="flex shrink-0 items-center gap-1 rounded bg-foreground/90 px-2 py-0.5 font-medium text-background transition-colors hover:bg-foreground disabled:opacity-50"
+          >
+            {lspInstallBusy && <Loader2 className="size-3 animate-spin" />}
+            {lspInstallBusy ? "Installing…" : "Install"}
+          </button>
+        </div>
+      )}
       <div className="relative min-h-0 flex-1">
         {binaryImage ? (
           <div className="flex h-full flex-col items-center justify-center overflow-auto bg-card p-4">

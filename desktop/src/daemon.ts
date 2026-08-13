@@ -16,6 +16,7 @@ import type {
   DaemonEvent,
   DaemonHandshake,
   DetectedAgent,
+  DetectedLanguageServer,
   ExternalSession,
   FileDoc,
   ServerMessage,
@@ -451,6 +452,10 @@ export class DaemonClient {
         return Promise.resolve([]);
       case "file.save":
         return Promise.resolve({});
+      case "lsp.detect":
+        return Promise.resolve([]);
+      case "lsp.install":
+        return Promise.resolve({ ok: false, command: "", output: "demo mode: install unavailable" });
       case "git.pushInfo": {
         const taskId = String(p.task_id);
         const task = this.state.snapshot.tasks.find((item) => item.id === taskId);
@@ -956,6 +961,26 @@ export class DaemonClient {
    *  success flag and captured output. */
   async installAgent(id: string): Promise<{ ok: boolean; command: string; output: string }> {
     const result = (await this.request("agents.install", { id })) as {
+      ok: boolean;
+      command: string;
+      output: string;
+    };
+    return result;
+  }
+
+  /** Detect the install/update state of every supported language server. */
+  async detectLanguageServers(): Promise<DetectedLanguageServer[]> {
+    const result = (await this.request("lsp.detect", {})) as DetectedLanguageServer[];
+    return Array.isArray(result) ? result : [];
+  }
+
+  /** Install (or update) a supported language server by id. */
+  async installLanguageServer(id: string): Promise<{
+    ok: boolean;
+    command: string;
+    output: string;
+  }> {
+    const result = (await this.request("lsp.install", { id })) as {
       ok: boolean;
       command: string;
       output: string;

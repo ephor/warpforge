@@ -17,6 +17,7 @@ pub mod agents;
 pub mod claude_auth;
 pub mod diff;
 pub mod lsp;
+pub mod lsp_servers;
 pub mod prompt;
 pub mod server;
 pub mod sessions;

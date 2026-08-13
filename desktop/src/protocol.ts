@@ -111,6 +111,21 @@ export interface LspStartResult {
   rootPath: string;
 }
 
+/** Install state of one editor language's language server (mirrors Rust). */
+export interface DetectedLanguageServer {
+  id: string;
+  language: string;
+  installed: boolean;
+  version?: string | null;
+  latestVersion?: string | null;
+  /** "current" | "behind" | "missing" | "unknown" */
+  status: string;
+  installCommand?: string | null;
+  updateCommand?: string | null;
+  canManage: boolean;
+  installHint: string;
+}
+
 export function isEvent(msg: ServerMessage): msg is DaemonEvent {
   return "event" in msg;
 }

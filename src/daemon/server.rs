@@ -408,6 +408,25 @@ async fn dispatch(
             handle.send(Command::LspStop { server_id }).await;
             Ok(json!(null))
         }
+        LanguageServersDetect {} => {
+            let detected = crate::daemon::lsp_servers::detect_language_servers().await;
+            serde_json::to_value(detected).map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
+        LanguageServersInstall { id } => {
+            let Some(command) = crate::daemon::lsp_servers::manage_command(&id).await else {
+                return Err(wire::RpcError {
+                    code: wire::ErrorCode::InvalidRequest,
+                    message: format!(
+                        "no automated install/update available for language server '{id}'"
+                    ),
+                });
+            };
+            let (ok, output) = crate::daemon::agents::run_manage_command(&command).await;
+            Ok(json!({ "ok": ok, "command": command, "output": output }))
+        }
         ServiceLogs {
             project,
             service,
@@ -1381,6 +1400,7 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | LspStart { .. }
             | LspSend { .. }
             | LspStop { .. }
+            | LanguageServersDetect {}
     )
 }
 
@@ -1957,7 +1977,9 @@ mod tests {
             .create_task(
                 "demo",
                 "keep working",
-                "definitely-not-an-installed-agent",
+                // Keep session process alive so asynchronous ACP failure cannot
+                // race the queued-task blocker assertion below.
+                "sleep 60",
                 Vec::new(),
                 false,
                 false,

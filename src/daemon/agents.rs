@@ -110,7 +110,7 @@ fn update_command(agent: &KnownAgent, resolved_path: Option<&str>) -> Option<Str
     }
 }
 
-enum PackageManager {
+pub(crate) enum PackageManager {
     Npm,
     Bun,
     Pnpm,
@@ -120,7 +120,7 @@ enum PackageManager {
 
 /// Classify a global-install manager from the resolved binary path (mirrors
 /// t3code's path heuristics).
-fn package_manager_for_path(path: &str) -> PackageManager {
+pub(crate) fn package_manager_for_path(path: &str) -> PackageManager {
     let p = path.replace('\\', "/").to_lowercase();
     // Check npm/bun/pnpm node paths before homebrew: an npm-global binary
     // installed under a brew-managed Node lives at /opt/homebrew/bin/… (a
@@ -144,7 +144,7 @@ fn package_manager_for_path(path: &str) -> PackageManager {
 /// Resolve a binary on PATH → its real (symlink-resolved) path, or None if
 /// absent. Resolving the symlink matters for install-manager classification:
 /// an npm-global bin often lives at a brew prefix as a link into node_modules.
-async fn which(binary: &str) -> Option<String> {
+pub(crate) async fn which(binary: &str) -> Option<String> {
     let output = tokio::process::Command::new("which")
         .arg(binary)
         .output()
@@ -168,7 +168,7 @@ async fn which(binary: &str) -> Option<String> {
 /// Latest published version of an npm package, cached ~1h with a short timeout
 /// so a slow/absent registry never blocks detection. Shells out to `npm view`
 /// (npm is already required to install agents) — no HTTP client dependency.
-async fn latest_npm_version(pkg: &str) -> Option<String> {
+pub(crate) async fn latest_npm_version(pkg: &str) -> Option<String> {
     const TTL: Duration = Duration::from_secs(60 * 60);
     // pkg → (fetched_at, latest_version_or_none)
     type VersionCache = HashMap<String, (Instant, Option<String>)>;
@@ -223,7 +223,7 @@ async fn installed_version(agent: &KnownAgent) -> Option<String> {
     first_version_token(&text)
 }
 
-async fn npm_global_version(pkg: &str) -> Option<String> {
+pub(crate) async fn npm_global_version(pkg: &str) -> Option<String> {
     let output = tokio::process::Command::new("npm")
         .args(["ls", "-g", pkg, "--json", "--depth=0"])
         .output()
@@ -237,7 +237,7 @@ async fn npm_global_version(pkg: &str) -> Option<String> {
         .map(String::from)
 }
 
-fn first_version_token(text: &str) -> Option<String> {
+pub(crate) fn first_version_token(text: &str) -> Option<String> {
     text.split_whitespace()
         .find(|tok| {
             let t = tok.trim_start_matches('v');
@@ -248,7 +248,7 @@ fn first_version_token(text: &str) -> Option<String> {
 
 /// -1 / 0 / 1 comparison of dotted numeric versions, ignoring any pre-release
 /// suffix. Enough to answer "is current behind latest?".
-fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
+pub(crate) fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
     fn parts(v: &str) -> Vec<u64> {
         v.split(['-', '+'])
             .next()
