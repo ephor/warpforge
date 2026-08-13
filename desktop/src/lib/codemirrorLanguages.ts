@@ -37,6 +37,26 @@ export function lspLanguageForPath(path: string): string | null {
   }
 }
 
+/** Exact document language id sent in `textDocument/didOpen`. React files need
+ * their React-specific ids so TypeScript parses JSX instead of plain TS/JS. */
+export function lspDocumentLanguageForPath(path: string): string | null {
+  const ext = path.split(/[\\/]/).pop()?.toLowerCase().split(".").pop();
+  switch (ext) {
+    case "tsx":
+      return "typescriptreact";
+    case "jsx":
+      return "javascriptreact";
+    case "ts":
+      return "typescript";
+    case "js":
+    case "mjs":
+    case "cjs":
+      return "javascript";
+    default:
+      return lspLanguageForPath(path);
+  }
+}
+
 export async function codemirrorLanguageForPath(path: string): Promise<Extension[]> {
   const filename = path.split(/[\\/]/).pop()?.toLowerCase() ?? "";
   const ext = filename.split(".").pop();

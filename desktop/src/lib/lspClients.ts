@@ -5,11 +5,15 @@
  * `lsp.send` requests and `lsp.message` events — the daemon owns the actual
  * language-server process (spawned lazily, killed once the last editor closes).
  */
+import { setDiagnostics } from "@codemirror/lint";
 import {
   languageServerExtensions,
   LSPClient,
+  LSPPlugin,
+  type LSPClientExtension,
   type Transport,
 } from "@codemirror/lsp-client";
+import { ViewPlugin, type EditorView } from "@codemirror/view";
 
 import { daemon } from "../daemon";
 import type { LspStartResult } from "../protocol";
@@ -26,6 +30,96 @@ type Entry = {
 };
 
 const entries = new Map<string, Entry>();
+
+type PullDiagnostic = {
+  range: {
+    start: { line: number; character: number };
+    end: { line: number; character: number };
+  };
+  message: string;
+  severity?: number;
+};
+
+type PullDiagnosticReport = {
+  kind: "full" | "unchanged";
+  items?: PullDiagnostic[];
+};
+
+function pullDiagnostics(view: EditorView) {
+  const plugin = LSPPlugin.get(view);
+  if (!plugin) {
+    return;
+  }
+  plugin.client.sync();
+  void plugin.client
+    .request<{ textDocument: { uri: string } }, PullDiagnosticReport>("textDocument/diagnostic", {
+      textDocument: { uri: plugin.uri },
+    })
+    .then((report) => {
+      const current = LSPPlugin.get(view);
+      if (!current || report.kind !== "full") {
+        return;
+      }
+      const diagnostics = (report.items ?? []).map((item) => ({
+        from: current.unsyncedChanges.mapPos(
+          current.fromPosition(item.range.start, current.syncedDoc),
+        ),
+        to: current.unsyncedChanges.mapPos(current.fromPosition(item.range.end, current.syncedDoc)),
+        severity:
+          item.severity === 2
+            ? ("warning" as const)
+            : item.severity === 3
+              ? ("info" as const)
+              : item.severity === 4
+                ? ("hint" as const)
+                : ("error" as const),
+        message: item.message,
+      }));
+      view.dispatch(setDiagnostics(view.state, diagnostics));
+    })
+    .catch(() => {
+      // The server may be warming up or shutting down; next edit retries.
+    });
+}
+
+const pullDiagnosticsExtension: LSPClientExtension = {
+  clientCapabilities: {
+    textDocument: {
+      diagnostic: { dynamicRegistration: false, relatedDocumentSupport: false },
+    },
+  },
+  editorExtension: ViewPlugin.fromClass(
+    class {
+      private timer: ReturnType<typeof setTimeout> | null = null;
+
+      constructor(private readonly view: EditorView) {
+        this.schedule(0);
+      }
+
+      update(update: { docChanged: boolean }) {
+        if (update.docChanged) {
+          this.schedule(500);
+        }
+      }
+
+      destroy() {
+        if (this.timer) {
+          clearTimeout(this.timer);
+        }
+      }
+
+      private schedule(delay: number) {
+        if (this.timer) {
+          clearTimeout(this.timer);
+        }
+        this.timer = setTimeout(() => {
+          this.timer = null;
+          pullDiagnostics(this.view);
+        }, delay);
+      }
+    },
+  ),
+};
 
 async function startClient(taskId: string, language: string): Promise<Resolved | null> {
   const res = (await daemon
@@ -57,7 +151,7 @@ async function startClient(taskId: string, language: string): Promise<Resolved |
   };
 
   const client = new LSPClient({
-    extensions: languageServerExtensions(),
+    extensions: [...languageServerExtensions(), pullDiagnosticsExtension],
     rootUri: `file://${res.rootPath}`,
     // rust-analyzer may need more than the package default of three seconds
     // while it is warming a workspace for the first time.

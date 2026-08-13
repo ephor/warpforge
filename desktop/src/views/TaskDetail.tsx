@@ -102,6 +102,11 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
   } | null>(null);
   const [openFileTabs, setOpenFileTabs] = useState<string[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
+  const [gotoLocation, setGotoLocation] = useState<{
+    path: string;
+    line: number;
+    column: number;
+  } | null>(null);
   const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
   const [commitExpanded, setCommitExpanded] = useState(false);
   const diffView = useUi((s) => s.diffView);
@@ -165,11 +170,12 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
   } = useTaskQueries(task.id, activeFilePath, activeTabForQuery, task.updatedAt);
 
   const openFileTab = useCallback(
-    (path: string) => {
+    (path: string, location?: { line: number; column: number }) => {
       setOpenFileTabs((tabs) => (tabs.includes(path) ? tabs : [...tabs, path]));
       setActiveFilePath(path);
       setActiveSurface("files");
       setShowDiff(true);
+      setGotoLocation(location ? { path, ...location } : null);
     },
     [setActiveSurface, setShowDiff],
   );
@@ -183,7 +189,11 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
     },
     [task.id],
   );
-  const openSymbol = useCallback((path: string) => openFileTab(path), [openFileTab]);
+  const openSymbol = useCallback(
+    (path: string, line: number, column: number) => openFileTab(path, { line, column }),
+    [openFileTab],
+  );
+  const clearGotoLocation = useCallback(() => setGotoLocation(null), []);
   const openDiffFile = useCallback(
     (path: string, hunks: EditHunk[] = []) => {
       setSelectedDiffFile(path);
@@ -449,6 +459,8 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
                       }
                       onGotoDefinition={searchSymbol}
                       onOpenSymbol={openSymbol}
+                      gotoLocation={gotoLocation}
+                      onGotoLocationHandled={clearGotoLocation}
                     />
                   )}
                   {activeSurface === "diff" && (

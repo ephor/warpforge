@@ -44,6 +44,8 @@ export function FilesSurface({
   taskId,
   onGotoDefinition,
   onOpenSymbol,
+  gotoLocation,
+  onGotoLocationHandled,
 }: {
   projectFiles: ProjectFile[];
   fileListError: string | null;
@@ -61,6 +63,8 @@ export function FilesSurface({
   taskId: string;
   onGotoDefinition?: (query: string) => Promise<SymbolMatch[]>;
   onOpenSymbol?: (path: string, line: number, column: number) => void;
+  gotoLocation?: { path: string; line: number; column: number } | null;
+  onGotoLocationHandled?: () => void;
 }) {
   return (
     <div className="flex h-full min-h-0 min-w-0">
@@ -124,6 +128,8 @@ export function FilesSurface({
                 onSave={onSave}
                 onGotoDefinition={onGotoDefinition}
                 onOpenSymbol={onOpenSymbol}
+                gotoLocation={gotoLocation?.path === fileDoc.path ? gotoLocation : undefined}
+                onGotoLocationHandled={onGotoLocationHandled}
               />
             </Suspense>
           ) : (

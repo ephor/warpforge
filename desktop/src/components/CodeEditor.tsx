@@ -1,22 +1,23 @@
 import { lintGutter } from "@codemirror/lint";
+import { jumpToDefinition } from "@codemirror/lsp-client";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { Check, Code, Eye, Save } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useThemeMode } from "@/hooks/useTheme";
 import {
   codemirrorLanguageForPath,
+  lspDocumentLanguageForPath,
   lspLanguageForPath,
 } from "@/lib/codemirrorLanguages";
 import { cmChromeForMode } from "@/lib/codemirrorTheme";
 import { acquireLspClient, releaseLspClient } from "@/lib/lspClients";
 import { cn } from "@/lib/utils";
-import { useThemeMode } from "@/hooks/useTheme";
-
-import { useUi } from "../store/ui";
 
 import type { FileDoc, SymbolMatch } from "../protocol";
+import { useUi } from "../store/ui";
 import { Markdown } from "./Markdown";
 
 type SaveStatus = "clean" | "unsaved" | "saved";
@@ -47,6 +48,8 @@ export function CodeEditor({
   onSave,
   onGotoDefinition,
   onOpenSymbol,
+  gotoLocation,
+  onGotoLocationHandled,
 }: {
   doc: FileDoc;
   editable: boolean;
@@ -57,11 +60,14 @@ export function CodeEditor({
   onGotoDefinition?: (query: string) => Promise<SymbolMatch[]>;
   /** Open a found symbol's file at its line/column. */
   onOpenSymbol?: (path: string, line: number, column: number) => void;
+  /** Move the editor to a pending 1-based source location after it loads. */
+  gotoLocation?: { line: number; column: number };
+  onGotoLocationHandled?: () => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const lspCompartment = useRef(new Compartment());
-  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gotoLocationKey = useRef<string | null>(null);
   const lastSaved = useRef<string | null>(null);
   const onSaveRef = useRef(onSave);
   const onGotoRef = useRef(onGotoDefinition);
@@ -73,6 +79,8 @@ export function CodeEditor({
   const [editorReady, setEditorReady] = useState(false);
   const [gotoResults, setGotoResults] = useState<SymbolMatch[]>([]);
   const [gotoActive, setGotoActive] = useState(0);
+  const [gotoPending, setGotoPending] = useState(false);
+  const [gotoQuery, setGotoQuery] = useState("");
   const markdown = isMarkdownPath(doc.path);
   const svgImage = isSvgPath(doc.path);
   const binaryImage = isBinaryImagePath(doc.path);
@@ -94,10 +102,6 @@ export function CodeEditor({
     if (!view) {
       return true;
     }
-    if (saveTimer.current) {
-      clearTimeout(saveTimer.current);
-      saveTimer.current = null;
-    }
     const current = view.state.doc.toString();
     lastSaved.current = current;
     setText(current);
@@ -109,11 +113,20 @@ export function CodeEditor({
   const runGoto = useCallback((): boolean => {
     const view = viewRef.current;
     const save = onGotoRef.current;
-    if (!view || !save) {
+    if (!view) {
+      return false;
+    }
+    if (jumpToDefinition(view)) {
+      setGotoResults([]);
+      setGotoPending(false);
+      setGotoQuery("");
+      return true;
+    }
+    if (!save) {
       return false;
     }
     const head = view.state.selection.main.head;
-    const word = view.state.wordAt(head);
+    const word = view.state.wordAt(head) ?? (head > 0 ? view.state.wordAt(head - 1) : null);
     if (!word) {
       return false;
     }
@@ -122,13 +135,20 @@ export function CodeEditor({
       return false;
     }
     setGotoResults([]);
-    void save(query).then((results) => {
-      if (!results.length) {
-        return;
-      }
-      setGotoResults(results.slice(0, 12));
-      setGotoActive(0);
-    });
+    setGotoQuery(query);
+    setGotoPending(true);
+    void save(query)
+      .then((results) => {
+        setGotoPending(false);
+        if (!results.length) {
+          return;
+        }
+        setGotoResults(results.slice(0, 12));
+        setGotoActive(0);
+      })
+      .catch(() => {
+        setGotoPending(false);
+      });
     return true;
   }, []);
 
@@ -140,6 +160,7 @@ export function CodeEditor({
       }
       const open = onOpenSymbolRef.current;
       setGotoResults([]);
+      setGotoQuery("");
       open?.(hit.path, hit.line, hit.column);
     },
     [gotoResults],
@@ -173,9 +194,7 @@ export function CodeEditor({
             EditorState.readOnly.of(!editable || isReadOnly),
             keymap.of([
               { key: "Mod-s", run: flushSave },
-              ...(onGotoDefinition
-                ? [{ key: "Mod-b", run: runGoto, preventDefault: true }]
-                : []),
+              ...(onGotoDefinition ? [{ key: "Mod-b", run: runGoto, preventDefault: true }] : []),
             ]),
             ...(onGotoDefinition
               ? [
@@ -203,14 +222,6 @@ export function CodeEditor({
               setStatus("unsaved");
               const next = u.state.doc.toString();
               setText(next);
-              if (saveTimer.current) {
-                clearTimeout(saveTimer.current);
-              }
-              saveTimer.current = setTimeout(() => {
-                lastSaved.current = next;
-                onSaveRef.current(next);
-                setStatus("saved");
-              }, 600);
             }),
           ],
         }),
@@ -221,10 +232,6 @@ export function CodeEditor({
 
     return () => {
       disposed = true;
-      if (saveTimer.current) {
-        clearTimeout(saveTimer.current);
-        saveTimer.current = null;
-      }
       setEditorReady(false);
       view?.destroy();
       if (viewRef.current === view) {
@@ -258,7 +265,8 @@ export function CodeEditor({
   // daemon; disabled files (diffs/history) and the LSP-off toggle skip this.
   useEffect(() => {
     const language = lspLanguageForPath(doc.path);
-    if (!editable || !editorReady || !lspEnabled || !language) {
+    const documentLanguage = lspDocumentLanguageForPath(doc.path);
+    if (!editable || !editorReady || !lspEnabled || !language || !documentLanguage) {
       return;
     }
     let cancelled = false;
@@ -275,7 +283,7 @@ export function CodeEditor({
       const uri = `file://${acquired.rootPath}/${doc.path}`;
       view.dispatch({
         effects: lspCompartment.current.reconfigure(
-          acquired.client.plugin(uri, language),
+          acquired.client.plugin(uri, documentLanguage),
         ),
       });
       detach = () => {
@@ -289,6 +297,30 @@ export function CodeEditor({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.path, editable, editorReady, lspEnabled, taskId]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !editorReady || !gotoLocation) {
+      if (!gotoLocation) {
+        gotoLocationKey.current = null;
+      }
+      return;
+    }
+    const key = `${gotoLocation.line}:${gotoLocation.column}`;
+    if (gotoLocationKey.current === key) {
+      return;
+    }
+    const lineNumber = Math.min(Math.max(gotoLocation.line, 1), view.state.doc.lines);
+    const line = view.state.doc.line(lineNumber);
+    const column = Math.min(Math.max(gotoLocation.column - 1, 0), line.length);
+    view.dispatch({
+      selection: { anchor: line.from + column },
+      scrollIntoView: true,
+      userEvent: "select.goto",
+    });
+    gotoLocationKey.current = key;
+    onGotoLocationHandled?.();
+  }, [editorReady, gotoLocation, onGotoLocationHandled]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -368,37 +400,46 @@ export function CodeEditor({
               )}
               style={{ fontSize: "var(--app-mono-font-size)" }}
             />
-            {gotoResults.length > 0 && !showPreview && (
-              <div className="absolute left-6 top-2 z-20 w-96 overflow-hidden rounded-md border bg-popover shadow-lg">
-                <div className="border-b px-3 py-1.5 text-xs font-semibold">
-                  Go to definition
+            {(gotoResults.length > 0 || gotoPending || (gotoQuery && !gotoPending)) &&
+              !showPreview && (
+                <div className="absolute left-6 top-2 z-20 w-96 overflow-hidden rounded-md border bg-popover shadow-lg">
+                  <div className="border-b px-3 py-1.5 text-xs font-semibold">Go to definition</div>
+                  {gotoPending ? (
+                    <div className="px-3 py-2 text-xs text-muted-foreground">
+                      Searching for {gotoQuery}…
+                    </div>
+                  ) : gotoResults.length === 0 ? (
+                    <div className="px-3 py-2 text-xs text-muted-foreground">
+                      No definition found for {gotoQuery}
+                    </div>
+                  ) : (
+                    <div className="max-h-64 overflow-y-auto py-1">
+                      {gotoResults.map((hit, index) => (
+                        <button
+                          key={`${hit.path}:${hit.line}`}
+                          type="button"
+                          onMouseEnter={() => setGotoActive(index)}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            pickGoto(index);
+                          }}
+                          className={cn(
+                            "flex w-full items-baseline gap-2 px-3 py-1 text-left font-mono text-xs",
+                            index === gotoActive
+                              ? "bg-accent text-accent-foreground"
+                              : "text-foreground",
+                          )}
+                        >
+                          <span className="shrink-0 text-muted-foreground">
+                            {hit.path}:{hit.line}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate">{hit.text.trim()}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div className="max-h-64 overflow-y-auto py-1">
-                  {gotoResults.map((hit, index) => (
-                    <button
-                      key={`${hit.path}:${hit.line}`}
-                      type="button"
-                      onMouseEnter={() => setGotoActive(index)}
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        pickGoto(index);
-                      }}
-                      className={cn(
-                        "flex w-full items-baseline gap-2 px-3 py-1 text-left font-mono text-xs",
-                        index === gotoActive
-                          ? "bg-accent text-accent-foreground"
-                          : "text-foreground",
-                      )}
-                    >
-                      <span className="shrink-0 text-muted-foreground">
-                        {hit.path}:{hit.line}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">{hit.text.trim()}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+              )}
             {showPreview && (
               <div className="h-full overflow-auto px-4 py-3">
                 {svgImage ? (

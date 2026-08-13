@@ -209,6 +209,340 @@ textarea {
   color: hsl(var(--foreground));
 }
 
+/* LSP hover, completion, and signature help use CodeMirror's raw tooltips. */
+.warpforge-code-editor .cm-tooltip {
+  z-index: 500;
+  box-sizing: border-box;
+  max-width: min(38rem, calc(100vw - 2rem));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 12px 32px hsl(0 0% 0% / 0.38);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: calc(var(--app-font-size) * 0.785);
+  line-height: 1.4;
+}
+
+.warpforge-code-editor .cm-tooltip-arrow {
+  height: 7px;
+  width: 14px;
+}
+
+.warpforge-code-editor .cm-tooltip-above .cm-tooltip-arrow {
+  bottom: -7px;
+}
+
+.warpforge-code-editor .cm-tooltip-below .cm-tooltip-arrow {
+  top: -7px;
+}
+
+.warpforge-code-editor .cm-tooltip-above .cm-tooltip-arrow::before,
+.warpforge-code-editor .cm-tooltip-above .cm-tooltip-arrow::after,
+.warpforge-code-editor .cm-tooltip-below .cm-tooltip-arrow::before,
+.warpforge-code-editor .cm-tooltip-below .cm-tooltip-arrow::after {
+  border-left-width: 7px;
+  border-right-width: 7px;
+}
+
+.warpforge-code-editor .cm-tooltip-above .cm-tooltip-arrow::before {
+  border-top-color: hsl(var(--border));
+}
+
+.warpforge-code-editor .cm-tooltip-above .cm-tooltip-arrow::after {
+  border-top-color: hsl(var(--popover));
+}
+
+.warpforge-code-editor .cm-tooltip-below .cm-tooltip-arrow::before {
+  border-bottom-color: hsl(var(--border));
+}
+
+.warpforge-code-editor .cm-tooltip-below .cm-tooltip-arrow::after {
+  border-bottom-color: hsl(var(--popover));
+}
+
+.warpforge-code-editor .cm-lsp-hover-tooltip,
+.warpforge-code-editor .cm-lsp-signature-tooltip {
+  max-width: min(38rem, calc(100vw - 2rem));
+  max-height: min(20rem, 45vh);
+  padding: 0.55rem 0.75rem;
+  overflow: auto;
+}
+
+.warpforge-code-editor .cm-lsp-documentation p,
+.warpforge-code-editor .cm-lsp-documentation pre,
+.warpforge-code-editor .cm-lsp-documentation ul,
+.warpforge-code-editor .cm-lsp-documentation ol {
+  margin: 0.3rem 0;
+}
+
+.warpforge-code-editor .cm-lsp-documentation > :first-child {
+  margin-top: 0;
+}
+
+.warpforge-code-editor .cm-lsp-documentation > :last-child {
+  margin-bottom: 0;
+}
+
+.warpforge-code-editor .cm-lsp-documentation pre {
+  max-width: 100%;
+  padding: 0.45rem 0.55rem;
+  overflow-x: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 0.125rem);
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+}
+
+.warpforge-code-editor .cm-lsp-documentation code {
+  padding: 0.05rem 0.2rem;
+  border-radius: 0.2rem;
+  background: hsl(var(--secondary));
+  color: hsl(var(--primary));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+}
+
+.warpforge-code-editor .cm-lsp-documentation pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.warpforge-code-editor .cm-lsp-documentation a {
+  color: hsl(var(--primary));
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.warpforge-code-editor .cm-lsp-documentation h1,
+.warpforge-code-editor .cm-lsp-documentation h2,
+.warpforge-code-editor .cm-lsp-documentation h3,
+.warpforge-code-editor .cm-lsp-documentation h4 {
+  margin: 0.45rem 0 0.25rem;
+  color: hsl(var(--foreground));
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.warpforge-code-editor .cm-lsp-signature-tooltip {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.warpforge-code-editor .cm-lsp-signature {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+}
+
+.warpforge-code-editor .cm-lsp-active-parameter {
+  color: hsl(var(--primary));
+  font-weight: 700;
+}
+
+.warpforge-code-editor .cm-lsp-signature-num {
+  color: hsl(var(--muted-foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.warpforge-code-editor .cm-tooltip.cm-tooltip-autocomplete {
+  min-width: 16rem;
+  max-width: min(44rem, calc(100vw - 2rem));
+  overflow: hidden;
+}
+
+.warpforge-code-editor .cm-tooltip-autocomplete > ul {
+  max-width: none;
+  max-height: min(18rem, 45vh);
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.warpforge-code-editor .cm-tooltip-autocomplete > ul > li,
+.warpforge-code-editor .cm-tooltip-autocomplete > ul > completion-section {
+  padding: 0.2rem 0.45rem;
+  line-height: 1.35;
+}
+
+.warpforge-code-editor .cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.warpforge-code-editor .cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionDetail {
+  color: hsl(var(--muted-foreground));
+}
+
+.warpforge-code-editor .cm-completionMatchedText {
+  color: hsl(var(--primary));
+  text-decoration-color: hsl(var(--primary));
+}
+
+.warpforge-code-editor .cm-completionDetail {
+  color: hsl(var(--muted-foreground));
+}
+
+.warpforge-code-editor .cm-completionIcon {
+  color: hsl(var(--info));
+}
+
+.warpforge-code-editor .cm-tooltip.cm-completionInfo {
+  max-width: min(30rem, calc(100vw - 2rem));
+  padding: 0;
+  overflow: hidden auto;
+}
+
+.warpforge-code-editor .cm-lsp-completion-documentation {
+  max-height: min(18rem, 40vh);
+  overflow: auto;
+}
+
+/* Diagnostics — keep CodeMirror's markers readable inside the dark editor. */
+.warpforge-code-editor .cm-tooltip.cm-tooltip-lint {
+  max-width: min(36rem, calc(100vw - 2rem));
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 12px 32px hsl(0 0% 0% / 0.38);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: calc(var(--app-font-size) * 0.785);
+}
+
+.warpforge-code-editor .cm-tooltip-lint {
+  min-width: 14rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.warpforge-code-editor .cm-tooltip-lint .cm-diagnostic {
+  display: block;
+  padding: 0.45rem 0.65rem 0.45rem 0.75rem;
+  margin: 0;
+  border-left: 3px solid hsl(var(--muted-foreground));
+  white-space: pre-wrap;
+  line-height: 1.35;
+}
+
+.warpforge-code-editor .cm-tooltip-lint .cm-diagnostic + .cm-diagnostic {
+  border-top: 1px solid hsl(var(--border));
+}
+
+.warpforge-code-editor .cm-tooltip-lint .cm-diagnostic-error {
+  border-left-color: hsl(var(--destructive));
+}
+
+.warpforge-code-editor .cm-tooltip-lint .cm-diagnostic-warning {
+  border-left-color: hsl(var(--warn));
+}
+
+.warpforge-code-editor .cm-tooltip-lint .cm-diagnostic-info {
+  border-left-color: hsl(var(--info));
+}
+
+.warpforge-code-editor .cm-tooltip-lint .cm-diagnostic-hint {
+  border-left-color: hsl(var(--muted-foreground));
+}
+
+.warpforge-code-editor .cm-tooltip-lint .cm-diagnosticSource {
+  margin-top: 0.2rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.85em;
+}
+
+.warpforge-code-editor .cm-tooltip-lint .cm-diagnosticAction {
+  padding: 0.15rem 0.4rem;
+  margin: 0.25rem 0 0 0.5rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) - 0.125rem);
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+  font: inherit;
+  cursor: pointer;
+}
+
+.warpforge-code-editor .cm-tooltip-lint .cm-diagnosticAction:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.warpforge-code-editor .cm-lintRange {
+  padding-bottom: 0;
+  background-image: none;
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-underline-offset: 0.15em;
+}
+
+.warpforge-code-editor .cm-lintRange-error {
+  text-decoration-color: hsl(var(--destructive));
+}
+
+.warpforge-code-editor .cm-lintRange-warning {
+  text-decoration-color: hsl(var(--warn));
+}
+
+.warpforge-code-editor .cm-lintRange-info {
+  text-decoration-color: hsl(var(--info));
+}
+
+.warpforge-code-editor .cm-lintRange-hint {
+  text-decoration-color: hsl(var(--muted-foreground));
+}
+
+.warpforge-code-editor .cm-lintRange-active {
+  background-color: hsl(var(--accent) / 0.7);
+}
+
+.warpforge-code-editor .cm-lint-marker {
+  width: 0.85rem;
+  height: 0.85rem;
+  margin: 0.1rem 0.075rem;
+  background-image: none;
+  opacity: 0.9;
+}
+
+.warpforge-code-editor .cm-lint-marker-error {
+  content: "";
+  border-radius: 999px;
+  background: hsl(var(--destructive));
+}
+
+.warpforge-code-editor .cm-lint-marker-warning {
+  content: "";
+  background: hsl(var(--warn));
+  clip-path: polygon(50% 4%, 96% 94%, 4% 94%);
+}
+
+.warpforge-code-editor .cm-lint-marker-info {
+  content: "";
+  border-radius: 0.15rem;
+  background: hsl(var(--info));
+}
+
+.warpforge-code-editor .cm-lint-marker-hint {
+  content: "";
+  border-radius: 0.15rem;
+  background: hsl(var(--muted-foreground));
+  transform: rotate(45deg) scale(0.7);
+}
+
+.warpforge-code-editor .cm-panel.cm-panel-lint {
+  border-top: 1px solid hsl(var(--border));
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+}
+
+.warpforge-code-editor .cm-panel.cm-panel-lint ul [aria-selected] {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
 /* Resize handles for Mission Control grid */
 .react-resizable-handle {
   position: absolute;

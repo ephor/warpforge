@@ -17,9 +17,8 @@ type SaveStatus = "clean" | "unsaved" | "saved";
 /**
  * Editable side-by-side review of one file: HEAD (left, read-only) vs the
  * working tree (right, editable) via CodeMirror's MergeView. Per-chunk revert
- * arrows (↩) discard an agent change; edits to the right pane auto-save (debounced)
- * back to the working tree. ⌘S saves now; "Discard edits" restores the file to
- * how the agent left it.
+ * arrows (↩) discard an agent change; edits stay unsaved until ⌘S or the save
+ * action runs. "Discard edits" restores the file to how the agent left it.
  */
 export function MergeDiff({
   doc,
@@ -76,7 +75,12 @@ export function MergeDiff({
 
     void codemirrorLanguageForPath(doc.path).then((lang) => {
       if (disposed) return;
-      const common: Extension[] = [lineNumbers(), ...cmChromeForMode(themeMode), EditorView.lineWrapping, ...lang];
+      const common: Extension[] = [
+        lineNumbers(),
+        ...cmChromeForMode(themeMode),
+        EditorView.lineWrapping,
+        ...lang,
+      ];
       view = new MergeView({
         a: {
           doc: doc.oldText,
