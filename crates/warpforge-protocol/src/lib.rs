@@ -425,6 +425,10 @@ pub enum Method {
         name: String,
         #[serde(default)]
         from: Option<String>,
+        #[serde(default = "default_true")]
+        checkout: bool,
+        #[serde(default)]
+        overwrite: bool,
     },
     /// Rebase the current branch onto `target`, carrying uncommitted changes
     /// across. A conflict rolls back to the prior tree.
