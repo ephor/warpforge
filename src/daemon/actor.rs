@@ -2941,10 +2941,7 @@ impl Daemon {
             } => {
                 // accept keeps the change (no-op); only reject touches the tree.
                 if resolution == wire::HunkResolution::Reject {
-                    let repo = self
-                        .tasks
-                        .get(&task_id)
-                        .and_then(|t| self.project_path(&t.project));
+                    let repo = self.task_repo_path(&task_id);
                     if let Some(path) = repo {
                         if super::diff::reject_hunk(&path, &file, hunk_index)
                             .await
@@ -2970,10 +2967,7 @@ impl Daemon {
                 amend,
                 reply,
             } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                let repo = self.task_repo_path(&task_id);
                 let result = match repo {
                     Some(p) => super::diff::commit(&p, &message, files.as_deref(), amend)
                         .await
@@ -2992,10 +2986,7 @@ impl Daemon {
                 let _ = reply.send(result);
             }
             Command::GitUpdate { task_id, reply } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                let repo = self.task_repo_path(&task_id);
                 let result = match repo {
                     Some(p) => super::diff::update_project(&p).await.unwrap_or_else(|e| {
                         wire::GitOpResult {
@@ -3026,10 +3017,7 @@ impl Daemon {
                 // A task pins its own project; without one, New Task passes the
                 // project directly because no task exists yet.
                 let repo = match task_id {
-                    Some(id) => self
-                        .tasks
-                        .get(&id)
-                        .and_then(|t| self.project_path(&t.project)),
+                    Some(id) => self.task_repo_path(&id),
                     None => project.as_deref().and_then(|p| self.project_path(p)),
                 };
                 let list = match repo {
@@ -3043,10 +3031,7 @@ impl Daemon {
                 branch,
                 reply,
             } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                let repo = self.task_repo_path(&task_id);
                 let result = match repo {
                     Some(p) => super::diff::switch_branch(&p, &branch)
                         .await
@@ -3075,10 +3060,7 @@ impl Daemon {
                 new_name,
                 reply,
             } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                let repo = self.task_repo_path(&task_id);
                 let result = match repo {
                     Some(p) => super::diff::rename_branch(&p, &branch, &new_name)
                         .await
@@ -3106,10 +3088,7 @@ impl Daemon {
                 force,
                 reply,
             } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                let repo = self.task_repo_path(&task_id);
                 let result = match repo {
                     Some(p) => super::diff::delete_branch(&p, &branch, force)
                         .await
@@ -3139,10 +3118,7 @@ impl Daemon {
                 overwrite,
                 reply,
             } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                let repo = self.task_repo_path(&task_id);
                 let result = match repo {
                     Some(p) => {
                         super::diff::branch_create(&p, &name, from.as_deref(), checkout, overwrite)
@@ -3172,10 +3148,7 @@ impl Daemon {
                 target,
                 reply,
             } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                let repo = self.task_repo_path(&task_id);
                 let result = match repo {
                     Some(p) => super::diff::rebase(&p, &branch, &target)
                         .await
@@ -3202,10 +3175,7 @@ impl Daemon {
                 target,
                 reply,
             } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                let repo = self.task_repo_path(&task_id);
                 let result = match repo {
                     Some(p) => super::diff::merge(&p, &target).await.unwrap_or_else(|e| {
                         wire::GitOpResult {
