@@ -51,7 +51,8 @@ pub async fn list_files(repo: &str, include_ignored: bool) -> Result<Vec<wire::P
             .lines()
             .filter_map(|line| {
                 let path = line.trim();
-                (!path.is_empty() && !is_ignored_path(path)).then(|| wire::ProjectFile {
+                let exists = std::path::Path::new(repo).join(path).exists();
+                (!path.is_empty() && exists && !is_ignored_path(path)).then(|| wire::ProjectFile {
                     path: path.to_string(),
                     changed: changed.contains(path),
                 })
