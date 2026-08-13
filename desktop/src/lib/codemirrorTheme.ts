@@ -16,43 +16,42 @@ import { appSyntaxHighlighting } from "./codemirrorSyntax";
  * internal `light`/`dark` parent class, which is what merge additions clamp onto
  * for their `&light`/`&dark` styling.
  */
-export const appChromeTheme = EditorView.theme({
-  "&": {
-    color: "hsl(var(--foreground))",
-    backgroundColor: "transparent",
-  },
-  ".cm-content": {
-    caretColor: "hsl(var(--ring))",
-  },
-  ".cm-cursor, .cm-dropCursor": {
-    borderLeftColor: "hsl(var(--ring))",
-  },
-  "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, &::selection": {
-    backgroundColor: "hsl(var(--primary) / 0.28)",
-  },
-  ".cm-gutters": {
-    backgroundColor: "transparent",
-    color: "hsl(var(--muted-foreground))",
-    borderRight: "1px solid hsl(var(--border))",
-  },
-  ".cm-activeLineGutter": {
-    backgroundColor: "hsl(var(--muted) / 0.7)",
-    color: "hsl(var(--foreground))",
-  },
-  ".cm-activeLine": {
-    backgroundColor: "hsl(var(--muted) / 0.45)",
-  },
-  ".cm-foldPlaceholder": {
-    backgroundColor: "hsl(var(--accent))",
-    color: "hsl(var(--accent-foreground))",
-    border: "none",
-  },
-});
+export function appChromeTheme(_mode: "light" | "dark") {
+  return EditorView.theme({
+    "&": {
+      color: "hsl(var(--foreground))",
+      backgroundColor: "transparent",
+    },
+    ".cm-content": {
+      caretColor: "hsl(var(--ring))",
+    },
+    ".cm-cursor, .cm-dropCursor": {
+      borderLeftColor: "hsl(var(--ring))",
+    },
+    ".cm-gutters": {
+      backgroundColor: "transparent",
+      color: "hsl(var(--muted-foreground))",
+      borderRight: "1px solid hsl(var(--border))",
+    },
+    ".cm-activeLineGutter": {
+      backgroundColor: "hsl(var(--muted) / 0.7)",
+      color: "hsl(var(--foreground))",
+    },
+    ".cm-activeLine": {
+      backgroundColor: "hsl(var(--muted) / 0.45)",
+    },
+    ".cm-foldPlaceholder": {
+      backgroundColor: "hsl(var(--accent))",
+      color: "hsl(var(--accent-foreground))",
+      border: "none",
+    },
+  });
+}
 
 /** Editor chrome + syntax set for the app theme. Both modes use the theme's
  * own `--syntax-*` tokens, so dark editor text tracks the Forge/Old-Money
  * palettes just like light ones do. (oneDark was the only shipped highlight —
  * dropping it lets every theme own its editor colors.) */
-export function cmChromeForMode(_mode: "light" | "dark"): Extension[] {
-  return [appChromeTheme, appSyntaxHighlighting];
+export function cmChromeForMode(mode: "light" | "dark"): Extension[] {
+  return [appChromeTheme(mode), appSyntaxHighlighting];
 }

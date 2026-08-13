@@ -16,7 +16,7 @@ import { cmChromeForMode } from "@/lib/codemirrorTheme";
 import { acquireLspClient, releaseLspClient } from "@/lib/lspClients";
 import { cn } from "@/lib/utils";
 
-import type { FileDoc, SymbolMatch } from "../protocol";
+import type { FileDoc, FileRange, SymbolMatch } from "../protocol";
 import { useUi } from "../store/ui";
 import { Markdown } from "./Markdown";
 
@@ -25,6 +25,9 @@ type SaveStatus = "clean" | "unsaved" | "saved";
 const isMarkdownPath = (path: string) => /\.(md|markdown|mdx)$/i.test(path);
 const isSvgPath = (path: string) => /\.svg$/i.test(path);
 const isBinaryImagePath = (path: string) => /\.(png|jpg|jpeg|gif|webp|ico|bmp)$/i.test(path);
+// Guard for SSR/test (navigator may be undefined).
+const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
+const SEND_TO_CHAT_HINT = IS_MAC ? "⌘L" : "Ctrl L";
 
 function getMimeType(path: string): string {
   const ext = path.toLowerCase().split(".").pop();
@@ -50,6 +53,7 @@ export function CodeEditor({
   onOpenSymbol,
   gotoLocation,
   onGotoLocationHandled,
+  onAskFile,
 }: {
   doc: FileDoc;
   editable: boolean;
@@ -63,6 +67,10 @@ export function CodeEditor({
   /** Move the editor to a pending 1-based source location after it loads. */
   gotoLocation?: { line: number; column: number };
   onGotoLocationHandled?: () => void;
+  /** When provided, a floating "Send to chat" action appears over text
+   * selections that sends the highlighted line range to the task chat as a
+   * file reference. */
+  onAskFile?: (path: string, range: FileRange) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -72,6 +80,7 @@ export function CodeEditor({
   const onSaveRef = useRef(onSave);
   const onGotoRef = useRef(onGotoDefinition);
   const onOpenSymbolRef = useRef(onOpenSymbol);
+  const onAskFileRef = useRef(onAskFile);
   const lspEnabled = useUi((s) => s.lspEnabled);
   const [status, setStatus] = useState<SaveStatus>("clean");
   const [preview, setPreview] = useState(false);
@@ -81,6 +90,12 @@ export function CodeEditor({
   const [gotoActive, setGotoActive] = useState(0);
   const [gotoPending, setGotoPending] = useState(false);
   const [gotoQuery, setGotoQuery] = useState("");
+  const [selectionMenu, setSelectionMenu] = useState<{
+    from: number;
+    to: number;
+    x: number;
+    y: number;
+  } | null>(null);
   const markdown = isMarkdownPath(doc.path);
   const svgImage = isSvgPath(doc.path);
   const binaryImage = isBinaryImagePath(doc.path);
@@ -95,7 +110,8 @@ export function CodeEditor({
   useEffect(() => {
     onGotoRef.current = onGotoDefinition;
     onOpenSymbolRef.current = onOpenSymbol;
-  }, [onGotoDefinition, onOpenSymbol]);
+    onAskFileRef.current = onAskFile;
+  }, [onGotoDefinition, onOpenSymbol, onAskFile]);
 
   const flushSave = () => {
     const view = viewRef.current;
@@ -166,6 +182,68 @@ export function CodeEditor({
     [gotoResults],
   );
 
+  const updateSelectionMenu = useCallback(() => {
+    const view = viewRef.current;
+    if (!view || !onAskFileRef.current || markdown || svgImage || binaryImage) {
+      setSelectionMenu(null);
+      return;
+    }
+    const sel = view.state.selection.main;
+    if (sel.empty) {
+      setSelectionMenu(null);
+      return;
+    }
+    const from = Math.min(sel.from, sel.to);
+    const to = Math.max(sel.from, sel.to);
+    const start = view.coordsAtPos(from);
+    const end = view.coordsAtPos(to);
+    if (!start) {
+      setSelectionMenu(null);
+      return;
+    }
+    // Place the action relative to the host container, since the button is
+    // absolutely positioned inside it and coordsAtPos is viewport-relative.
+    const hostRect = host.current?.getBoundingClientRect();
+    const x = hostRect ? start.left - hostRect.left : start.left;
+    // Single-line selections: sit below the line (above overlaps the row of
+    // text the button is describing). Multi-line: float above the first line.
+    const singleLine = !!end && Math.abs(end.top - start.top) < 1;
+    const lineHeight = start.bottom - start.top;
+    const y = hostRect
+      ? singleLine
+        ? start.top - hostRect.top + lineHeight + 10
+        : start.top - hostRect.top - 8
+      : start.top + (singleLine ? lineHeight + 10 : -8);
+    setSelectionMenu({ from, to, x, y });
+  }, [binaryImage, markdown, svgImage]);
+
+  const askSelection = useCallback(() => {
+    const view = viewRef.current;
+    const ask = onAskFileRef.current;
+    if (!view || !ask || !selectionMenu) {
+      return;
+    }
+    const docText = view.state.doc;
+    setSelectionMenu(null);
+    ask(doc.path, {
+      start: docText.lineAt(selectionMenu.from).number,
+      end: docText.lineAt(selectionMenu.to).number,
+    });
+  }, [doc.path, selectionMenu]);
+
+  // CodeMirror consumes mouse/key events; React handlers on the host wrapper
+  // never see mouseup/keyup. Keep the latest updater in a ref the editor's own
+  // dom-event extension can invoke while the view is mounted.
+  const updateSelectionMenuRef = useRef(updateSelectionMenu);
+  useEffect(() => {
+    updateSelectionMenuRef.current = updateSelectionMenu;
+  }, [updateSelectionMenu]);
+
+  const askSelectionRef = useRef(askSelection);
+  useEffect(() => {
+    askSelectionRef.current = askSelection;
+  }, [askSelection]);
+
   useEffect(() => {
     const parent = host.current;
     if (!parent || binaryImage) {
@@ -195,6 +273,9 @@ export function CodeEditor({
             keymap.of([
               { key: "Mod-s", run: flushSave },
               ...(onGotoDefinition ? [{ key: "Mod-b", run: runGoto, preventDefault: true }] : []),
+              ...(onAskFile
+                ? [{ key: "Mod-l", run: () => { askSelectionRef.current(); return true; }, preventDefault: true }]
+                : []),
             ]),
             ...(onGotoDefinition
               ? [
@@ -211,6 +292,20 @@ export function CodeEditor({
                       cv.dispatch({ selection: { anchor: pos } });
                       runGoto();
                       return true;
+                    },
+                  }),
+                ]
+              : []),
+            ...(onAskFile
+              ? [
+                  EditorView.domEventHandlers({
+                    mouseup: () => {
+                      updateSelectionMenuRef.current();
+                      return false;
+                    },
+                    keyup: () => {
+                      updateSelectionMenuRef.current();
+                      return false;
                     },
                   }),
                 ]
@@ -399,6 +494,8 @@ export function CodeEditor({
                 showPreview && "hidden",
               )}
               style={{ fontSize: "var(--app-mono-font-size)" }}
+              onMouseUp={updateSelectionMenu}
+              onKeyUp={updateSelectionMenu}
             />
             {(gotoResults.length > 0 || gotoPending || (gotoQuery && !gotoPending)) &&
               !showPreview && (
@@ -440,6 +537,20 @@ export function CodeEditor({
                   )}
                 </div>
               )}
+            {selectionMenu && !showPreview && (
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={askSelection}
+                className="absolute z-20 flex items-center gap-1.5 rounded-md border bg-popover px-2 py-1 text-xs font-medium text-foreground shadow-lg hover:bg-accent hover:text-accent-foreground"
+                style={{ left: selectionMenu.x, top: selectionMenu.y }}
+              >
+                Send to chat
+                <kbd className="rounded-sm border border-border bg-muted px-1 font-mono text-[10px] leading-4 text-muted-foreground">
+                  {SEND_TO_CHAT_HINT}
+                </kbd>
+              </button>
+            )}
             {showPreview && (
               <div className="h-full overflow-auto px-4 py-3">
                 {svgImage ? (

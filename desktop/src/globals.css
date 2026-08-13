@@ -630,6 +630,19 @@ textarea {
   border-radius: 0.375rem;
 }
 
+/* CodeMirror selection: beats the library's own focus-scoped `&light`/`&dark`
+   core rules (specificity (0,5,0) + `!important`) that otherwise flash a
+   near-white `#d7d4f0` over dark text fields. CM's user themes can't express
+   `&light`/`&dark`, so this lives in global CSS instead. */
+:root:not(.dark) .cm-editor .cm-selectionBackground,
+:root:not(.dark) .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {
+  background-color: hsl(var(--primary) / 0.18) !important;
+}
+.dark .cm-editor .cm-selectionBackground,
+.dark .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {
+  background-color: hsl(var(--ring) / 0.28) !important;
+}
+
 /* Prevent text selection during drag/resize */
 body.wf-dragging,
 body.wf-dragging * {
