@@ -32,6 +32,7 @@ use crate::registry::ProjectEntry;
 use crate::service::{kill_listeners_in_ranges, ServiceEvent, ServiceManager, ServiceStatus};
 
 use super::acp::{spawn_acp_session, AcpHandle, AcpUpdate, PolicyCheck};
+use super::runtime::{Ask as PersistAsk, Write as PersistWrite};
 use super::store::Store;
 use super::task::{Task, TaskStatus};
 use super::wire as wireconv;
@@ -1870,7 +1871,14 @@ pub struct Daemon {
     /// (e.g. the ACP probe) can deliver results without needing a borrow of the
     /// actor. Held alongside `store` etc. as a primary mutator handle.
     cmd_tx: mpsc::Sender<Command>,
-    store: Option<Store>,
+    /// Queued writes, applied off the actor thread. Every mutation goes here —
+    /// calling `store` directly from a handler puts a blocking disk write back
+    /// on the hot path (ADR 0002).
+    persist: super::runtime::Persist,
+    /// Shared with the persistence thread, for the reads that still run on the
+    /// actor. Those move to an in-memory projection next; until then, use
+    /// [`Daemon::with_store`] rather than locking at the call site.
+    store: Option<Arc<Mutex<Store>>>,
     /// `session/load` may replay already persisted ACP updates. While the
     /// replay matches local history in order, drop it; the first mismatch is
     /// new live output and disables the guard.
@@ -1896,6 +1904,13 @@ pub struct Daemon {
     pending_wake: std::collections::HashSet<String>,
     /// Stable first-seen timestamps for streamed frames of the same tool call.
     tool_call_starts: HashMap<(String, String), u64>,
+    /// The session transcript per task, mirroring the `session_updates` table.
+    ///
+    /// Held in memory because persistence is write-behind: a read straight from
+    /// SQLite would miss whatever is still queued, and a stage that reads its
+    /// own truncated output mis-parses its verdict. This is also what keeps
+    /// transcript reads off the actor's thread entirely (ADR 0002).
+    session_updates: HashMap<String, Vec<wire::SessionUpdate>>,
     /// Deterministic workflow pipelines keyed by parent task id. Finished runs
     /// stay in the map so their state remains visible on the board.
     workflow_runs: HashMap<String, WorkflowRun>,
@@ -1960,18 +1975,23 @@ impl Daemon {
             .flatten()
             .unwrap_or_default();
 
-        let tool_call_starts = store
+        // The transcript is loaded once and kept. It was already read in full
+        // here (for `tool_call_starts`) and then dropped; keeping it is what
+        // lets the actor answer transcript questions without touching the disk.
+        let session_updates: HashMap<String, Vec<wire::SessionUpdate>> = store
             .as_ref()
-            .and_then(|s| s.load_all_session_updates().ok())
-            .unwrap_or_default()
-            .into_iter()
+            .and_then(|s| s.load_all_session_updates_raw().ok())
+            .unwrap_or_default();
+
+        let tool_call_starts = session_updates
+            .iter()
             .flat_map(|(task_id, updates)| {
-                updates.into_iter().filter_map(move |update| match update {
+                updates.iter().filter_map(move |update| match update {
                     wire::SessionUpdate::ToolCall {
                         tool_call_id,
                         started_at: Some(started_at),
                         ..
-                    } => Some(((task_id.clone(), tool_call_id), started_at)),
+                    } => Some(((task_id.clone(), tool_call_id.clone()), *started_at)),
                     _ => None,
                 })
             })
@@ -1981,6 +2001,11 @@ impl Daemon {
             .as_ref()
             .and_then(|s| s.load_accounts().ok())
             .unwrap_or_default();
+
+        // Everything above read from the store directly — it is startup, the
+        // actor is not running yet. From here the connection belongs to the
+        // persistence thread and writes go through the queue.
+        let (persist, store) = super::runtime::Persist::spawn(store);
 
         let config_observer = ConfigObserver::new(&projects);
         let daemon = Daemon {
@@ -1997,6 +2022,7 @@ impl Daemon {
             event_tx: event_tx.clone(),
             acp_tx,
             cmd_tx: cmd_tx.clone(),
+            persist,
             store,
             resume_replay: HashMap::new(),
             worktrees: HashMap::new(),
@@ -2008,6 +2034,7 @@ impl Daemon {
             orchestrator_inbox: HashMap::new(),
             pending_wake: std::collections::HashSet::new(),
             tool_call_starts,
+            session_updates,
             workflow_runs: HashMap::new(),
             accounts,
         };
@@ -2070,9 +2097,29 @@ impl Daemon {
     }
 
     fn persist(&self, task: &Task) {
-        if let Some(store) = &self.store {
-            let _ = store.upsert_task(task);
-        }
+        self.persist.task(task);
+    }
+
+    /// This task's transcript so far. Empty for a task that has none.
+    fn transcript(&self, task_id: &str) -> &[wire::SessionUpdate] {
+        self.session_updates
+            .get(task_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    /// Read from the store on the actor thread.
+    ///
+    /// Every remaining caller is a blocking read that ADR 0002 moves to an
+    /// in-memory projection; this exists so those call sites are greppable and
+    /// share one poisoning policy rather than each locking by hand. Do not add
+    /// new ones, and never write through it — writes go to `self.persist`.
+    fn with_store<T>(&self, read: impl FnOnce(&Store) -> T) -> Option<T> {
+        let store = self.store.as_ref()?;
+        // Recover a poisoned lock instead of taking the daemon down with the
+        // persistence thread.
+        let guard = store.lock().unwrap_or_else(|e| e.into_inner());
+        Some(read(&guard))
     }
 
     fn build_project_config_state(
@@ -2232,11 +2279,13 @@ impl Daemon {
             })
             .collect();
 
+        // Folded from the in-memory transcript, not re-read: a disk read here
+        // would miss whatever persistence still has queued.
         let session_history = self
-            .store
-            .as_ref()
-            .and_then(|s| s.load_all_session_updates().ok())
-            .unwrap_or_default();
+            .session_updates
+            .iter()
+            .map(|(task_id, updates)| (task_id.clone(), super::store::fold_for_snapshot(updates)))
+            .collect();
 
         wire::Snapshot {
             projects,
@@ -2330,6 +2379,10 @@ impl Daemon {
         self.portforwards.stop_all().await.ok();
         kill_listeners_in_ranges(&self.project_port_ranges()).await;
         self.agents.kill_all();
+        // Writes are applied on another thread, so exiting without draining the
+        // queue drops the tail of every transcript written since the last
+        // batch. Everything above can still enqueue, so flush last.
+        self.persist.flush().await;
         match shutdown_reply {
             Some(ShutdownReply::Requested(reply)) => {
                 let _ = reply.send(());
@@ -2799,13 +2852,11 @@ impl Daemon {
                     {
                         if agent_cfg.last_model.as_deref() != Some(m.as_str()) {
                             agent_cfg.last_model = Some(m.clone());
-                            if let Some(ref store) = self.store {
-                                let _ = store.update_agent_models(
-                                    &agent_cfg.id,
-                                    &agent_cfg.models,
-                                    agent_cfg.last_model.as_deref(),
-                                );
-                            }
+                            self.persist.write(PersistWrite::AgentModels {
+                                id: agent_cfg.id.clone(),
+                                models: agent_cfg.models.clone(),
+                                last_model: agent_cfg.last_model.clone(),
+                            });
                             let agents = self.configured_agents.clone();
                             self.emit(Event::AgentsUpdated { agents });
                         }
@@ -3481,9 +3532,8 @@ impl Daemon {
                 };
                 let mut delete_result = stop_result;
                 if delete_result.is_ok() && self.workflow_runs.remove(&id).is_some() {
-                    if let Some(store) = &self.store {
-                        let _ = store.delete_workflow_run(&id);
-                    }
+                    self.persist
+                        .write(PersistWrite::DeleteWorkflowRun(id.clone()));
                 }
                 if delete_result.is_ok() {
                     self.pending_permissions.cleanup_task(&id);
@@ -3501,10 +3551,12 @@ impl Daemon {
                 if delete_result.is_ok() && self.tasks.remove(&id).is_some() {
                     self.tool_call_starts
                         .retain(|(task_id, _), _| task_id != &id);
-                    if let Some(store) = &self.store {
-                        if let Err(error) = store.delete_task(&id) {
-                            delete_result = Err(error.to_string());
-                        }
+                    self.session_updates.remove(&id);
+                    // Awaited, not queued: a failed delete is reported to the
+                    // user, and dropping the error would leave a task that
+                    // reappears on the next start with no explanation.
+                    if let Err(error) = self.persist.ask(PersistAsk::DeleteTask(id.clone())).await {
+                        delete_result = Err(error);
                     }
                     self.emit(Event::TaskRemoved { id: id.clone() });
                     // Deleting a stage child mid-run fails that stage.
@@ -3840,9 +3892,7 @@ impl Daemon {
                 });
             }
             Command::UpdateAgents { agents } => {
-                if let Some(store) = &self.store {
-                    let _ = store.save_agents(&agents);
-                }
+                self.persist.write(PersistWrite::Agents(agents.clone()));
                 self.configured_agents = agents.clone();
                 self.emit(Event::AgentsUpdated {
                     agents: self.configured_agents.clone(),
@@ -3866,7 +3916,8 @@ impl Daemon {
                 label,
                 reply,
             } => {
-                let _ = reply.send(self.import_account(&agent_id, &label));
+                let result = self.import_account(&agent_id, &label).await;
+                let _ = reply.send(result);
             }
             Command::RenameAccount {
                 account_id,
@@ -3877,9 +3928,7 @@ impl Daemon {
                     Some(account) => {
                         account.label = label;
                         let updated = account.clone();
-                        if let Some(store) = &self.store {
-                            let _ = store.upsert_account(&updated);
-                        }
+                        self.persist.write(PersistWrite::Account(Box::new(updated)));
                         Ok(())
                     }
                     None => Err(format!("no account {account_id}")),
@@ -3887,14 +3936,15 @@ impl Daemon {
                 let _ = reply.send(result.map(|()| self.emit_accounts()));
             }
             Command::RemoveAccount { account_id, reply } => {
-                let _ = reply.send(self.remove_account(&account_id));
+                let result = self.remove_account(&account_id).await;
+                let _ = reply.send(result);
             }
             Command::SetActiveAccount {
                 agent_id,
                 account_id,
                 reply,
             } => {
-                let result = self.set_active_account(&agent_id, &account_id);
+                let result = self.set_active_account(&agent_id, &account_id).await;
                 let _ = reply.send(result);
             }
             Command::ProbeAgent { id } => {
@@ -3936,9 +3986,11 @@ impl Daemon {
                 if let Some(agent) = self.configured_agents.iter_mut().find(|a| a.id == id) {
                     agent.models = models.clone();
                     agent.last_model = last_model.clone();
-                    if let Some(store) = &self.store {
-                        let _ = store.update_agent_models(&id, &models, last_model.as_deref());
-                    }
+                    self.persist.write(PersistWrite::AgentModels {
+                        id: id.clone(),
+                        models: models.clone(),
+                        last_model: last_model.clone(),
+                    });
                 }
                 self.emit(Event::AgentsUpdated {
                     agents: self.configured_agents.clone(),
@@ -3987,10 +4039,10 @@ impl Daemon {
             }
             Command::SaveOrchestratorConfig { config, reply } => {
                 self.orch_config = config.into();
-                // Persist to store if available.
-                if let Some(ref store) = self.store {
-                    let _ = store.save_orchestrator_config(&self.orch_config);
-                }
+                self.persist
+                    .write(PersistWrite::OrchestratorConfig(Box::new(
+                        self.orch_config.clone(),
+                    )));
                 let _ = reply.send(true);
             }
             Command::SetTaskStatus { id, status } => {
@@ -4420,7 +4472,7 @@ impl Daemon {
     /// Register the agent's currently-authenticated login as a new account by
     /// copying its credentials into a fresh vault. The agent's own home is only
     /// ever read.
-    fn import_account(
+    async fn import_account(
         &mut self,
         agent_id: &str,
         label: &str,
@@ -4458,11 +4510,19 @@ impl Daemon {
             // wait to be picked, so importing never moves live sessions.
             active: !self.accounts.iter().any(|a| a.agent_id == agent_id),
         };
-        if let Some(store) = &self.store {
-            store.upsert_account(&account).map_err(|e| e.to_string())?;
-            if account.active {
-                let _ = store.set_active_account(agent_id, &account.id);
-            }
+        let active = account.active;
+        let account_id = account.id.clone();
+        self.persist
+            .ask(PersistAsk::Account(Box::new(account.clone())))
+            .await?;
+        if active {
+            let _ = self
+                .persist
+                .ask(PersistAsk::SetActiveAccount {
+                    agent_id: agent_id.to_string(),
+                    account_id,
+                })
+                .await;
         }
         self.accounts.push(account);
         Ok(self.emit_accounts())
@@ -4475,7 +4535,7 @@ impl Daemon {
     /// the selection is only recorded if that succeeded: a stored "active"
     /// account the CLI is not actually using would misreport which login every
     /// session runs under.
-    fn set_active_account(
+    async fn set_active_account(
         &mut self,
         agent_id: &str,
         account_id: &str,
@@ -4501,11 +4561,12 @@ impl Daemon {
             )
             .map_err(|e| e.to_string())?;
         }
-        if let Some(store) = &self.store {
-            store
-                .set_active_account(agent_id, account_id)
-                .map_err(|e| e.to_string())?;
-        }
+        self.persist
+            .ask(PersistAsk::SetActiveAccount {
+                agent_id: agent_id.to_string(),
+                account_id: account_id.to_string(),
+            })
+            .await?;
         for account in &mut self.accounts {
             if account.agent_id == agent_id {
                 account.active = account.id == account_id;
@@ -4554,18 +4615,16 @@ impl Daemon {
             .unwrap_or(agent)
     }
 
-    fn remove_account(&mut self, account_id: &str) -> Result<Vec<wire::AccountInfo>, String> {
+    async fn remove_account(&mut self, account_id: &str) -> Result<Vec<wire::AccountInfo>, String> {
         let Some(index) = self.accounts.iter().position(|a| a.id == account_id) else {
             return Err(format!("no account {account_id}"));
         };
         let account = self.accounts[index].clone();
         super::accounts::remove_vault(std::path::Path::new(&account.home_dir), &account.id)
             .map_err(|e| e.to_string())?;
-        if let Some(store) = &self.store {
-            store
-                .delete_account(account_id)
-                .map_err(|e| e.to_string())?;
-        }
+        self.persist
+            .ask(PersistAsk::DeleteAccount(account_id.to_string()))
+            .await?;
         self.accounts.remove(index);
         if account.agent_id == "claude" {
             let _ = self
@@ -4583,7 +4642,7 @@ impl Daemon {
                 .find(|a| a.agent_id == account.agent_id)
                 .map(|a| a.id.clone())
             {
-                self.set_active_account(&account.agent_id, &next_id)?;
+                self.set_active_account(&account.agent_id, &next_id).await?;
             }
         }
         Ok(self.emit_accounts())
@@ -4988,27 +5047,26 @@ impl Daemon {
         }
     }
 
-    fn emit_session_unless_last_duplicate(&self, task_id: &str, update: wire::SessionUpdate) {
-        if let Some(store) = &self.store {
-            if let Ok(Some(last)) = store.load_last_session_update(task_id) {
-                if last == update {
-                    return;
-                }
-            }
+    /// Emit unless this is byte-for-byte the update that went out last for the
+    /// task — a reconnect retry re-sending a prompt, or a repeated usage frame.
+    ///
+    /// The comparison is against what this daemon last emitted, held in memory.
+    /// It used to `SELECT` the last persisted row, which write-behind
+    /// persistence makes wrong as well as slow: the row it needs is usually
+    /// still in the queue, so every duplicate would slip through.
+    fn emit_session_unless_last_duplicate(&mut self, task_id: &str, update: wire::SessionUpdate) {
+        if self.transcript(task_id).last() == Some(&update) {
+            return;
         }
         self.emit_session(task_id, update);
     }
 
     fn prepare_resume_replay_guard(&mut self, task_id: &str) {
-        let Some(store) = &self.store else {
-            return;
-        };
-        let Ok(updates) = store.load_session_updates(task_id) else {
-            return;
-        };
-        let replayable = updates
-            .into_iter()
-            .filter(is_acp_replay_update)
+        let replayable = self
+            .transcript(task_id)
+            .iter()
+            .filter(|update| is_acp_replay_update(update))
+            .cloned()
             .collect::<VecDeque<_>>();
         if !replayable.is_empty() {
             self.resume_replay.insert(task_id.to_string(), replayable);
@@ -5042,16 +5100,10 @@ impl Daemon {
     /// `AgentText` updates) — used as the orchestrator node's result, e.g. the
     /// planner's task-graph JSON.
     fn collect_agent_text(&self, task_id: &str) -> String {
-        let Some(store) = &self.store else {
-            return String::new();
-        };
-        let Ok(updates) = store.load_session_updates(task_id) else {
-            return String::new();
-        };
-        updates
-            .into_iter()
+        self.transcript(task_id)
+            .iter()
             .filter_map(|u| match u {
-                wire::SessionUpdate::AgentText { text } => Some(text),
+                wire::SessionUpdate::AgentText { text } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<Vec<_>>()
@@ -5075,13 +5127,7 @@ impl Daemon {
     /// `full` is every chunk of the turn, kept as a parsing fallback for an
     /// agent that emits its protocol block before a trailing tool call.
     fn collect_stage_text(&self, task_id: &str) -> StageText {
-        let Some(updates) = self
-            .store
-            .as_ref()
-            .and_then(|s| s.load_session_updates(task_id).ok())
-        else {
-            return StageText::default();
-        };
+        let updates = self.transcript(task_id).iter().cloned();
         let mut full: Vec<String> = Vec::new();
         let mut closing: Vec<String> = Vec::new();
         for update in updates {
@@ -5195,10 +5241,12 @@ impl Daemon {
         });
     }
 
-    fn emit_session(&self, task_id: &str, update: wire::SessionUpdate) {
-        if let Some(store) = &self.store {
-            let _ = store.save_session_update(task_id, &update);
-        }
+    fn emit_session(&mut self, task_id: &str, update: wire::SessionUpdate) {
+        self.persist.session_update(task_id, &update);
+        self.session_updates
+            .entry(task_id.to_string())
+            .or_default()
+            .push(update.clone());
         self.emit(Event::SessionUpdate {
             task_id: task_id.to_string(),
             update,
@@ -5397,7 +5445,7 @@ impl Daemon {
     /// but would glue unrelated workflow transitions into one Markdown blob.
     #[allow(clippy::too_many_arguments)]
     fn workflow_event(
-        &self,
+        &mut self,
         parent_id: &str,
         event: wire::WorkflowEventKind,
         title: impl Into<String>,
@@ -5422,7 +5470,7 @@ impl Daemon {
     /// Convenience wrapper for transitions that do not reference a particular
     /// agent. Split the first paragraph into the card title and keep the rest
     /// as Markdown detail.
-    fn workflow_timeline(&self, parent_id: &str, text: impl Into<String>) {
+    fn workflow_timeline(&mut self, parent_id: &str, text: impl Into<String>) {
         let text = text.into();
         let text = text.trim();
         let (heading, detail) = text
@@ -5478,10 +5526,8 @@ impl Daemon {
             self.persist(&updated);
             self.emit(Event::TaskUpdated(updated));
         }
-        if let Some(store) = &self.store {
-            if let Ok(json) = serde_json::to_string(run) {
-                let _ = store.save_workflow_run(&run.parent_id, &json);
-            }
+        if let Ok(json) = serde_json::to_string(run) {
+            self.persist.workflow_run(&run.parent_id, json);
         }
     }
 
@@ -6679,9 +6725,8 @@ impl Daemon {
     /// (resume re-runs the interrupted stage from scratch).
     fn restore_workflow_runs(&mut self) {
         let rows = self
-            .store
-            .as_ref()
-            .and_then(|s| s.load_workflow_runs().ok())
+            .with_store(|store| store.load_workflow_runs().ok())
+            .flatten()
             .unwrap_or_default();
         for (task_id, json) in rows {
             let Ok(mut run) = serde_json::from_str::<WorkflowRun>(&json) else {
@@ -6689,9 +6734,8 @@ impl Daemon {
                 // the parent sits with no pipeline state and therefore no
                 // pause/resume/stop controls. Say so, once, and move on.
                 eprintln!("[daemon] dropping unreadable workflow run for task {task_id}");
-                if let Some(store) = &self.store {
-                    let _ = store.delete_workflow_run(&task_id);
-                }
+                self.persist
+                    .write(PersistWrite::DeleteWorkflowRun(task_id.clone()));
                 if let Some(task) = self.tasks.get_mut(&task_id) {
                     task.blocked_reason =
                         Some("workflow state could not be restored after an upgrade".to_string());
@@ -6761,10 +6805,8 @@ impl Daemon {
                 let updated = task.clone();
                 self.persist(&updated);
             }
-            if let Some(store) = &self.store {
-                if let Ok(json) = serde_json::to_string(&run) {
-                    let _ = store.save_workflow_run(&task_id, &json);
-                }
+            if let Ok(json) = serde_json::to_string(&run) {
+                self.persist.workflow_run(&task_id, json);
             }
             self.workflow_runs.insert(task_id, run);
         }
