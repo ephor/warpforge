@@ -3007,11 +3007,21 @@ impl Daemon {
                     .tasks
                     .get(&task_id)
                     .and_then(|t| self.project_path(&t.project));
-                let matches = match repo {
-                    Some(p) => super::diff::search_files(&p, &query, limit).unwrap_or_default(),
-                    None => Vec::new(),
-                };
-                let _ = reply.send(matches);
+                match repo {
+                    // A synchronous walk that reads every file in the project.
+                    // Run inline it freezes the whole daemon for the length of
+                    // the search — on a large repo, seconds (ADR 0002).
+                    Some(p) => {
+                        tokio::task::spawn_blocking(move || {
+                            let matches =
+                                super::diff::search_files(&p, &query, limit).unwrap_or_default();
+                            let _ = reply.send(matches);
+                        });
+                    }
+                    None => {
+                        let _ = reply.send(Vec::new());
+                    }
+                }
             }
             Command::SaveFile {
                 task_id,
