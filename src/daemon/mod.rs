@@ -20,6 +20,7 @@ pub mod diff;
 pub mod lsp;
 pub mod lsp_servers;
 pub mod prompt;
+pub mod runtime;
 pub mod server;
 pub mod sessions;
 pub mod store;
@@ -127,6 +128,55 @@ mod tests {
             task_rx.await.is_err(),
             "the actor must drop mutations queued after an accepted handoff"
         );
+    }
+
+    /// Shutting a daemon down must not kill processes it never started.
+    ///
+    /// Teardown used to sweep the project's whole port range with `lsof` and
+    /// kill every listener in it. Every test that shuts a daemon down did that
+    /// too — so `cargo test` in this repo killed whatever the developer had
+    /// listening on 4000-4099, including the agent processes of the warpforge
+    /// running the tests.
+    #[tokio::test]
+    async fn shutdown_does_not_kill_listeners_it_did_not_start() {
+        // A stranger's server on a port inside the project's range. Spawned as
+        // a child process so the sweep would kill it, not the test runner.
+        let (start, end) = crate::ports::port_range(0);
+        let port = (start..=end)
+            .find(|p| std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok())
+            .expect("a free port in the project range");
+        let mut stranger = tokio::process::Command::new("python3")
+            .args([
+                "-c",
+                &format!(
+                    "import socket,time\ns=socket.socket()\ns.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\ns.bind(('127.0.0.1',{port}))\ns.listen()\ntime.sleep(30)"
+                ),
+            ])
+            .spawn()
+            .expect("spawn the stranger");
+
+        // Wait until it is actually listening.
+        let mut listening = false;
+        for _ in 0..100 {
+            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                listening = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            listening,
+            "the stranger should be listening before we start"
+        );
+
+        let daemon = Daemon::spawn(test_projects(), None);
+        daemon.shutdown().await;
+
+        assert!(
+            stranger.try_wait().expect("poll the stranger").is_none(),
+            "daemon shutdown killed a process it never started"
+        );
+        stranger.kill().await.ok();
     }
 
     #[tokio::test]
@@ -1182,6 +1232,67 @@ mod tests {
         assert_ne!(
             graph.nodes[1].task_id, graph.nodes[3].task_id,
             "a dead reviewer session must be replaced by a fresh one"
+        );
+    }
+
+    /// Losing a stage's agent must not finish the pipeline. It used to call
+    /// workflow_finalize, which is terminal — the run was over, resume refused
+    /// with "the pipeline is not paused", and a user whose agent died had to
+    /// start again from a new task even when the work was already done. The run
+    /// now parks at the pause barrier, and resuming re-runs the stage.
+    #[tokio::test]
+    async fn workflow_lost_stage_agent_pauses_instead_of_failing() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: placeholder\n");
+        let reviewer = wf_agent(&dir, "rev.state", "approve");
+        std::fs::write(
+            dir.path().join(".warpforge/workflows/test.yaml"),
+            format!("name: Lost agent\nreview:\n  reviewers:\n    - agent: {reviewer}\n"),
+        )
+        .unwrap();
+        // Implement dies mid-turn; the re-run after resume implements normally.
+        let lead = wf_agent(&dir, "impl.state", "die impl");
+
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(projects, store);
+        let mut events = daemon.subscribe();
+        let parent_id = create_workflow_task(&daemon, &lead).await;
+
+        let paused = wait_for_parent(&mut events, &parent_id, "paused after lost agent", |t| {
+            t.workflow_run
+                .as_ref()
+                .and_then(|w| w.waiting.as_ref())
+                .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Paused)
+        })
+        .await;
+        assert_eq!(paused.status, TaskStatus::Waiting);
+        assert_eq!(
+            paused.workflow_run.as_ref().unwrap().stage,
+            wire::WorkflowStage::Implement,
+            "it parks at the stage that lost its agent, ready to re-run it"
+        );
+
+        // The run is genuinely resumable — the whole point.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::WorkflowResume {
+                task: parent_id.clone(),
+                note: None,
+                reply: tx,
+            })
+            .await;
+        rx.await.unwrap().expect("a parked run must accept resume");
+
+        let done = wait_for_parent(&mut events, &parent_id, "pipeline done", |t| {
+            t.workflow_run
+                .as_ref()
+                .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
+        })
+        .await;
+        assert_eq!(
+            done.workflow_run.unwrap().verdict,
+            Some(wire::WorkflowVerdict::Approve),
+            "resuming re-runs the stage and the pipeline completes"
         );
     }
 

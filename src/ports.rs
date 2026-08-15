@@ -48,6 +48,26 @@ pub fn allocate(
     ))
 }
 
+/// Ports this process handed out that fall inside `ranges`.
+///
+/// Teardown sweeps use this instead of the whole range: a range holds whatever
+/// happens to be listening, including a developer's unrelated server, and
+/// warpforge has no business killing a process it did not start.
+pub fn allocated_in_ranges(ranges: &[(u16, u16)]) -> Vec<u16> {
+    let map = alloc_map().lock().unwrap();
+    let mut ports: Vec<u16> = map
+        .keys()
+        .copied()
+        .filter(|port| {
+            ranges
+                .iter()
+                .any(|&(start, end)| *port >= start && *port <= end)
+        })
+        .collect();
+    ports.sort_unstable();
+    ports
+}
+
 /// Release the port allocated for a service.
 pub fn release(project_name: &str, service_name: &str) {
     let key = format!("{project_name}/{service_name}");

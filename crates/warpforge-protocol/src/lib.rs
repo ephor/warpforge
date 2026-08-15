@@ -655,50 +655,6 @@ pub enum Method {
     /// server. Returns `{ ok, command, output }`.
     #[serde(rename = "lsp.install")]
     LanguageServersInstall { id: String },
-}
-
-/// One supported editor language and its language-server install state, sent
-/// by [`Method::LanguageServersDetect`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct DetectedLanguageServer {
-    /// Editor language id, matching the daemon's server_command table
-    /// (`typescript`, `rust`, `go`, `python`, `json`, `css`, `html`, `yaml`).
-    pub id: String,
-    /// User-facing label ("TypeScript / JavaScript", "Rust", …).
-    pub language: String,
-    pub installed: bool,
-    /// Installed version of the server binary, when determinable.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    /// Latest published version (from the npm registry), when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub latest_version: Option<String>,
-    /// Freshness verdict: "current" | "behind" | "missing" | "unknown".
-    pub status: String,
-    /// Shell command that installs the server. None when there is no automatable
-    /// install (unknown package manager / system-only package).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub install_command: Option<String>,
-    /// Shell command that updates an installed server to latest, derived from
-    /// how the existing binary was installed. None when it can't be updated.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub update_command: Option<String>,
-    /// Whether the daemon can run an automated install/update for this server.
-    pub can_manage: bool,
-    /// Human-readable install hint shown when the server is missing.
-    pub install_hint: String,
-}
-
-/// Reply to [`Method::LspStart`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct LspStartResult {
-    pub server_id: String,
-    pub available: bool,
-    /// Absolute workspace root the server was rooted at. Clients build
-    /// `file://` document URIs from it. Empty when unavailable.
-    pub root_path: String,
 
     // ── Issue trackers (GitHub / Linear sync) ──
     /// Current tracker connection state. Returns `{ linear: { connected,
@@ -862,6 +818,50 @@ pub struct LspStartResult {
     /// its first task). Returns `{ ok }`.
     #[serde(rename = "workItem.linkTask")]
     WorkItemLinkTask { item_id: String, task_id: String },
+}
+
+/// One supported editor language and its language-server install state, sent
+/// by [`Method::LanguageServersDetect`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectedLanguageServer {
+    /// Editor language id, matching the daemon's server_command table
+    /// (`typescript`, `rust`, `go`, `python`, `json`, `css`, `html`, `yaml`).
+    pub id: String,
+    /// User-facing label ("TypeScript / JavaScript", "Rust", …).
+    pub language: String,
+    pub installed: bool,
+    /// Installed version of the server binary, when determinable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Latest published version (from the npm registry), when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_version: Option<String>,
+    /// Freshness verdict: "current" | "behind" | "missing" | "unknown".
+    pub status: String,
+    /// Shell command that installs the server. None when there is no automatable
+    /// install (unknown package manager / system-only package).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_command: Option<String>,
+    /// Shell command that updates an installed server to latest, derived from
+    /// how the existing binary was installed. None when it can't be updated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_command: Option<String>,
+    /// Whether the daemon can run an automated install/update for this server.
+    pub can_manage: bool,
+    /// Human-readable install hint shown when the server is missing.
+    pub install_hint: String,
+}
+
+/// Reply to [`Method::LspStart`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LspStartResult {
+    pub server_id: String,
+    pub available: bool,
+    /// Absolute workspace root the server was rooted at. Clients build
+    /// `file://` document URIs from it. Empty when unavailable.
+    pub root_path: String,
 }
 
 /// Answers collected by the desktop bootstrap wizard. Mirrors the daemon's

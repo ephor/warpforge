@@ -1,5 +1,85 @@
 # Changelog
 
+## 0.6.2
+
+### Patch Changes
+
+- [#33](https://github.com/ephor/warpforge/pull/33) [`c50688f`](https://github.com/ephor/warpforge/commit/c50688f34eb33269d6e9129fde94552be9996776) Thanks [@ephor](https://github.com/ephor)! - A workflow no longer ends for good when one of its agents is lost. If an agent
+  process dies part-way through a stage — killed by something outside the run,
+  not by anything wrong with the work — the pipeline now pauses at that stage
+  instead of finishing as failed. Press Resume and it runs the stage again,
+  warned that the working copy may already hold partial changes. Previously the
+  run was over: resume was refused and the only way forward was a new task, even
+  when the work was already done.
+
+- [#33](https://github.com/ephor/warpforge/pull/33) [`98f58ea`](https://github.com/ephor/warpforge/commit/98f58eabbc9404d3d1ef77e14ca2014c50688802) Thanks [@ephor](https://github.com/ephor)! - Starting a task no longer pauses while its name is written. Naming a task runs
+  a short agent in the background, and the app used to wait on it before handling
+  anything else — so the first message, tool approvals, and other tasks all sat
+  still until the name came back. Naming now happens alongside your work, as do
+  installing an agent or a language server, which had the same problem and could
+  hold things up for much longer.
+
+- [#33](https://github.com/ephor/warpforge/pull/33) [`9689d81`](https://github.com/ephor/warpforge/commit/9689d813956d2a40bb28d29afc24d310765f31c3) Thanks [@ephor](https://github.com/ephor)! - The app now handles several requests at once instead of one at a time. A single
+  slow action — listing a large project, loading a diff, scanning for agents —
+  used to hold up everything else you did, so a tool approval could sit waiting
+  until the slow one finished. Requests that only read now run alongside each
+  other, and replies are sent without waiting on the network's send delay, which
+  takes tens of milliseconds off routine actions.
+
+- [#33](https://github.com/ephor/warpforge/pull/33) [`364e5b8`](https://github.com/ephor/warpforge/commit/364e5b8df3d7e16f95e716db6dc7bf195c7c8b67) Thanks [@ephor](https://github.com/ephor)! - Starting a task in its own workspace copy no longer holds up everything else.
+  Setting that copy up takes a moment, and until now the whole app waited on it —
+  your other tasks' replies and approvals paused until the new task's workspace
+  was ready. The task now shows up on the board immediately and begins work as
+  soon as its workspace lands, while the rest of the app keeps moving.
+
+- [#33](https://github.com/ephor/warpforge/pull/33) [`c387c6f`](https://github.com/ephor/warpforge/commit/c387c6f27c79f7632d72001543e4b9f6583a2769) Thanks [@ephor](https://github.com/ephor)! - Branching a conversation now carries your uncommitted work across, including
+  when the original task runs in the project folder itself rather than its own
+  workspace copy. The branch used to start from the last commit in that case, so
+  edits you had not committed were missing from the conversation meant to
+  continue them.
+
+- [#33](https://github.com/ephor/warpforge/pull/33) [`b05f44d`](https://github.com/ephor/warpforge/commit/b05f44d799811cd0a5db1936e99a1445743d446a) Thanks [@ephor](https://github.com/ephor)! - Searching for files no longer freezes the rest of the app. On a large project
+  the search reads through every file, and until now everything else — agent
+  replies, approvals, service controls — stopped until it finished. Search now
+  runs out of the way, so the app keeps responding while it works.
+
+- [#33](https://github.com/ephor/warpforge/pull/33) [`c41e691`](https://github.com/ephor/warpforge/commit/c41e6916efcdba8112c475500f1528974ed74a91) Thanks [@ephor](https://github.com/ephor)! - Merging a task's workspace copy back into your project no longer pauses the
+  rest of the app while git works.
+
+- [#33](https://github.com/ephor/warpforge/pull/33) [`22ba126`](https://github.com/ephor/warpforge/commit/22ba1269967fd05faab9005f0ef02236c08cdbc7) Thanks [@ephor](https://github.com/ephor)! - Approving a tool call, sending a message, or starting a task no longer waits on
+  whatever else is happening. Previously, while an agent was streaming its answer,
+  the app saved every fragment as it arrived and everything else queued up behind
+  that — so an approval prompt could sit unresponsive for as long as the agent
+  kept typing, even in a different task. Saving now happens out of the way, and
+  the interface stays responsive while agents work.
+
+- [#33](https://github.com/ephor/warpforge/pull/33) [`f73592d`](https://github.com/ephor/warpforge/commit/f73592dc7f3ba4c0f3145e4e2931708ae6a4b224) Thanks [@ephor](https://github.com/ephor)! - Long conversations no longer grow memory without limit. The app used to keep
+  every line of everything your agents had said in memory and reload it all on
+  start, so the more work agents did, the more memory the app held onto even when
+  it was only showing the latest exchange. It now keeps just what the current
+  view needs — the latest message and the most recent exchange — and loads the
+  rest only when you resume a session or open a project. Resuming a session
+  still shows each reply once, and nothing in the chat history is lost.
+
+- [#33](https://github.com/ephor/warpforge/pull/33) [`1e5b63e`](https://github.com/ephor/warpforge/commit/1e5b63e92a5898e453dcef6455a2aeb18cce5ffd) Thanks [@ephor](https://github.com/ephor)! - Warpforge no longer stops processes it did not start. When shutting down it used
+  to clear everything listening on the project's port range, which could take down
+  a server you were running yourself — or, when running warpforge's own tests, the
+  agents of the warpforge you were running them from. It now only stops the
+  services it started.
+
+- [#33](https://github.com/ephor/warpforge/pull/33) [`4227053`](https://github.com/ephor/warpforge/commit/4227053779c1b9bd082fd56eca0451edbae199b4) Thanks [@ephor](https://github.com/ephor)! - Viewing changes no longer slows the rest of the app down. The changes panel
+  refreshes on a timer, and each refresh used to hold everything else up while it
+  inspected the repository — with a task open, that was a steady drip of pauses
+  affecting agent replies and approvals. Reading diffs, file contents, file lists
+  and branches now happens alongside the rest of the app instead of in front of
+  it.
+
+- [#33](https://github.com/ephor/warpforge/pull/33) [`ec03690`](https://github.com/ephor/warpforge/commit/ec03690aa18f3636c4931dad97a75d8607f57576) Thanks [@ephor](https://github.com/ephor)! - Committing, pushing, merging, switching branches, saving a file and opening a
+  pull request no longer pause the rest of the app while they run. Each of these
+  waits on git, and until now everything else — agent replies, approvals, your
+  other tasks — waited with it. They now run alongside your work, so a slow push
+  costs you the push and nothing else.
+
 ## 0.6.1
 
 ### Patch Changes

@@ -308,6 +308,26 @@ impl Store {
         Ok(Self { conn })
     }
 
+    /// Run `writes` as one transaction. The persistence actor (see
+    /// `daemon/runtime/persist.rs`) drains its queue through here so a burst of
+    /// streamed session updates costs one commit instead of one per row.
+    ///
+    /// On any error the whole batch is rolled back — a half-applied batch would
+    /// leave a task row without the session updates that explain it.
+    pub fn write_batch(&self, writes: impl FnOnce(&Self) -> Result<()>) -> Result<()> {
+        self.conn.execute_batch("BEGIN")?;
+        match writes(self) {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     pub fn upsert_task(&self, task: &Task) -> Result<()> {
         let tags = serde_json::to_string(&task.tags)?;
         let config_options = serde_json::to_string(&task.config_options)?;
@@ -650,10 +670,54 @@ impl Store {
         }
     }
 
+    /// First-seen timestamps of every streamed tool call, keyed by
+    /// `(task_id, tool_call_id)`. Read once at daemon startup: the actor keeps
+    /// only this small map rather than the full transcripts it was derived from.
+    pub fn load_tool_call_starts(&self) -> Result<HashMap<(String, String), u64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT task_id, update_json FROM session_updates ORDER BY id")?;
+        let mut map = HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows.filter_map(|r| r.ok()) {
+            if let Ok(wire::SessionUpdate::ToolCall {
+                tool_call_id,
+                started_at: Some(started_at),
+                ..
+            }) = serde_json::from_str::<wire::SessionUpdate>(&row.1)
+            {
+                // First-seen wins. Later frames of the same tool call repeat the
+                // timestamp the daemon assigned, but a daemon restart mid-call
+                // can assign a new one — and this map exists precisely so a
+                // call's start time does not move under the user.
+                map.entry((row.0, tool_call_id)).or_insert(started_at);
+            }
+        }
+        Ok(map)
+    }
+
     /// Load persisted histories as semantic rows. Raw ACP text chunks and
     /// repeated tool lifecycle frames remain in SQLite for replay fidelity but
     /// are folded before building the desktop snapshot.
     pub fn load_all_session_updates(&self) -> Result<HashMap<String, Vec<wire::SessionUpdate>>> {
+        let mut map = self.load_all_session_updates_raw()?;
+        for updates in map.values_mut() {
+            *updates = fold_for_snapshot(updates);
+        }
+        Ok(map)
+    }
+
+    /// Every persisted update, per task, exactly as written.
+    ///
+    /// Unlike [`Store::load_all_session_updates`] nothing is folded or trimmed:
+    /// the resume replay guard matches the agent's replay against this history
+    /// chunk for chunk, so a folded `AgentText` would never compare equal and
+    /// the whole turn would be emitted twice.
+    pub fn load_all_session_updates_raw(
+        &self,
+    ) -> Result<HashMap<String, Vec<wire::SessionUpdate>>> {
         let mut stmt = self
             .conn
             .prepare("SELECT task_id, update_json FROM session_updates ORDER BY id")?;
@@ -663,18 +727,7 @@ impl Store {
         })?;
         for row in rows.filter_map(|r| r.ok()) {
             if let Ok(update) = serde_json::from_str::<wire::SessionUpdate>(&row.1) {
-                let output = map.entry(row.0).or_default();
-                append_snapshot_update(output, update);
-                if output.len() > MAX_SESSION_SNAPSHOT_UPDATES + SNAPSHOT_TRIM_HEADROOM {
-                    let overflow = output.len() - MAX_SESSION_SNAPSHOT_UPDATES;
-                    output.drain(..overflow);
-                }
-            }
-        }
-        for updates in map.values_mut() {
-            if updates.len() > MAX_SESSION_SNAPSHOT_UPDATES {
-                let overflow = updates.len() - MAX_SESSION_SNAPSHOT_UPDATES;
-                updates.drain(..overflow);
+                map.entry(row.0).or_default().push(update);
             }
         }
         Ok(map)
@@ -908,6 +961,25 @@ fn backlog_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<wire::BacklogItem> {
         updated_at: row.get(13)?,
         task_id: row.get(14)?,
     })
+}
+
+/// Fold a raw history into the shape the desktop snapshot wants: streamed text
+/// concatenated, repeated tool frames collapsed, oldest entries dropped past
+/// the cap.
+pub fn fold_for_snapshot(updates: &[wire::SessionUpdate]) -> Vec<wire::SessionUpdate> {
+    let mut output: Vec<wire::SessionUpdate> = Vec::new();
+    for update in updates {
+        append_snapshot_update(&mut output, update.clone());
+        if output.len() > MAX_SESSION_SNAPSHOT_UPDATES + SNAPSHOT_TRIM_HEADROOM {
+            let overflow = output.len() - MAX_SESSION_SNAPSHOT_UPDATES;
+            output.drain(..overflow);
+        }
+    }
+    if output.len() > MAX_SESSION_SNAPSHOT_UPDATES {
+        let overflow = output.len() - MAX_SESSION_SNAPSHOT_UPDATES;
+        output.drain(..overflow);
+    }
+    output
 }
 
 /// `"idle"` and `"needs_review"` are the pre-merge spellings of `Waiting`. Rows

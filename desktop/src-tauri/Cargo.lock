@@ -4635,7 +4635,7 @@ dependencies = [
 
 [[package]]
 name = "warpforge-desktop"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "dirs 5.0.1",
  "mac-usernotifications",
@@ -4654,7 +4654,7 @@ dependencies = [
 
 [[package]]
 name = "warpforge-protocol"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "serde",
  "serde_json",

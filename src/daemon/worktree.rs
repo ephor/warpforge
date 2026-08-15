@@ -37,50 +37,38 @@ impl WorktreeManager {
     /// Create a worktree for `task_id`. If `base_branch` is provided, branch
     /// from that; otherwise branch from the current HEAD.
     pub async fn create(&mut self, task_id: &str, base_branch: Option<&str>) -> Result<Worktree> {
-        let wt_dir = self.base_repo.join(".worktrees").join(task_id);
-        let branch = format!("warpforge/task/{task_id}");
-
-        // Resolve the base branch.
-        let base = match base_branch {
-            Some(b) => b.to_string(),
-            None => {
-                let output = tokio::process::Command::new("git")
-                    .args(["rev-parse", "--abbrev-ref", "HEAD"])
-                    .current_dir(&self.base_repo)
-                    .output()
-                    .await
-                    .context("failed to run git rev-parse")?;
-                String::from_utf8_lossy(&output.stdout).trim().to_string()
-            }
-        };
-
-        // Create the worktree + branch.
-        let status = tokio::process::Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                "-b",
-                &branch,
-                wt_dir.to_str().unwrap_or(".worktrees/task"),
-                &base,
-            ])
-            .current_dir(&self.base_repo)
-            .status()
-            .await
-            .context("failed to run git worktree add")?;
-
-        if !status.success() {
-            anyhow::bail!("git worktree add failed (exit {status})");
-        }
-
-        let wt = Worktree {
-            task_id: task_id.to_string(),
-            path: wt_dir,
-            branch,
-            base_branch: base,
-        };
-        self.worktrees.insert(task_id.to_string(), wt.clone());
+        let wt = create_detached(&self.base_repo, task_id, base_branch).await?;
+        self.adopt(wt.clone());
         Ok(wt)
+    }
+
+    /// The repo this manager tracks worktrees for.
+    pub fn base_repo(&self) -> &Path {
+        &self.base_repo
+    }
+
+    /// Drop a worktree from the map without touching git — for a removal that
+    /// already ran off the actor (see [`remove_detached`]).
+    pub fn forget(&mut self, task_id: &str) -> Option<Worktree> {
+        self.worktrees.remove(task_id)
+    }
+
+    /// This task's worktree metadata, if the manager tracks one.
+    pub fn get(&self, task_id: &str) -> Option<&Worktree> {
+        self.worktrees.get(task_id)
+    }
+
+    /// Record a worktree created outside the manager (see [`create_detached`]).
+    pub fn adopt(&mut self, wt: Worktree) {
+        self.worktrees.insert(wt.task_id.clone(), wt);
+    }
+
+    /// The branch and path a branched worktree would inherit from, if the
+    /// source task has a worktree here.
+    pub fn source_state(&self, source_task_id: &str) -> Option<(String, PathBuf)> {
+        self.worktrees
+            .get(source_task_id)
+            .map(|wt| (wt.branch.clone(), wt.path.clone()))
     }
 
     /// Create a worktree for `task_id` that inherits the state of a source
@@ -267,6 +255,147 @@ impl WorktreeManager {
     }
 }
 
+/// Create a worktree without a manager, so the git work can run off the daemon
+/// actor. The caller records the result with [`WorktreeManager::adopt`].
+///
+/// `git worktree add` takes long enough to be felt: run inside a command
+/// handler it delayed every other task's messages and approvals until the new
+/// task's checkout finished (ADR 0002).
+pub async fn create_detached(
+    base_repo: &Path,
+    task_id: &str,
+    base_branch: Option<&str>,
+) -> Result<Worktree> {
+    let wt_dir = base_repo.join(".worktrees").join(task_id);
+    let branch = format!("warpforge/task/{task_id}");
+
+    let base = match base_branch {
+        Some(b) => b.to_string(),
+        None => {
+            let output = tokio::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(base_repo)
+                .output()
+                .await
+                .context("failed to run git rev-parse")?;
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+    };
+
+    let status = tokio::process::Command::new("git")
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            wt_dir.to_str().unwrap_or(".worktrees/task"),
+            &base,
+        ])
+        .current_dir(base_repo)
+        .status()
+        .await
+        .context("failed to run git worktree add")?;
+
+    if !status.success() {
+        anyhow::bail!("git worktree add failed (exit {status})");
+    }
+
+    Ok(Worktree {
+        task_id: task_id.to_string(),
+        path: wt_dir,
+        branch,
+        base_branch: base,
+    })
+}
+
+/// [`create_detached`] for a conversation branch: branch from `base_branch`
+/// (the current HEAD when `None`) and carry over the uncommitted changes in
+/// `source_path`.
+///
+/// `source_path` is wherever the source task actually works, which is its own
+/// worktree only when it has one — a task running in the project checkout
+/// branches from there. Getting this wrong is silent: the branch comes up on a
+/// clean HEAD and the work it was meant to continue is simply absent.
+pub async fn create_branched_detached(
+    base_repo: &Path,
+    task_id: &str,
+    base_branch: Option<&str>,
+    source_path: &Path,
+) -> Result<Worktree> {
+    let wt = create_detached(base_repo, task_id, base_branch).await?;
+    copy_working_state(source_path, &wt.path)
+        .await
+        .with_context(|| {
+            format!("failed to copy working state into branched worktree {task_id}")
+        })?;
+    Ok(wt)
+}
+
+/// Merge `branch` into `base_branch` without a manager, so the git work can run
+/// off the daemon actor. The caller records the outcome.
+pub async fn merge_detached(
+    base_repo: &Path,
+    branch: &str,
+    base_branch: &str,
+) -> Result<MergeResult> {
+    let status = tokio::process::Command::new("git")
+        .args(["checkout", base_branch])
+        .current_dir(base_repo)
+        .status()
+        .await
+        .context("failed to checkout base branch")?;
+    if !status.success() {
+        return Ok(MergeResult::Error("failed to checkout base branch".into()));
+    }
+
+    let output = tokio::process::Command::new("git")
+        .args(["merge", branch, "--no-edit"])
+        .current_dir(base_repo)
+        .output()
+        .await
+        .context("failed to run git merge")?;
+
+    if output.status.success() {
+        return Ok(MergeResult::Ok {
+            branch: branch.to_string(),
+        });
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if stderr.contains("CONFLICT") || stderr.contains("conflict") {
+        // Abort the failed merge.
+        let _ = tokio::process::Command::new("git")
+            .args(["merge", "--abort"])
+            .current_dir(base_repo)
+            .status()
+            .await;
+        return Ok(MergeResult::Conflict {
+            message: stderr,
+            branch: branch.to_string(),
+        });
+    }
+    Ok(MergeResult::Error(stderr))
+}
+
+/// Remove a worktree and delete its branch, without a manager. The caller drops
+/// it from the map with [`WorktreeManager::forget`].
+pub async fn remove_detached(base_repo: &Path, path: &Path, branch: &str) -> Result<()> {
+    let status = tokio::process::Command::new("git")
+        .args(["worktree", "remove", "--force", path.to_str().unwrap_or("")])
+        .current_dir(base_repo)
+        .status()
+        .await
+        .context("failed to run git worktree remove")?;
+    if !status.success() {
+        anyhow::bail!("git worktree remove failed (exit {status})");
+    }
+    let _ = tokio::process::Command::new("git")
+        .args(["branch", "-D", branch])
+        .current_dir(base_repo)
+        .status()
+        .await;
+    Ok(())
+}
+
 /// Copy the uncommitted working-tree state of `source` into `target` so a
 /// branched worktree starts from the exact files the source left behind.
 /// Handles tracked modifications/deletions (via a binary diff applied with
@@ -324,6 +453,15 @@ async fn copy_working_state(source: &Path, target: &Path) -> Result<()> {
             continue;
         }
         let src = source.join(line);
+        // `git ls-files --others` reports a nested checkout as one directory
+        // entry rather than its contents, and every worktree lives inside the
+        // project at `.worktrees/<task>`. So when the source is the project
+        // checkout itself, its own worktrees show up here — copying one would
+        // fail outright, and copying it successfully would be worse. Nothing
+        // that is not a plain file belongs in a branch's starting state.
+        if !src.is_file() {
+            continue;
+        }
         let dst = target.join(line);
         if let Some(parent) = dst.parent() {
             tokio::fs::create_dir_all(parent)

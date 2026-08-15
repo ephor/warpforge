@@ -32,6 +32,7 @@ use crate::registry::ProjectEntry;
 use crate::service::{kill_listeners_in_ranges, ServiceEvent, ServiceManager, ServiceStatus};
 
 use super::acp::{spawn_acp_session, AcpHandle, AcpUpdate, PolicyCheck};
+use super::runtime::{Ask as PersistAsk, Write as PersistWrite};
 use super::store::Store;
 use super::task::{Task, TaskStatus};
 use super::wire as wireconv;
@@ -164,6 +165,64 @@ fn is_acp_replay_update(update: &wire::SessionUpdate) -> bool {
         | wire::SessionUpdate::TurnEnded { .. } => true,
         wire::SessionUpdate::Usage { .. } => false,
     }
+}
+
+/// The replayable subset of a task's persisted history, in order — the seed
+/// for the resume replay guard. Built from the store on demand, because the
+/// actor holds no full transcript in memory.
+fn replayable_history(updates: &[wire::SessionUpdate]) -> VecDeque<wire::SessionUpdate> {
+    updates
+        .iter()
+        .filter(|update| is_acp_replay_update(update))
+        .cloned()
+        .collect()
+}
+
+/// Fold a turn's updates into the two shapes the pipeline needs: the agent's
+/// closing message and the whole turn. A new user message starts a fresh turn.
+/// The input is the current-turn buffer, which is bounded by a turn, not by the
+/// session's length.
+fn stage_text_from_updates(updates: &[wire::SessionUpdate]) -> StageText {
+    let mut full: Vec<String> = Vec::new();
+    let mut closing: Vec<String> = Vec::new();
+    for update in updates {
+        match update {
+            // A new user message starts a fresh turn.
+            wire::SessionUpdate::UserMessage { .. } => {
+                full.clear();
+                closing.clear();
+            }
+            wire::SessionUpdate::AgentText { text } => {
+                full.push(text.clone());
+                closing.push(text.clone());
+            }
+            // Any work the agent does ends whatever it was narrating, so the
+            // closing message restarts after it.
+            wire::SessionUpdate::ToolCall { .. }
+            | wire::SessionUpdate::FileEdit { .. }
+            | wire::SessionUpdate::AgentThought { .. }
+            | wire::SessionUpdate::Plan { .. } => closing.clear(),
+            _ => {}
+        }
+    }
+    StageText {
+        closing: closing.join(""),
+        full: full.join(""),
+    }
+}
+
+/// Concatenate every `AgentText` update in a task's history — a task's full
+/// text output, used as the orchestrator node's result. Computed off the actor
+/// loop from the store (the actor holds no full transcript).
+fn agent_text_from_updates(updates: &[wire::SessionUpdate]) -> String {
+    updates
+        .iter()
+        .filter_map(|update| match update {
+            wire::SessionUpdate::AgentText { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 /// System preamble prepended to an orchestrator-chat session's first prompt.
@@ -600,6 +659,45 @@ pub enum Command {
     },
     KillAgent {
         id: String,
+    },
+    /// A task's worktree checkout finished (or failed); start its session.
+    WorktreeReady {
+        task_id: String,
+        created: Result<(String, super::worktree::Worktree), String>,
+    },
+    /// Test-only: report whether a finished turn's output has a consumer.
+    #[cfg(test)]
+    TurnOutputConsumerProbe {
+        task_id: String,
+        workflow_child: bool,
+        reply: oneshot::Sender<bool>,
+    },
+    /// A worktree merge finished and its checkout is gone; drop it from the
+    /// manager and clear the task's worktree.
+    WorktreeMerged {
+        task_id: String,
+        project: String,
+    },
+    /// A git operation that ran off the loop finished; apply what it changed
+    /// to the task's state.
+    GitOpFinished {
+        task_id: String,
+        effect: GitEffect,
+    },
+    /// A task's resume replay guard was read from the store; start its session
+    /// now that replayed history can be de-duplicated. Loaded off the loop
+    /// (write-behind flush + store read), mirroring [`Command::WorktreeReady`].
+    ResumeReplayReady {
+        task_id: String,
+        replay: std::collections::VecDeque<wire::SessionUpdate>,
+    },
+    /// A finished turn's full text output was assembled from the store; deliver
+    /// it to the orchestrator / parent inbox off the actor loop.
+    TaskOutputReady {
+        task_id: String,
+        success: bool,
+        workflow_child: bool,
+        output: String,
     },
     CreateTask {
         project: String,
@@ -2157,6 +2255,113 @@ impl DaemonHandle {
     }
 }
 
+/// What a finished git operation changed about a task.
+///
+/// These describe something that already happened on disk, so applying one late
+/// is still correct — a commit that landed is a commit that landed. The only
+/// guard needed is that the task still exists, which the handlers check.
+#[derive(Debug, Clone, Copy)]
+pub enum GitEffect {
+    /// HEAD or the working tree moved: nudge clients to refetch.
+    Bump,
+    /// A commit landed, so the task has no uncommitted changes left.
+    Committed,
+    /// A hunk was rejected, so one fewer file differs.
+    HunkRejected,
+}
+
+/// A session that cannot start until its worktree exists.
+struct PendingSessionStart {
+    project: String,
+    agent: String,
+    prompt: String,
+    include_runtime_context: bool,
+    attachments: Vec<wire::PromptAttachment>,
+    default_model: Option<String>,
+    config_overrides: std::collections::HashMap<String, String>,
+}
+
+/// A session that cannot start until its resume replay guard has been loaded
+/// from the store. Carries everything `start_session` needs to resume.
+struct PendingResume {
+    project: String,
+    agent: String,
+    text: String,
+    session_id: String,
+    attachments: Vec<wire::PromptAttachment>,
+}
+
+/// De-duplicates the ACP updates an agent replays on `session/load` against the
+/// daemon's persisted history. While the replay matches history in order it is
+/// dropped; the first mismatch is new live output and disables the guard.
+struct ResumeReplayGuard {
+    history: VecDeque<wire::SessionUpdate>,
+}
+
+impl ResumeReplayGuard {
+    /// The replayable subset of `updates`, in order. `None` when there is
+    /// nothing to de-duplicate (a session with no persisted history).
+    fn from_updates(updates: &[wire::SessionUpdate]) -> Option<Self> {
+        let history = replayable_history(updates);
+        (!history.is_empty()).then_some(Self { history })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.history.is_empty()
+    }
+
+    /// True when `update` is the next replayed update and should be dropped.
+    /// False when it is live output (and the caller must disable the guard).
+    fn consume(&mut self, update: &wire::SessionUpdate) -> bool {
+        if self.history.front() == Some(update) {
+            self.history.pop_front();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// A worktree checkout resolved against actor state, ready to run elsewhere.
+struct WorktreeRequest {
+    project: String,
+    base_repo: PathBuf,
+    task_id: String,
+    /// What a conversation branch inherits from.
+    source: Option<BranchSource>,
+}
+
+/// Where a branched conversation picks up from.
+struct BranchSource {
+    /// The source task's own branch, when it has a worktree. `None` means the
+    /// source works in the project checkout, so the branch starts from HEAD.
+    base_branch: Option<String>,
+    /// The working tree whose uncommitted changes carry over.
+    path: PathBuf,
+}
+
+impl WorktreeRequest {
+    async fn run(self) -> Result<(String, super::worktree::Worktree), String> {
+        let created = match self.source {
+            Some(ref source) => {
+                super::worktree::create_branched_detached(
+                    &self.base_repo,
+                    &self.task_id,
+                    source.base_branch.as_deref(),
+                    &source.path,
+                )
+                .await
+            }
+            None => super::worktree::create_detached(&self.base_repo, &self.task_id, None).await,
+        };
+        created
+            .map(|wt| (self.project, wt))
+            // `{:#}` keeps the context chain: the top line alone says only
+            // "failed to copy working state", never which git step failed.
+            .map_err(|e| format!("{e:#}"))
+    }
+}
+
 pub struct Daemon {
     projects: Vec<ProjectEntry>,
     config_observer: ConfigObserver,
@@ -2179,13 +2384,24 @@ pub struct Daemon {
     /// (e.g. the ACP probe) can deliver results without needing a borrow of the
     /// actor. Held alongside `store` etc. as a primary mutator handle.
     cmd_tx: mpsc::Sender<Command>,
-    store: Option<Store>,
+    /// Queued writes, applied off the actor thread. Every mutation goes here —
+    /// calling `store` directly from a handler puts a blocking disk write back
+    /// on the hot path (ADR 0002).
+    persist: super::runtime::Persist,
+    /// Shared with the persistence thread, for the reads that still run on the
+    /// actor. Those move to an in-memory projection next; until then, use
+    /// [`Daemon::with_store`] rather than locking at the call site.
+    store: Option<Arc<Mutex<Store>>>,
     /// `session/load` may replay already persisted ACP updates. While the
     /// replay matches local history in order, drop it; the first mismatch is
     /// new live output and disables the guard.
-    resume_replay: HashMap<String, VecDeque<wire::SessionUpdate>>,
+    resume_replay: HashMap<String, ResumeReplayGuard>,
     /// Per-project git worktree managers, lazily created on first worktree use.
     worktrees: HashMap<String, WorktreeManager>,
+    /// Sessions waiting on a worktree checkout, keyed by task id. Presence is
+    /// the token that lets a finished checkout start its session: cancel and
+    /// delete remove the entry, so a late checkout cannot resurrect the task.
+    pending_session_starts: HashMap<String, PendingSessionStart>,
     /// Policy engine: gates agent actions through configurable policies.
     policies: PolicyRegistry,
     /// Channel for ACP reader tasks to request policy checks before file ops.
@@ -2205,6 +2421,20 @@ pub struct Daemon {
     pending_wake: std::collections::HashSet<String>,
     /// Stable first-seen timestamps for streamed frames of the same tool call.
     tool_call_starts: HashMap<(String, String), u64>,
+    /// The last session update emitted per task — all `emit_session_unless_last_duplicate`
+    /// needs to catch a reconnect retry or a repeated usage frame. O(1) per task,
+    /// never the whole transcript.
+    last_session_update: HashMap<String, wire::SessionUpdate>,
+    /// Updates emitted since the task's last user message (its current turn).
+    /// Reset on each new user message, so this is bounded by a turn, not by the
+    /// session's length. Serves the workflow engine's stage-text reads, which
+    /// used to fold the entire in-memory transcript.
+    turn_updates: HashMap<String, Vec<wire::SessionUpdate>>,
+    /// A session that cannot start until its resume replay guard has been read
+    /// from the store (off the loop). Presence is the token that lets the loaded
+    /// guard start the session: cancel and delete remove the entry, so a late
+    /// load cannot resurrect the task (ADR 0002 invariant 5).
+    pending_resume: HashMap<String, PendingResume>,
     /// Deterministic workflow pipelines keyed by parent task id. Finished runs
     /// stay in the map so their state remains visible on the board.
     workflow_runs: HashMap<String, WorkflowRun>,
@@ -2269,27 +2499,23 @@ impl Daemon {
             .flatten()
             .unwrap_or_default();
 
+        // Only the stable tool-call timestamps survive startup. The full
+        // transcripts are NOT loaded or held in memory — resume replay guards,
+        // snapshots and finished-turn output read them from the store on demand.
         let tool_call_starts = store
             .as_ref()
-            .and_then(|s| s.load_all_session_updates().ok())
-            .unwrap_or_default()
-            .into_iter()
-            .flat_map(|(task_id, updates)| {
-                updates.into_iter().filter_map(move |update| match update {
-                    wire::SessionUpdate::ToolCall {
-                        tool_call_id,
-                        started_at: Some(started_at),
-                        ..
-                    } => Some(((task_id.clone(), tool_call_id), started_at)),
-                    _ => None,
-                })
-            })
-            .collect();
+            .and_then(|s| s.load_tool_call_starts().ok())
+            .unwrap_or_default();
 
         let accounts = store
             .as_ref()
             .and_then(|s| s.load_accounts().ok())
             .unwrap_or_default();
+
+        // Everything above read from the store directly — it is startup, the
+        // actor is not running yet. From here the connection belongs to the
+        // persistence thread and writes go through the queue.
+        let (persist, store) = super::runtime::Persist::spawn(store);
 
         let config_observer = ConfigObserver::new(&projects);
         let daemon = Daemon {
@@ -2306,9 +2532,11 @@ impl Daemon {
             event_tx: event_tx.clone(),
             acp_tx,
             cmd_tx: cmd_tx.clone(),
+            persist,
             store,
             resume_replay: HashMap::new(),
             worktrees: HashMap::new(),
+            pending_session_starts: HashMap::new(),
             policies: default_policies(),
             policy_tx,
             orch_tx: None,
@@ -2317,6 +2545,9 @@ impl Daemon {
             orchestrator_inbox: HashMap::new(),
             pending_wake: std::collections::HashSet::new(),
             tool_call_starts,
+            last_session_update: HashMap::new(),
+            turn_updates: HashMap::new(),
+            pending_resume: HashMap::new(),
             workflow_runs: HashMap::new(),
             accounts,
         };
@@ -2379,9 +2610,23 @@ impl Daemon {
     }
 
     fn persist(&self, task: &Task) {
-        if let Some(store) = &self.store {
-            let _ = store.upsert_task(task);
-        }
+        self.persist.task(task);
+    }
+
+    /// A blocking store read, for startup only.
+    ///
+    /// Its one caller — `restore_workflow_runs` — runs inside [`Daemon::spawn`]
+    /// before the actor loop starts, so blocking here blocks nothing. A handler
+    /// must never use it: that is a blocking disk read on the actor's thread,
+    /// which is the whole subject of ADR 0002. Reads from a handler go through
+    /// `runtime::store_read` on the blocking pool, and writes through
+    /// `self.persist`.
+    fn with_store<T>(&self, read: impl FnOnce(&Store) -> T) -> Option<T> {
+        let store = self.store.as_ref()?;
+        // Recover a poisoned lock instead of taking the daemon down with the
+        // persistence thread.
+        let guard = store.lock().unwrap_or_else(|e| e.into_inner());
+        Some(read(&guard))
     }
 
     fn build_project_config_state(
@@ -2510,7 +2755,10 @@ impl Daemon {
     }
 
     /// Build the serializable snapshot handed to a client on subscribe.
-    fn build_snapshot(&self) -> wire::Snapshot {
+    ///
+    /// `session_history` is filled in by the caller (from the store, off the
+    /// loop) — the actor holds no in-memory transcript to fold here.
+    fn build_snapshot_core(&self) -> wire::Snapshot {
         let mut projects = Vec::new();
         let mut services = Vec::new();
         let mut portforwards = Vec::new();
@@ -2541,19 +2789,15 @@ impl Daemon {
             })
             .collect();
 
-        let session_history = self
-            .store
-            .as_ref()
-            .and_then(|s| s.load_all_session_updates().ok())
-            .unwrap_or_default();
-
+        // History is read from the store by the caller, then folded; the actor
+        // holds no transcript in memory to fold here.
         wire::Snapshot {
             projects,
             services,
             portforwards,
             tasks,
             terminals,
-            session_history,
+            session_history: HashMap::new(),
             agents: self.configured_agents.clone(),
             accounts: self.account_infos(),
         }
@@ -2637,8 +2881,19 @@ impl Daemon {
         // Teardown — stop everything we started.
         self.services.stop_all().await.ok();
         self.portforwards.stop_all().await.ok();
-        kill_listeners_in_ranges(&self.project_port_ranges()).await;
+        // Only ports this daemon handed out. Sweeping the whole range kills
+        // whatever else happens to listen there — a developer's own server, or
+        // an agent process — and this runs on every shutdown, including the
+        // ones the test suite performs on the developer's machine.
+        crate::service::kill_listeners_on_ports(&crate::ports::allocated_in_ranges(
+            &self.project_port_ranges(),
+        ))
+        .await;
         self.agents.kill_all();
+        // Writes are applied on another thread, so exiting without draining the
+        // queue drops the tail of every transcript written since the last
+        // batch. Everything above can still enqueue, so flush last.
+        self.persist.flush().await;
         match shutdown_reply {
             Some(ShutdownReply::Requested(reply)) => {
                 let _ = reply.send(());
@@ -2890,7 +3145,22 @@ impl Daemon {
                 let _ = reply.send(tasks);
             }
             Command::Snapshot(reply) => {
-                let _ = reply.send(self.build_snapshot());
+                // The snapshot's history must not be read on the loop: a disk
+                // read here would miss whatever write-behind persistence still
+                // has queued, and it would block the actor (ADR 0002). Flush +
+                // read + fold happen on a worker; only the reply crosses back.
+                let mut snapshot = self.build_snapshot_core();
+                let persist = self.persist.clone();
+                let store = self.store.clone();
+                tokio::spawn(async move {
+                    persist.flush().await;
+                    snapshot.session_history = super::runtime::store_read(store, |store| {
+                        store.load_all_session_updates().unwrap_or_default()
+                    })
+                    .await
+                    .unwrap_or_default();
+                    let _ = reply.send(snapshot);
+                });
             }
             Command::OpenProject { name } => self.open_project(&name).await,
             Command::StartService { project, service } => {
@@ -3072,27 +3342,6 @@ impl Daemon {
                 let mut task = Task::new(&project, &prompt, &agent, tags);
                 task.parent_task_id = parent_task_id;
                 task.backlog_item_id = backlog_item_id;
-                // Create worktree if requested and project has a git repo.
-                if use_worktree {
-                    if let Some(path) = self.project_path(&project) {
-                        let wt_mgr = self.worktrees.entry(project.clone()).or_insert_with(|| {
-                            WorktreeManager::new(std::path::PathBuf::from(&path))
-                        });
-                        let created = match branched_from {
-                            Some(ref src) => wt_mgr.create_branched(&task.id, src).await,
-                            None => wt_mgr.create(&task.id, None).await,
-                        };
-                        match created {
-                            Ok(wt) => {
-                                task.worktree = Some(wt.path.to_string_lossy().to_string());
-                            }
-                            Err(e) => {
-                                eprintln!("[daemon] worktree creation failed: {e}");
-                                // Fall back to non-isolated run.
-                            }
-                        }
-                    }
-                }
                 // Resolve the model the session should start with: an explicit
                 // UI pick wins; otherwise fall back to the user's last choice
                 // for this agent (so orchestrator-spawned sub-agents inherit it
@@ -3110,13 +3359,11 @@ impl Daemon {
                     {
                         if agent_cfg.last_model.as_deref() != Some(m.as_str()) {
                             agent_cfg.last_model = Some(m.clone());
-                            if let Some(ref store) = self.store {
-                                let _ = store.update_agent_models(
-                                    &agent_cfg.id,
-                                    &agent_cfg.models,
-                                    agent_cfg.last_model.as_deref(),
-                                );
-                            }
+                            self.persist.write(PersistWrite::AgentModels {
+                                id: agent_cfg.id.clone(),
+                                models: agent_cfg.models.clone(),
+                                last_model: agent_cfg.last_model.clone(),
+                            });
                             let agents = self.configured_agents.clone();
                             self.emit(Event::AgentsUpdated { agents });
                         }
@@ -3127,17 +3374,133 @@ impl Daemon {
                 self.persist(&task);
                 self.emit(Event::TaskCreated(task));
                 let _ = reply.send(id.clone());
-                self.start_session(
-                    &id,
-                    &project,
-                    &agent,
-                    &prompt,
+
+                let start = PendingSessionStart {
+                    project: project.clone(),
+                    agent: agent.clone(),
+                    prompt: prompt.clone(),
                     include_runtime_context,
-                    None,
                     attachments,
-                    resolved_model,
+                    default_model: resolved_model,
                     config_overrides,
-                );
+                };
+                // A worktree checkout is git work, so it runs off the loop and
+                // the session starts when it lands. The task is on the board
+                // before then, which is also why a new task no longer delays
+                // every other task's messages (ADR 0002).
+                match use_worktree
+                    .then(|| self.worktree_request(&id, &project, branched_from.as_deref()))
+                    .flatten()
+                {
+                    Some(request) => {
+                        self.pending_session_starts.insert(id.clone(), start);
+                        let cmd_tx = self.cmd_tx.clone();
+                        tokio::spawn(async move {
+                            let created = request.run().await;
+                            let _ = cmd_tx
+                                .send(Command::WorktreeReady {
+                                    task_id: id,
+                                    created,
+                                })
+                                .await;
+                        });
+                    }
+                    None => self.start_pending_session(&id, start),
+                }
+            }
+            Command::WorktreeReady { task_id, created } => {
+                // Record the checkout even if nobody is waiting for it any
+                // more: the directory exists on disk either way, and a
+                // worktree the manager does not know about is one nothing can
+                // clean up later.
+                match created {
+                    Ok((project, wt)) => {
+                        if let Some(task) = self.tasks.get_mut(&task_id) {
+                            task.worktree = Some(wt.path.to_string_lossy().to_string());
+                            let updated = task.clone();
+                            self.persist(&updated);
+                            self.emit(Event::TaskUpdated(updated));
+                        }
+                        if let Some(mgr) = self.worktrees.get_mut(&project) {
+                            mgr.adopt(wt);
+                        }
+                    }
+                    // Fall back to a non-isolated run, as before.
+                    Err(error) => eprintln!("[daemon] worktree creation failed: {error}"),
+                }
+                // The pending entry is the token: cancelling or deleting the
+                // task removes it, so a checkout that lands afterwards must not
+                // start a session for it (ADR 0002 invariant 5).
+                if let Some(start) = self.pending_session_starts.remove(&task_id) {
+                    self.start_pending_session(&task_id, start);
+                }
+            }
+            #[cfg(test)]
+            Command::TurnOutputConsumerProbe {
+                task_id,
+                workflow_child,
+                reply,
+            } => {
+                let _ = reply.send(self.turn_output_has_consumer(&task_id, workflow_child));
+            }
+            Command::GitOpFinished { task_id, effect } => match effect {
+                GitEffect::Bump => self.bump_task(&task_id),
+                GitEffect::Committed => {
+                    if let Some(task) = self.tasks.get_mut(&task_id) {
+                        task.updated_at = super::task::now_secs();
+                        task.files_changed = 0;
+                        let updated = task.clone();
+                        self.persist(&updated);
+                        self.emit(Event::TaskUpdated(updated));
+                    }
+                }
+                GitEffect::HunkRejected => {
+                    if let Some(task) = self.tasks.get_mut(&task_id) {
+                        task.updated_at = super::task::now_secs();
+                        task.files_changed = task.files_changed.saturating_sub(1);
+                        let updated = task.clone();
+                        self.persist(&updated);
+                        self.emit(Event::TaskUpdated(updated));
+                    }
+                }
+            },
+            Command::ResumeReplayReady {
+                task_id,
+                mut replay,
+            } => {
+                // The pending entry is the token: cancelling or deleting the
+                // task removes it, so a guard that lands afterwards must not
+                // resurrect a cancelled task's session (ADR 0002 invariant 5).
+                if let Some(pending) = self.pending_resume.remove(&task_id) {
+                    if let Some(guard) = ResumeReplayGuard::from_updates(replay.make_contiguous()) {
+                        self.resume_replay.insert(task_id.clone(), guard);
+                    }
+                    self.start_session(
+                        &task_id,
+                        &pending.project,
+                        &pending.agent,
+                        &pending.text,
+                        false,
+                        Some(pending.session_id),
+                        pending.attachments,
+                        None,
+                        std::collections::HashMap::new(),
+                    );
+                }
+            }
+            Command::TaskOutputReady {
+                task_id,
+                success,
+                workflow_child,
+                output,
+            } => {
+                // A finished turn's full text was assembled off the loop; now
+                // deliver it the way TurnEnded used to. notify_orch_finished is
+                // a no-op unless the task is an orchestrator child.
+                self.notify_orch_finished(&task_id, success, output.clone());
+                if !workflow_child {
+                    self.deliver_child_result(&task_id, success, output);
+                }
             }
             Command::CreateWorkflowTask {
                 project,
@@ -3204,23 +3567,27 @@ impl Daemon {
                 let _ = reply.send(results);
             }
             Command::GetDiff { task_id, reply } => {
-                // Resolve the repo path (sync) before awaiting git, so no shared
-                // borrow of self is held across the await.
+                // Resolve the repo path from actor state, then run git off the
+                // loop. The diff panel polls this, so awaiting it here put a
+                // pair of git processes between every poll and the next
+                // command — a tool approval included (ADR 0002).
                 let repo = self
                     .tasks
                     .get(&task_id)
                     .and_then(|_| self.task_repo_path(&task_id));
-                let (files, branch) = match repo {
-                    Some(path) => (
-                        super::diff::working_diff(&path).await.unwrap_or_default(),
-                        super::diff::current_branch(&path).await,
-                    ),
-                    None => (Vec::new(), None),
-                };
-                let _ = reply.send(wire::TaskDiff {
-                    task_id,
-                    files,
-                    branch,
+                tokio::spawn(async move {
+                    let (files, branch) = match repo {
+                        Some(path) => (
+                            super::diff::working_diff(&path).await.unwrap_or_default(),
+                            super::diff::current_branch(&path).await,
+                        ),
+                        None => (Vec::new(), None),
+                    };
+                    let _ = reply.send(wire::TaskDiff {
+                        task_id,
+                        files,
+                        branch,
+                    });
                 });
             }
             Command::GetFileContents {
@@ -3232,11 +3599,13 @@ impl Daemon {
                     .tasks
                     .get(&task_id)
                     .and_then(|_| self.task_repo_path(&task_id));
-                let doc = match repo {
-                    Some(p) => super::diff::file_doc(&p, &path).await.ok(),
-                    None => None,
-                };
-                let _ = reply.send(doc);
+                tokio::spawn(async move {
+                    let doc = match repo {
+                        Some(p) => super::diff::file_doc(&p, &path).await.ok(),
+                        None => None,
+                    };
+                    let _ = reply.send(doc);
+                });
             }
             Command::ListFiles {
                 task_id,
@@ -3249,13 +3618,15 @@ impl Daemon {
                     .get(&task_id)
                     .and_then(|_| self.task_repo_path(&task_id))
                     .or_else(|| project.as_deref().and_then(|name| self.project_path(name)));
-                let files = match repo {
-                    Some(p) => super::diff::list_files(&p, include_ignored)
-                        .await
-                        .unwrap_or_default(),
-                    None => Vec::new(),
-                };
-                let _ = reply.send(files);
+                tokio::spawn(async move {
+                    let files = match repo {
+                        Some(p) => super::diff::list_files(&p, include_ignored)
+                            .await
+                            .unwrap_or_default(),
+                        None => Vec::new(),
+                    };
+                    let _ = reply.send(files);
+                });
             }
             Command::SearchFiles {
                 task_id,
@@ -3267,11 +3638,21 @@ impl Daemon {
                     .tasks
                     .get(&task_id)
                     .and_then(|t| self.project_path(&t.project));
-                let matches = match repo {
-                    Some(p) => super::diff::search_files(&p, &query, limit).unwrap_or_default(),
-                    None => Vec::new(),
-                };
-                let _ = reply.send(matches);
+                match repo {
+                    // A synchronous walk that reads every file in the project.
+                    // Run inline it freezes the whole daemon for the length of
+                    // the search — on a large repo, seconds (ADR 0002).
+                    Some(p) => {
+                        tokio::task::spawn_blocking(move || {
+                            let matches =
+                                super::diff::search_files(&p, &query, limit).unwrap_or_default();
+                            let _ = reply.send(matches);
+                        });
+                    }
+                    None => {
+                        let _ = reply.send(Vec::new());
+                    }
+                }
             }
             Command::SaveFile {
                 task_id,
@@ -3282,17 +3663,17 @@ impl Daemon {
                     .tasks
                     .get(&task_id)
                     .and_then(|_| self.task_repo_path(&task_id));
-                if let Some(p) = repo {
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let Some(p) = repo else { return };
                     if super::diff::save_file(&p, &path, &content).is_ok() {
                         // Nudge clients so the diff/file list refetches.
-                        if let Some(task) = self.tasks.get_mut(&task_id) {
-                            task.updated_at = super::task::now_secs();
-                            let updated = task.clone();
-                            self.persist(&updated);
-                            self.emit(Event::TaskUpdated(updated));
-                        }
+                        let _ = cmd_tx.blocking_send(Command::GitOpFinished {
+                            task_id,
+                            effect: GitEffect::Bump,
+                        });
                     }
-                }
+                });
             }
             Command::CreateFile {
                 task_id,
@@ -3300,15 +3681,21 @@ impl Daemon {
                 directory,
                 reply,
             } => {
-                let result = self
+                // Filesystem work: resolve the path here, touch the disk on the
+                // blocking pool (ADR 0002 invariant 1).
+                let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|_| self.task_repo_path(&task_id))
-                    .ok_or_else(|| format!("no repo for task {task_id}"))
-                    .and_then(|repo| {
-                        super::diff::create_file(&repo, &path, directory).map_err(|e| e.to_string())
-                    });
-                let _ = reply.send(result);
+                    .and_then(|_| self.task_repo_path(&task_id));
+                tokio::task::spawn_blocking(move || {
+                    let result = repo
+                        .ok_or_else(|| format!("no repo for task {task_id}"))
+                        .and_then(|repo| {
+                            super::diff::create_file(&repo, &path, directory)
+                                .map_err(|e| e.to_string())
+                        });
+                    let _ = reply.send(result);
+                });
             }
             Command::RenameFile {
                 task_id,
@@ -3316,30 +3703,37 @@ impl Daemon {
                 new_path,
                 reply,
             } => {
-                let result = self
+                let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|_| self.task_repo_path(&task_id))
-                    .ok_or_else(|| format!("no repo for task {task_id}"))
-                    .and_then(|repo| {
-                        super::diff::rename_file(&repo, &path, &new_path).map_err(|e| e.to_string())
-                    });
-                let _ = reply.send(result);
+                    .and_then(|_| self.task_repo_path(&task_id));
+                tokio::task::spawn_blocking(move || {
+                    let result = repo
+                        .ok_or_else(|| format!("no repo for task {task_id}"))
+                        .and_then(|repo| {
+                            super::diff::rename_file(&repo, &path, &new_path)
+                                .map_err(|e| e.to_string())
+                        });
+                    let _ = reply.send(result);
+                });
             }
             Command::DeleteFile {
                 task_id,
                 path,
                 reply,
             } => {
-                let result = self
+                let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|_| self.task_repo_path(&task_id))
-                    .ok_or_else(|| format!("no repo for task {task_id}"))
-                    .and_then(|repo| {
-                        super::diff::delete_file(&repo, &path).map_err(|e| e.to_string())
-                    });
-                let _ = reply.send(result);
+                    .and_then(|_| self.task_repo_path(&task_id));
+                tokio::task::spawn_blocking(move || {
+                    let result = repo
+                        .ok_or_else(|| format!("no repo for task {task_id}"))
+                        .and_then(|repo| {
+                            super::diff::delete_file(&repo, &path).map_err(|e| e.to_string())
+                        });
+                    let _ = reply.send(result);
+                });
             }
             Command::ResolveHunk {
                 task_id,
@@ -3350,22 +3744,21 @@ impl Daemon {
                 // accept keeps the change (no-op); only reject touches the tree.
                 if resolution == wire::HunkResolution::Reject {
                     let repo = self.task_repo_path(&task_id);
-                    if let Some(path) = repo {
+                    let cmd_tx = self.cmd_tx.clone();
+                    tokio::spawn(async move {
+                        let Some(path) = repo else { return };
                         if super::diff::reject_hunk(&path, &file, hunk_index)
                             .await
                             .is_ok()
                         {
-                            if let Some(task) = self.tasks.get_mut(&task_id) {
-                                task.updated_at = super::task::now_secs();
-                                if task.files_changed > 0 {
-                                    task.files_changed -= 1;
-                                }
-                                let updated = task.clone();
-                                self.persist(&updated);
-                                self.emit(Event::TaskUpdated(updated));
-                            }
+                            let _ = cmd_tx
+                                .send(Command::GitOpFinished {
+                                    task_id,
+                                    effect: GitEffect::HunkRejected,
+                                })
+                                .await;
                         }
-                    }
+                    });
                 }
             }
             Command::GitCommit {
@@ -3375,47 +3768,62 @@ impl Daemon {
                 amend,
                 reply,
             } => {
+                // git shells out; resolve the repo here and run it off the loop,
+                // reporting what changed back as GitOpFinished (ADR 0002).
                 let repo = self.task_repo_path(&task_id);
-                let result = match repo {
-                    Some(p) => super::diff::commit(&p, &message, files.as_deref(), amend)
-                        .await
-                        .map_err(|e| e.to_string()),
-                    None => Err(format!("no repo for task {task_id}")),
-                };
-                if result.is_ok() {
-                    if let Some(task) = self.tasks.get_mut(&task_id) {
-                        task.updated_at = super::task::now_secs();
-                        task.files_changed = 0;
-                        let updated = task.clone();
-                        self.persist(&updated);
-                        self.emit(Event::TaskUpdated(updated));
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(p) => super::diff::commit(&p, &message, files.as_deref(), amend)
+                            .await
+                            .map_err(|e| e.to_string()),
+                        None => Err(format!("no repo for task {task_id}")),
+                    };
+                    if result.is_ok() {
+                        let _ = cmd_tx
+                            .send(Command::GitOpFinished {
+                                task_id,
+                                effect: GitEffect::Committed,
+                            })
+                            .await;
                     }
-                }
-                let _ = reply.send(result);
+                    let _ = reply.send(result);
+                });
             }
             Command::GitUpdate { task_id, reply } => {
+                // git shells out; resolve the repo here and run it off
+                // the loop, reporting what changed back as
+                // GitOpFinished (ADR 0002).
                 let repo = self.task_repo_path(&task_id);
-                let result = match repo {
-                    Some(p) => super::diff::update_project(&p).await.unwrap_or_else(|e| {
-                        wire::GitOpResult {
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(p) => super::diff::update_project(&p).await.unwrap_or_else(|e| {
+                            wire::GitOpResult {
+                                status: wire::GitOpStatus::Error,
+                                message: e.to_string(),
+                                conflicts: Vec::new(),
+                                branch: None,
+                            }
+                        }),
+                        None => wire::GitOpResult {
                             status: wire::GitOpStatus::Error,
-                            message: e.to_string(),
+                            message: format!("no repo for task {task_id}"),
                             conflicts: Vec::new(),
                             branch: None,
-                        }
-                    }),
-                    None => wire::GitOpResult {
-                        status: wire::GitOpStatus::Error,
-                        message: format!("no repo for task {task_id}"),
-                        conflicts: Vec::new(),
-                        branch: None,
-                    },
-                };
-                // A clean update changed HEAD/tree — nudge clients to refetch.
-                if result.status == wire::GitOpStatus::Ok {
-                    self.bump_task(&task_id);
-                }
-                let _ = reply.send(result);
+                        },
+                    };
+                    // A clean update changed HEAD/tree — nudge clients to refetch.
+                    if result.status == wire::GitOpStatus::Ok {
+                        let _ = cmd_tx
+                            .send(Command::GitOpFinished {
+                                task_id,
+                                effect: GitEffect::Bump,
+                            })
+                            .await;
+                    }
+                    let _ = reply.send(result);
+                });
             }
             Command::GitBranches {
                 task_id,
@@ -3428,39 +3836,52 @@ impl Daemon {
                     Some(id) => self.task_repo_path(&id),
                     None => project.as_deref().and_then(|p| self.project_path(p)),
                 };
-                let list = match repo {
-                    Some(p) => super::diff::list_branches(&p).await.unwrap_or_default(),
-                    None => wire::GitBranchList::default(),
-                };
-                let _ = reply.send(list);
+                tokio::spawn(async move {
+                    let list = match repo {
+                        Some(p) => super::diff::list_branches(&p).await.unwrap_or_default(),
+                        None => wire::GitBranchList::default(),
+                    };
+                    let _ = reply.send(list);
+                });
             }
             Command::GitSwitchBranch {
                 task_id,
                 branch,
                 reply,
             } => {
+                // git shells out; resolve the repo here and run it off
+                // the loop, reporting what changed back as
+                // GitOpFinished (ADR 0002).
                 let repo = self.task_repo_path(&task_id);
-                let result = match repo {
-                    Some(p) => super::diff::switch_branch(&p, &branch)
-                        .await
-                        .unwrap_or_else(|e| wire::GitOpResult {
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(p) => super::diff::switch_branch(&p, &branch)
+                            .await
+                            .unwrap_or_else(|e| wire::GitOpResult {
+                                status: wire::GitOpStatus::Error,
+                                message: e.to_string(),
+                                conflicts: Vec::new(),
+                                branch: None,
+                            }),
+                        None => wire::GitOpResult {
                             status: wire::GitOpStatus::Error,
-                            message: e.to_string(),
+                            message: format!("no repo for task {task_id}"),
                             conflicts: Vec::new(),
                             branch: None,
-                        }),
-                    None => wire::GitOpResult {
-                        status: wire::GitOpStatus::Error,
-                        message: format!("no repo for task {task_id}"),
-                        conflicts: Vec::new(),
-                        branch: None,
-                    },
-                };
-                // Switching branches changes the whole working tree — refetch.
-                if result.status == wire::GitOpStatus::Ok {
-                    self.bump_task(&task_id);
-                }
-                let _ = reply.send(result);
+                        },
+                    };
+                    // Switching branches changes the whole working tree — refetch.
+                    if result.status == wire::GitOpStatus::Ok {
+                        let _ = cmd_tx
+                            .send(Command::GitOpFinished {
+                                task_id,
+                                effect: GitEffect::Bump,
+                            })
+                            .await;
+                    }
+                    let _ = reply.send(result);
+                });
             }
             Command::GitBranchRename {
                 task_id,
@@ -3468,27 +3889,38 @@ impl Daemon {
                 new_name,
                 reply,
             } => {
+                // git shells out; resolve the repo here and run it off
+                // the loop, reporting what changed back as
+                // GitOpFinished (ADR 0002).
                 let repo = self.task_repo_path(&task_id);
-                let result = match repo {
-                    Some(p) => super::diff::rename_branch(&p, &branch, &new_name)
-                        .await
-                        .unwrap_or_else(|e| wire::GitOpResult {
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(p) => super::diff::rename_branch(&p, &branch, &new_name)
+                            .await
+                            .unwrap_or_else(|e| wire::GitOpResult {
+                                status: wire::GitOpStatus::Error,
+                                message: e.to_string(),
+                                conflicts: Vec::new(),
+                                branch: None,
+                            }),
+                        None => wire::GitOpResult {
                             status: wire::GitOpStatus::Error,
-                            message: e.to_string(),
+                            message: format!("no repo for task {task_id}"),
                             conflicts: Vec::new(),
                             branch: None,
-                        }),
-                    None => wire::GitOpResult {
-                        status: wire::GitOpStatus::Error,
-                        message: format!("no repo for task {task_id}"),
-                        conflicts: Vec::new(),
-                        branch: None,
-                    },
-                };
-                if result.status == wire::GitOpStatus::Ok {
-                    self.bump_task(&task_id);
-                }
-                let _ = reply.send(result);
+                        },
+                    };
+                    if result.status == wire::GitOpStatus::Ok {
+                        let _ = cmd_tx
+                            .send(Command::GitOpFinished {
+                                task_id,
+                                effect: GitEffect::Bump,
+                            })
+                            .await;
+                    }
+                    let _ = reply.send(result);
+                });
             }
             Command::GitBranchDelete {
                 task_id,
@@ -3496,27 +3928,38 @@ impl Daemon {
                 force,
                 reply,
             } => {
+                // git shells out; resolve the repo here and run it off
+                // the loop, reporting what changed back as
+                // GitOpFinished (ADR 0002).
                 let repo = self.task_repo_path(&task_id);
-                let result = match repo {
-                    Some(p) => super::diff::delete_branch(&p, &branch, force)
-                        .await
-                        .unwrap_or_else(|e| wire::GitOpResult {
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(p) => super::diff::delete_branch(&p, &branch, force)
+                            .await
+                            .unwrap_or_else(|e| wire::GitOpResult {
+                                status: wire::GitOpStatus::Error,
+                                message: e.to_string(),
+                                conflicts: Vec::new(),
+                                branch: None,
+                            }),
+                        None => wire::GitOpResult {
                             status: wire::GitOpStatus::Error,
-                            message: e.to_string(),
+                            message: format!("no repo for task {task_id}"),
                             conflicts: Vec::new(),
                             branch: None,
-                        }),
-                    None => wire::GitOpResult {
-                        status: wire::GitOpStatus::Error,
-                        message: format!("no repo for task {task_id}"),
-                        conflicts: Vec::new(),
-                        branch: None,
-                    },
-                };
-                if result.status == wire::GitOpStatus::Ok {
-                    self.bump_task(&task_id);
-                }
-                let _ = reply.send(result);
+                        },
+                    };
+                    if result.status == wire::GitOpStatus::Ok {
+                        let _ = cmd_tx
+                            .send(Command::GitOpFinished {
+                                task_id,
+                                effect: GitEffect::Bump,
+                            })
+                            .await;
+                    }
+                    let _ = reply.send(result);
+                });
             }
             Command::GitBranchCreate {
                 task_id,
@@ -3526,39 +3969,20 @@ impl Daemon {
                 overwrite,
                 reply,
             } => {
+                // git shells out; resolve the repo here and run it off
+                // the loop, reporting what changed back as
+                // GitOpFinished (ADR 0002).
                 let repo = self.task_repo_path(&task_id);
-                let result = match repo {
-                    Some(p) => {
-                        super::diff::branch_create(&p, &name, from.as_deref(), checkout, overwrite)
-                            .await
-                            .unwrap_or_else(|e| wire::GitOpResult {
-                                status: wire::GitOpStatus::Error,
-                                message: e.to_string(),
-                                conflicts: Vec::new(),
-                                branch: None,
-                            })
-                    }
-                    None => wire::GitOpResult {
-                        status: wire::GitOpStatus::Error,
-                        message: format!("no repo for task {task_id}"),
-                        conflicts: Vec::new(),
-                        branch: None,
-                    },
-                };
-                if result.status == wire::GitOpStatus::Ok {
-                    self.bump_task(&task_id);
-                }
-                let _ = reply.send(result);
-            }
-            Command::GitRebase {
-                task_id,
-                branch,
-                target,
-                reply,
-            } => {
-                let repo = self.task_repo_path(&task_id);
-                let result = match repo {
-                    Some(p) => super::diff::rebase(&p, &branch, &target)
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(p) => super::diff::branch_create(
+                            &p,
+                            &name,
+                            from.as_deref(),
+                            checkout,
+                            overwrite,
+                        )
                         .await
                         .unwrap_or_else(|e| wire::GitOpResult {
                             status: wire::GitOpStatus::Error,
@@ -3566,44 +3990,100 @@ impl Daemon {
                             conflicts: Vec::new(),
                             branch: None,
                         }),
-                    None => wire::GitOpResult {
-                        status: wire::GitOpStatus::Error,
-                        message: format!("no repo for task {task_id}"),
-                        conflicts: Vec::new(),
-                        branch: None,
-                    },
-                };
-                if result.status == wire::GitOpStatus::Ok {
-                    self.bump_task(&task_id);
-                }
-                let _ = reply.send(result);
+                        None => wire::GitOpResult {
+                            status: wire::GitOpStatus::Error,
+                            message: format!("no repo for task {task_id}"),
+                            conflicts: Vec::new(),
+                            branch: None,
+                        },
+                    };
+                    if result.status == wire::GitOpStatus::Ok {
+                        let _ = cmd_tx
+                            .send(Command::GitOpFinished {
+                                task_id,
+                                effect: GitEffect::Bump,
+                            })
+                            .await;
+                    }
+                    let _ = reply.send(result);
+                });
+            }
+            Command::GitRebase {
+                task_id,
+                branch,
+                target,
+                reply,
+            } => {
+                // git shells out; resolve the repo here and run it off
+                // the loop, reporting what changed back as
+                // GitOpFinished (ADR 0002).
+                let repo = self.task_repo_path(&task_id);
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(p) => super::diff::rebase(&p, &branch, &target)
+                            .await
+                            .unwrap_or_else(|e| wire::GitOpResult {
+                                status: wire::GitOpStatus::Error,
+                                message: e.to_string(),
+                                conflicts: Vec::new(),
+                                branch: None,
+                            }),
+                        None => wire::GitOpResult {
+                            status: wire::GitOpStatus::Error,
+                            message: format!("no repo for task {task_id}"),
+                            conflicts: Vec::new(),
+                            branch: None,
+                        },
+                    };
+                    if result.status == wire::GitOpStatus::Ok {
+                        let _ = cmd_tx
+                            .send(Command::GitOpFinished {
+                                task_id,
+                                effect: GitEffect::Bump,
+                            })
+                            .await;
+                    }
+                    let _ = reply.send(result);
+                });
             }
             Command::GitMerge {
                 task_id,
                 target,
                 reply,
             } => {
+                // git shells out; resolve the repo here and run it off
+                // the loop, reporting what changed back as
+                // GitOpFinished (ADR 0002).
                 let repo = self.task_repo_path(&task_id);
-                let result = match repo {
-                    Some(p) => super::diff::merge(&p, &target).await.unwrap_or_else(|e| {
-                        wire::GitOpResult {
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(p) => super::diff::merge(&p, &target).await.unwrap_or_else(|e| {
+                            wire::GitOpResult {
+                                status: wire::GitOpStatus::Error,
+                                message: e.to_string(),
+                                conflicts: Vec::new(),
+                                branch: None,
+                            }
+                        }),
+                        None => wire::GitOpResult {
                             status: wire::GitOpStatus::Error,
-                            message: e.to_string(),
+                            message: format!("no repo for task {task_id}"),
                             conflicts: Vec::new(),
                             branch: None,
-                        }
-                    }),
-                    None => wire::GitOpResult {
-                        status: wire::GitOpStatus::Error,
-                        message: format!("no repo for task {task_id}"),
-                        conflicts: Vec::new(),
-                        branch: None,
-                    },
-                };
-                if result.status == wire::GitOpStatus::Ok {
-                    self.bump_task(&task_id);
-                }
-                let _ = reply.send(result);
+                        },
+                    };
+                    if result.status == wire::GitOpStatus::Ok {
+                        let _ = cmd_tx
+                            .send(Command::GitOpFinished {
+                                task_id,
+                                effect: GitEffect::Bump,
+                            })
+                            .await;
+                    }
+                    let _ = reply.send(result);
+                });
             }
             Command::GitPushInfo { task_id, reply } => {
                 let repo = self.tasks.get(&task_id).and_then(|task| {
@@ -3611,44 +4091,57 @@ impl Daemon {
                         .clone()
                         .or_else(|| self.project_path(&task.project))
                 });
-                let result = match repo {
-                    Some(path) => super::diff::push_info(&path)
-                        .await
-                        .map_err(|e| e.to_string()),
-                    None => Err(format!("no repo for task {task_id}")),
-                };
-                let _ = reply.send(result);
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(path) => super::diff::push_info(&path)
+                            .await
+                            .map_err(|e| e.to_string()),
+                        None => Err(format!("no repo for task {task_id}")),
+                    };
+                    let _ = reply.send(result);
+                });
             }
             Command::GitPush {
                 task_id,
                 force,
                 reply,
             } => {
+                // git shells out; resolve the repo here and run it off
+                // the loop, reporting what changed back as
+                // GitOpFinished (ADR 0002).
                 let repo = self.tasks.get(&task_id).and_then(|task| {
                     task.worktree
                         .clone()
                         .or_else(|| self.project_path(&task.project))
                 });
-                let result = match repo {
-                    Some(path) => super::diff::push(&path, force).await.unwrap_or_else(|e| {
-                        wire::GitOpResult {
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(path) => super::diff::push(&path, force).await.unwrap_or_else(|e| {
+                            wire::GitOpResult {
+                                status: wire::GitOpStatus::Error,
+                                message: e.to_string(),
+                                conflicts: Vec::new(),
+                                branch: None,
+                            }
+                        }),
+                        None => wire::GitOpResult {
                             status: wire::GitOpStatus::Error,
-                            message: e.to_string(),
+                            message: format!("no repo for task {task_id}"),
                             conflicts: Vec::new(),
                             branch: None,
-                        }
-                    }),
-                    None => wire::GitOpResult {
-                        status: wire::GitOpStatus::Error,
-                        message: format!("no repo for task {task_id}"),
-                        conflicts: Vec::new(),
-                        branch: None,
-                    },
-                };
-                if result.status == wire::GitOpStatus::Ok {
-                    self.bump_task(&task_id);
-                }
-                let _ = reply.send(result);
+                        },
+                    };
+                    if result.status == wire::GitOpStatus::Ok {
+                        let _ = cmd_tx
+                            .send(Command::GitOpFinished {
+                                task_id,
+                                effect: GitEffect::Bump,
+                            })
+                            .await;
+                    }
+                    let _ = reply.send(result);
+                });
             }
             Command::GitCreatePr {
                 task_id,
@@ -3662,13 +4155,18 @@ impl Daemon {
                         .clone()
                         .or_else(|| self.project_path(&task.project))
                 });
-                let result = match repo {
-                    Some(path) => super::diff::create_pr(&path, &title, &body, base.as_deref())
-                        .await
-                        .map_err(|e| e.to_string()),
-                    None => Err(format!("no repo for task {task_id}")),
-                };
-                let _ = reply.send(result);
+                // Creating a PR shells out to the forge's CLI over the network;
+                // it changes nothing the actor holds, so it just answers from a
+                // task of its own (ADR 0002).
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(path) => super::diff::create_pr(&path, &title, &body, base.as_deref())
+                            .await
+                            .map_err(|e| e.to_string()),
+                        None => Err(format!("no repo for task {task_id}")),
+                    };
+                    let _ = reply.send(result);
+                });
             }
             Command::GenerateText {
                 task_id,
@@ -3753,17 +4251,23 @@ impl Daemon {
             }
             Command::TrackerPersistLink { link, reply } => {
                 let result = match &self.store {
-                    Some(store) => store
-                        .upsert_tracker_link(&link)
-                        .map_err(|e| format!("failed to persist link: {e:#}")),
+                    Some(store) => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        store
+                            .upsert_tracker_link(&link)
+                            .map_err(|e| format!("failed to persist link: {e:#}"))
+                    }
                     None => Err("daemon has no persistent store (demo mode?)".into()),
                 };
                 let _ = reply.send(result);
             }
             Command::TrackerLinks { reply } => {
                 let result = match &self.store {
-                    Some(store) => super::tracker::list_links(store)
-                        .map_err(|e: anyhow::Error| format!("{e:#}")),
+                    Some(store) => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        super::tracker::list_links(&store)
+                            .map_err(|e: anyhow::Error| format!("{e:#}"))
+                    }
                     None => Ok(Vec::new()),
                 };
                 let _ = reply.send(result);
@@ -3774,6 +4278,7 @@ impl Daemon {
                     .as_ref()
                     .ok_or_else(|| "daemon has no persistent store".to_string())
                     .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
                         store
                             .tracker_project_settings(&project)
                             .map_err(|e| format!("{e:#}"))
@@ -3791,6 +4296,7 @@ impl Daemon {
                     .as_ref()
                     .ok_or_else(|| "daemon has no persistent store".to_string())
                     .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
                         // Pointing a project somewhere else (or nowhere) makes the
                         // rows the old team put here meaningless, so they go with
                         // the mapping. Only rows an import minted are eligible —
@@ -3824,12 +4330,15 @@ impl Daemon {
             Command::TrackerSyncInputs { ids, reply } => {
                 let links: Vec<super::store::TrackerLink> = match &self.store {
                     Some(store) if ids.is_empty() => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
                         store.load_all_tracker_links().unwrap_or_default()
                     }
-                    Some(store) => ids
-                        .iter()
-                        .filter_map(|id| store.load_tracker_link(id).ok().flatten())
-                        .collect(),
+                    Some(store) => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        ids.iter()
+                            .filter_map(|id| store.load_tracker_link(id).ok().flatten())
+                            .collect()
+                    }
                     None => Vec::new(),
                 };
                 let mut repo_dirs = std::collections::HashMap::new();
@@ -3844,7 +4353,10 @@ impl Daemon {
                         if let Some(team) = self
                             .store
                             .as_ref()
-                            .and_then(|store| store.tracker_project_settings(&link.project).ok())
+                            .and_then(|store| {
+                                let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                                store.tracker_project_settings(&link.project).ok()
+                            })
                             .and_then(|settings| settings.linear_team_id)
                         {
                             linear_teams.insert(link.project.clone(), team);
@@ -3855,6 +4367,7 @@ impl Daemon {
             }
             Command::TrackerPersistSynced { links, reply } => {
                 if let Some(store) = &self.store {
+                    let store = store.lock().unwrap_or_else(|e| e.into_inner());
                     for link in &links {
                         if let Err(e) = store.upsert_tracker_link(link) {
                             eprintln!("[tracker] failed to persist sync for {}: {e}", link.item_id);
@@ -3907,6 +4420,7 @@ impl Daemon {
             } => {
                 let result = match &self.store {
                     Some(store) => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
                         // YAML mode keeps backlog item rows project-local in
                         // `…/.workforge/backlog/`; SQLite mode keeps them in the
                         // `backlog_items` table. `adopt_imported` is told which
@@ -3919,7 +4433,7 @@ impl Daemon {
                             None
                         };
                         super::tracker::adopt_imported(
-                            store,
+                            &store,
                             &project,
                             yaml_path.as_deref(),
                             fetched,
@@ -3935,7 +4449,10 @@ impl Daemon {
                     .store
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
-                    .and_then(|store| store.backlog_storage_mode())
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        store.backlog_storage_mode()
+                    })
                     .map(|mode| wire::BacklogSettings { mode })
                     .map_err(|e| format!("{e:#}"));
                 let _ = reply.send(result);
@@ -3946,6 +4463,7 @@ impl Daemon {
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
                     .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
                         let from = store.backlog_storage_mode()?;
                         if from != mode {
                             // Switching backends must not silently hide rows in
@@ -3992,6 +4510,7 @@ impl Daemon {
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
                     .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
                         if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
                             let path = self
                                 .project_path(&project)
@@ -4011,6 +4530,7 @@ impl Daemon {
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
                     .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
                         let project = new.project;
                         let now = super::task::now_secs();
                         let (number, yaml_path) =
@@ -4076,6 +4596,7 @@ impl Daemon {
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
                     .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
                         if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
                             let path = self
                                 .project_path(&project)
@@ -4116,6 +4637,7 @@ impl Daemon {
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
                     .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
                         if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
                             let path = self
                                 .project_path(&project)
@@ -4140,12 +4662,13 @@ impl Daemon {
                     .as_ref()
                     .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store (demo mode?)"))
                     .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
                         let project = self
                             .tasks
                             .get(&task_id)
                             .map(|t| t.project.clone())
                             .unwrap_or_default();
-                        super::tracker::link_task(store, &item_id, &task_id, "local", &project)
+                        super::tracker::link_task(&store, &item_id, &task_id, "local", &project)
                             .and_then(|_| {
                                 if store.backlog_storage_mode()? == wire::BacklogStorageMode::Sqlite
                                 {
@@ -4178,6 +4701,13 @@ impl Daemon {
                         Some(handle) => handle.cancel_and_wait().await,
                         None => Ok(()),
                     };
+                    // A worktree checkout may still be running for this task;
+                    // dropping its token stops it from starting a session the
+                    // user just cancelled. Same for a pending resume: its
+                    // guard must not start a session the user cancelled.
+                    self.pending_session_starts.remove(&id);
+                    self.pending_resume.remove(&id);
+                    self.resume_replay.remove(&id);
                     self.pending_permissions.cleanup_task(&id);
                     // A finished pipeline's parent keeps its terminal status:
                     // cancelling it must not rewrite that back to Waiting.
@@ -4248,9 +4778,8 @@ impl Daemon {
                 };
                 let mut delete_result = stop_result;
                 if delete_result.is_ok() && self.workflow_runs.remove(&id).is_some() {
-                    if let Some(store) = &self.store {
-                        let _ = store.delete_workflow_run(&id);
-                    }
+                    self.persist
+                        .write(PersistWrite::DeleteWorkflowRun(id.clone()));
                 }
                 if delete_result.is_ok() {
                     self.pending_permissions.cleanup_task(&id);
@@ -4268,10 +4797,16 @@ impl Daemon {
                 if delete_result.is_ok() && self.tasks.remove(&id).is_some() {
                     self.tool_call_starts
                         .retain(|(task_id, _), _| task_id != &id);
-                    if let Some(store) = &self.store {
-                        if let Err(error) = store.delete_task(&id) {
-                            delete_result = Err(error.to_string());
-                        }
+                    self.last_session_update.remove(&id);
+                    self.turn_updates.remove(&id);
+                    self.resume_replay.remove(&id);
+                    self.pending_resume.remove(&id);
+                    self.pending_session_starts.remove(&id);
+                    // Awaited, not queued: a failed delete is reported to the
+                    // user, and dropping the error would leave a task that
+                    // reappears on the next start with no explanation.
+                    if let Err(error) = self.persist.ask(PersistAsk::DeleteTask(id.clone())).await {
+                        delete_result = Err(error);
                     }
                     self.emit(Event::TaskRemoved { id: id.clone() });
                     // Deleting a stage child mid-run fails that stage.
@@ -4289,37 +4824,61 @@ impl Daemon {
                 }
             }
             Command::MergeWorktree { task_id, reply } => {
-                let result = if let Some(task) = self.tasks.get(&task_id) {
-                    if let Some(wt_mgr) = self.worktrees.get(&task.project) {
-                        match wt_mgr.merge(&task_id).await {
-                            Ok(super::worktree::MergeResult::Ok { branch }) => {
-                                // Clean up after merge.
-                                if let Some(wt_mgr) = self.worktrees.get_mut(&task.project) {
-                                    let _ = wt_mgr.remove(&task_id).await;
-                                }
-                                // Clear the worktree field on the task.
-                                if let Some(task) = self.tasks.get_mut(&task_id) {
-                                    task.worktree = None;
-                                    task.updated_at = super::task::now_secs();
-                                    let updated = task.clone();
-                                    self.persist(&updated);
-                                    self.emit(Event::TaskUpdated(updated));
-                                }
-                                Ok(branch)
-                            }
-                            Ok(super::worktree::MergeResult::Conflict { message, branch }) => {
-                                Err(format!("merge conflict on {branch}: {message}"))
-                            }
-                            Ok(super::worktree::MergeResult::Error(msg)) => Err(msg),
-                            Err(e) => Err(e.to_string()),
-                        }
-                    } else {
-                        Err("no worktree manager for this project".into())
-                    }
-                } else {
-                    Err(format!("unknown task {task_id}"))
+                // Merging runs two git commands and removes a checkout. Resolve
+                // what they need here, run them off the loop, and record the
+                // outcome through Command::WorktreeMerged (ADR 0002).
+                let resolved = self
+                    .tasks
+                    .get(&task_id)
+                    .map(|t| t.project.clone())
+                    .and_then(|project| {
+                        let mgr = self.worktrees.get(&project)?;
+                        let wt = mgr.get(&task_id)?;
+                        Some((
+                            project,
+                            mgr.base_repo().to_path_buf(),
+                            wt.path.clone(),
+                            wt.branch.clone(),
+                            wt.base_branch.clone(),
+                        ))
+                    });
+                let Some((project, base_repo, path, branch, base_branch)) = resolved else {
+                    let _ = reply.send(Err(format!("no worktree for task {task_id}")));
+                    return;
                 };
-                let _ = reply.send(result);
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let merged =
+                        super::worktree::merge_detached(&base_repo, &branch, &base_branch).await;
+                    let result = match merged {
+                        Ok(super::worktree::MergeResult::Ok { branch }) => {
+                            let _ =
+                                super::worktree::remove_detached(&base_repo, &path, &branch).await;
+                            let _ = cmd_tx
+                                .send(Command::WorktreeMerged { task_id, project })
+                                .await;
+                            Ok(branch)
+                        }
+                        Ok(super::worktree::MergeResult::Conflict { message, branch }) => {
+                            Err(format!("merge conflict on {branch}: {message}"))
+                        }
+                        Ok(super::worktree::MergeResult::Error(msg)) => Err(msg),
+                        Err(e) => Err(format!("{e:#}")),
+                    };
+                    let _ = reply.send(result);
+                });
+            }
+            Command::WorktreeMerged { task_id, project } => {
+                if let Some(mgr) = self.worktrees.get_mut(&project) {
+                    mgr.forget(&task_id);
+                }
+                if let Some(task) = self.tasks.get_mut(&task_id) {
+                    task.worktree = None;
+                    task.updated_at = super::task::now_secs();
+                    let updated = task.clone();
+                    self.persist(&updated);
+                    self.emit(Event::TaskUpdated(updated));
+                }
             }
             Command::ListWorktrees { project, reply } => {
                 let wts = if let Some(wt_mgr) = self.worktrees.get(&project) {
@@ -4546,24 +5105,30 @@ impl Daemon {
 
                         if let Some((project, agent, session_id)) = resume {
                             self.mark_task_running(&task_id);
-                            self.prepare_resume_replay_guard(&task_id);
                             self.emit_session(
                                 &task_id,
                                 wire::SessionUpdate::AgentText {
                                     text: "Reconnecting to the saved agent session…".into(),
                                 },
                             );
-                            self.start_session(
-                                &task_id,
-                                &project,
-                                &agent,
-                                &text,
-                                false,
-                                Some(session_id),
-                                attachments,
-                                None,
-                                std::collections::HashMap::new(),
+                            // The replay guard is built from the persisted
+                            // transcript, which must be read off the loop
+                            // (write-behind flush + store read). Start the
+                            // session only once the guard has landed, mirroring
+                            // WorktreeReady: starting before it would let the
+                            // agent's replayed history through unfiltered and
+                            // double the output.
+                            self.pending_resume.insert(
+                                task_id.clone(),
+                                PendingResume {
+                                    project,
+                                    agent,
+                                    text: text.clone(),
+                                    session_id,
+                                    attachments,
+                                },
                             );
+                            self.request_resume_replay_guard(&task_id);
                             let _ = reply.send(Ok(()));
                         } else {
                             // Reject without echoing a user message that was never delivered.
@@ -4607,9 +5172,7 @@ impl Daemon {
                 });
             }
             Command::UpdateAgents { agents } => {
-                if let Some(store) = &self.store {
-                    let _ = store.save_agents(&agents);
-                }
+                self.persist.write(PersistWrite::Agents(agents.clone()));
                 self.configured_agents = agents.clone();
                 self.emit(Event::AgentsUpdated {
                     agents: self.configured_agents.clone(),
@@ -4633,7 +5196,8 @@ impl Daemon {
                 label,
                 reply,
             } => {
-                let _ = reply.send(self.import_account(&agent_id, &label));
+                let result = self.import_account(&agent_id, &label).await;
+                let _ = reply.send(result);
             }
             Command::RenameAccount {
                 account_id,
@@ -4644,9 +5208,7 @@ impl Daemon {
                     Some(account) => {
                         account.label = label;
                         let updated = account.clone();
-                        if let Some(store) = &self.store {
-                            let _ = store.upsert_account(&updated);
-                        }
+                        self.persist.write(PersistWrite::Account(Box::new(updated)));
                         Ok(())
                     }
                     None => Err(format!("no account {account_id}")),
@@ -4654,14 +5216,15 @@ impl Daemon {
                 let _ = reply.send(result.map(|()| self.emit_accounts()));
             }
             Command::RemoveAccount { account_id, reply } => {
-                let _ = reply.send(self.remove_account(&account_id));
+                let result = self.remove_account(&account_id).await;
+                let _ = reply.send(result);
             }
             Command::SetActiveAccount {
                 agent_id,
                 account_id,
                 reply,
             } => {
-                let result = self.set_active_account(&agent_id, &account_id);
+                let result = self.set_active_account(&agent_id, &account_id).await;
                 let _ = reply.send(result);
             }
             Command::ProbeAgent { id } => {
@@ -4703,9 +5266,11 @@ impl Daemon {
                 if let Some(agent) = self.configured_agents.iter_mut().find(|a| a.id == id) {
                     agent.models = models.clone();
                     agent.last_model = last_model.clone();
-                    if let Some(store) = &self.store {
-                        let _ = store.update_agent_models(&id, &models, last_model.as_deref());
-                    }
+                    self.persist.write(PersistWrite::AgentModels {
+                        id: id.clone(),
+                        models: models.clone(),
+                        last_model: last_model.clone(),
+                    });
                 }
                 self.emit(Event::AgentsUpdated {
                     agents: self.configured_agents.clone(),
@@ -4754,10 +5319,10 @@ impl Daemon {
             }
             Command::SaveOrchestratorConfig { config, reply } => {
                 self.orch_config = config.into();
-                // Persist to store if available.
-                if let Some(ref store) = self.store {
-                    let _ = store.save_orchestrator_config(&self.orch_config);
-                }
+                self.persist
+                    .write(PersistWrite::OrchestratorConfig(Box::new(
+                        self.orch_config.clone(),
+                    )));
                 let _ = reply.send(true);
             }
             Command::SetTaskStatus { id, status } => {
@@ -5187,7 +5752,7 @@ impl Daemon {
     /// Register the agent's currently-authenticated login as a new account by
     /// copying its credentials into a fresh vault. The agent's own home is only
     /// ever read.
-    fn import_account(
+    async fn import_account(
         &mut self,
         agent_id: &str,
         label: &str,
@@ -5225,11 +5790,19 @@ impl Daemon {
             // wait to be picked, so importing never moves live sessions.
             active: !self.accounts.iter().any(|a| a.agent_id == agent_id),
         };
-        if let Some(store) = &self.store {
-            store.upsert_account(&account).map_err(|e| e.to_string())?;
-            if account.active {
-                let _ = store.set_active_account(agent_id, &account.id);
-            }
+        let active = account.active;
+        let account_id = account.id.clone();
+        self.persist
+            .ask(PersistAsk::Account(Box::new(account.clone())))
+            .await?;
+        if active {
+            let _ = self
+                .persist
+                .ask(PersistAsk::SetActiveAccount {
+                    agent_id: agent_id.to_string(),
+                    account_id,
+                })
+                .await;
         }
         self.accounts.push(account);
         Ok(self.emit_accounts())
@@ -5242,7 +5815,7 @@ impl Daemon {
     /// the selection is only recorded if that succeeded: a stored "active"
     /// account the CLI is not actually using would misreport which login every
     /// session runs under.
-    fn set_active_account(
+    async fn set_active_account(
         &mut self,
         agent_id: &str,
         account_id: &str,
@@ -5268,11 +5841,12 @@ impl Daemon {
             )
             .map_err(|e| e.to_string())?;
         }
-        if let Some(store) = &self.store {
-            store
-                .set_active_account(agent_id, account_id)
-                .map_err(|e| e.to_string())?;
-        }
+        self.persist
+            .ask(PersistAsk::SetActiveAccount {
+                agent_id: agent_id.to_string(),
+                account_id: account_id.to_string(),
+            })
+            .await?;
         for account in &mut self.accounts {
             if account.agent_id == agent_id {
                 account.active = account.id == account_id;
@@ -5321,18 +5895,16 @@ impl Daemon {
             .unwrap_or(agent)
     }
 
-    fn remove_account(&mut self, account_id: &str) -> Result<Vec<wire::AccountInfo>, String> {
+    async fn remove_account(&mut self, account_id: &str) -> Result<Vec<wire::AccountInfo>, String> {
         let Some(index) = self.accounts.iter().position(|a| a.id == account_id) else {
             return Err(format!("no account {account_id}"));
         };
         let account = self.accounts[index].clone();
         super::accounts::remove_vault(std::path::Path::new(&account.home_dir), &account.id)
             .map_err(|e| e.to_string())?;
-        if let Some(store) = &self.store {
-            store
-                .delete_account(account_id)
-                .map_err(|e| e.to_string())?;
-        }
+        self.persist
+            .ask(PersistAsk::DeleteAccount(account_id.to_string()))
+            .await?;
         self.accounts.remove(index);
         if account.agent_id == "claude" {
             let _ = self
@@ -5350,7 +5922,7 @@ impl Daemon {
                 .find(|a| a.agent_id == account.agent_id)
                 .map(|a| a.id.clone())
             {
-                self.set_active_account(&account.agent_id, &next_id)?;
+                self.set_active_account(&account.agent_id, &next_id).await?;
             }
         }
         Ok(self.emit_accounts())
@@ -5389,6 +5961,51 @@ impl Daemon {
     ///
     /// If the task has a worktree, the agent runs in the worktree directory
     /// instead of the project root — so its edits are isolated.
+    /// Start a session whose worktree checkout has finished.
+    fn start_pending_session(&mut self, task_id: &str, start: PendingSessionStart) {
+        self.start_session(
+            task_id,
+            &start.project,
+            &start.agent,
+            &start.prompt,
+            start.include_runtime_context,
+            None,
+            start.attachments,
+            start.default_model,
+            start.config_overrides,
+        );
+    }
+
+    /// Resolve everything a worktree checkout needs from actor state, so the
+    /// git work itself can run without borrowing the actor.
+    fn worktree_request(
+        &mut self,
+        task_id: &str,
+        project: &str,
+        branched_from: Option<&str>,
+    ) -> Option<WorktreeRequest> {
+        let path = self.project_path(project)?;
+        // Resolve the source's working directory before borrowing the manager.
+        // A source task without a worktree runs in the project checkout, and
+        // that is still the tree its branch must inherit from.
+        let source_path = branched_from.and_then(|src| self.task_repo_path(src));
+        let mgr = self
+            .worktrees
+            .entry(project.to_string())
+            .or_insert_with(|| WorktreeManager::new(std::path::PathBuf::from(&path)));
+        let base_branch = branched_from.and_then(|src| mgr.source_state(src).map(|(b, _)| b));
+        let source = source_path.map(|path| BranchSource {
+            base_branch,
+            path: PathBuf::from(path),
+        });
+        Some(WorktreeRequest {
+            project: project.to_string(),
+            base_repo: mgr.base_repo().to_path_buf(),
+            task_id: task_id.to_string(),
+            source,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn start_session(
         &mut self,
@@ -5674,24 +6291,29 @@ impl Daemon {
                         }
                     }
                 }
-                let output = self.collect_agent_text(&task_id);
-                self.notify_orch_finished(&task_id, success, output.clone());
                 if workflow_child {
                     // A workflow stage finished — advance the pipeline. Parse
-                    // only the latest turn's text: answered questions and
-                    // superseded verdicts from earlier turns must not count.
-                    // The legacy orchestrator inbox path does not apply here.
+                    // only the latest turn's text from the in-memory turn buffer
+                    // (bounded by a turn): answered questions and superseded
+                    // verdicts from earlier turns must not count. The legacy
+                    // orchestrator inbox path does not apply here.
                     let text = self.collect_stage_text(&task_id);
                     self.workflow_stage_finished(&task_id, success, text).await;
-                } else {
-                    // Deliver to a parent if this was a sub-agent; and drain our
-                    // own inbox if we are a parent that just went idle.
-                    self.deliver_child_result(&task_id, success, output);
                 }
                 // If we are an orchestrator whose sub-agents finished mid-turn,
                 // process them now that the turn is over.
                 if self.pending_wake.remove(&task_id) {
                     self.wake_parent(&task_id);
+                }
+                // The finished task's full text output is assembled off the loop
+                // (write-behind flush + store read) and delivered back as
+                // Command::TaskOutputReady, which notifies the orchestrator and
+                // the parent inbox. Only ask for it when somebody consumes it:
+                // both consumers are no-ops for an ordinary task, and reading
+                // its whole transcript per turn would trade the memory this
+                // change saves for disk it never needed to touch.
+                if self.turn_output_has_consumer(&task_id, workflow_child) {
+                    self.request_task_output(&task_id, success, workflow_child);
                 }
             }
             AcpUpdate::Error { run_id, message } => {
@@ -5755,31 +6377,99 @@ impl Daemon {
         }
     }
 
-    fn emit_session_unless_last_duplicate(&self, task_id: &str, update: wire::SessionUpdate) {
-        if let Some(store) = &self.store {
-            if let Ok(Some(last)) = store.load_last_session_update(task_id) {
-                if last == update {
-                    return;
-                }
-            }
+    /// Emit unless this is byte-for-byte the update that went out last for the
+    /// task — a reconnect retry re-sending a prompt, or a repeated usage frame.
+    ///
+    /// The comparison is against what this daemon last emitted, held in memory.
+    /// It used to `SELECT` the last persisted row, which write-behind
+    /// persistence makes wrong as well as slow: the row it needs is usually
+    /// still in the queue, so every duplicate would slip through.
+    fn emit_session_unless_last_duplicate(&mut self, task_id: &str, update: wire::SessionUpdate) {
+        if self.last_session_update.get(task_id) == Some(&update) {
+            return;
         }
         self.emit_session(task_id, update);
     }
 
-    fn prepare_resume_replay_guard(&mut self, task_id: &str) {
-        let Some(store) = &self.store else {
-            return;
+    /// Ask a worker to read this task's persisted history off the loop and send
+    /// the replay guard back as [`Command::ResumeReplayReady`]. The session does
+    /// not start until then (see the SessionPrompt resume path).
+    fn request_resume_replay_guard(&self, task_id: &str) {
+        let persist = self.persist.clone();
+        let store = self.store.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let task_id = task_id.to_string();
+        tokio::spawn(async move {
+            persist.flush().await;
+            let lookup = task_id.clone();
+            let replay = super::runtime::store_read(store, move |store| {
+                store
+                    .load_session_updates(&lookup)
+                    .map(|updates| replayable_history(&updates))
+                    .unwrap_or_default()
+            })
+            .await
+            .unwrap_or_default();
+            let _ = cmd_tx
+                .send(Command::ResumeReplayReady { task_id, replay })
+                .await;
+        });
+    }
+
+    /// Whether anything reads a finished turn's full text output.
+    ///
+    /// `notify_orch_finished` is a no-op unless the task is an orchestrator
+    /// node, and `deliver_child_result` returns early without a parent — and it
+    /// is skipped entirely for a workflow stage, which reads its own turn
+    /// buffer instead. For everything else the assembled output is discarded,
+    /// so it should never be assembled.
+    fn turn_output_has_consumer(&self, task_id: &str, workflow_child: bool) -> bool {
+        let Some(task) = self.tasks.get(task_id) else {
+            return false;
         };
-        let Ok(updates) = store.load_session_updates(task_id) else {
-            return;
-        };
-        let replayable = updates
-            .into_iter()
-            .filter(is_acp_replay_update)
-            .collect::<VecDeque<_>>();
-        if !replayable.is_empty() {
-            self.resume_replay.insert(task_id.to_string(), replayable);
-        }
+        let orchestrator_node =
+            self.orch_tx.is_some() && task.tags.iter().any(|tag| tag == "orchestrator");
+        let feeds_parent = !workflow_child && task.parent_task_id.is_some();
+        orchestrator_node || feeds_parent
+    }
+
+    /// Ask a worker to assemble a finished task's full text output off the loop
+    /// and send it back as [`Command::TaskOutputReady`], so the orchestrator /
+    /// parent-inbox delivery never blocks the actor on a disk read.
+    fn request_task_output(&self, task_id: &str, success: bool, workflow_child: bool) {
+        let persist = self.persist.clone();
+        let store = self.store.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let task_id = task_id.to_string();
+        // Without a database the actor's turn buffer is the only history there
+        // is; hand it back rather than an empty result.
+        let fallback = agent_text_from_updates(
+            self.turn_updates
+                .get(&task_id)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+        );
+        tokio::spawn(async move {
+            persist.flush().await;
+            let lookup = task_id.clone();
+            let output = super::runtime::store_read(store, move |store| {
+                store
+                    .load_session_updates(&lookup)
+                    .map(|updates| agent_text_from_updates(&updates))
+                    .unwrap_or_default()
+            })
+            .await
+            // Without a database the actor's turn buffer is the only history.
+            .unwrap_or(fallback);
+            let _ = cmd_tx
+                .send(Command::TaskOutputReady {
+                    task_id,
+                    success,
+                    workflow_child,
+                    output,
+                })
+                .await;
+        });
     }
 
     fn should_skip_resume_replay(&mut self, task_id: &str, update: &wire::SessionUpdate) -> bool {
@@ -5787,13 +6477,12 @@ impl Daemon {
             return false;
         }
 
-        let Some(history) = self.resume_replay.get_mut(task_id) else {
+        let Some(guard) = self.resume_replay.get_mut(task_id) else {
             return false;
         };
 
-        if history.front() == Some(update) {
-            history.pop_front();
-            if history.is_empty() {
+        if guard.consume(update) {
+            if guard.is_empty() {
                 self.resume_replay.remove(task_id);
             }
             return true;
@@ -5805,30 +6494,10 @@ impl Daemon {
         false
     }
 
-    /// Concatenate the agent's text output for a task (its persisted
-    /// `AgentText` updates) — used as the orchestrator node's result, e.g. the
-    /// planner's task-graph JSON.
-    fn collect_agent_text(&self, task_id: &str) -> String {
-        let Some(store) = &self.store else {
-            return String::new();
-        };
-        let Ok(updates) = store.load_session_updates(task_id) else {
-            return String::new();
-        };
-        updates
-            .into_iter()
-            .filter_map(|u| match u {
-                wire::SessionUpdate::AgentText { text } => Some(text),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("")
-    }
-
-    /// Like [`collect_agent_text`], but only the text streamed since the last
-    /// user message — i.e. the output of the task's latest turn. The workflow
-    /// engine parses this: a `need_user_input` block answered two turns ago
-    /// must not be mistaken for a fresh question.
+    /// Like [`agent_text_from_updates`], but only the text streamed since the
+    /// last user message — i.e. the output of the task's latest turn. The
+    /// workflow engine parses this: a `need_user_input` block answered two turns
+    /// ago must not be mistaken for a fresh question.
     fn collect_last_turn_text(&self, task_id: &str) -> String {
         self.collect_stage_text(task_id).full
     }
@@ -5841,40 +6510,16 @@ impl Daemon {
     /// reads as the result, so it is what reviewers and fixers are handed.
     /// `full` is every chunk of the turn, kept as a parsing fallback for an
     /// agent that emits its protocol block before a trailing tool call.
+    ///
+    /// Reads the in-memory current-turn buffer (bounded by a turn, reset on
+    /// each user message), not the whole session transcript.
     fn collect_stage_text(&self, task_id: &str) -> StageText {
-        let Some(updates) = self
-            .store
-            .as_ref()
-            .and_then(|s| s.load_session_updates(task_id).ok())
-        else {
-            return StageText::default();
-        };
-        let mut full: Vec<String> = Vec::new();
-        let mut closing: Vec<String> = Vec::new();
-        for update in updates {
-            match update {
-                // A new user message starts a fresh turn.
-                wire::SessionUpdate::UserMessage { .. } => {
-                    full.clear();
-                    closing.clear();
-                }
-                wire::SessionUpdate::AgentText { text } => {
-                    full.push(text.clone());
-                    closing.push(text);
-                }
-                // Any work the agent does ends whatever it was narrating, so
-                // the closing message restarts after it.
-                wire::SessionUpdate::ToolCall { .. }
-                | wire::SessionUpdate::FileEdit { .. }
-                | wire::SessionUpdate::AgentThought { .. }
-                | wire::SessionUpdate::Plan { .. } => closing.clear(),
-                _ => {}
-            }
-        }
-        StageText {
-            closing: closing.join(""),
-            full: full.join(""),
-        }
+        let updates = self
+            .turn_updates
+            .get(task_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        stage_text_from_updates(updates)
     }
 
     /// Tell the orchestrator a dispatched task finished. No-op unless the task
@@ -5962,10 +6607,19 @@ impl Daemon {
         });
     }
 
-    fn emit_session(&self, task_id: &str, update: wire::SessionUpdate) {
-        if let Some(store) = &self.store {
-            let _ = store.save_session_update(task_id, &update);
+    fn emit_session(&mut self, task_id: &str, update: wire::SessionUpdate) {
+        self.persist.session_update(task_id, &update);
+        // A new user message begins a fresh turn: drop the previous turn's
+        // buffer so stage-text reads stay bounded by a turn, not the session.
+        if matches!(update, wire::SessionUpdate::UserMessage { .. }) {
+            self.turn_updates.remove(task_id);
         }
+        self.turn_updates
+            .entry(task_id.to_string())
+            .or_default()
+            .push(update.clone());
+        self.last_session_update
+            .insert(task_id.to_string(), update.clone());
         self.emit(Event::SessionUpdate {
             task_id: task_id.to_string(),
             update,
@@ -6164,7 +6818,7 @@ impl Daemon {
     /// but would glue unrelated workflow transitions into one Markdown blob.
     #[allow(clippy::too_many_arguments)]
     fn workflow_event(
-        &self,
+        &mut self,
         parent_id: &str,
         event: wire::WorkflowEventKind,
         title: impl Into<String>,
@@ -6189,7 +6843,7 @@ impl Daemon {
     /// Convenience wrapper for transitions that do not reference a particular
     /// agent. Split the first paragraph into the card title and keep the rest
     /// as Markdown detail.
-    fn workflow_timeline(&self, parent_id: &str, text: impl Into<String>) {
+    fn workflow_timeline(&mut self, parent_id: &str, text: impl Into<String>) {
         let text = text.into();
         let text = text.trim();
         let (heading, detail) = text
@@ -6245,10 +6899,8 @@ impl Daemon {
             self.persist(&updated);
             self.emit(Event::TaskUpdated(updated));
         }
-        if let Some(store) = &self.store {
-            if let Ok(json) = serde_json::to_string(run) {
-                let _ = store.save_workflow_run(&run.parent_id, &json);
-            }
+        if let Ok(json) = serde_json::to_string(run) {
+            self.persist.workflow_run(&run.parent_id, json);
         }
     }
 
@@ -6786,6 +7438,51 @@ impl Daemon {
 
     /// A non-review stage child failed, or a reviewer died. Reviewers are
     /// excluded from the verdict; any other stage failure fails the pipeline.
+    /// Park a run whose stage lost its agent, instead of failing it outright.
+    ///
+    /// Losing the agent process is an infrastructure failure, not a verdict:
+    /// the stage never got to say whether the work was good. Failing the run
+    /// made that unrecoverable — the pipeline was finished, and a user whose
+    /// agent died (or who revived the session by hand and watched it finish the
+    /// work) had no way to continue and had to start over. Parking at the
+    /// existing pause barrier leaves it resumable, and resume re-runs the stage.
+    ///
+    /// Mirrors the daemon-restart recovery in `restore_workflow_runs`, down to
+    /// warning the re-run that the working copy may already hold partial work.
+    fn workflow_park_after_failure(
+        &mut self,
+        parent_id: &str,
+        mut run: WorkflowRun,
+        stage: StageKind,
+        reason: &str,
+    ) {
+        run.active_children.clear();
+        if stage == StageKind::Review {
+            run.review_pending.clear();
+            run.review_collected.clear();
+            run.reasked.clear();
+            // Re-running a review re-increments `round` on spawn; give the
+            // abandoned round back or the re-run reports "round 3/2".
+            run.round = run.round.saturating_sub(1);
+        }
+        run.pause_requested = false;
+        run.state = RunState::Paused { next: stage };
+        run.pending_guidance = Some(format!(
+            "The previous attempt of this stage ended before it finished: {reason}. The working \
+             copy may already contain its partial changes — inspect the current diff before \
+             assuming you are starting from scratch."
+        ));
+        self.workflow_sync(&run);
+        self.workflow_runs.insert(parent_id.to_string(), run);
+        self.workflow_timeline(
+            parent_id,
+            format!(
+                "Stage **{}** lost its agent: {reason}. Paused — resume to run it again.",
+                stage.label()
+            ),
+        );
+    }
+
     async fn workflow_child_failed(
         &mut self,
         parent_id: &str,
@@ -6823,13 +7520,15 @@ impl Daemon {
             );
             if run.review_pending.is_empty() {
                 if run.review_collected.is_empty() {
-                    self.workflow_runs.insert(parent_id.to_string(), run);
-                    let _ = self
-                        .workflow_finalize(
-                            parent_id,
-                            WorkflowOutcome::Error("all reviewers failed".to_string()),
-                        )
-                        .await;
+                    // Every reviewer lost its agent, so the round produced no
+                    // verdict at all. That is the same infrastructure failure
+                    // as a dead implement stage, not a rejection of the work.
+                    self.workflow_park_after_failure(
+                        parent_id,
+                        run,
+                        stage,
+                        "every reviewer's agent ended before producing a verdict",
+                    );
                 } else {
                     self.workflow_merge_reviews(parent_id, run).await;
                 }
@@ -6864,13 +7563,7 @@ impl Daemon {
             event_agent.into_iter().collect(),
             wire::WorkflowEventTone::Error,
         );
-        self.workflow_runs.insert(parent_id.to_string(), run);
-        let _ = self
-            .workflow_finalize(
-                parent_id,
-                WorkflowOutcome::Error(format!("stage {} failed: {reason}", stage.label())),
-            )
-            .await;
+        self.workflow_park_after_failure(parent_id, run, stage, &reason);
     }
 
     /// One reviewer's turn ended: parse its verdict, re-ask once on garbage,
@@ -7446,9 +8139,8 @@ impl Daemon {
     /// (resume re-runs the interrupted stage from scratch).
     fn restore_workflow_runs(&mut self) {
         let rows = self
-            .store
-            .as_ref()
-            .and_then(|s| s.load_workflow_runs().ok())
+            .with_store(|store| store.load_workflow_runs().ok())
+            .flatten()
             .unwrap_or_default();
         for (task_id, json) in rows {
             let Ok(mut run) = serde_json::from_str::<WorkflowRun>(&json) else {
@@ -7456,9 +8148,8 @@ impl Daemon {
                 // the parent sits with no pipeline state and therefore no
                 // pause/resume/stop controls. Say so, once, and move on.
                 eprintln!("[daemon] dropping unreadable workflow run for task {task_id}");
-                if let Some(store) = &self.store {
-                    let _ = store.delete_workflow_run(&task_id);
-                }
+                self.persist
+                    .write(PersistWrite::DeleteWorkflowRun(task_id.clone()));
                 if let Some(task) = self.tasks.get_mut(&task_id) {
                     task.blocked_reason =
                         Some("workflow state could not be restored after an upgrade".to_string());
@@ -7528,10 +8219,8 @@ impl Daemon {
                 let updated = task.clone();
                 self.persist(&updated);
             }
-            if let Some(store) = &self.store {
-                if let Ok(json) = serde_json::to_string(&run) {
-                    let _ = store.save_workflow_run(&task_id, &json);
-                }
+            if let Ok(json) = serde_json::to_string(&run) {
+                self.persist.workflow_run(&task_id, json);
             }
             self.workflow_runs.insert(task_id, run);
         }
@@ -8012,5 +8701,430 @@ mod lifecycle_action_tests {
         assert_eq!(task.settled_at, None);
         assert_eq!(task.snoozed_until, None);
         assert_eq!(task.snoozed_at, None);
+    }
+}
+
+#[cfg(test)]
+mod worktree_start_tests {
+    use super::*;
+    use crate::registry::ProjectEntry;
+    use std::time::Duration;
+
+    const MOCK_AGENT: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/mock-acp-inspect.mjs"
+    );
+
+    /// A git repo with one commit, so `git worktree add` has something to
+    /// branch from.
+    async fn repo_with_commit() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            tokio::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .env("GIT_AUTHOR_NAME", "test")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "test")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .status()
+        };
+        git(&["init"]).await.unwrap();
+        std::fs::write(dir.path().join("README.md"), "init\n").unwrap();
+        git(&["add", "."]).await.unwrap();
+        git(&["commit", "-m", "init"]).await.unwrap();
+        dir
+    }
+
+    async fn spawn_with_repo(dir: &tempfile::TempDir) -> DaemonHandle {
+        Daemon::spawn(
+            vec![ProjectEntry {
+                name: "demo".into(),
+                path: dir.path().to_string_lossy().into_owned(),
+                added_at: "0".into(),
+            }],
+            None,
+        )
+    }
+
+    async fn create_worktree_task(handle: &DaemonHandle) -> String {
+        handle
+            .create_task(
+                "demo",
+                "do the thing",
+                &format!("node {MOCK_AGENT}"),
+                Vec::new(),
+                false,
+                true,
+                None,
+                Vec::new(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await
+    }
+
+    async fn task_now(handle: &DaemonHandle, id: &str) -> Task {
+        handle
+            .tasks()
+            .await
+            .into_iter()
+            .find(|t| t.id == id)
+            .expect("task on the board")
+    }
+
+    /// The task must reach the board before its checkout finishes. It used to
+    /// be created only after `git worktree add` returned, so starting a task
+    /// held up every other task's messages and approvals (ADR 0002).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn task_appears_before_its_worktree_is_ready() {
+        let dir = repo_with_commit().await;
+        let handle = spawn_with_repo(&dir).await;
+
+        let id = create_worktree_task(&handle).await;
+        assert!(!id.is_empty());
+        assert_eq!(
+            task_now(&handle, &id).await.worktree,
+            None,
+            "create must return before the checkout, not after it"
+        );
+
+        // The worktree is attached once the checkout lands.
+        let mut path = None;
+        for _ in 0..100 {
+            if let Some(p) = task_now(&handle, &id).await.worktree {
+                path = Some(p);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let path = path.expect("checkout should attach a worktree");
+        assert!(std::path::Path::new(&path).exists(), "worktree on disk");
+
+        handle.shutdown().await;
+    }
+
+    /// Branching a conversation whose source runs in the project checkout —
+    /// no worktree of its own — must still carry the uncommitted work over.
+    ///
+    /// This regressed once: the lookup only knew how to find a source
+    /// *worktree*, so a source without one silently produced a branch on a
+    /// clean HEAD, and the change the user was continuing from was gone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn branching_from_the_project_checkout_carries_its_changes() {
+        let dir = repo_with_commit().await;
+        let handle = spawn_with_repo(&dir).await;
+
+        // The source task has no worktree, and its checkout has uncommitted
+        // work: one tracked edit and one new file.
+        let source = handle
+            .create_task(
+                "demo",
+                "source",
+                &format!("node {MOCK_AGENT}"),
+                Vec::new(),
+                false,
+                false,
+                None,
+                Vec::new(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await;
+        std::fs::write(dir.path().join("README.md"), "edited\n").unwrap();
+        std::fs::write(dir.path().join("NEW.md"), "new file\n").unwrap();
+
+        let branch = handle
+            .create_task(
+                "demo",
+                "branch",
+                &format!("node {MOCK_AGENT}"),
+                vec![format!("branched-from:{source}")],
+                false,
+                true,
+                None,
+                Vec::new(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await;
+
+        let mut path = None;
+        for _ in 0..100 {
+            if let Some(p) = task_now(&handle, &branch).await.worktree {
+                path = Some(p);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let path = std::path::PathBuf::from(path.expect("branch should get a worktree"));
+
+        assert_eq!(
+            std::fs::read_to_string(path.join("README.md")).unwrap(),
+            "edited\n",
+            "the tracked edit must carry over"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join("NEW.md")).unwrap(),
+            "new file\n",
+            "the new untracked file must carry over"
+        );
+
+        handle.shutdown().await;
+    }
+
+    /// Cancelling while the checkout is still running must not start a session
+    /// when it lands — but the worktree still gets recorded, because it exists
+    /// on disk and something has to be able to clean it up.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_during_checkout_does_not_start_a_session() {
+        let dir = repo_with_commit().await;
+        let handle = spawn_with_repo(&dir).await;
+
+        let id = create_worktree_task(&handle).await;
+        handle.cancel_task(&id).await.ok();
+
+        // Wait for the checkout to land, then give a session every chance to
+        // start before concluding that none did.
+        for _ in 0..100 {
+            if task_now(&handle, &id).await.worktree.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let task = task_now(&handle, &id).await;
+        assert!(
+            task.worktree.is_some(),
+            "the checkout must still be recorded so it can be cleaned up"
+        );
+        assert_eq!(
+            task.session_id, None,
+            "a cancelled task must not be started by its own checkout"
+        );
+
+        handle.shutdown().await;
+    }
+}
+
+/// Transcript memory: the daemon holds no full session transcript in memory,
+/// only bounded projections. These tests pin the behavior of the projections
+/// that replaced it.
+#[cfg(test)]
+mod transcript_projection_tests {
+    use super::*;
+
+    /// A plain task's finished turn feeds nothing: the orchestrator hook is a
+    /// no-op without the tag, and there is no parent inbox. Assembling its
+    /// output would read the whole transcript back per turn — trading the
+    /// memory this projection saves for disk it never needed.
+    #[tokio::test]
+    async fn a_plain_task_does_not_assemble_turn_output() {
+        let handle = Daemon::spawn(Vec::new(), None);
+        let id = handle
+            .create_task(
+                "demo",
+                "prompt",
+                "agent",
+                Vec::new(),
+                false,
+                false,
+                None,
+                Vec::new(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await;
+
+        let (tx, rx) = oneshot::channel();
+        handle
+            .send(Command::TurnOutputConsumerProbe {
+                task_id: id.clone(),
+                workflow_child: false,
+                reply: tx,
+            })
+            .await;
+        assert!(!rx.await.unwrap(), "nothing consumes a plain task's output");
+
+        // A sub-agent's parent does consume it.
+        let child = handle
+            .create_task(
+                "demo",
+                "child",
+                "agent",
+                Vec::new(),
+                false,
+                false,
+                Some(id.clone()),
+                Vec::new(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await;
+        let (tx, rx) = oneshot::channel();
+        handle
+            .send(Command::TurnOutputConsumerProbe {
+                task_id: child,
+                workflow_child: false,
+                reply: tx,
+            })
+            .await;
+        assert!(rx.await.unwrap(), "a sub-agent's result feeds its parent");
+
+        handle.shutdown().await;
+    }
+
+    /// A long, realistic history: alternating tool calls and streamed text
+    /// chunks, as a long agent turn produces.
+    fn long_history(turns: usize, chunks_per_turn: usize) -> Vec<wire::SessionUpdate> {
+        let mut history = Vec::new();
+        for turn in 0..turns {
+            history.push(wire::SessionUpdate::UserMessage {
+                text: format!("prompt {turn}"),
+                attachments: vec![],
+            });
+            for chunk in 0..chunks_per_turn {
+                history.push(wire::SessionUpdate::ToolCall {
+                    tool_call_id: format!("turn-{turn}-call-{chunk}"),
+                    title: "tool".into(),
+                    status: wire::ToolCallStatus::Completed,
+                    started_at: Some(1000 + (turn * chunks_per_turn + chunk) as u64),
+                    tool_kind: "read".into(),
+                    content: None,
+                });
+                history.push(wire::SessionUpdate::AgentText {
+                    text: format!("turn-{turn} chunk {chunk} "),
+                });
+            }
+        }
+        history
+    }
+
+    /// A resumed session replays its whole persisted history, update for
+    /// update, before producing live output. The guard must drop every replayed
+    /// update — a long history must not surface as duplicated output — and then
+    /// let live output through.
+    #[test]
+    fn resume_replay_guard_drops_long_replayed_history_whole() {
+        let history = long_history(10, 20); // 410 updates, 400 of them replayable
+        let mut guard = ResumeReplayGuard::from_updates(&history).expect("replayable history");
+
+        // The guard only covers the replayable subset; user prompts are not
+        // part of the agent's replay.
+        let replayable = replayable_history(&history);
+        let mut dropped = 0;
+        for update in &replayable {
+            if guard.consume(update) {
+                dropped += 1;
+            }
+        }
+        assert_eq!(
+            dropped,
+            replayable.len(),
+            "every replayed update must be dropped — none may reach the UI twice"
+        );
+        assert!(guard.is_empty(), "guard exhausted after the replay");
+
+        // Live output after the replay is never dropped.
+        let live = wire::SessionUpdate::AgentText {
+            text: "fresh output".into(),
+        };
+        assert!(!guard.consume(&live));
+    }
+
+    /// The guard reports non-matches so the caller (should_skip_resume_replay)
+    /// can disable it on the first divergence — otherwise a live update that
+    /// happens to equal a later entry of the old history would be eaten.
+    #[test]
+    fn resume_replay_guard_reports_divergence() {
+        let history = long_history(1, 3);
+        // history[0] is the user prompt (not replayable); the first replayed
+        // update is history[1].
+        let mut guard = ResumeReplayGuard::from_updates(&history).unwrap();
+        assert!(guard.consume(&history[1]));
+        assert!(
+            !guard.consume(&wire::SessionUpdate::AgentText {
+                text: "diverged".into()
+            }),
+            "a divergent update must be reported so the guard can be disabled"
+        );
+    }
+
+    /// Stage text must reflect only the latest turn: after several turns, the
+    /// closing message and the full-turn text must not leak earlier turns' text.
+    #[test]
+    fn stage_text_is_scoped_to_the_latest_turn() {
+        let history = vec![
+            wire::SessionUpdate::UserMessage {
+                text: "first".into(),
+                attachments: vec![],
+            },
+            wire::SessionUpdate::AgentText {
+                text: "old turn text ".into(),
+            },
+            wire::SessionUpdate::UserMessage {
+                text: "second".into(),
+                attachments: vec![],
+            },
+            wire::SessionUpdate::AgentText {
+                text: "work ".into(),
+            },
+            wire::SessionUpdate::ToolCall {
+                tool_call_id: "c1".into(),
+                title: "tool".into(),
+                status: wire::ToolCallStatus::Completed,
+                started_at: Some(2000),
+                tool_kind: "read".into(),
+                content: None,
+            },
+            wire::SessionUpdate::AgentText {
+                text: "final message".into(),
+            },
+        ];
+        let text = stage_text_from_updates(&history);
+        assert_eq!(
+            text.full, "work final message",
+            "earlier turns must not leak into full"
+        );
+        assert_eq!(
+            text.closing, "final message",
+            "tool call restarts the closing message"
+        );
+    }
+
+    /// The orchestrator's node result is the task's whole text output,
+    /// including text from every turn.
+    #[test]
+    fn agent_text_spans_every_turn() {
+        let history = long_history(3, 2);
+        let text = agent_text_from_updates(&history);
+        assert_eq!(text, "turn-0 chunk 0 turn-0 chunk 1 turn-1 chunk 0 turn-1 chunk 1 turn-2 chunk 0 turn-2 chunk 1 ");
+    }
+
+    /// The replayable subset skips the "Reconnecting…" placeholder the daemon
+    /// emits before a resume, so it is never replayed back as agent output.
+    #[test]
+    fn replayable_history_excludes_reconnect_placeholder() {
+        let history = vec![
+            wire::SessionUpdate::AgentText {
+                text: "Reconnecting to the saved agent session…".into(),
+            },
+            wire::SessionUpdate::AgentText {
+                text: "real text".into(),
+            },
+            wire::SessionUpdate::UserMessage {
+                text: "prompt".into(),
+                attachments: vec![],
+            },
+        ];
+        let replayable = replayable_history(&history);
+        assert_eq!(replayable.len(), 1);
+        assert_eq!(replayable[0], history[1]);
     }
 }

@@ -20,7 +20,7 @@ use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{mpsc, Notify, RwLock, Semaphore};
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 use warpforge_protocol as wire;
@@ -28,6 +28,15 @@ use warpforge_protocol as wire;
 use super::actor::{Command, DaemonHandle};
 use super::tracker;
 use super::wire as wireconv;
+
+/// Outgoing frames buffered per connection before the read loop slows down.
+const OUTGOING_QUEUE: usize = 256;
+
+/// Requests one connection may have in flight at once. Concurrent requests
+/// answer off the read loop, so without a cap a client could fan out unbounded
+/// git, filesystem and subprocess work by sending faster than the daemon
+/// completes it.
+const MAX_CONCURRENT_REQUESTS: usize = 8;
 
 fn daemon_json_path() -> PathBuf {
     dirs::home_dir()
@@ -163,6 +172,10 @@ async fn run_controlled(
             accepted = listener.accept() => accepted?,
             _ = lifecycle.shutdown.notified() => return Ok(()),
         };
+        // Replies are small frames. Left to Nagle they wait on an ACK for the
+        // previous one, which pairs with the peer's delayed ACK to add tens of
+        // milliseconds to an otherwise instant answer.
+        let _ = stream.set_nodelay(true);
         let handle = handle.clone();
         let token = token.clone();
         let lifecycle = Arc::clone(&lifecycle);
@@ -181,15 +194,29 @@ async fn handle_conn(
     lifecycle: Arc<ServerLifecycle>,
 ) -> Result<()> {
     let ws = tokio_tungstenite::accept_async(stream).await?;
-    let (mut tx, mut rx) = ws.split();
+    let (mut sink, mut rx) = ws.split();
     let mut events = handle.subscribe();
     let mut authed = token.is_empty();
     let mut subscribed = false;
 
+    // One writer owns the socket so read requests answered off the read loop
+    // have somewhere to reply to. Bounded: a client that stops draining slows
+    // its own connection rather than growing the queue without limit.
+    let (out_tx, mut out_rx) = mpsc::channel::<Message>(OUTGOING_QUEUE);
+    tokio::spawn(async move {
+        while let Some(msg) = out_rx.recv().await {
+            if sink.send(msg).await.is_err() {
+                break;
+            }
+        }
+    });
+    // Caps the work one client can have in flight at once.
+    let request_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+
     macro_rules! send {
         ($msg:expr) => {{
             let text = serde_json::to_string(&$msg)?;
-            if tx.send(Message::Text(text)).await.is_err() {
+            if out_tx.send(Message::Text(text)).await.is_err() {
                 break;
             }
         }};
@@ -204,7 +231,7 @@ async fn handle_conn(
                 };
                 let text = match msg {
                     Message::Text(t) => t.as_str().to_string(),
-                    Message::Ping(p) => { let _ = tx.send(Message::Pong(p)).await; continue; }
+                    Message::Ping(p) => { let _ = out_tx.send(Message::Pong(p)).await; continue; }
                     Message::Close(_) => break,
                     _ => continue,
                 };
@@ -218,7 +245,7 @@ async fn handle_conn(
                     if ok {
                         authed = true;
                     } else {
-                        let _ = tx.send(Message::Close(None)).await;
+                        let _ = out_tx.send(Message::Close(None)).await;
                         break;
                     }
                     continue;
@@ -257,6 +284,45 @@ async fn handle_conn(
                     continue;
                 }
 
+                // Independent requests answer without holding up the next one.
+                // Until now a connection served one request at a time, so a
+                // tool approval was not even read off the socket while a title
+                // was being generated ahead of it (ADR 0002).
+                if method_runs_concurrently(&req.method) {
+                    let gated = method_is_mutation(&req.method);
+                    let handle = handle.clone();
+                    let lifecycle = Arc::clone(&lifecycle);
+                    let out = out_tx.clone();
+                    let slots = Arc::clone(&request_slots);
+                    tokio::spawn(async move {
+                        let _permit = slots.acquire_owned().await;
+                        // The same update gate the serial path applies, kept
+                        // here so moving a method between the two lists cannot
+                        // quietly let it run during a daemon handover.
+                        let result = if gated {
+                            let _guard = lifecycle.mutations.read().await;
+                            if lifecycle.quiescing.load(Ordering::Acquire) {
+                                Err(wire::RpcError {
+                                    code: wire::ErrorCode::Updating,
+                                    message: "daemon is quiescing for an application update".into(),
+                                })
+                            } else {
+                                dispatch(&handle, req.method, &lifecycle).await
+                            }
+                        } else {
+                            dispatch(&handle, req.method, &lifecycle).await
+                        };
+                        let message = match result {
+                            Ok(result) => wire::ServerMessage::Response { id, result },
+                            Err(error) => wire::ServerMessage::Error { id, error },
+                        };
+                        if let Ok(text) = serde_json::to_string(&message) {
+                            let _ = out.send(Message::Text(text)).await;
+                        }
+                    });
+                    continue;
+                }
+
                 let is_handoff = matches!(&req.method, wire::Method::UpdatePrepareShutdown { .. });
                 let result = if method_is_mutation(&req.method) && !is_handoff {
                     let _guard = lifecycle.mutations.read().await;
@@ -279,7 +345,7 @@ async fn handle_conn(
                     Err(error) => wire::ServerMessage::Error { id, error },
                 };
                 let text = serde_json::to_string(&message)?;
-                let sent = tx.send(Message::Text(text)).await.is_ok();
+                let sent = out_tx.send(Message::Text(text)).await.is_ok();
 
                 if handoff_ready {
                     // Queue the acknowledgement on the socket before stopping
@@ -1690,6 +1756,50 @@ fn accounts_result(
     }
 }
 
+/// Requests answered off the connection's read loop instead of ahead of
+/// everything behind them.
+///
+/// The question is not whether a request writes — it is whether it has to be
+/// ordered against the others on the connection. So this is its own list rather
+/// than the negation of [`method_is_mutation`], which exists to decide what the
+/// update gate holds back:
+///
+/// - Reads are independent by definition.
+/// - So are one-shot jobs whose result depends on nothing else in flight:
+///   generating a title, installing an agent or a language server. These are
+///   the slowest things the daemon does — a title spawns an agent process with
+///   a two-minute ceiling, an install shells out to a package manager — and
+///   they are what made starting a task feel like it stalled everything else.
+/// - Ordered work stays serial. LSP is a streaming protocol, so dispatching
+///   `LspSend` concurrently would reorder a language server's inbox, and git
+///   writes mean what they mean only in sequence: commit, then push.
+fn method_runs_concurrently(method: &wire::Method) -> bool {
+    use wire::Method::*;
+    matches!(
+        method,
+        TextGenerate { .. }
+            | AgentsInstall { .. }
+            | LanguageServersInstall { .. }
+            | DiffGet { .. }
+            | FileContents { .. }
+            | FileList { .. }
+            | FileSearch { .. }
+            | GitBranches { .. }
+            | GitPushInfo { .. }
+            | ServiceLogs { .. }
+            | PortForwardLogs { .. }
+            | TaskListWorktrees { .. }
+            | SessionsList { .. }
+            | OrchestratorListAgents { .. }
+            | AgentsDetect {}
+            | AccountsList {}
+            | OrchestrateList {}
+            | OrchestrateGetConfig {}
+            | WorkflowList { .. }
+            | LanguageServersDetect {}
+    )
+}
+
 fn method_is_mutation(method: &wire::Method) -> bool {
     use wire::Method::*;
     !matches!(
@@ -1771,6 +1881,131 @@ mod tests {
             assert_eq!(v["id"].as_u64(), Some(id));
             assert_eq!(v["error"]["code"], "invalid_request");
         }
+    }
+
+    /// Generating a title spawns an agent process and can run for minutes. It
+    /// used to be dispatched on the read loop, so the daemon read nothing else
+    /// from that client meanwhile — which is what made starting a task appear
+    /// to stall the conversation it was starting.
+    #[test]
+    fn the_slowest_requests_do_not_block_the_connection() {
+        use wire::Method::*;
+        for method in [
+            TextGenerate {
+                task_id: "t".into(),
+                agent_id: "claude".into(),
+                kind: wire::TextGenKind::TaskTitle,
+                model: None,
+            },
+            AgentsInstall {
+                id: "claude".into(),
+            },
+            LanguageServersInstall { id: "rust".into() },
+        ] {
+            assert!(
+                method_runs_concurrently(&method),
+                "{method:?} shells out for seconds to minutes and must not hold the read loop"
+            );
+        }
+    }
+
+    /// Ordered work must stay on the serial path. LSP is a streaming protocol
+    /// and git writes only mean what they mean in sequence.
+    #[test]
+    fn ordered_requests_stay_serial() {
+        use wire::Method::*;
+        for method in [
+            LspSend {
+                server_id: "s".into(),
+                payload: serde_json::Value::Null,
+            },
+            GitCommit {
+                task_id: "t".into(),
+                message: "m".into(),
+                files: None,
+                amend: false,
+            },
+        ] {
+            assert!(
+                !method_runs_concurrently(&method),
+                "{method:?} depends on arriving in order"
+            );
+        }
+    }
+
+    /// A read must not hold up whatever is queued behind it. One connection
+    /// used to serve one request at a time, so a slow read delayed everything
+    /// after it — a tool approval was not even read off the socket until the
+    /// read ahead of it finished. The cheap request sent second must come back
+    /// first.
+    // Multi-threaded on purpose: the daemon runs on a multi-thread runtime, and
+    // on the single-threaded test default a synchronous filesystem walk inside
+    // a spawned task blocks the very socket read this is measuring.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_slow_read_does_not_delay_the_request_behind_it() {
+        // A project big enough that listing it takes real time, and sized here
+        // rather than inherited from the checkout so the margin is the same
+        // everywhere this runs.
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..4000 {
+            std::fs::write(dir.path().join(format!("file{i}.txt")), "x").unwrap();
+        }
+        let projects = vec![ProjectEntry {
+            name: "demo".into(),
+            path: dir.path().to_string_lossy().into_owned(),
+            added_at: "0".into(),
+        }];
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let handle = Daemon::spawn(projects, store);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(run(listener, handle.clone(), String::new()));
+        // Without this the second request sits in the client's send buffer
+        // waiting on an ACK for the first, and the test measures Nagle rather
+        // than the daemon.
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        tcp.set_nodelay(true).unwrap();
+        let (mut ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}"), tcp)
+            .await
+            .unwrap();
+
+        // Listing walks and stats every file; the accounts list is answered
+        // from memory.
+        ws.send(Message::Text(
+            json!({
+                "id": 1,
+                "method": "file.list",
+                "params": { "project": "demo", "include_ignored": true }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            json!({ "id": 2, "method": "accounts.list", "params": {} }).to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Both are answered; the order is the point.
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let msg = timeout(Duration::from_secs(10), ws.next())
+                .await
+                .expect("a reply, not silence")
+                .expect("some")
+                .expect("ok");
+            let Message::Text(text) = msg else {
+                panic!("expected a text frame")
+            };
+            let reply: serde_json::Value = serde_json::from_str(text.as_str()).unwrap();
+            ids.push(reply["id"].as_u64());
+        }
+        assert_eq!(
+            ids,
+            vec![Some(2), Some(1)],
+            "the cheap request must not wait behind the project listing"
+        );
     }
 
     #[tokio::test]

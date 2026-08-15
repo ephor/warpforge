@@ -16,3 +16,5 @@ stale and then misleads.
 | ADR | Subject |
 | --- | --- |
 | [0001](0001-workflow-pipelines.md) | Workflow pipelines: deterministic engine, project-configured |
+| [0002](0002-daemon-concurrency.md) | Daemon concurrency: non-blocking mailboxes, sharded per task |
+| [0003](0003-workflow-agent-loss.md) | Losing a stage's agent pauses a pipeline, it does not fail it |
