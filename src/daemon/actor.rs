@@ -167,6 +167,64 @@ fn is_acp_replay_update(update: &wire::SessionUpdate) -> bool {
     }
 }
 
+/// The replayable subset of a task's persisted history, in order — the seed
+/// for the resume replay guard. Built from the store on demand, because the
+/// actor holds no full transcript in memory.
+fn replayable_history(updates: &[wire::SessionUpdate]) -> VecDeque<wire::SessionUpdate> {
+    updates
+        .iter()
+        .filter(|update| is_acp_replay_update(update))
+        .cloned()
+        .collect()
+}
+
+/// Fold a turn's updates into the two shapes the pipeline needs: the agent's
+/// closing message and the whole turn. A new user message starts a fresh turn.
+/// The input is the current-turn buffer, which is bounded by a turn, not by the
+/// session's length.
+fn stage_text_from_updates(updates: &[wire::SessionUpdate]) -> StageText {
+    let mut full: Vec<String> = Vec::new();
+    let mut closing: Vec<String> = Vec::new();
+    for update in updates {
+        match update {
+            // A new user message starts a fresh turn.
+            wire::SessionUpdate::UserMessage { .. } => {
+                full.clear();
+                closing.clear();
+            }
+            wire::SessionUpdate::AgentText { text } => {
+                full.push(text.clone());
+                closing.push(text.clone());
+            }
+            // Any work the agent does ends whatever it was narrating, so the
+            // closing message restarts after it.
+            wire::SessionUpdate::ToolCall { .. }
+            | wire::SessionUpdate::FileEdit { .. }
+            | wire::SessionUpdate::AgentThought { .. }
+            | wire::SessionUpdate::Plan { .. } => closing.clear(),
+            _ => {}
+        }
+    }
+    StageText {
+        closing: closing.join(""),
+        full: full.join(""),
+    }
+}
+
+/// Concatenate every `AgentText` update in a task's history — a task's full
+/// text output, used as the orchestrator node's result. Computed off the actor
+/// loop from the store (the actor holds no full transcript).
+fn agent_text_from_updates(updates: &[wire::SessionUpdate]) -> String {
+    updates
+        .iter()
+        .filter_map(|update| match update {
+            wire::SessionUpdate::AgentText { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 /// System preamble prepended to an orchestrator-chat session's first prompt.
 const ORCHESTRATOR_SYSTEM: &str = "\
 You are an orchestrator agent in warpforge. You coordinate work by delegating to \
@@ -588,6 +646,21 @@ pub enum Command {
     WorktreeReady {
         task_id: String,
         created: Result<(String, super::worktree::Worktree), String>,
+    },
+    /// A task's resume replay guard was read from the store; start its session
+    /// now that replayed history can be de-duplicated. Loaded off the loop
+    /// (write-behind flush + store read), mirroring [`Command::WorktreeReady`].
+    ResumeReplayReady {
+        task_id: String,
+        replay: std::collections::VecDeque<wire::SessionUpdate>,
+    },
+    /// A finished turn's full text output was assembled from the store; deliver
+    /// it to the orchestrator / parent inbox off the actor loop.
+    TaskOutputReady {
+        task_id: String,
+        success: bool,
+        workflow_child: bool,
+        output: String,
     },
     CreateTask {
         project: String,
@@ -1865,6 +1938,47 @@ struct PendingSessionStart {
     config_overrides: std::collections::HashMap<String, String>,
 }
 
+/// A session that cannot start until its resume replay guard has been loaded
+/// from the store. Carries everything `start_session` needs to resume.
+struct PendingResume {
+    project: String,
+    agent: String,
+    text: String,
+    session_id: String,
+    attachments: Vec<wire::PromptAttachment>,
+}
+
+/// De-duplicates the ACP updates an agent replays on `session/load` against the
+/// daemon's persisted history. While the replay matches history in order it is
+/// dropped; the first mismatch is new live output and disables the guard.
+struct ResumeReplayGuard {
+    history: VecDeque<wire::SessionUpdate>,
+}
+
+impl ResumeReplayGuard {
+    /// The replayable subset of `updates`, in order. `None` when there is
+    /// nothing to de-duplicate (a session with no persisted history).
+    fn from_updates(updates: &[wire::SessionUpdate]) -> Option<Self> {
+        let history = replayable_history(updates);
+        (!history.is_empty()).then_some(Self { history })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.history.is_empty()
+    }
+
+    /// True when `update` is the next replayed update and should be dropped.
+    /// False when it is live output (and the caller must disable the guard).
+    fn consume(&mut self, update: &wire::SessionUpdate) -> bool {
+        if self.history.front() == Some(update) {
+            self.history.pop_front();
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// A worktree checkout resolved against actor state, ready to run elsewhere.
 struct WorktreeRequest {
     project: String,
@@ -1938,7 +2052,7 @@ pub struct Daemon {
     /// `session/load` may replay already persisted ACP updates. While the
     /// replay matches local history in order, drop it; the first mismatch is
     /// new live output and disables the guard.
-    resume_replay: HashMap<String, VecDeque<wire::SessionUpdate>>,
+    resume_replay: HashMap<String, ResumeReplayGuard>,
     /// Per-project git worktree managers, lazily created on first worktree use.
     worktrees: HashMap<String, WorktreeManager>,
     /// Sessions waiting on a worktree checkout, keyed by task id. Presence is
@@ -1964,13 +2078,20 @@ pub struct Daemon {
     pending_wake: std::collections::HashSet<String>,
     /// Stable first-seen timestamps for streamed frames of the same tool call.
     tool_call_starts: HashMap<(String, String), u64>,
-    /// The session transcript per task, mirroring the `session_updates` table.
-    ///
-    /// Held in memory because persistence is write-behind: a read straight from
-    /// SQLite would miss whatever is still queued, and a stage that reads its
-    /// own truncated output mis-parses its verdict. This is also what keeps
-    /// transcript reads off the actor's thread entirely (ADR 0002).
-    session_updates: HashMap<String, Vec<wire::SessionUpdate>>,
+    /// The last session update emitted per task — all `emit_session_unless_last_duplicate`
+    /// needs to catch a reconnect retry or a repeated usage frame. O(1) per task,
+    /// never the whole transcript.
+    last_session_update: HashMap<String, wire::SessionUpdate>,
+    /// Updates emitted since the task's last user message (its current turn).
+    /// Reset on each new user message, so this is bounded by a turn, not by the
+    /// session's length. Serves the workflow engine's stage-text reads, which
+    /// used to fold the entire in-memory transcript.
+    turn_updates: HashMap<String, Vec<wire::SessionUpdate>>,
+    /// A session that cannot start until its resume replay guard has been read
+    /// from the store (off the loop). Presence is the token that lets the loaded
+    /// guard start the session: cancel and delete remove the entry, so a late
+    /// load cannot resurrect the task (ADR 0002 invariant 5).
+    pending_resume: HashMap<String, PendingResume>,
     /// Deterministic workflow pipelines keyed by parent task id. Finished runs
     /// stay in the map so their state remains visible on the board.
     workflow_runs: HashMap<String, WorkflowRun>,
@@ -2035,27 +2156,13 @@ impl Daemon {
             .flatten()
             .unwrap_or_default();
 
-        // The transcript is loaded once and kept. It was already read in full
-        // here (for `tool_call_starts`) and then dropped; keeping it is what
-        // lets the actor answer transcript questions without touching the disk.
-        let session_updates: HashMap<String, Vec<wire::SessionUpdate>> = store
+        // Only the stable tool-call timestamps survive startup. The full
+        // transcripts are NOT loaded or held in memory — resume replay guards,
+        // snapshots and finished-turn output read them from the store on demand.
+        let tool_call_starts = store
             .as_ref()
-            .and_then(|s| s.load_all_session_updates_raw().ok())
+            .and_then(|s| s.load_tool_call_starts().ok())
             .unwrap_or_default();
-
-        let tool_call_starts = session_updates
-            .iter()
-            .flat_map(|(task_id, updates)| {
-                updates.iter().filter_map(move |update| match update {
-                    wire::SessionUpdate::ToolCall {
-                        tool_call_id,
-                        started_at: Some(started_at),
-                        ..
-                    } => Some(((task_id.clone(), tool_call_id.clone()), *started_at)),
-                    _ => None,
-                })
-            })
-            .collect();
 
         let accounts = store
             .as_ref()
@@ -2095,7 +2202,9 @@ impl Daemon {
             orchestrator_inbox: HashMap::new(),
             pending_wake: std::collections::HashSet::new(),
             tool_call_starts,
-            session_updates,
+            last_session_update: HashMap::new(),
+            turn_updates: HashMap::new(),
+            pending_resume: HashMap::new(),
             workflow_runs: HashMap::new(),
             accounts,
         };
@@ -2159,14 +2268,6 @@ impl Daemon {
 
     fn persist(&self, task: &Task) {
         self.persist.task(task);
-    }
-
-    /// This task's transcript so far. Empty for a task that has none.
-    fn transcript(&self, task_id: &str) -> &[wire::SessionUpdate] {
-        self.session_updates
-            .get(task_id)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
     }
 
     /// Read from the store on the actor thread.
@@ -2309,7 +2410,10 @@ impl Daemon {
     }
 
     /// Build the serializable snapshot handed to a client on subscribe.
-    fn build_snapshot(&self) -> wire::Snapshot {
+    ///
+    /// `session_history` is filled in by the caller (from the store, off the
+    /// loop) — the actor holds no in-memory transcript to fold here.
+    fn build_snapshot_core(&self) -> wire::Snapshot {
         let mut projects = Vec::new();
         let mut services = Vec::new();
         let mut portforwards = Vec::new();
@@ -2340,21 +2444,15 @@ impl Daemon {
             })
             .collect();
 
-        // Folded from the in-memory transcript, not re-read: a disk read here
-        // would miss whatever persistence still has queued.
-        let session_history = self
-            .session_updates
-            .iter()
-            .map(|(task_id, updates)| (task_id.clone(), super::store::fold_for_snapshot(updates)))
-            .collect();
-
+        // History is read from the store by the caller, then folded; the actor
+        // holds no transcript in memory to fold here.
         wire::Snapshot {
             projects,
             services,
             portforwards,
             tasks,
             terminals,
-            session_history,
+            session_history: HashMap::new(),
             agents: self.configured_agents.clone(),
             accounts: self.account_infos(),
         }
@@ -2695,7 +2793,25 @@ impl Daemon {
                 let _ = reply.send(tasks);
             }
             Command::Snapshot(reply) => {
-                let _ = reply.send(self.build_snapshot());
+                // The snapshot's history must not be read on the loop: a disk
+                // read here would miss whatever write-behind persistence still
+                // has queued, and it would block the actor (ADR 0002). Flush +
+                // read + fold happen on a worker; only the reply crosses back.
+                let mut snapshot = self.build_snapshot_core();
+                let persist = self.persist.clone();
+                let store = self.store.clone();
+                tokio::spawn(async move {
+                    persist.flush().await;
+                    let session_history = match store.as_ref() {
+                        Some(store) => {
+                            let guard = store.lock().unwrap_or_else(|e| e.into_inner());
+                            guard.load_all_session_updates().unwrap_or_default()
+                        }
+                        None => HashMap::new(),
+                    };
+                    snapshot.session_history = session_history;
+                    let _ = reply.send(snapshot);
+                });
             }
             Command::OpenProject { name } => self.open_project(&name).await,
             Command::StartService { project, service } => {
@@ -2966,6 +3082,44 @@ impl Daemon {
                 // start a session for it (ADR 0002 invariant 5).
                 if let Some(start) = self.pending_session_starts.remove(&task_id) {
                     self.start_pending_session(&task_id, start);
+                }
+            }
+            Command::ResumeReplayReady {
+                task_id,
+                mut replay,
+            } => {
+                // The pending entry is the token: cancelling or deleting the
+                // task removes it, so a guard that lands afterwards must not
+                // resurrect a cancelled task's session (ADR 0002 invariant 5).
+                if let Some(pending) = self.pending_resume.remove(&task_id) {
+                    if let Some(guard) = ResumeReplayGuard::from_updates(replay.make_contiguous()) {
+                        self.resume_replay.insert(task_id.clone(), guard);
+                    }
+                    self.start_session(
+                        &task_id,
+                        &pending.project,
+                        &pending.agent,
+                        &pending.text,
+                        false,
+                        Some(pending.session_id),
+                        pending.attachments,
+                        None,
+                        std::collections::HashMap::new(),
+                    );
+                }
+            }
+            Command::TaskOutputReady {
+                task_id,
+                success,
+                workflow_child,
+                output,
+            } => {
+                // A finished turn's full text was assembled off the loop; now
+                // deliver it the way TurnEnded used to. notify_orch_finished is
+                // a no-op unless the task is an orchestrator child.
+                self.notify_orch_finished(&task_id, success, output.clone());
+                if !workflow_child {
+                    self.deliver_child_result(&task_id, success, output);
                 }
             }
             Command::CreateWorkflowTask {
@@ -3575,8 +3729,11 @@ impl Daemon {
                     };
                     // A worktree checkout may still be running for this task;
                     // dropping its token stops it from starting a session the
-                    // user just cancelled.
+                    // user just cancelled. Same for a pending resume: its
+                    // guard must not start a session the user cancelled.
                     self.pending_session_starts.remove(&id);
+                    self.pending_resume.remove(&id);
+                    self.resume_replay.remove(&id);
                     self.pending_permissions.cleanup_task(&id);
                     // A finished pipeline's parent keeps its terminal status:
                     // cancelling it must not rewrite that back to Waiting.
@@ -3666,7 +3823,10 @@ impl Daemon {
                 if delete_result.is_ok() && self.tasks.remove(&id).is_some() {
                     self.tool_call_starts
                         .retain(|(task_id, _), _| task_id != &id);
-                    self.session_updates.remove(&id);
+                    self.last_session_update.remove(&id);
+                    self.turn_updates.remove(&id);
+                    self.resume_replay.remove(&id);
+                    self.pending_resume.remove(&id);
                     self.pending_session_starts.remove(&id);
                     // Awaited, not queued: a failed delete is reported to the
                     // user, and dropping the error would leave a task that
@@ -3947,24 +4107,30 @@ impl Daemon {
 
                         if let Some((project, agent, session_id)) = resume {
                             self.mark_task_running(&task_id);
-                            self.prepare_resume_replay_guard(&task_id);
                             self.emit_session(
                                 &task_id,
                                 wire::SessionUpdate::AgentText {
                                     text: "Reconnecting to the saved agent session…".into(),
                                 },
                             );
-                            self.start_session(
-                                &task_id,
-                                &project,
-                                &agent,
-                                &text,
-                                false,
-                                Some(session_id),
-                                attachments,
-                                None,
-                                std::collections::HashMap::new(),
+                            // The replay guard is built from the persisted
+                            // transcript, which must be read off the loop
+                            // (write-behind flush + store read). Start the
+                            // session only once the guard has landed, mirroring
+                            // WorktreeReady: starting before it would let the
+                            // agent's replayed history through unfiltered and
+                            // double the output.
+                            self.pending_resume.insert(
+                                task_id.clone(),
+                                PendingResume {
+                                    project,
+                                    agent,
+                                    text: text.clone(),
+                                    session_id,
+                                    attachments,
+                                },
                             );
+                            self.request_resume_replay_guard(&task_id);
                             let _ = reply.send(Ok(()));
                         } else {
                             // Reject without echoing a user message that was never delivered.
@@ -5127,25 +5293,25 @@ impl Daemon {
                         }
                     }
                 }
-                let output = self.collect_agent_text(&task_id);
-                self.notify_orch_finished(&task_id, success, output.clone());
                 if workflow_child {
                     // A workflow stage finished — advance the pipeline. Parse
-                    // only the latest turn's text: answered questions and
-                    // superseded verdicts from earlier turns must not count.
-                    // The legacy orchestrator inbox path does not apply here.
+                    // only the latest turn's text from the in-memory turn buffer
+                    // (bounded by a turn): answered questions and superseded
+                    // verdicts from earlier turns must not count. The legacy
+                    // orchestrator inbox path does not apply here.
                     let text = self.collect_stage_text(&task_id);
                     self.workflow_stage_finished(&task_id, success, text).await;
-                } else {
-                    // Deliver to a parent if this was a sub-agent; and drain our
-                    // own inbox if we are a parent that just went idle.
-                    self.deliver_child_result(&task_id, success, output);
                 }
                 // If we are an orchestrator whose sub-agents finished mid-turn,
                 // process them now that the turn is over.
                 if self.pending_wake.remove(&task_id) {
                     self.wake_parent(&task_id);
                 }
+                // The finished task's full text output is assembled off the loop
+                // (write-behind flush + store read) and delivered back as
+                // Command::TaskOutputReady, which notifies the orchestrator and
+                // the parent inbox.
+                self.request_task_output(&task_id, success, workflow_child);
             }
             AcpUpdate::Error { run_id, message } => {
                 if self
@@ -5216,22 +5382,75 @@ impl Daemon {
     /// persistence makes wrong as well as slow: the row it needs is usually
     /// still in the queue, so every duplicate would slip through.
     fn emit_session_unless_last_duplicate(&mut self, task_id: &str, update: wire::SessionUpdate) {
-        if self.transcript(task_id).last() == Some(&update) {
+        if self.last_session_update.get(task_id) == Some(&update) {
             return;
         }
         self.emit_session(task_id, update);
     }
 
-    fn prepare_resume_replay_guard(&mut self, task_id: &str) {
-        let replayable = self
-            .transcript(task_id)
-            .iter()
-            .filter(|update| is_acp_replay_update(update))
-            .cloned()
-            .collect::<VecDeque<_>>();
-        if !replayable.is_empty() {
-            self.resume_replay.insert(task_id.to_string(), replayable);
-        }
+    /// Ask a worker to read this task's persisted history off the loop and send
+    /// the replay guard back as [`Command::ResumeReplayReady`]. The session does
+    /// not start until then (see the SessionPrompt resume path).
+    fn request_resume_replay_guard(&self, task_id: &str) {
+        let persist = self.persist.clone();
+        let store = self.store.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let task_id = task_id.to_string();
+        tokio::spawn(async move {
+            persist.flush().await;
+            let replay = match store.as_ref() {
+                Some(store) => {
+                    let guard = store.lock().unwrap_or_else(|e| e.into_inner());
+                    guard
+                        .load_session_updates(&task_id)
+                        .map(|updates| replayable_history(&updates))
+                        .unwrap_or_default()
+                }
+                None => VecDeque::new(),
+            };
+            let _ = cmd_tx
+                .send(Command::ResumeReplayReady { task_id, replay })
+                .await;
+        });
+    }
+
+    /// Ask a worker to assemble a finished task's full text output off the loop
+    /// and send it back as [`Command::TaskOutputReady`], so the orchestrator /
+    /// parent-inbox delivery never blocks the actor on a disk read.
+    fn request_task_output(&self, task_id: &str, success: bool, workflow_child: bool) {
+        let persist = self.persist.clone();
+        let store = self.store.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let task_id = task_id.to_string();
+        // Without a database the actor's turn buffer is the only history there
+        // is; hand it back rather than an empty result.
+        let fallback = agent_text_from_updates(
+            self.turn_updates
+                .get(&task_id)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+        );
+        tokio::spawn(async move {
+            persist.flush().await;
+            let output = match store.as_ref() {
+                Some(store) => {
+                    let guard = store.lock().unwrap_or_else(|e| e.into_inner());
+                    guard
+                        .load_session_updates(&task_id)
+                        .map(|updates| agent_text_from_updates(&updates))
+                        .unwrap_or_default()
+                }
+                None => fallback,
+            };
+            let _ = cmd_tx
+                .send(Command::TaskOutputReady {
+                    task_id,
+                    success,
+                    workflow_child,
+                    output,
+                })
+                .await;
+        });
     }
 
     fn should_skip_resume_replay(&mut self, task_id: &str, update: &wire::SessionUpdate) -> bool {
@@ -5239,13 +5458,12 @@ impl Daemon {
             return false;
         }
 
-        let Some(history) = self.resume_replay.get_mut(task_id) else {
+        let Some(guard) = self.resume_replay.get_mut(task_id) else {
             return false;
         };
 
-        if history.front() == Some(update) {
-            history.pop_front();
-            if history.is_empty() {
+        if guard.consume(update) {
+            if guard.is_empty() {
                 self.resume_replay.remove(task_id);
             }
             return true;
@@ -5257,24 +5475,10 @@ impl Daemon {
         false
     }
 
-    /// Concatenate the agent's text output for a task (its persisted
-    /// `AgentText` updates) — used as the orchestrator node's result, e.g. the
-    /// planner's task-graph JSON.
-    fn collect_agent_text(&self, task_id: &str) -> String {
-        self.transcript(task_id)
-            .iter()
-            .filter_map(|u| match u {
-                wire::SessionUpdate::AgentText { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("")
-    }
-
-    /// Like [`collect_agent_text`], but only the text streamed since the last
-    /// user message — i.e. the output of the task's latest turn. The workflow
-    /// engine parses this: a `need_user_input` block answered two turns ago
-    /// must not be mistaken for a fresh question.
+    /// Like [`agent_text_from_updates`], but only the text streamed since the
+    /// last user message — i.e. the output of the task's latest turn. The
+    /// workflow engine parses this: a `need_user_input` block answered two turns
+    /// ago must not be mistaken for a fresh question.
     fn collect_last_turn_text(&self, task_id: &str) -> String {
         self.collect_stage_text(task_id).full
     }
@@ -5287,34 +5491,16 @@ impl Daemon {
     /// reads as the result, so it is what reviewers and fixers are handed.
     /// `full` is every chunk of the turn, kept as a parsing fallback for an
     /// agent that emits its protocol block before a trailing tool call.
+    ///
+    /// Reads the in-memory current-turn buffer (bounded by a turn, reset on
+    /// each user message), not the whole session transcript.
     fn collect_stage_text(&self, task_id: &str) -> StageText {
-        let updates = self.transcript(task_id).iter().cloned();
-        let mut full: Vec<String> = Vec::new();
-        let mut closing: Vec<String> = Vec::new();
-        for update in updates {
-            match update {
-                // A new user message starts a fresh turn.
-                wire::SessionUpdate::UserMessage { .. } => {
-                    full.clear();
-                    closing.clear();
-                }
-                wire::SessionUpdate::AgentText { text } => {
-                    full.push(text.clone());
-                    closing.push(text);
-                }
-                // Any work the agent does ends whatever it was narrating, so
-                // the closing message restarts after it.
-                wire::SessionUpdate::ToolCall { .. }
-                | wire::SessionUpdate::FileEdit { .. }
-                | wire::SessionUpdate::AgentThought { .. }
-                | wire::SessionUpdate::Plan { .. } => closing.clear(),
-                _ => {}
-            }
-        }
-        StageText {
-            closing: closing.join(""),
-            full: full.join(""),
-        }
+        let updates = self
+            .turn_updates
+            .get(task_id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        stage_text_from_updates(updates)
     }
 
     /// Tell the orchestrator a dispatched task finished. No-op unless the task
@@ -5404,10 +5590,17 @@ impl Daemon {
 
     fn emit_session(&mut self, task_id: &str, update: wire::SessionUpdate) {
         self.persist.session_update(task_id, &update);
-        self.session_updates
+        // A new user message begins a fresh turn: drop the previous turn's
+        // buffer so stage-text reads stay bounded by a turn, not the session.
+        if matches!(update, wire::SessionUpdate::UserMessage { .. }) {
+            self.turn_updates.remove(task_id);
+        }
+        self.turn_updates
             .entry(task_id.to_string())
             .or_default()
             .push(update.clone());
+        self.last_session_update
+            .insert(task_id.to_string(), update.clone());
         self.emit(Event::SessionUpdate {
             task_id: task_id.to_string(),
             update,
@@ -7650,5 +7843,161 @@ mod worktree_start_tests {
         );
 
         handle.shutdown().await;
+    }
+}
+
+/// Transcript memory: the daemon holds no full session transcript in memory,
+/// only bounded projections. These tests pin the behavior of the projections
+/// that replaced it.
+#[cfg(test)]
+mod transcript_projection_tests {
+    use super::*;
+
+    /// A long, realistic history: alternating tool calls and streamed text
+    /// chunks, as a long agent turn produces.
+    fn long_history(turns: usize, chunks_per_turn: usize) -> Vec<wire::SessionUpdate> {
+        let mut history = Vec::new();
+        for turn in 0..turns {
+            history.push(wire::SessionUpdate::UserMessage {
+                text: format!("prompt {turn}"),
+                attachments: vec![],
+            });
+            for chunk in 0..chunks_per_turn {
+                history.push(wire::SessionUpdate::ToolCall {
+                    tool_call_id: format!("turn-{turn}-call-{chunk}"),
+                    title: "tool".into(),
+                    status: wire::ToolCallStatus::Completed,
+                    started_at: Some(1000 + (turn * chunks_per_turn + chunk) as u64),
+                    tool_kind: "read".into(),
+                    content: None,
+                });
+                history.push(wire::SessionUpdate::AgentText {
+                    text: format!("turn-{turn} chunk {chunk} "),
+                });
+            }
+        }
+        history
+    }
+
+    /// A resumed session replays its whole persisted history, update for
+    /// update, before producing live output. The guard must drop every replayed
+    /// update — a long history must not surface as duplicated output — and then
+    /// let live output through.
+    #[test]
+    fn resume_replay_guard_drops_long_replayed_history_whole() {
+        let history = long_history(10, 20); // 410 updates, 400 of them replayable
+        let mut guard = ResumeReplayGuard::from_updates(&history).expect("replayable history");
+
+        // The guard only covers the replayable subset; user prompts are not
+        // part of the agent's replay.
+        let replayable = replayable_history(&history);
+        let mut dropped = 0;
+        for update in &replayable {
+            if guard.consume(update) {
+                dropped += 1;
+            }
+        }
+        assert_eq!(
+            dropped,
+            replayable.len(),
+            "every replayed update must be dropped — none may reach the UI twice"
+        );
+        assert!(guard.is_empty(), "guard exhausted after the replay");
+
+        // Live output after the replay is never dropped.
+        let live = wire::SessionUpdate::AgentText {
+            text: "fresh output".into(),
+        };
+        assert!(!guard.consume(&live));
+    }
+
+    /// The guard reports non-matches so the caller (should_skip_resume_replay)
+    /// can disable it on the first divergence — otherwise a live update that
+    /// happens to equal a later entry of the old history would be eaten.
+    #[test]
+    fn resume_replay_guard_reports_divergence() {
+        let history = long_history(1, 3);
+        // history[0] is the user prompt (not replayable); the first replayed
+        // update is history[1].
+        let mut guard = ResumeReplayGuard::from_updates(&history).unwrap();
+        assert!(guard.consume(&history[1]));
+        assert!(
+            !guard.consume(&wire::SessionUpdate::AgentText {
+                text: "diverged".into()
+            }),
+            "a divergent update must be reported so the guard can be disabled"
+        );
+    }
+
+    /// Stage text must reflect only the latest turn: after several turns, the
+    /// closing message and the full-turn text must not leak earlier turns' text.
+    #[test]
+    fn stage_text_is_scoped_to_the_latest_turn() {
+        let history = vec![
+            wire::SessionUpdate::UserMessage {
+                text: "first".into(),
+                attachments: vec![],
+            },
+            wire::SessionUpdate::AgentText {
+                text: "old turn text ".into(),
+            },
+            wire::SessionUpdate::UserMessage {
+                text: "second".into(),
+                attachments: vec![],
+            },
+            wire::SessionUpdate::AgentText {
+                text: "work ".into(),
+            },
+            wire::SessionUpdate::ToolCall {
+                tool_call_id: "c1".into(),
+                title: "tool".into(),
+                status: wire::ToolCallStatus::Completed,
+                started_at: Some(2000),
+                tool_kind: "read".into(),
+                content: None,
+            },
+            wire::SessionUpdate::AgentText {
+                text: "final message".into(),
+            },
+        ];
+        let text = stage_text_from_updates(&history);
+        assert_eq!(
+            text.full, "work final message",
+            "earlier turns must not leak into full"
+        );
+        assert_eq!(
+            text.closing, "final message",
+            "tool call restarts the closing message"
+        );
+    }
+
+    /// The orchestrator's node result is the task's whole text output,
+    /// including text from every turn.
+    #[test]
+    fn agent_text_spans_every_turn() {
+        let history = long_history(3, 2);
+        let text = agent_text_from_updates(&history);
+        assert_eq!(text, "turn-0 chunk 0 turn-0 chunk 1 turn-1 chunk 0 turn-1 chunk 1 turn-2 chunk 0 turn-2 chunk 1 ");
+    }
+
+    /// The replayable subset skips the "Reconnecting…" placeholder the daemon
+    /// emits before a resume, so it is never replayed back as agent output.
+    #[test]
+    fn replayable_history_excludes_reconnect_placeholder() {
+        let history = vec![
+            wire::SessionUpdate::AgentText {
+                text: "Reconnecting to the saved agent session…".into(),
+            },
+            wire::SessionUpdate::AgentText {
+                text: "real text".into(),
+            },
+            wire::SessionUpdate::UserMessage {
+                text: "prompt".into(),
+                attachments: vec![],
+            },
+        ];
+        let replayable = replayable_history(&history);
+        assert_eq!(replayable.len(), 1);
+        assert_eq!(replayable[0], history[1]);
     }
 }
