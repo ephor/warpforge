@@ -297,15 +297,21 @@ pub async fn create_detached(
     })
 }
 
-/// [`create_detached`] for a conversation branch: branch from `source_branch`
-/// and carry over the source worktree's uncommitted changes.
+/// [`create_detached`] for a conversation branch: branch from `base_branch`
+/// (the current HEAD when `None`) and carry over the uncommitted changes in
+/// `source_path`.
+///
+/// `source_path` is wherever the source task actually works, which is its own
+/// worktree only when it has one — a task running in the project checkout
+/// branches from there. Getting this wrong is silent: the branch comes up on a
+/// clean HEAD and the work it was meant to continue is simply absent.
 pub async fn create_branched_detached(
     base_repo: &Path,
     task_id: &str,
-    source_branch: &str,
+    base_branch: Option<&str>,
     source_path: &Path,
 ) -> Result<Worktree> {
-    let wt = create_detached(base_repo, task_id, Some(source_branch)).await?;
+    let wt = create_detached(base_repo, task_id, base_branch).await?;
     copy_working_state(source_path, &wt.path)
         .await
         .with_context(|| {
@@ -371,6 +377,15 @@ async fn copy_working_state(source: &Path, target: &Path) -> Result<()> {
             continue;
         }
         let src = source.join(line);
+        // `git ls-files --others` reports a nested checkout as one directory
+        // entry rather than its contents, and every worktree lives inside the
+        // project at `.worktrees/<task>`. So when the source is the project
+        // checkout itself, its own worktrees show up here — copying one would
+        // fail outright, and copying it successfully would be worse. Nothing
+        // that is not a plain file belongs in a branch's starting state.
+        if !src.is_file() {
+            continue;
+        }
         let dst = target.join(line);
         if let Some(parent) = dst.parent() {
             tokio::fs::create_dir_all(parent)

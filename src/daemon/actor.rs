@@ -1870,19 +1870,28 @@ struct WorktreeRequest {
     project: String,
     base_repo: PathBuf,
     task_id: String,
-    /// Branch and path to inherit from, for a conversation branch.
-    source: Option<(String, PathBuf)>,
+    /// What a conversation branch inherits from.
+    source: Option<BranchSource>,
+}
+
+/// Where a branched conversation picks up from.
+struct BranchSource {
+    /// The source task's own branch, when it has a worktree. `None` means the
+    /// source works in the project checkout, so the branch starts from HEAD.
+    base_branch: Option<String>,
+    /// The working tree whose uncommitted changes carry over.
+    path: PathBuf,
 }
 
 impl WorktreeRequest {
     async fn run(self) -> Result<(String, super::worktree::Worktree), String> {
         let created = match self.source {
-            Some((ref branch, ref path)) => {
+            Some(ref source) => {
                 super::worktree::create_branched_detached(
                     &self.base_repo,
                     &self.task_id,
-                    branch,
-                    path,
+                    source.base_branch.as_deref(),
+                    &source.path,
                 )
                 .await
             }
@@ -1890,7 +1899,9 @@ impl WorktreeRequest {
         };
         created
             .map(|wt| (self.project, wt))
-            .map_err(|e| e.to_string())
+            // `{:#}` keeps the context chain: the top line alone says only
+            // "failed to copy working state", never which git step failed.
+            .map_err(|e| format!("{e:#}"))
     }
 }
 
@@ -4810,11 +4821,19 @@ impl Daemon {
         branched_from: Option<&str>,
     ) -> Option<WorktreeRequest> {
         let path = self.project_path(project)?;
+        // Resolve the source's working directory before borrowing the manager.
+        // A source task without a worktree runs in the project checkout, and
+        // that is still the tree its branch must inherit from.
+        let source_path = branched_from.and_then(|src| self.task_repo_path(src));
         let mgr = self
             .worktrees
             .entry(project.to_string())
             .or_insert_with(|| WorktreeManager::new(std::path::PathBuf::from(&path)));
-        let source = branched_from.and_then(|src| mgr.source_state(src));
+        let base_branch = branched_from.and_then(|src| mgr.source_state(src).map(|(b, _)| b));
+        let source = source_path.map(|path| BranchSource {
+            base_branch,
+            path: PathBuf::from(path),
+        });
         Some(WorktreeRequest {
             project: project.to_string(),
             base_repo: mgr.base_repo().to_path_buf(),
@@ -7526,6 +7545,75 @@ mod worktree_start_tests {
         }
         let path = path.expect("checkout should attach a worktree");
         assert!(std::path::Path::new(&path).exists(), "worktree on disk");
+
+        handle.shutdown().await;
+    }
+
+    /// Branching a conversation whose source runs in the project checkout —
+    /// no worktree of its own — must still carry the uncommitted work over.
+    ///
+    /// This regressed once: the lookup only knew how to find a source
+    /// *worktree*, so a source without one silently produced a branch on a
+    /// clean HEAD, and the change the user was continuing from was gone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn branching_from_the_project_checkout_carries_its_changes() {
+        let dir = repo_with_commit().await;
+        let handle = spawn_with_repo(&dir).await;
+
+        // The source task has no worktree, and its checkout has uncommitted
+        // work: one tracked edit and one new file.
+        let source = handle
+            .create_task(
+                "demo",
+                "source",
+                &format!("node {MOCK_AGENT}"),
+                Vec::new(),
+                false,
+                false,
+                None,
+                Vec::new(),
+                None,
+                Default::default(),
+            )
+            .await;
+        std::fs::write(dir.path().join("README.md"), "edited\n").unwrap();
+        std::fs::write(dir.path().join("NEW.md"), "new file\n").unwrap();
+
+        let branch = handle
+            .create_task(
+                "demo",
+                "branch",
+                &format!("node {MOCK_AGENT}"),
+                vec![format!("branched-from:{source}")],
+                false,
+                true,
+                None,
+                Vec::new(),
+                None,
+                Default::default(),
+            )
+            .await;
+
+        let mut path = None;
+        for _ in 0..100 {
+            if let Some(p) = task_now(&handle, &branch).await.worktree {
+                path = Some(p);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let path = std::path::PathBuf::from(path.expect("branch should get a worktree"));
+
+        assert_eq!(
+            std::fs::read_to_string(path.join("README.md")).unwrap(),
+            "edited\n",
+            "the tracked edit must carry over"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join("NEW.md")).unwrap(),
+            "new file\n",
+            "the new untracked file must carry over"
+        );
 
         handle.shutdown().await;
     }
