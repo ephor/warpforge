@@ -37,50 +37,27 @@ impl WorktreeManager {
     /// Create a worktree for `task_id`. If `base_branch` is provided, branch
     /// from that; otherwise branch from the current HEAD.
     pub async fn create(&mut self, task_id: &str, base_branch: Option<&str>) -> Result<Worktree> {
-        let wt_dir = self.base_repo.join(".worktrees").join(task_id);
-        let branch = format!("warpforge/task/{task_id}");
-
-        // Resolve the base branch.
-        let base = match base_branch {
-            Some(b) => b.to_string(),
-            None => {
-                let output = tokio::process::Command::new("git")
-                    .args(["rev-parse", "--abbrev-ref", "HEAD"])
-                    .current_dir(&self.base_repo)
-                    .output()
-                    .await
-                    .context("failed to run git rev-parse")?;
-                String::from_utf8_lossy(&output.stdout).trim().to_string()
-            }
-        };
-
-        // Create the worktree + branch.
-        let status = tokio::process::Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                "-b",
-                &branch,
-                wt_dir.to_str().unwrap_or(".worktrees/task"),
-                &base,
-            ])
-            .current_dir(&self.base_repo)
-            .status()
-            .await
-            .context("failed to run git worktree add")?;
-
-        if !status.success() {
-            anyhow::bail!("git worktree add failed (exit {status})");
-        }
-
-        let wt = Worktree {
-            task_id: task_id.to_string(),
-            path: wt_dir,
-            branch,
-            base_branch: base,
-        };
-        self.worktrees.insert(task_id.to_string(), wt.clone());
+        let wt = create_detached(&self.base_repo, task_id, base_branch).await?;
+        self.adopt(wt.clone());
         Ok(wt)
+    }
+
+    /// The repo this manager tracks worktrees for.
+    pub fn base_repo(&self) -> &Path {
+        &self.base_repo
+    }
+
+    /// Record a worktree created outside the manager (see [`create_detached`]).
+    pub fn adopt(&mut self, wt: Worktree) {
+        self.worktrees.insert(wt.task_id.clone(), wt);
+    }
+
+    /// The branch and path a branched worktree would inherit from, if the
+    /// source task has a worktree here.
+    pub fn source_state(&self, source_task_id: &str) -> Option<(String, PathBuf)> {
+        self.worktrees
+            .get(source_task_id)
+            .map(|wt| (wt.branch.clone(), wt.path.clone()))
     }
 
     /// Create a worktree for `task_id` that inherits the state of a source
@@ -265,6 +242,76 @@ impl WorktreeManager {
         }
         Ok(())
     }
+}
+
+/// Create a worktree without a manager, so the git work can run off the daemon
+/// actor. The caller records the result with [`WorktreeManager::adopt`].
+///
+/// `git worktree add` takes long enough to be felt: run inside a command
+/// handler it delayed every other task's messages and approvals until the new
+/// task's checkout finished (ADR 0002).
+pub async fn create_detached(
+    base_repo: &Path,
+    task_id: &str,
+    base_branch: Option<&str>,
+) -> Result<Worktree> {
+    let wt_dir = base_repo.join(".worktrees").join(task_id);
+    let branch = format!("warpforge/task/{task_id}");
+
+    let base = match base_branch {
+        Some(b) => b.to_string(),
+        None => {
+            let output = tokio::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(base_repo)
+                .output()
+                .await
+                .context("failed to run git rev-parse")?;
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+    };
+
+    let status = tokio::process::Command::new("git")
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            &branch,
+            wt_dir.to_str().unwrap_or(".worktrees/task"),
+            &base,
+        ])
+        .current_dir(base_repo)
+        .status()
+        .await
+        .context("failed to run git worktree add")?;
+
+    if !status.success() {
+        anyhow::bail!("git worktree add failed (exit {status})");
+    }
+
+    Ok(Worktree {
+        task_id: task_id.to_string(),
+        path: wt_dir,
+        branch,
+        base_branch: base,
+    })
+}
+
+/// [`create_detached`] for a conversation branch: branch from `source_branch`
+/// and carry over the source worktree's uncommitted changes.
+pub async fn create_branched_detached(
+    base_repo: &Path,
+    task_id: &str,
+    source_branch: &str,
+    source_path: &Path,
+) -> Result<Worktree> {
+    let wt = create_detached(base_repo, task_id, Some(source_branch)).await?;
+    copy_working_state(source_path, &wt.path)
+        .await
+        .with_context(|| {
+            format!("failed to copy working state into branched worktree {task_id}")
+        })?;
+    Ok(wt)
 }
 
 /// Copy the uncommitted working-tree state of `source` into `target` so a
