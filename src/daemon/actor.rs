@@ -654,6 +654,12 @@ pub enum Command {
         workflow_child: bool,
         reply: oneshot::Sender<bool>,
     },
+    /// A worktree merge finished and its checkout is gone; drop it from the
+    /// manager and clear the task's worktree.
+    WorktreeMerged {
+        task_id: String,
+        project: String,
+    },
     /// A git operation that ran off the loop finished; apply what it changed
     /// to the task's state.
     GitOpFinished {
@@ -4026,37 +4032,61 @@ impl Daemon {
                 }
             }
             Command::MergeWorktree { task_id, reply } => {
-                let result = if let Some(task) = self.tasks.get(&task_id) {
-                    if let Some(wt_mgr) = self.worktrees.get(&task.project) {
-                        match wt_mgr.merge(&task_id).await {
-                            Ok(super::worktree::MergeResult::Ok { branch }) => {
-                                // Clean up after merge.
-                                if let Some(wt_mgr) = self.worktrees.get_mut(&task.project) {
-                                    let _ = wt_mgr.remove(&task_id).await;
-                                }
-                                // Clear the worktree field on the task.
-                                if let Some(task) = self.tasks.get_mut(&task_id) {
-                                    task.worktree = None;
-                                    task.updated_at = super::task::now_secs();
-                                    let updated = task.clone();
-                                    self.persist(&updated);
-                                    self.emit(Event::TaskUpdated(updated));
-                                }
-                                Ok(branch)
-                            }
-                            Ok(super::worktree::MergeResult::Conflict { message, branch }) => {
-                                Err(format!("merge conflict on {branch}: {message}"))
-                            }
-                            Ok(super::worktree::MergeResult::Error(msg)) => Err(msg),
-                            Err(e) => Err(e.to_string()),
-                        }
-                    } else {
-                        Err("no worktree manager for this project".into())
-                    }
-                } else {
-                    Err(format!("unknown task {task_id}"))
+                // Merging runs two git commands and removes a checkout. Resolve
+                // what they need here, run them off the loop, and record the
+                // outcome through Command::WorktreeMerged (ADR 0002).
+                let resolved = self
+                    .tasks
+                    .get(&task_id)
+                    .map(|t| t.project.clone())
+                    .and_then(|project| {
+                        let mgr = self.worktrees.get(&project)?;
+                        let wt = mgr.get(&task_id)?;
+                        Some((
+                            project,
+                            mgr.base_repo().to_path_buf(),
+                            wt.path.clone(),
+                            wt.branch.clone(),
+                            wt.base_branch.clone(),
+                        ))
+                    });
+                let Some((project, base_repo, path, branch, base_branch)) = resolved else {
+                    let _ = reply.send(Err(format!("no worktree for task {task_id}")));
+                    return;
                 };
-                let _ = reply.send(result);
+                let cmd_tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let merged =
+                        super::worktree::merge_detached(&base_repo, &branch, &base_branch).await;
+                    let result = match merged {
+                        Ok(super::worktree::MergeResult::Ok { branch }) => {
+                            let _ =
+                                super::worktree::remove_detached(&base_repo, &path, &branch).await;
+                            let _ = cmd_tx
+                                .send(Command::WorktreeMerged { task_id, project })
+                                .await;
+                            Ok(branch)
+                        }
+                        Ok(super::worktree::MergeResult::Conflict { message, branch }) => {
+                            Err(format!("merge conflict on {branch}: {message}"))
+                        }
+                        Ok(super::worktree::MergeResult::Error(msg)) => Err(msg),
+                        Err(e) => Err(format!("{e:#}")),
+                    };
+                    let _ = reply.send(result);
+                });
+            }
+            Command::WorktreeMerged { task_id, project } => {
+                if let Some(mgr) = self.worktrees.get_mut(&project) {
+                    mgr.forget(&task_id);
+                }
+                if let Some(task) = self.tasks.get_mut(&task_id) {
+                    task.worktree = None;
+                    task.updated_at = super::task::now_secs();
+                    let updated = task.clone();
+                    self.persist(&updated);
+                    self.emit(Event::TaskUpdated(updated));
+                }
             }
             Command::ListWorktrees { project, reply } => {
                 let wts = if let Some(wt_mgr) = self.worktrees.get(&project) {

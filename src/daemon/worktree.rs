@@ -47,6 +47,17 @@ impl WorktreeManager {
         &self.base_repo
     }
 
+    /// Drop a worktree from the map without touching git — for a removal that
+    /// already ran off the actor (see [`remove_detached`]).
+    pub fn forget(&mut self, task_id: &str) -> Option<Worktree> {
+        self.worktrees.remove(task_id)
+    }
+
+    /// This task's worktree metadata, if the manager tracks one.
+    pub fn get(&self, task_id: &str) -> Option<&Worktree> {
+        self.worktrees.get(task_id)
+    }
+
     /// Record a worktree created outside the manager (see [`create_detached`]).
     pub fn adopt(&mut self, wt: Worktree) {
         self.worktrees.insert(wt.task_id.clone(), wt);
@@ -318,6 +329,71 @@ pub async fn create_branched_detached(
             format!("failed to copy working state into branched worktree {task_id}")
         })?;
     Ok(wt)
+}
+
+/// Merge `branch` into `base_branch` without a manager, so the git work can run
+/// off the daemon actor. The caller records the outcome.
+pub async fn merge_detached(
+    base_repo: &Path,
+    branch: &str,
+    base_branch: &str,
+) -> Result<MergeResult> {
+    let status = tokio::process::Command::new("git")
+        .args(["checkout", base_branch])
+        .current_dir(base_repo)
+        .status()
+        .await
+        .context("failed to checkout base branch")?;
+    if !status.success() {
+        return Ok(MergeResult::Error("failed to checkout base branch".into()));
+    }
+
+    let output = tokio::process::Command::new("git")
+        .args(["merge", branch, "--no-edit"])
+        .current_dir(base_repo)
+        .output()
+        .await
+        .context("failed to run git merge")?;
+
+    if output.status.success() {
+        return Ok(MergeResult::Ok {
+            branch: branch.to_string(),
+        });
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if stderr.contains("CONFLICT") || stderr.contains("conflict") {
+        // Abort the failed merge.
+        let _ = tokio::process::Command::new("git")
+            .args(["merge", "--abort"])
+            .current_dir(base_repo)
+            .status()
+            .await;
+        return Ok(MergeResult::Conflict {
+            message: stderr,
+            branch: branch.to_string(),
+        });
+    }
+    Ok(MergeResult::Error(stderr))
+}
+
+/// Remove a worktree and delete its branch, without a manager. The caller drops
+/// it from the map with [`WorktreeManager::forget`].
+pub async fn remove_detached(base_repo: &Path, path: &Path, branch: &str) -> Result<()> {
+    let status = tokio::process::Command::new("git")
+        .args(["worktree", "remove", "--force", path.to_str().unwrap_or("")])
+        .current_dir(base_repo)
+        .status()
+        .await
+        .context("failed to run git worktree remove")?;
+    if !status.success() {
+        anyhow::bail!("git worktree remove failed (exit {status})");
+    }
+    let _ = tokio::process::Command::new("git")
+        .args(["branch", "-D", branch])
+        .current_dir(base_repo)
+        .status()
+        .await;
+    Ok(())
 }
 
 /// Copy the uncommitted working-tree state of `source` into `target` so a
