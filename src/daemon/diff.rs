@@ -40,36 +40,50 @@ pub async fn list_files(repo: &str, include_ignored: bool) -> Result<Vec<wire::P
     }
     let out = Command::new("git").args(&args).output().await?;
 
+    // Both paths below stat every file in the project. That is synchronous
+    // work, and left on a runtime worker it stalls whatever shares the thread —
+    // it was measurably delaying the next request on the same connection. Hand
+    // it to the blocking pool (ADR 0002).
+    let repo = repo.to_string();
     if out.status.success() {
-        let changed = working_diff(repo)
+        let changed = working_diff(&repo)
             .await
             .unwrap_or_default()
             .into_iter()
             .map(|f| f.path)
             .collect::<std::collections::HashSet<_>>();
-        let mut files = String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter_map(|line| {
-                let path = line.trim();
-                let exists = std::path::Path::new(repo).join(path).exists();
-                (!path.is_empty() && exists && !is_ignored_path(path)).then(|| wire::ProjectFile {
-                    path: path.to_string(),
-                    changed: changed.contains(path),
+        return tokio::task::spawn_blocking(move || {
+            let mut files = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter_map(|line| {
+                    let path = line.trim();
+                    let exists = std::path::Path::new(&repo).join(path).exists();
+                    (!path.is_empty() && exists && !is_ignored_path(path)).then(|| {
+                        wire::ProjectFile {
+                            path: path.to_string(),
+                            changed: changed.contains(path),
+                        }
+                    })
                 })
-            })
-            .collect::<Vec<_>>();
-        files.sort_by(|a, b| a.path.cmp(&b.path));
-        return Ok(files);
+                .collect::<Vec<_>>();
+            files.sort_by(|a, b| a.path.cmp(&b.path));
+            files
+        })
+        .await
+        .map_err(anyhow::Error::from);
     }
 
-    let mut files = Vec::new();
-    walk_files(
-        std::path::Path::new(repo),
-        std::path::Path::new(repo),
-        &mut files,
-    )?;
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(files)
+    tokio::task::spawn_blocking(move || {
+        let mut files = Vec::new();
+        walk_files(
+            std::path::Path::new(&repo),
+            std::path::Path::new(&repo),
+            &mut files,
+        )?;
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(files)
+    })
+    .await?
 }
 
 /// Case-insensitive substring search across the project working tree. Reuses
