@@ -2944,23 +2944,27 @@ impl Daemon {
                 let _ = reply.send(results);
             }
             Command::GetDiff { task_id, reply } => {
-                // Resolve the repo path (sync) before awaiting git, so no shared
-                // borrow of self is held across the await.
+                // Resolve the repo path from actor state, then run git off the
+                // loop. The diff panel polls this, so awaiting it here put a
+                // pair of git processes between every poll and the next
+                // command — a tool approval included (ADR 0002).
                 let repo = self
                     .tasks
                     .get(&task_id)
                     .and_then(|_| self.task_repo_path(&task_id));
-                let (files, branch) = match repo {
-                    Some(path) => (
-                        super::diff::working_diff(&path).await.unwrap_or_default(),
-                        super::diff::current_branch(&path).await,
-                    ),
-                    None => (Vec::new(), None),
-                };
-                let _ = reply.send(wire::TaskDiff {
-                    task_id,
-                    files,
-                    branch,
+                tokio::spawn(async move {
+                    let (files, branch) = match repo {
+                        Some(path) => (
+                            super::diff::working_diff(&path).await.unwrap_or_default(),
+                            super::diff::current_branch(&path).await,
+                        ),
+                        None => (Vec::new(), None),
+                    };
+                    let _ = reply.send(wire::TaskDiff {
+                        task_id,
+                        files,
+                        branch,
+                    });
                 });
             }
             Command::GetFileContents {
@@ -2972,11 +2976,13 @@ impl Daemon {
                     .tasks
                     .get(&task_id)
                     .and_then(|_| self.task_repo_path(&task_id));
-                let doc = match repo {
-                    Some(p) => super::diff::file_doc(&p, &path).await.ok(),
-                    None => None,
-                };
-                let _ = reply.send(doc);
+                tokio::spawn(async move {
+                    let doc = match repo {
+                        Some(p) => super::diff::file_doc(&p, &path).await.ok(),
+                        None => None,
+                    };
+                    let _ = reply.send(doc);
+                });
             }
             Command::ListFiles {
                 task_id,
@@ -2989,13 +2995,15 @@ impl Daemon {
                     .get(&task_id)
                     .and_then(|_| self.task_repo_path(&task_id))
                     .or_else(|| project.as_deref().and_then(|name| self.project_path(name)));
-                let files = match repo {
-                    Some(p) => super::diff::list_files(&p, include_ignored)
-                        .await
-                        .unwrap_or_default(),
-                    None => Vec::new(),
-                };
-                let _ = reply.send(files);
+                tokio::spawn(async move {
+                    let files = match repo {
+                        Some(p) => super::diff::list_files(&p, include_ignored)
+                            .await
+                            .unwrap_or_default(),
+                        None => Vec::new(),
+                    };
+                    let _ = reply.send(files);
+                });
             }
             Command::SearchFiles {
                 task_id,
@@ -3178,11 +3186,13 @@ impl Daemon {
                     Some(id) => self.task_repo_path(&id),
                     None => project.as_deref().and_then(|p| self.project_path(p)),
                 };
-                let list = match repo {
-                    Some(p) => super::diff::list_branches(&p).await.unwrap_or_default(),
-                    None => wire::GitBranchList::default(),
-                };
-                let _ = reply.send(list);
+                tokio::spawn(async move {
+                    let list = match repo {
+                        Some(p) => super::diff::list_branches(&p).await.unwrap_or_default(),
+                        None => wire::GitBranchList::default(),
+                    };
+                    let _ = reply.send(list);
+                });
             }
             Command::GitSwitchBranch {
                 task_id,
@@ -3361,13 +3371,15 @@ impl Daemon {
                         .clone()
                         .or_else(|| self.project_path(&task.project))
                 });
-                let result = match repo {
-                    Some(path) => super::diff::push_info(&path)
-                        .await
-                        .map_err(|e| e.to_string()),
-                    None => Err(format!("no repo for task {task_id}")),
-                };
-                let _ = reply.send(result);
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(path) => super::diff::push_info(&path)
+                            .await
+                            .map_err(|e| e.to_string()),
+                        None => Err(format!("no repo for task {task_id}")),
+                    };
+                    let _ = reply.send(result);
+                });
             }
             Command::GitPush {
                 task_id,
