@@ -623,6 +623,30 @@ impl Store {
         }
     }
 
+    /// First-seen timestamps of every streamed tool call, keyed by
+    /// `(task_id, tool_call_id)`. Read once at daemon startup: the actor keeps
+    /// only this small map rather than the full transcripts it was derived from.
+    pub fn load_tool_call_starts(&self) -> Result<HashMap<(String, String), u64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT task_id, update_json FROM session_updates ORDER BY id")?;
+        let mut map = HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows.filter_map(|r| r.ok()) {
+            if let Ok(wire::SessionUpdate::ToolCall {
+                tool_call_id,
+                started_at: Some(started_at),
+                ..
+            }) = serde_json::from_str::<wire::SessionUpdate>(&row.1)
+            {
+                map.insert((row.0, tool_call_id), started_at);
+            }
+        }
+        Ok(map)
+    }
+
     /// Load persisted histories as semantic rows. Raw ACP text chunks and
     /// repeated tool lifecycle frames remain in SQLite for replay fidelity but
     /// are folded before building the desktop snapshot.
