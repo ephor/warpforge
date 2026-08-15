@@ -6456,6 +6456,51 @@ impl Daemon {
 
     /// A non-review stage child failed, or a reviewer died. Reviewers are
     /// excluded from the verdict; any other stage failure fails the pipeline.
+    /// Park a run whose stage lost its agent, instead of failing it outright.
+    ///
+    /// Losing the agent process is an infrastructure failure, not a verdict:
+    /// the stage never got to say whether the work was good. Failing the run
+    /// made that unrecoverable — the pipeline was finished, and a user whose
+    /// agent died (or who revived the session by hand and watched it finish the
+    /// work) had no way to continue and had to start over. Parking at the
+    /// existing pause barrier leaves it resumable, and resume re-runs the stage.
+    ///
+    /// Mirrors the daemon-restart recovery in `restore_workflow_runs`, down to
+    /// warning the re-run that the working copy may already hold partial work.
+    fn workflow_park_after_failure(
+        &mut self,
+        parent_id: &str,
+        mut run: WorkflowRun,
+        stage: StageKind,
+        reason: &str,
+    ) {
+        run.active_children.clear();
+        if stage == StageKind::Review {
+            run.review_pending.clear();
+            run.review_collected.clear();
+            run.reasked.clear();
+            // Re-running a review re-increments `round` on spawn; give the
+            // abandoned round back or the re-run reports "round 3/2".
+            run.round = run.round.saturating_sub(1);
+        }
+        run.pause_requested = false;
+        run.state = RunState::Paused { next: stage };
+        run.pending_guidance = Some(format!(
+            "The previous attempt of this stage ended before it finished: {reason}. The working \
+             copy may already contain its partial changes — inspect the current diff before \
+             assuming you are starting from scratch."
+        ));
+        self.workflow_sync(&run);
+        self.workflow_runs.insert(parent_id.to_string(), run);
+        self.workflow_timeline(
+            parent_id,
+            format!(
+                "Stage **{}** lost its agent: {reason}. Paused — resume to run it again.",
+                stage.label()
+            ),
+        );
+    }
+
     async fn workflow_child_failed(
         &mut self,
         parent_id: &str,
@@ -6493,13 +6538,15 @@ impl Daemon {
             );
             if run.review_pending.is_empty() {
                 if run.review_collected.is_empty() {
-                    self.workflow_runs.insert(parent_id.to_string(), run);
-                    let _ = self
-                        .workflow_finalize(
-                            parent_id,
-                            WorkflowOutcome::Error("all reviewers failed".to_string()),
-                        )
-                        .await;
+                    // Every reviewer lost its agent, so the round produced no
+                    // verdict at all. That is the same infrastructure failure
+                    // as a dead implement stage, not a rejection of the work.
+                    self.workflow_park_after_failure(
+                        parent_id,
+                        run,
+                        stage,
+                        "every reviewer's agent ended before producing a verdict",
+                    );
                 } else {
                     self.workflow_merge_reviews(parent_id, run).await;
                 }
@@ -6534,13 +6581,7 @@ impl Daemon {
             event_agent.into_iter().collect(),
             wire::WorkflowEventTone::Error,
         );
-        self.workflow_runs.insert(parent_id.to_string(), run);
-        let _ = self
-            .workflow_finalize(
-                parent_id,
-                WorkflowOutcome::Error(format!("stage {} failed: {reason}", stage.label())),
-            )
-            .await;
+        self.workflow_park_after_failure(parent_id, run, stage, &reason);
     }
 
     /// One reviewer's turn ended: parse its verdict, re-ask once on garbage,

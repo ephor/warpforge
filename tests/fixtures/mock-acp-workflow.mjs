@@ -98,6 +98,11 @@ function handle(msg) {
         endTurn(msg.id);
         setTimeout(() => process.exit(0), 100);
         break;
+      case "die":
+        // Exit mid-turn without ever ending it: the agent process is lost
+        // before the stage produces any verdict at all.
+        process.exit(1);
+        break;
       case "slow-fix":
         text("FIX-DONE: addressed the findings (slowly).");
         setTimeout(() => endTurn(msg.id), 600);

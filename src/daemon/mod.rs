@@ -1173,6 +1173,67 @@ mod tests {
         );
     }
 
+    /// Losing a stage's agent must not finish the pipeline. It used to call
+    /// workflow_finalize, which is terminal — the run was over, resume refused
+    /// with "the pipeline is not paused", and a user whose agent died had to
+    /// start again from a new task even when the work was already done. The run
+    /// now parks at the pause barrier, and resuming re-runs the stage.
+    #[tokio::test]
+    async fn workflow_lost_stage_agent_pauses_instead_of_failing() {
+        use warpforge_protocol as wire;
+        let (dir, projects) = workflow_project("name: placeholder\n");
+        let reviewer = wf_agent(&dir, "rev.state", "approve");
+        std::fs::write(
+            dir.path().join(".warpforge/workflows/test.yaml"),
+            format!("name: Lost agent\nreview:\n  reviewers:\n    - agent: {reviewer}\n"),
+        )
+        .unwrap();
+        // Implement dies mid-turn; the re-run after resume implements normally.
+        let lead = wf_agent(&dir, "impl.state", "die impl");
+
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let daemon = Daemon::spawn(projects, store);
+        let mut events = daemon.subscribe();
+        let parent_id = create_workflow_task(&daemon, &lead).await;
+
+        let paused = wait_for_parent(&mut events, &parent_id, "paused after lost agent", |t| {
+            t.workflow_run
+                .as_ref()
+                .and_then(|w| w.waiting.as_ref())
+                .is_some_and(|w| w.kind == wire::WorkflowWaitKind::Paused)
+        })
+        .await;
+        assert_eq!(paused.status, TaskStatus::Waiting);
+        assert_eq!(
+            paused.workflow_run.as_ref().unwrap().stage,
+            wire::WorkflowStage::Implement,
+            "it parks at the stage that lost its agent, ready to re-run it"
+        );
+
+        // The run is genuinely resumable — the whole point.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        daemon
+            .send(Command::WorkflowResume {
+                task: parent_id.clone(),
+                note: None,
+                reply: tx,
+            })
+            .await;
+        rx.await.unwrap().expect("a parked run must accept resume");
+
+        let done = wait_for_parent(&mut events, &parent_id, "pipeline done", |t| {
+            t.workflow_run
+                .as_ref()
+                .is_some_and(|w| w.stage == wire::WorkflowStage::Done)
+        })
+        .await;
+        assert_eq!(
+            done.workflow_run.unwrap().verdict,
+            Some(wire::WorkflowVerdict::Approve),
+            "resuming re-runs the stage and the pipeline completes"
+        );
+    }
+
     #[tokio::test]
     async fn workflow_plan_question_reply_flow() {
         use warpforge_protocol as wire;
