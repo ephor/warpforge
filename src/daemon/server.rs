@@ -31,10 +31,11 @@ use super::wire as wireconv;
 /// Outgoing frames buffered per connection before the read loop slows down.
 const OUTGOING_QUEUE: usize = 256;
 
-/// Read requests one connection may have in flight at once. Reads answer off
-/// the read loop, so without a cap a client could fan out unbounded git and
-/// filesystem work by sending faster than the daemon completes it.
-const MAX_CONCURRENT_READS: usize = 8;
+/// Requests one connection may have in flight at once. Concurrent requests
+/// answer off the read loop, so without a cap a client could fan out unbounded
+/// git, filesystem and subprocess work by sending faster than the daemon
+/// completes it.
+const MAX_CONCURRENT_REQUESTS: usize = 8;
 
 fn daemon_json_path() -> PathBuf {
     dirs::home_dir()
@@ -208,8 +209,8 @@ async fn handle_conn(
             }
         }
     });
-    // Caps the git and filesystem work one client can have in flight at once.
-    let read_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_READS));
+    // Caps the work one client can have in flight at once.
+    let request_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
 
     macro_rules! send {
         ($msg:expr) => {{
@@ -282,18 +283,35 @@ async fn handle_conn(
                     continue;
                 }
 
-                // Reads answer without holding up the next request. Until now
-                // one connection served one request at a time, so a tool
-                // approval was not even read off the socket while a file
-                // search ran ahead of it (ADR 0002).
-                if method_is_concurrent_read(&req.method) {
+                // Independent requests answer without holding up the next one.
+                // Until now a connection served one request at a time, so a
+                // tool approval was not even read off the socket while a title
+                // was being generated ahead of it (ADR 0002).
+                if method_runs_concurrently(&req.method) {
+                    let gated = method_is_mutation(&req.method);
                     let handle = handle.clone();
                     let lifecycle = Arc::clone(&lifecycle);
                     let out = out_tx.clone();
-                    let slots = Arc::clone(&read_slots);
+                    let slots = Arc::clone(&request_slots);
                     tokio::spawn(async move {
                         let _permit = slots.acquire_owned().await;
-                        let message = match dispatch(&handle, req.method, &lifecycle).await {
+                        // The same update gate the serial path applies, kept
+                        // here so moving a method between the two lists cannot
+                        // quietly let it run during a daemon handover.
+                        let result = if gated {
+                            let _guard = lifecycle.mutations.read().await;
+                            if lifecycle.quiescing.load(Ordering::Acquire) {
+                                Err(wire::RpcError {
+                                    code: wire::ErrorCode::Updating,
+                                    message: "daemon is quiescing for an application update".into(),
+                                })
+                            } else {
+                                dispatch(&handle, req.method, &lifecycle).await
+                            }
+                        } else {
+                            dispatch(&handle, req.method, &lifecycle).await
+                        };
+                        let message = match result {
                             Ok(result) => wire::ServerMessage::Response { id, result },
                             Err(error) => wire::ServerMessage::Error { id, error },
                         };
@@ -1421,19 +1439,31 @@ fn accounts_result(
     }
 }
 
-/// Requests that only read, and can therefore be answered off the connection's
-/// read loop instead of ahead of everything behind them.
+/// Requests answered off the connection's read loop instead of ahead of
+/// everything behind them.
 ///
-/// Deliberately a separate list from [`method_is_mutation`], not its negation.
-/// That one classifies what the update gate must hold back, and it counts the
-/// LSP methods as non-mutating — but LSP is an ordered protocol, so running
-/// `LspSend` concurrently would reorder a language server's inbox. Anything
-/// whose effect depends on arriving in order stays on the serial path.
-fn method_is_concurrent_read(method: &wire::Method) -> bool {
+/// The question is not whether a request writes — it is whether it has to be
+/// ordered against the others on the connection. So this is its own list rather
+/// than the negation of [`method_is_mutation`], which exists to decide what the
+/// update gate holds back:
+///
+/// - Reads are independent by definition.
+/// - So are one-shot jobs whose result depends on nothing else in flight:
+///   generating a title, installing an agent or a language server. These are
+///   the slowest things the daemon does — a title spawns an agent process with
+///   a two-minute ceiling, an install shells out to a package manager — and
+///   they are what made starting a task feel like it stalled everything else.
+/// - Ordered work stays serial. LSP is a streaming protocol, so dispatching
+///   `LspSend` concurrently would reorder a language server's inbox, and git
+///   writes mean what they mean only in sequence: commit, then push.
+fn method_runs_concurrently(method: &wire::Method) -> bool {
     use wire::Method::*;
     matches!(
         method,
-        DiffGet { .. }
+        TextGenerate { .. }
+            | AgentsInstall { .. }
+            | LanguageServersInstall { .. }
+            | DiffGet { .. }
             | FileContents { .. }
             | FileList { .. }
             | FileSearch { .. }
@@ -1532,6 +1562,56 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
             assert_eq!(v["id"].as_u64(), Some(id));
             assert_eq!(v["error"]["code"], "invalid_request");
+        }
+    }
+
+    /// Generating a title spawns an agent process and can run for minutes. It
+    /// used to be dispatched on the read loop, so the daemon read nothing else
+    /// from that client meanwhile — which is what made starting a task appear
+    /// to stall the conversation it was starting.
+    #[test]
+    fn the_slowest_requests_do_not_block_the_connection() {
+        use wire::Method::*;
+        for method in [
+            TextGenerate {
+                task_id: "t".into(),
+                agent_id: "claude".into(),
+                kind: wire::TextGenKind::TaskTitle,
+                model: None,
+            },
+            AgentsInstall {
+                id: "claude".into(),
+            },
+            LanguageServersInstall { id: "rust".into() },
+        ] {
+            assert!(
+                method_runs_concurrently(&method),
+                "{method:?} shells out for seconds to minutes and must not hold the read loop"
+            );
+        }
+    }
+
+    /// Ordered work must stay on the serial path. LSP is a streaming protocol
+    /// and git writes only mean what they mean in sequence.
+    #[test]
+    fn ordered_requests_stay_serial() {
+        use wire::Method::*;
+        for method in [
+            LspSend {
+                server_id: "s".into(),
+                payload: serde_json::Value::Null,
+            },
+            GitCommit {
+                task_id: "t".into(),
+                message: "m".into(),
+                files: None,
+                amend: false,
+            },
+        ] {
+            assert!(
+                !method_runs_concurrently(&method),
+                "{method:?} depends on arriving in order"
+            );
         }
     }
 
