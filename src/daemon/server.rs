@@ -20,13 +20,21 @@ use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::sync::oneshot;
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{mpsc, Notify, RwLock, Semaphore};
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 use warpforge_protocol as wire;
 
 use super::actor::{Command, DaemonHandle};
 use super::wire as wireconv;
+
+/// Outgoing frames buffered per connection before the read loop slows down.
+const OUTGOING_QUEUE: usize = 256;
+
+/// Read requests one connection may have in flight at once. Reads answer off
+/// the read loop, so without a cap a client could fan out unbounded git and
+/// filesystem work by sending faster than the daemon completes it.
+const MAX_CONCURRENT_READS: usize = 8;
 
 fn daemon_json_path() -> PathBuf {
     dirs::home_dir()
@@ -162,6 +170,10 @@ async fn run_controlled(
             accepted = listener.accept() => accepted?,
             _ = lifecycle.shutdown.notified() => return Ok(()),
         };
+        // Replies are small frames. Left to Nagle they wait on an ACK for the
+        // previous one, which pairs with the peer's delayed ACK to add tens of
+        // milliseconds to an otherwise instant answer.
+        let _ = stream.set_nodelay(true);
         let handle = handle.clone();
         let token = token.clone();
         let lifecycle = Arc::clone(&lifecycle);
@@ -180,15 +192,29 @@ async fn handle_conn(
     lifecycle: Arc<ServerLifecycle>,
 ) -> Result<()> {
     let ws = tokio_tungstenite::accept_async(stream).await?;
-    let (mut tx, mut rx) = ws.split();
+    let (mut sink, mut rx) = ws.split();
     let mut events = handle.subscribe();
     let mut authed = token.is_empty();
     let mut subscribed = false;
 
+    // One writer owns the socket so read requests answered off the read loop
+    // have somewhere to reply to. Bounded: a client that stops draining slows
+    // its own connection rather than growing the queue without limit.
+    let (out_tx, mut out_rx) = mpsc::channel::<Message>(OUTGOING_QUEUE);
+    tokio::spawn(async move {
+        while let Some(msg) = out_rx.recv().await {
+            if sink.send(msg).await.is_err() {
+                break;
+            }
+        }
+    });
+    // Caps the git and filesystem work one client can have in flight at once.
+    let read_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_READS));
+
     macro_rules! send {
         ($msg:expr) => {{
             let text = serde_json::to_string(&$msg)?;
-            if tx.send(Message::Text(text)).await.is_err() {
+            if out_tx.send(Message::Text(text)).await.is_err() {
                 break;
             }
         }};
@@ -203,7 +229,7 @@ async fn handle_conn(
                 };
                 let text = match msg {
                     Message::Text(t) => t.as_str().to_string(),
-                    Message::Ping(p) => { let _ = tx.send(Message::Pong(p)).await; continue; }
+                    Message::Ping(p) => { let _ = out_tx.send(Message::Pong(p)).await; continue; }
                     Message::Close(_) => break,
                     _ => continue,
                 };
@@ -217,7 +243,7 @@ async fn handle_conn(
                     if ok {
                         authed = true;
                     } else {
-                        let _ = tx.send(Message::Close(None)).await;
+                        let _ = out_tx.send(Message::Close(None)).await;
                         break;
                     }
                     continue;
@@ -256,6 +282,28 @@ async fn handle_conn(
                     continue;
                 }
 
+                // Reads answer without holding up the next request. Until now
+                // one connection served one request at a time, so a tool
+                // approval was not even read off the socket while a file
+                // search ran ahead of it (ADR 0002).
+                if method_is_concurrent_read(&req.method) {
+                    let handle = handle.clone();
+                    let lifecycle = Arc::clone(&lifecycle);
+                    let out = out_tx.clone();
+                    let slots = Arc::clone(&read_slots);
+                    tokio::spawn(async move {
+                        let _permit = slots.acquire_owned().await;
+                        let message = match dispatch(&handle, req.method, &lifecycle).await {
+                            Ok(result) => wire::ServerMessage::Response { id, result },
+                            Err(error) => wire::ServerMessage::Error { id, error },
+                        };
+                        if let Ok(text) = serde_json::to_string(&message) {
+                            let _ = out.send(Message::Text(text)).await;
+                        }
+                    });
+                    continue;
+                }
+
                 let is_handoff = matches!(&req.method, wire::Method::UpdatePrepareShutdown { .. });
                 let result = if method_is_mutation(&req.method) && !is_handoff {
                     let _guard = lifecycle.mutations.read().await;
@@ -278,7 +326,7 @@ async fn handle_conn(
                     Err(error) => wire::ServerMessage::Error { id, error },
                 };
                 let text = serde_json::to_string(&message)?;
-                let sent = tx.send(Message::Text(text)).await.is_ok();
+                let sent = out_tx.send(Message::Text(text)).await.is_ok();
 
                 if handoff_ready {
                     // Queue the acknowledgement on the socket before stopping
@@ -1373,6 +1421,38 @@ fn accounts_result(
     }
 }
 
+/// Requests that only read, and can therefore be answered off the connection's
+/// read loop instead of ahead of everything behind them.
+///
+/// Deliberately a separate list from [`method_is_mutation`], not its negation.
+/// That one classifies what the update gate must hold back, and it counts the
+/// LSP methods as non-mutating — but LSP is an ordered protocol, so running
+/// `LspSend` concurrently would reorder a language server's inbox. Anything
+/// whose effect depends on arriving in order stays on the serial path.
+fn method_is_concurrent_read(method: &wire::Method) -> bool {
+    use wire::Method::*;
+    matches!(
+        method,
+        DiffGet { .. }
+            | FileContents { .. }
+            | FileList { .. }
+            | FileSearch { .. }
+            | GitBranches { .. }
+            | GitPushInfo { .. }
+            | ServiceLogs { .. }
+            | PortForwardLogs { .. }
+            | TaskListWorktrees { .. }
+            | SessionsList { .. }
+            | OrchestratorListAgents { .. }
+            | AgentsDetect {}
+            | AccountsList {}
+            | OrchestrateList {}
+            | OrchestrateGetConfig {}
+            | WorkflowList { .. }
+            | LanguageServersDetect {}
+    )
+}
+
 fn method_is_mutation(method: &wire::Method) -> bool {
     use wire::Method::*;
     !matches!(
@@ -1453,6 +1533,81 @@ mod tests {
             assert_eq!(v["id"].as_u64(), Some(id));
             assert_eq!(v["error"]["code"], "invalid_request");
         }
+    }
+
+    /// A read must not hold up whatever is queued behind it. One connection
+    /// used to serve one request at a time, so a slow read delayed everything
+    /// after it — a tool approval was not even read off the socket until the
+    /// read ahead of it finished. The cheap request sent second must come back
+    /// first.
+    // Multi-threaded on purpose: the daemon runs on a multi-thread runtime, and
+    // on the single-threaded test default a synchronous filesystem walk inside
+    // a spawned task blocks the very socket read this is measuring.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_slow_read_does_not_delay_the_request_behind_it() {
+        // A project big enough that listing it takes real time, and sized here
+        // rather than inherited from the checkout so the margin is the same
+        // everywhere this runs.
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..4000 {
+            std::fs::write(dir.path().join(format!("file{i}.txt")), "x").unwrap();
+        }
+        let projects = vec![ProjectEntry {
+            name: "demo".into(),
+            path: dir.path().to_string_lossy().into_owned(),
+            added_at: "0".into(),
+        }];
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let handle = Daemon::spawn(projects, store);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(run(listener, handle.clone(), String::new()));
+        // Without this the second request sits in the client's send buffer
+        // waiting on an ACK for the first, and the test measures Nagle rather
+        // than the daemon.
+        let tcp = TcpStream::connect(addr).await.unwrap();
+        tcp.set_nodelay(true).unwrap();
+        let (mut ws, _) = tokio_tungstenite::client_async(format!("ws://{addr}"), tcp)
+            .await
+            .unwrap();
+
+        // Listing walks and stats every file; the accounts list is answered
+        // from memory.
+        ws.send(Message::Text(
+            json!({
+                "id": 1,
+                "method": "file.list",
+                "params": { "project": "demo", "include_ignored": true }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            json!({ "id": 2, "method": "accounts.list", "params": {} }).to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Both are answered; the order is the point.
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let msg = timeout(Duration::from_secs(10), ws.next())
+                .await
+                .expect("a reply, not silence")
+                .expect("some")
+                .expect("ok");
+            let Message::Text(text) = msg else {
+                panic!("expected a text frame")
+            };
+            let reply: serde_json::Value = serde_json::from_str(text.as_str()).unwrap();
+            ids.push(reply["id"].as_u64());
+        }
+        assert_eq!(
+            ids,
+            vec![Some(2), Some(1)],
+            "the cheap request must not wait behind the project listing"
+        );
     }
 
     #[tokio::test]
