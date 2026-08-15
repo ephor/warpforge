@@ -647,6 +647,13 @@ pub enum Command {
         task_id: String,
         created: Result<(String, super::worktree::Worktree), String>,
     },
+    /// Test-only: report whether a finished turn's output has a consumer.
+    #[cfg(test)]
+    TurnOutputConsumerProbe {
+        task_id: String,
+        workflow_child: bool,
+        reply: oneshot::Sender<bool>,
+    },
     /// A task's resume replay guard was read from the store; start its session
     /// now that replayed history can be de-duplicated. Loaded off the loop
     /// (write-behind flush + store read), mirroring [`Command::WorktreeReady`].
@@ -3084,6 +3091,14 @@ impl Daemon {
                     self.start_pending_session(&task_id, start);
                 }
             }
+            #[cfg(test)]
+            Command::TurnOutputConsumerProbe {
+                task_id,
+                workflow_child,
+                reply,
+            } => {
+                let _ = reply.send(self.turn_output_has_consumer(&task_id, workflow_child));
+            }
             Command::ResumeReplayReady {
                 task_id,
                 mut replay,
@@ -5310,8 +5325,13 @@ impl Daemon {
                 // The finished task's full text output is assembled off the loop
                 // (write-behind flush + store read) and delivered back as
                 // Command::TaskOutputReady, which notifies the orchestrator and
-                // the parent inbox.
-                self.request_task_output(&task_id, success, workflow_child);
+                // the parent inbox. Only ask for it when somebody consumes it:
+                // both consumers are no-ops for an ordinary task, and reading
+                // its whole transcript per turn would trade the memory this
+                // change saves for disk it never needed to touch.
+                if self.turn_output_has_consumer(&task_id, workflow_child) {
+                    self.request_task_output(&task_id, success, workflow_child);
+                }
             }
             AcpUpdate::Error { run_id, message } => {
                 if self
@@ -5412,6 +5432,23 @@ impl Daemon {
                 .send(Command::ResumeReplayReady { task_id, replay })
                 .await;
         });
+    }
+
+    /// Whether anything reads a finished turn's full text output.
+    ///
+    /// `notify_orch_finished` is a no-op unless the task is an orchestrator
+    /// node, and `deliver_child_result` returns early without a parent — and it
+    /// is skipped entirely for a workflow stage, which reads its own turn
+    /// buffer instead. For everything else the assembled output is discarded,
+    /// so it should never be assembled.
+    fn turn_output_has_consumer(&self, task_id: &str, workflow_child: bool) -> bool {
+        let Some(task) = self.tasks.get(task_id) else {
+            return false;
+        };
+        let orchestrator_node =
+            self.orch_tx.is_some() && task.tags.iter().any(|tag| tag == "orchestrator");
+        let feeds_parent = !workflow_child && task.parent_task_id.is_some();
+        orchestrator_node || feeds_parent
     }
 
     /// Ask a worker to assemble a finished task's full text output off the loop
@@ -7852,6 +7889,66 @@ mod worktree_start_tests {
 #[cfg(test)]
 mod transcript_projection_tests {
     use super::*;
+
+    /// A plain task's finished turn feeds nothing: the orchestrator hook is a
+    /// no-op without the tag, and there is no parent inbox. Assembling its
+    /// output would read the whole transcript back per turn — trading the
+    /// memory this projection saves for disk it never needed.
+    #[tokio::test]
+    async fn a_plain_task_does_not_assemble_turn_output() {
+        let handle = Daemon::spawn(Vec::new(), None);
+        let id = handle
+            .create_task(
+                "demo",
+                "prompt",
+                "agent",
+                Vec::new(),
+                false,
+                false,
+                None,
+                Vec::new(),
+                None,
+                Default::default(),
+            )
+            .await;
+
+        let (tx, rx) = oneshot::channel();
+        handle
+            .send(Command::TurnOutputConsumerProbe {
+                task_id: id.clone(),
+                workflow_child: false,
+                reply: tx,
+            })
+            .await;
+        assert!(!rx.await.unwrap(), "nothing consumes a plain task's output");
+
+        // A sub-agent's parent does consume it.
+        let child = handle
+            .create_task(
+                "demo",
+                "child",
+                "agent",
+                Vec::new(),
+                false,
+                false,
+                Some(id.clone()),
+                Vec::new(),
+                None,
+                Default::default(),
+            )
+            .await;
+        let (tx, rx) = oneshot::channel();
+        handle
+            .send(Command::TurnOutputConsumerProbe {
+                task_id: child,
+                workflow_child: false,
+                reply: tx,
+            })
+            .await;
+        assert!(rx.await.unwrap(), "a sub-agent's result feeds its parent");
+
+        handle.shutdown().await;
+    }
 
     /// A long, realistic history: alternating tool calls and streamed text
     /// chunks, as a long agent turn produces.
