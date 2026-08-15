@@ -7,4 +7,4 @@
 
 pub mod persist;
 
-pub use persist::{Ask, Persist, Write};
+pub use persist::{read as store_read, Ask, Persist, Write};

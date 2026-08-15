@@ -197,6 +197,27 @@ impl Persist {
     }
 }
 
+/// Run a read against the store on the blocking pool.
+///
+/// SQLite is blocking and the store is behind a plain mutex, so doing this
+/// inline in a spawned task occupies a runtime worker for the length of the
+/// query — and blocks outright whenever the persistence thread happens to hold
+/// the lock for a batch commit. `None` when there is no database.
+pub async fn read<T: Send + 'static>(
+    store: Option<Arc<Mutex<Store>>>,
+    read: impl FnOnce(&Store) -> T + Send + 'static,
+) -> Option<T> {
+    let store = store?;
+    tokio::task::spawn_blocking(move || {
+        // Recover a poisoned lock rather than cascade the panic, as the
+        // persistence thread does.
+        let guard = store.lock().unwrap_or_else(|e| e.into_inner());
+        read(&guard)
+    })
+    .await
+    .ok()
+}
+
 /// Drain the queue into transactions until every sender is gone.
 fn run(mut rx: mpsc::UnboundedReceiver<Msg>, store: &Arc<Mutex<Store>>) {
     // Replies are sent after the batch commits, never inside it, so a caller
