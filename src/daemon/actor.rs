@@ -584,6 +584,11 @@ pub enum Command {
     KillAgent {
         id: String,
     },
+    /// A task's worktree checkout finished (or failed); start its session.
+    WorktreeReady {
+        task_id: String,
+        created: Result<(String, super::worktree::Worktree), String>,
+    },
     CreateTask {
         project: String,
         prompt: String,
@@ -1849,6 +1854,46 @@ impl DaemonHandle {
     }
 }
 
+/// A session that cannot start until its worktree exists.
+struct PendingSessionStart {
+    project: String,
+    agent: String,
+    prompt: String,
+    include_runtime_context: bool,
+    attachments: Vec<wire::PromptAttachment>,
+    default_model: Option<String>,
+    config_overrides: std::collections::HashMap<String, String>,
+}
+
+/// A worktree checkout resolved against actor state, ready to run elsewhere.
+struct WorktreeRequest {
+    project: String,
+    base_repo: PathBuf,
+    task_id: String,
+    /// Branch and path to inherit from, for a conversation branch.
+    source: Option<(String, PathBuf)>,
+}
+
+impl WorktreeRequest {
+    async fn run(self) -> Result<(String, super::worktree::Worktree), String> {
+        let created = match self.source {
+            Some((ref branch, ref path)) => {
+                super::worktree::create_branched_detached(
+                    &self.base_repo,
+                    &self.task_id,
+                    branch,
+                    path,
+                )
+                .await
+            }
+            None => super::worktree::create_detached(&self.base_repo, &self.task_id, None).await,
+        };
+        created
+            .map(|wt| (self.project, wt))
+            .map_err(|e| e.to_string())
+    }
+}
+
 pub struct Daemon {
     projects: Vec<ProjectEntry>,
     config_observer: ConfigObserver,
@@ -1885,6 +1930,10 @@ pub struct Daemon {
     resume_replay: HashMap<String, VecDeque<wire::SessionUpdate>>,
     /// Per-project git worktree managers, lazily created on first worktree use.
     worktrees: HashMap<String, WorktreeManager>,
+    /// Sessions waiting on a worktree checkout, keyed by task id. Presence is
+    /// the token that lets a finished checkout start its session: cancel and
+    /// delete remove the entry, so a late checkout cannot resurrect the task.
+    pending_session_starts: HashMap<String, PendingSessionStart>,
     /// Policy engine: gates agent actions through configurable policies.
     policies: PolicyRegistry,
     /// Channel for ACP reader tasks to request policy checks before file ops.
@@ -2026,6 +2075,7 @@ impl Daemon {
             store,
             resume_replay: HashMap::new(),
             worktrees: HashMap::new(),
+            pending_session_starts: HashMap::new(),
             policies: default_policies(),
             policy_tx,
             orch_tx: None,
@@ -2814,27 +2864,6 @@ impl Daemon {
                     .map(str::to_string);
                 let mut task = Task::new(&project, &prompt, &agent, tags);
                 task.parent_task_id = parent_task_id;
-                // Create worktree if requested and project has a git repo.
-                if use_worktree {
-                    if let Some(path) = self.project_path(&project) {
-                        let wt_mgr = self.worktrees.entry(project.clone()).or_insert_with(|| {
-                            WorktreeManager::new(std::path::PathBuf::from(&path))
-                        });
-                        let created = match branched_from {
-                            Some(ref src) => wt_mgr.create_branched(&task.id, src).await,
-                            None => wt_mgr.create(&task.id, None).await,
-                        };
-                        match created {
-                            Ok(wt) => {
-                                task.worktree = Some(wt.path.to_string_lossy().to_string());
-                            }
-                            Err(e) => {
-                                eprintln!("[daemon] worktree creation failed: {e}");
-                                // Fall back to non-isolated run.
-                            }
-                        }
-                    }
-                }
                 // Resolve the model the session should start with: an explicit
                 // UI pick wins; otherwise fall back to the user's last choice
                 // for this agent (so orchestrator-spawned sub-agents inherit it
@@ -2867,17 +2896,66 @@ impl Daemon {
                 self.persist(&task);
                 self.emit(Event::TaskCreated(task));
                 let _ = reply.send(id.clone());
-                self.start_session(
-                    &id,
-                    &project,
-                    &agent,
-                    &prompt,
+
+                let start = PendingSessionStart {
+                    project: project.clone(),
+                    agent: agent.clone(),
+                    prompt: prompt.clone(),
                     include_runtime_context,
-                    None,
                     attachments,
-                    resolved_model,
+                    default_model: resolved_model,
                     config_overrides,
-                );
+                };
+                // A worktree checkout is git work, so it runs off the loop and
+                // the session starts when it lands. The task is on the board
+                // before then, which is also why a new task no longer delays
+                // every other task's messages (ADR 0002).
+                match use_worktree
+                    .then(|| self.worktree_request(&id, &project, branched_from.as_deref()))
+                    .flatten()
+                {
+                    Some(request) => {
+                        self.pending_session_starts.insert(id.clone(), start);
+                        let cmd_tx = self.cmd_tx.clone();
+                        tokio::spawn(async move {
+                            let created = request.run().await;
+                            let _ = cmd_tx
+                                .send(Command::WorktreeReady {
+                                    task_id: id,
+                                    created,
+                                })
+                                .await;
+                        });
+                    }
+                    None => self.start_pending_session(&id, start),
+                }
+            }
+            Command::WorktreeReady { task_id, created } => {
+                // Record the checkout even if nobody is waiting for it any
+                // more: the directory exists on disk either way, and a
+                // worktree the manager does not know about is one nothing can
+                // clean up later.
+                match created {
+                    Ok((project, wt)) => {
+                        if let Some(task) = self.tasks.get_mut(&task_id) {
+                            task.worktree = Some(wt.path.to_string_lossy().to_string());
+                            let updated = task.clone();
+                            self.persist(&updated);
+                            self.emit(Event::TaskUpdated(updated));
+                        }
+                        if let Some(mgr) = self.worktrees.get_mut(&project) {
+                            mgr.adopt(wt);
+                        }
+                    }
+                    // Fall back to a non-isolated run, as before.
+                    Err(error) => eprintln!("[daemon] worktree creation failed: {error}"),
+                }
+                // The pending entry is the token: cancelling or deleting the
+                // task removes it, so a checkout that lands afterwards must not
+                // start a session for it (ADR 0002 invariant 5).
+                if let Some(start) = self.pending_session_starts.remove(&task_id) {
+                    self.start_pending_session(&task_id, start);
+                }
             }
             Command::CreateWorkflowTask {
                 project,
@@ -3484,6 +3562,10 @@ impl Daemon {
                         Some(handle) => handle.cancel_and_wait().await,
                         None => Ok(()),
                     };
+                    // A worktree checkout may still be running for this task;
+                    // dropping its token stops it from starting a session the
+                    // user just cancelled.
+                    self.pending_session_starts.remove(&id);
                     self.pending_permissions.cleanup_task(&id);
                     // A finished pipeline's parent keeps its terminal status:
                     // cancelling it must not rewrite that back to Waiting.
@@ -3574,6 +3656,7 @@ impl Daemon {
                     self.tool_call_starts
                         .retain(|(task_id, _), _| task_id != &id);
                     self.session_updates.remove(&id);
+                    self.pending_session_starts.remove(&id);
                     // Awaited, not queued: a failed delete is reported to the
                     // user, and dropping the error would leave a task that
                     // reappears on the next start with no explanation.
@@ -4703,6 +4786,43 @@ impl Daemon {
     ///
     /// If the task has a worktree, the agent runs in the worktree directory
     /// instead of the project root — so its edits are isolated.
+    /// Start a session whose worktree checkout has finished.
+    fn start_pending_session(&mut self, task_id: &str, start: PendingSessionStart) {
+        self.start_session(
+            task_id,
+            &start.project,
+            &start.agent,
+            &start.prompt,
+            start.include_runtime_context,
+            None,
+            start.attachments,
+            start.default_model,
+            start.config_overrides,
+        );
+    }
+
+    /// Resolve everything a worktree checkout needs from actor state, so the
+    /// git work itself can run without borrowing the actor.
+    fn worktree_request(
+        &mut self,
+        task_id: &str,
+        project: &str,
+        branched_from: Option<&str>,
+    ) -> Option<WorktreeRequest> {
+        let path = self.project_path(project)?;
+        let mgr = self
+            .worktrees
+            .entry(project.to_string())
+            .or_insert_with(|| WorktreeManager::new(std::path::PathBuf::from(&path)));
+        let source = branched_from.and_then(|src| mgr.source_state(src));
+        Some(WorktreeRequest {
+            project: project.to_string(),
+            base_repo: mgr.base_repo().to_path_buf(),
+            task_id: task_id.to_string(),
+            source,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn start_session(
         &mut self,
@@ -7307,5 +7427,140 @@ mod lifecycle_action_tests {
         assert_eq!(task.settled_at, None);
         assert_eq!(task.snoozed_until, None);
         assert_eq!(task.snoozed_at, None);
+    }
+}
+
+#[cfg(test)]
+mod worktree_start_tests {
+    use super::*;
+    use crate::registry::ProjectEntry;
+    use std::time::Duration;
+
+    const MOCK_AGENT: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/mock-acp-inspect.mjs"
+    );
+
+    /// A git repo with one commit, so `git worktree add` has something to
+    /// branch from.
+    async fn repo_with_commit() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            tokio::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .env("GIT_AUTHOR_NAME", "test")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "test")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .status()
+        };
+        git(&["init"]).await.unwrap();
+        std::fs::write(dir.path().join("README.md"), "init\n").unwrap();
+        git(&["add", "."]).await.unwrap();
+        git(&["commit", "-m", "init"]).await.unwrap();
+        dir
+    }
+
+    async fn spawn_with_repo(dir: &tempfile::TempDir) -> DaemonHandle {
+        Daemon::spawn(
+            vec![ProjectEntry {
+                name: "demo".into(),
+                path: dir.path().to_string_lossy().into_owned(),
+                added_at: "0".into(),
+            }],
+            None,
+        )
+    }
+
+    async fn create_worktree_task(handle: &DaemonHandle) -> String {
+        handle
+            .create_task(
+                "demo",
+                "do the thing",
+                &format!("node {MOCK_AGENT}"),
+                Vec::new(),
+                false,
+                true,
+                None,
+                Vec::new(),
+                None,
+                Default::default(),
+            )
+            .await
+    }
+
+    async fn task_now(handle: &DaemonHandle, id: &str) -> Task {
+        handle
+            .tasks()
+            .await
+            .into_iter()
+            .find(|t| t.id == id)
+            .expect("task on the board")
+    }
+
+    /// The task must reach the board before its checkout finishes. It used to
+    /// be created only after `git worktree add` returned, so starting a task
+    /// held up every other task's messages and approvals (ADR 0002).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn task_appears_before_its_worktree_is_ready() {
+        let dir = repo_with_commit().await;
+        let handle = spawn_with_repo(&dir).await;
+
+        let id = create_worktree_task(&handle).await;
+        assert!(!id.is_empty());
+        assert_eq!(
+            task_now(&handle, &id).await.worktree,
+            None,
+            "create must return before the checkout, not after it"
+        );
+
+        // The worktree is attached once the checkout lands.
+        let mut path = None;
+        for _ in 0..100 {
+            if let Some(p) = task_now(&handle, &id).await.worktree {
+                path = Some(p);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let path = path.expect("checkout should attach a worktree");
+        assert!(std::path::Path::new(&path).exists(), "worktree on disk");
+
+        handle.shutdown().await;
+    }
+
+    /// Cancelling while the checkout is still running must not start a session
+    /// when it lands — but the worktree still gets recorded, because it exists
+    /// on disk and something has to be able to clean it up.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_during_checkout_does_not_start_a_session() {
+        let dir = repo_with_commit().await;
+        let handle = spawn_with_repo(&dir).await;
+
+        let id = create_worktree_task(&handle).await;
+        handle.cancel_task(&id).await.ok();
+
+        // Wait for the checkout to land, then give a session every chance to
+        // start before concluding that none did.
+        for _ in 0..100 {
+            if task_now(&handle, &id).await.worktree.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let task = task_now(&handle, &id).await;
+        assert!(
+            task.worktree.is_some(),
+            "the checkout must still be recorded so it can be cleaned up"
+        );
+        assert_eq!(
+            task.session_id, None,
+            "a cancelled task must not be started by its own checkout"
+        );
+
+        handle.shutdown().await;
     }
 }
