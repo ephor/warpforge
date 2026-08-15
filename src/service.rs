@@ -149,6 +149,30 @@ pub async fn kill_listeners_in_ranges(ranges: &[(u16, u16)]) {
     let _ = ranges;
 }
 
+/// Kill whatever listens on exactly these ports.
+///
+/// Unlike [`kill_listeners_in_ranges`] this touches only ports the caller knows
+/// warpforge allocated, so it can never reach a process warpforge did not
+/// start.
+pub async fn kill_listeners_on_ports(ports: &[u16]) {
+    #[cfg(unix)]
+    {
+        if ports.is_empty() {
+            return;
+        }
+        for &port in ports {
+            kill_listeners_in_range(port, port, "TERM").await;
+        }
+        sleep(Duration::from_millis(600)).await;
+        for &port in ports {
+            kill_listeners_in_range(port, port, "KILL").await;
+        }
+    }
+
+    #[cfg(not(unix))]
+    let _ = ports;
+}
+
 #[cfg(unix)]
 async fn kill_listeners_in_range(start: u16, end: u16, signal: &str) {
     let spec = format!("-iTCP:{start}-{end}");

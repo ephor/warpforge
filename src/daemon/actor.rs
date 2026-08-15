@@ -2543,7 +2543,14 @@ impl Daemon {
         // Teardown — stop everything we started.
         self.services.stop_all().await.ok();
         self.portforwards.stop_all().await.ok();
-        kill_listeners_in_ranges(&self.project_port_ranges()).await;
+        // Only ports this daemon handed out. Sweeping the whole range kills
+        // whatever else happens to listen there — a developer's own server, or
+        // an agent process — and this runs on every shutdown, including the
+        // ones the test suite performs on the developer's machine.
+        crate::service::kill_listeners_on_ports(&crate::ports::allocated_in_ranges(
+            &self.project_port_ranges(),
+        ))
+        .await;
         self.agents.kill_all();
         // Writes are applied on another thread, so exiting without draining the
         // queue drops the tail of every transcript written since the last
