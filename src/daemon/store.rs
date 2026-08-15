@@ -641,7 +641,11 @@ impl Store {
                 ..
             }) = serde_json::from_str::<wire::SessionUpdate>(&row.1)
             {
-                map.insert((row.0, tool_call_id), started_at);
+                // First-seen wins. Later frames of the same tool call repeat the
+                // timestamp the daemon assigned, but a daemon restart mid-call
+                // can assign a new one — and this map exists precisely so a
+                // call's start time does not move under the user.
+                map.entry((row.0, tool_call_id)).or_insert(started_at);
             }
         }
         Ok(map)
