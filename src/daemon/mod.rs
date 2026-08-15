@@ -19,6 +19,7 @@ pub mod diff;
 pub mod lsp;
 pub mod lsp_servers;
 pub mod prompt;
+pub mod runtime;
 pub mod server;
 pub mod sessions;
 pub mod store;
