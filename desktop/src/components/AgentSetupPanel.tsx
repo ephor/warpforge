@@ -191,7 +191,7 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
 
   return (
     <>
-      <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {agents.map((agent) => {
           const on = enabled.has(agent.id);
           const isBusy = busy.has(agent.id);
@@ -280,14 +280,17 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
         })}
       </div>
       <div className="flex items-center justify-end gap-3 pt-3">
+        <span className="mr-auto text-[11px] text-muted-foreground">
+          Enable the agents you want available for new tasks, then Save.
+        </span>
         {refreshing && (
-          <span className="mr-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <Loader2 className="size-3 animate-spin" />
             Checking versions…
           </span>
         )}
         {loadError && !refreshing && (
-          <span className="mr-auto text-[11px] text-muted-foreground">
+          <span className="text-[11px] text-muted-foreground">
             Version check failed: {loadError}
           </span>
         )}

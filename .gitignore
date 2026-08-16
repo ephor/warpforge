@@ -32,3 +32,9 @@ scratch/
 
 # Task worktree submodules (runtime state, never tracked as gitlinks)
 .worktrees/
+
+# Agent runtime memory (junie writes project-local .junie dirs)
+.junie/
+
+# Personal drafts / notes (never tracked)
+posts/

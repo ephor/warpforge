@@ -13,5 +13,8 @@
     "components": "@/components",
     "ui": "@/components/ui",
     "utils": "@/lib/utils"
+  },
+  "registries": {
+    "@svgl": "https://svgl.app/r/{name}.json"
   }
 }

@@ -2173,6 +2173,11 @@ impl Daemon {
                 let _ = store.save_agents(&configured_agents);
             }
         }
+        // Always present every known agent in canonical order, even those never
+        // saved (e.g. newly installed). Keeps the UI list stable and complete
+        // without waiting on live detection; version/install state is layered on
+        // later by `agents.detect`.
+        let configured_agents = super::agents::reconcile_agents_config(&configured_agents);
         let probe_candidates: Vec<String> = configured_agents
             .iter()
             .filter(|a| a.enabled && a.models.is_empty())
