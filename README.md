@@ -22,6 +22,10 @@
   <a href="#build-from-source">Build from source</a>
 </p>
 
+<p align="center">
+  <img src="docs/images/task-detail.png" alt="Warpforge task view: agent conversation, live diff, and staged changes" width="100%">
+</p>
+
 Warpforge is an **agentic development environment (ADE)**: the operating layer around your coding agents. Agent conversations, project runtime, isolated worktrees, live services, configurable multi-agent workflows, and human review live in one place — so running several agents does not turn into managing several terminals.
 
 It does not replace Claude Code, Codex, or OpenCode; those tools still do the coding. Warpforge gives them shared project context, parallel execution, runtime visibility, and a reviewable path from prompt to commit. Everything runs on your machine: there is no separate Warpforge account or API key, and your existing agent authentication stays with the underlying CLI.
@@ -88,6 +92,10 @@ Agent capabilities vary. Image input, session resume, slash commands, model sele
 
 Warpforge supports two complementary ways to coordinate agents.
 
+<p align="center">
+  <img src="docs/images/new-task.png" alt="New task composer in orchestrator mode, choosing the lead agent and previewing the delegated split" width="100%">
+</p>
+
 ### The orchestrator agent
 
 A regular Warpforge task is one conversation with one coding agent. Enable **Orchestrator** and that agent becomes a lead with three Warpforge tools:
@@ -103,6 +111,10 @@ Orchestration stays inside a real conversation you can keep steering while child
 For repeatable work, choose one of the built-in **Plan + implement + review loop** or **Implement + review loop** workflows. The daemon—not a manager model—drives the fixed `plan? → implement → review ⇄ fix` sequence. Each stage is a visible child task with its own agent session, and each stage can use a different configured agent and model. Multiple reviewers can run in a review round, findings can point to exact lines, and repair rounds continue until approval or a configured limit.
 
 Workflows pause at safe boundaries, survive a daemon restart, and stop for structured human input when an agent asks a question or the review limit is reached. A completed pipeline never commits automatically; it lands in **Needs review** with its chats, timeline, and diff available for inspection.
+
+<p align="center">
+  <img src="docs/images/workflow-pipeline.png" alt="Workflow pipeline with implement, review, and fix stages and a reviewer verdict" width="100%">
+</p>
 
 Workflow definitions are versioned YAML files in `.warpforge/workflows/`. Built-ins can be copied into a project and customized there, so the process travels with the code instead of living in one person's UI settings.
 
