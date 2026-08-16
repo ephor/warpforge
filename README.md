@@ -14,12 +14,12 @@
 
 <p align="center">
   <a href="#install">Install</a> ·
-  <a href="#why-warpforge">Why Warpforge?</a> ·
-  <a href="#bring-your-own-agents">Agents</a> ·
-  <a href="#the-orchestrator-agent">Orchestrator</a> ·
-  <a href="#workflow-pipelines">Workflows</a> ·
-  <a href="#projects-and-their-runtime">Projects &amp; runtime</a> ·
-  <a href="#build-from-source">Build from source</a>
+  <a href="https://docs.warpforge.dev">Docs</a> ·
+  <a href="https://docs.warpforge.dev/concepts/why-warpforge/">Why Warpforge?</a> ·
+  <a href="https://docs.warpforge.dev/concepts/agents/">Agents</a> ·
+  <a href="https://docs.warpforge.dev/concepts/orchestration/">Orchestration &amp; workflows</a> ·
+  <a href="https://docs.warpforge.dev/guides/projects-and-runtime/">Projects &amp; runtime</a> ·
+  <a href="https://docs.warpforge.dev/getting-started/build-from-source/">Build from source</a>
 </p>
 
 <p align="center">
@@ -52,138 +52,39 @@ Warpforge adds no model account or API-key layer. It looks for supported agent b
 
 ## Why Warpforge?
 
-AI-assisted development becomes a coordination problem long before it becomes a model problem:
+AI-assisted development becomes a coordination problem long before it becomes a model problem: agents wait on each other, services collide on the same ports, logs hide in terminal tabs, and finished work scatters across chats, worktrees, and diffs. Warpforge turns that sprawl into one visible workflow — Mission Control for every session, a runtime that travels with the task, human review at the moments that matter, and an orchestrator for when a task outgrows one agent.
 
-- one agent is editing while another waits for permission;
-- a third needs the app server and its real URL;
-- logs are hidden in terminal tabs;
-- two projects both assume port `3000`;
-- completed work is scattered across chats, worktrees, and diffs.
-
-Warpforge turns that sprawl into one visible workflow:
-
-- **Mission Control for active work.** Running, blocked, interrupted, and review-ready sessions across every project, with live conversation previews — no hunting through terminals.
-- **The environment travels with the task.** Agents receive live service URLs, resolved ports, files, and project context instead of guessing how to run the app.
-- **Parallel work without checkout collisions.** A task can run in its own git worktree while staying attached to the same project.
-- **Human control at the moments that matter.** Permission requests, commands, tool calls, changed files, and diffs stay visible before work moves forward.
-- **From agent output to a reviewed branch.** Unified or split diffs, hunk-level accept/reject, inline edits, commit, update, push, and pull request from the same workspace.
-- **A lead agent when the task outgrows one session.** An orchestrator delegates bounded work to sub-agents, and every child task stays visible.
-- **Repeatable workflows when a prompt is not enough.** Put different agents and models into explicit plan, implement, review, and fix stages; Warpforge drives the transitions and stops when a human decision is needed.
-
-That combination is what makes Warpforge an ADE rather than another coding agent: part cross-harness orchestrator, part project runtime, part review surface.
-
-## Bring your own agents
-
-Warpforge detects agents as globally installed binaries and spawns them directly — no `npx` at session start, so the first prompt is never blocked on a package download.
-
-| Agent | Binary | Default ACP command | Install integration |
-| --- | --- | --- | --- |
-| Claude Code | `claude-agent-acp` | `claude-agent-acp --acp` | `npm install -g @agentclientprotocol/claude-agent-acp` |
-| Codex | `codex-acp` | `codex-acp` | `npm install -g @agentclientprotocol/codex-acp` |
-| OpenCode | `opencode` | `opencode acp` | `npm install -g opencode-ai` |
-| Qwen Code | `qwen` | `qwen --acp` | `npm install -g @qwen-code/qwen-code` |
-| Goose | `goose` | `goose acp` | `brew install block-goose-cli` |
-| Junie | `junie` | `junie --acp true` | `npm install -g @jetbrains/junie-cli` |
-| Cursor | `cursor-agent-acp` | `cursor-agent-acp` | `npm install -g @blowmage/cursor-agent-acp` |
-| Pi | `pi-acp` | `pi-acp` | `npm install -g @earendil-works/pi-coding-agent pi-acp` |
-
-Claude Code and Codex reach ACP through small adapter binaries. Warpforge shows whether each agent is present, which version is installed, and whether a newer one exists — and installs or updates it in one click from the agent panel. Any other ACP-compatible agent can be added with a custom command, globally or per project through `agentTemplates`.
-
-Agent capabilities vary. Image input, session resume, slash commands, model selection, and permission semantics are negotiated with each ACP implementation.
-
-## Orchestration and workflows
-
-Warpforge supports two complementary ways to coordinate agents.
+Read the full pitch in **[Why Warpforge?](https://docs.warpforge.dev/concepts/why-warpforge/)**
 
 <p align="center">
   <img src="docs/images/new-task.png" alt="New task composer in orchestrator mode, choosing the lead agent and previewing the delegated split" width="100%">
 </p>
 
-### The orchestrator agent
+## Bring your own agents
 
-A regular Warpforge task is one conversation with one coding agent. Enable **Orchestrator** and that agent becomes a lead with three Warpforge tools:
+Warpforge detects Claude Code, Codex, OpenCode, Qwen Code, Goose, Junie, Cursor, and Pi as globally installed binaries and speaks [ACP](https://agentclientprotocol.com/) to them over stdio — no separate Warpforge account, no new API key, your existing agent login just works. Any other ACP-compatible agent can be added with a custom command.
 
-- `spawn_agent` — dispatch a bounded task to Claude Code, Codex, OpenCode, or any configured harness, and return immediately;
-- `message_agent` — send a follow-up into an existing sub-agent's session, in context;
-- `read_inbox` — drain finished results and decide what happens next.
+See **[Bring your own agents](https://docs.warpforge.dev/concepts/agents/)** for the full list and setup details.
 
-Orchestration stays inside a real conversation you can keep steering while child agents work. Sub-agents appear as normal Warpforge tasks linked to their parent, so you can see which harness is running, what it changed, and where human attention is needed instead of sending work into a black box.
+## Orchestration and workflows
 
-### Workflow pipelines
-
-For repeatable work, choose one of the built-in **Plan + implement + review loop** or **Implement + review loop** workflows. The daemon—not a manager model—drives the fixed `plan? → implement → review ⇄ fix` sequence. Each stage is a visible child task with its own agent session, and each stage can use a different configured agent and model. Multiple reviewers can run in a review round, findings can point to exact lines, and repair rounds continue until approval or a configured limit.
-
-Workflows pause at safe boundaries, survive a daemon restart, and stop for structured human input when an agent asks a question or the review limit is reached. A completed pipeline never commits automatically; it lands in **Needs review** with its chats, timeline, and diff available for inspection.
+A regular task is one conversation with one agent. Enable **Orchestrator** and that agent becomes a lead that can dispatch bounded sub-tasks to other harnesses and track their results in context. For repeatable work, configured **workflow pipelines** drive a fixed `plan? → implement → review ⇄ fix` sequence across stages, each with its own agent and model, pausing for human input at review limits and never committing automatically.
 
 <p align="center">
   <img src="docs/images/workflow-pipeline.png" alt="Workflow pipeline with implement, review, and fix stages and a reviewer verdict" width="100%">
 </p>
 
-Workflow definitions are versioned YAML files in `.warpforge/workflows/`. Built-ins can be copied into a project and customized there, so the process travels with the code instead of living in one person's UI settings.
+Details in **[Orchestration and workflows](https://docs.warpforge.dev/concepts/orchestration/)**.
 
 ## Projects and their runtime
 
-**Register a project once.** In **Projects → Add Project**, pick a folder. Warpforge keeps a local registry and reads or creates `.warpforge/workspace.yaml` — optionally prefilled from a `package.json` `dev` script or a Docker Compose file, or generated interactively by an agent in the bootstrap wizard. Existing `.warpforge.yaml`, `.wf.yaml`, and `.workspace.yaml` files remain supported. Removing a project only unregisters it; the directory and its config stay untouched.
+Register a project once and Warpforge reads or creates `.warpforge/workspace.yaml`, brings its services online in dependency order with captured logs and readiness detection, and gives every project a predictable 100-port range starting at `4000` — no more `address already in use`. A local Rust daemon owns all state behind a WebSocket API, so work survives closing the window. Review changed files as unified or split diffs, accept or reject hunks, commit, push, and open a pull request from the same workspace.
 
-**Bring the real runtime online.** Services start in dependency order with captured logs, interpolated environment variables, and readiness detection. Kubernetes port-forwards run alongside local processes and are watched and retried with backoff when they drop. Each project also has interactive terminals inside the app, so a quick `git log` or one-off script does not need another window.
-
-**Work survives the window.** A local Rust daemon owns projects, services, sessions, and task state behind a WebSocket API; the Tauri app is a thin client. Close or restart it and long-running work continues. Task history and agent configuration persist in `~/.warpforge/warpforge.db`, the project registry in `~/.warpforge/projects.json`.
-
-**Review, commit, ship.** Browse changed files, read unified or split diffs, accept or reject individual hunks, edit files inline, draft a commit message, commit or amend, update the branch, push with `--force-with-lease`, and open a pull request through the GitHub CLI.
-
-### No port roulette
-
-Every registered project gets a predictable 100-port range beginning at `4000`. That is not a registry detail — it is what makes parallel work practical: multiple projects, and multiple agent-built previews inside them, stay online together without fighting over `3000`, `5173`, or other common defaults.
-
-For services with a configured port, Warpforge selects an available value in the project's range, sets `PORT`, and expands references such as `${app.port}` in environment variables. The resolved URLs become part of the live context handed to new agent sessions. You can switch projects and come back without stopping unrelated services, rewriting configuration, or chasing `address already in use`.
-
-### Workspace configuration
-
-Project runtime lives in `.warpforge/workspace.yaml`. The legacy `.warpforge.yaml`, `.wf.yaml`, and `.workspace.yaml` names are also supported.
-
-```yaml
-name: my-app
-
-services:
-  db:
-    command: docker compose up postgres
-    port: 5432
-    readyPattern: "database system is ready to accept connections"
-
-  app:
-    command: npm run dev
-    port: 3000
-    dependsOn: [db]
-    env:
-      DATABASE_URL: postgres://localhost:${db.port}/myapp
-
-portforwards:
-  - name: staging-db
-    namespace: postgres
-    pod: postgres-cluster-pooler
-    localPort: 5432
-    remotePort: 5432
-
-agentTemplates:
-  custom:
-    command: my-acp-agent
-    description: Custom project agent
-```
+Full guide: **[Projects and their runtime](https://docs.warpforge.dev/guides/projects-and-runtime/)** · config schema: **[Configuration reference](https://docs.warpforge.dev/reference/configuration/)**
 
 ## Build from source
 
-Only needed to develop Warpforge itself or to run it where no build is published. The [installer](#install) is the recommended path.
-
-### Prerequisites
-
-- Rust and Cargo
-- [Bun](https://bun.sh) 1.3 or newer
-- Git
-- [Tauri 2 system prerequisites](https://v2.tauri.app/start/prerequisites/)
-- At least one supported coding-agent CLI, installed and authenticated
-- Optional: Docker Compose, `kubectl`, and `gh` for pull requests
-
-### Run the desktop app
+Only needed to develop Warpforge itself or to run it where no build is published — the [installer](#install) above is the recommended path otherwise.
 
 ```bash
 git clone https://github.com/ephor/warpforge.git
@@ -192,31 +93,11 @@ bun install
 bun run tauri dev
 ```
 
-The Tauri shell builds and starts the matching Rust daemon as a sidecar. `bun install` also wires up the pre-commit hook that runs the fast CI checks against staged files.
+Prerequisites, running the checks, and building a local bundle: **[Build from source](https://docs.warpforge.dev/getting-started/build-from-source/)**.
 
-### Run the checks
+## CLI
 
-```bash
-cargo test --locked
-
-cd desktop
-bun run test
-bun run typecheck
-bun run lint
-```
-
-### Build a local desktop bundle
-
-```bash
-cd desktop
-bun run tauri build
-```
-
-Official releases additionally use protected updater signing keys, Developer ID signing, Apple notarization, immutable release tags, and draft-asset verification in GitHub Actions — see [docs/RELEASING.md](docs/RELEASING.md).
-
-## CLI and terminal UI
-
-The Rust binary also manages projects directly and can run the daemon by hand:
+The Rust binary manages the project registry directly and can run the daemon by hand:
 
 ```bash
 warpforge add <path>        # register a project
@@ -224,30 +105,13 @@ warpforge remove <name>     # unregister it
 warpforge list              # list projects and port ranges
 warpforge init [path]       # create workspace config (--add also registers it)
 warpforge bootstrap [path]  # generate a config interactively with an agent
-warpforge daemon            # run the local daemon explicitly
-warpforge ui                # terminal UI companion
 ```
 
-`install.sh` installs this CLI as `wf` from published archives; it does not install the desktop app, and the current release publishes a macOS Apple Silicon archive only. The Ratatui terminal UI is kept as a companion — the desktop app is where development happens.
-
-## Architecture
-
-- **Desktop:** Tauri 2, React, TypeScript, Vite, Tailwind CSS, CodeMirror, xterm.js
-- **Core and daemon:** Rust, Tokio, SQLite, local WebSocket protocol, daemon bundled as a sidecar in packaged builds
-- **Agents:** ACP over stdio, persisted sessions, capability negotiation, permission flow, orchestrator MCP tools
-- **Runtime:** process-group service management, log capture, port isolation, readiness detection, Kubernetes port-forwards, interactive PTYs
-- **Git workflow:** optional worktrees, file browser/editor, structured diffs, hunk resolution, commit/update/push, pull requests via `gh`
-- **Release:** Developer ID signing, Apple notarization, signed updater artifacts, checksummed assets
+`install.sh` installs this as `wf` from published archives (macOS Apple Silicon only for now); it does not install the desktop app. Full command reference: **[CLI reference](https://docs.warpforge.dev/reference/cli/)**.
 
 ## Current scope
 
-Warpforge is young software, shipped and built in the open:
-
-- macOS Apple Silicon is validated; Windows and Linux remain unvalidated previews;
-- automatic config detection covers a `package.json` `dev` script and basic Docker Compose services, with the bootstrap wizard for anything richer;
-- runtime state is local to one machine, and running processes do not survive a machine restart;
-- interrupted task recovery depends on the underlying agent's session-load support;
-- worktrees and multi-agent orchestration are powerful but still evolving — review branches before merging or pushing.
+Warpforge is young software, shipped and built in the open: macOS Apple Silicon is validated, Windows and Linux remain unvalidated previews, and runtime state is local to one machine. See **[Architecture and current scope](https://docs.warpforge.dev/reference/architecture/)** for the full picture.
 
 Bug reports, design feedback, and focused pull requests are welcome. If you use Warpforge on a real multi-agent workflow, sharing what felt smooth — and what still sent you back to terminal juggling — is especially useful. Release notes live in [CHANGELOG.md](CHANGELOG.md).
 

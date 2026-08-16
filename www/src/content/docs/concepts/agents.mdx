@@ -1,0 +1,26 @@
+---
+title: Bring your own agents
+description: Supported coding agents, how Warpforge talks to them, and how to add a custom one.
+sidebar:
+  order: 2
+  label: Bring your own agents
+---
+
+Warpforge detects agents as globally installed binaries and spawns them directly — no `npx` at session start, so the first prompt is never blocked on a package download.
+
+| Agent | Binary | Default ACP command | Install integration |
+| --- | --- | --- | --- |
+| Claude Code | `claude-agent-acp` | `claude-agent-acp --acp` | `npm install -g @agentclientprotocol/claude-agent-acp` |
+| Codex | `codex-acp` | `codex-acp` | `npm install -g @agentclientprotocol/codex-acp` |
+| OpenCode | `opencode` | `opencode acp` | `npm install -g opencode-ai` |
+| Qwen Code | `qwen` | `qwen --acp` | `npm install -g @qwen-code/qwen-code` |
+| Goose | `goose` | `goose acp` | `brew install block-goose-cli` |
+| Junie | `junie` | `junie --acp true` | `npm install -g @jetbrains/junie-cli` |
+| Cursor | `cursor-agent-acp` | `cursor-agent-acp` | `npm install -g @blowmage/cursor-agent-acp` |
+| Pi | `pi-acp` | `pi-acp` | `npm install -g @earendil-works/pi-coding-agent pi-acp` |
+
+Claude Code and Codex reach ACP through small adapter binaries. Warpforge shows whether each agent is present, which version is installed, and whether a newer one exists — and installs or updates it in one click from the agent panel. Any other ACP-compatible agent can be added with a custom command, globally or per project through `agentTemplates` — see the [configuration reference](/reference/configuration/#agenttemplates).
+
+<Aside type="tip">
+  Agent capabilities vary. Image input, session resume, slash commands, model selection, and permission semantics are negotiated with each ACP implementation.
+</Aside>

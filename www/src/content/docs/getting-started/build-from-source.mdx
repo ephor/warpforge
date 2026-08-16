@@ -1,0 +1,49 @@
+---
+title: Build from source
+description: Prerequisites and commands to run Warpforge from a source checkout.
+sidebar:
+  order: 2
+  label: Build from source
+---
+
+Only needed to develop Warpforge itself or to run it where no build is published. [Install](/getting-started/install/) is the recommended path for everyday use.
+
+## Prerequisites
+
+- Rust and Cargo
+- [Bun](https://bun.sh) 1.3 or newer
+- Git
+- [Tauri 2 system prerequisites](https://v2.tauri.app/start/prerequisites/)
+- At least one supported coding-agent CLI, installed and authenticated
+- Optional: Docker Compose, `kubectl`, and `gh` for pull requests
+
+## Run the desktop app
+
+```bash
+git clone https://github.com/ephor/warpforge.git
+cd warpforge/desktop
+bun install
+bun run tauri dev
+```
+
+The Tauri shell builds and starts the matching Rust daemon as a sidecar. `bun install` also wires up the pre-commit hook that runs the fast CI checks against staged files.
+
+## Run the checks
+
+```bash
+cargo test --locked
+
+cd desktop
+bun run test
+bun run typecheck
+bun run lint
+```
+
+## Build a local desktop bundle
+
+```bash
+cd desktop
+bun run tauri build
+```
+
+Official releases additionally use protected updater signing keys, Developer ID signing, Apple notarization, immutable release tags, and draft-asset verification in GitHub Actions — see [RELEASING.md](https://github.com/ephor/warpforge/blob/main/docs/RELEASING.md) in the repository.

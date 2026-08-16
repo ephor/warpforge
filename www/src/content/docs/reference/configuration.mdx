@@ -1,0 +1,81 @@
+---
+title: Workspace configuration
+description: Full schema for .warpforge/workspace.yaml — services, ports, port-forwards, and agent templates.
+sidebar:
+  order: 1
+  label: Configuration
+---
+
+Project runtime lives in `.warpforge/workspace.yaml`. The legacy `.warpforge.yaml`, `.wf.yaml`, and `.workspace.yaml` names (at the project root) are also supported — Warpforge checks them in that order and uses the first one it finds.
+
+```yaml
+name: my-app
+
+services:
+  db:
+    command: docker compose up postgres
+    port: 5432
+    readyPattern: "database system is ready to accept connections"
+
+  app:
+    command: npm run dev
+    port: 3000
+    dependsOn: [db]
+    env:
+      DATABASE_URL: postgres://localhost:${db.port}/myapp
+    healthcheck:
+      url: http://localhost:${app.port}/api/health
+      interval: 5s
+
+portforwards:
+  - name: staging-db
+    namespace: postgres
+    pod: postgres-cluster-pooler
+    localPort: 5432
+    remotePort: 5432
+
+agentTemplates:
+  custom:
+    command: my-acp-agent
+    description: Custom project agent
+```
+
+## `name`
+
+**Required, string.** The project's display name.
+
+## `services`
+
+A map of service name → service config. Services start in dependency order (see `dependsOn` below); a cycle falls back to alphabetical order.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `command` | string | yes | Run via `sh -c "<command>"`, so pipes, `&&`, and `cd` all work. |
+| `port` | number | no | If set, Warpforge picks an available port in the project's range, sets `PORT`, and makes `${<service>.port}` available to other services' `env`. |
+| `env` | map\<string, string\> | no | Environment variables. Values may reference `${<service>.port}` for any service in the same config. |
+| `readyPattern` | string | no | A substring or pattern to watch for in the service's stdout/stderr before marking it ready. |
+| `dependsOn` | string[] | no | Service names that must be running before this one starts. |
+| `healthcheck` | object | no | `{ url, interval }` — polled after the process starts. `interval` accepts `"5s"`, `"100ms"`, `"2m"`. |
+
+## `portforwards`
+
+A list of Kubernetes port-forwards to keep alive alongside local services. Each entry:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `namespace` | string | yes | Kubernetes namespace. |
+| `pod` | string | yes | Pod name or prefix — Warpforge finds the first matching pod. |
+| `localPort` | number | yes | Local port to bind. |
+| `remotePort` | number | yes | Remote port on the pod. |
+| `name` | string | no | Human-readable label shown in the UI. |
+
+Port-forwards are watched and retried with backoff when they drop.
+
+## `agentTemplates`
+
+A map of template name → agent template, for adding a custom ACP-compatible agent beyond the [built-in ones](/concepts/agents/) — globally or per project.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `command` | string | yes | The command Warpforge spawns to speak ACP over stdio. |
+| `description` | string | no | Shown in the agent picker. |

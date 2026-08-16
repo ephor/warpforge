@@ -1,0 +1,23 @@
+---
+title: Projects and their runtime
+description: Register a project, bring its services online, and review agent changes into a commit.
+sidebar:
+  order: 1
+  label: Projects & runtime
+---
+
+**Register a project once.** In **Projects → Add Project**, pick a folder. Warpforge keeps a local registry and reads or creates `.warpforge/workspace.yaml` — optionally prefilled from a `package.json` `dev` script or a Docker Compose file, or generated interactively by an agent in the bootstrap wizard. Existing `.warpforge.yaml`, `.wf.yaml`, and `.workspace.yaml` files remain supported. Removing a project only unregisters it; the directory and its config stay untouched.
+
+**Bring the real runtime online.** Services start in dependency order with captured logs, interpolated environment variables, and readiness detection. Kubernetes port-forwards run alongside local processes and are watched and retried with backoff when they drop. Each project also has interactive terminals inside the app, so a quick `git log` or one-off script does not need another window.
+
+**Work survives the window.** A local Rust daemon owns projects, services, sessions, and task state behind a WebSocket API; the Tauri app is a thin client. Close or restart it and long-running work continues. Task history and agent configuration persist in `~/.warpforge/warpforge.db`, the project registry in `~/.warpforge/projects.json`.
+
+**Review, commit, ship.** Browse changed files, read unified or split diffs, accept or reject individual hunks, edit files inline, draft a commit message, commit or amend, update the branch, push with `--force-with-lease`, and open a pull request through the GitHub CLI.
+
+## No port roulette
+
+Every registered project gets a predictable 100-port range beginning at `4000`. That is not a registry detail — it is what makes parallel work practical: multiple projects, and multiple agent-built previews inside them, stay online together without fighting over `3000`, `5173`, or other common defaults.
+
+For services with a configured port, Warpforge selects an available value in the project's range, sets `PORT`, and expands references such as `${app.port}` in environment variables. The resolved URLs become part of the live context handed to new agent sessions. You can switch projects and come back without stopping unrelated services, rewriting configuration, or chasing `address already in use`.
+
+See the [configuration reference](/reference/configuration/) for the full `.warpforge/workspace.yaml` schema.
