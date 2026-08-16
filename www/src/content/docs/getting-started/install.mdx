@@ -25,6 +25,22 @@ The build is signed with a Developer ID certificate and notarized by Apple, so i
   macOS on Apple Silicon is the validated desktop target. Windows and Linux packaging exists as an opt-in release preview, but those platforms have not been tested on real machines and are not claimed as publicly supported.
 </Aside>
 
+## Requirements beyond the app itself
+
+The signed app needs no Rust toolchain or source checkout, but two features shell out to CLIs it does not bundle — install them separately if you want those features:
+
+- **Node.js and `npm` on `PATH`.** Powers the one-click install/update for most agents (see the [agent table](/concepts/agents/)) and for editor language servers. Without it, you can still point Warpforge at an agent binary you installed yourself.
+- **[GitHub CLI](https://cli.github.com/) (`gh`), authenticated.** Needed only for **Open pull request** in the changes rail. Commit, push, and everything else in the git workflow use `git` directly and don't need it.
+
+  ```bash
+  brew install gh
+  gh auth login
+  ```
+
+<Aside type="note">
+  Both are checked at the point of use — you'll get a clear error telling you what's missing and how to fix it, not a broken button.
+</Aside>
+
 ## Reuse your existing agent login
 
 Warpforge adds no model account or API-key layer. It looks for supported agent binaries on your `PATH`, speaks the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) to them over stdio, and stores your enabled-agent selection locally. If Claude Code, Codex, or OpenCode is already installed and authenticated, that setup is reused as-is — the CLI keeps owning authentication, model access, and the coding itself.

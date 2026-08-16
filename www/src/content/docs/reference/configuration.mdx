@@ -57,9 +57,13 @@ A map of service name → service config. Services start in dependency order (se
 | `dependsOn` | string[] | no | Service names that must be running before this one starts. |
 | `healthcheck` | object | no | `{ url, interval }` — polled after the process starts. `interval` accepts `"5s"`, `"100ms"`, `"2m"`. |
 
+<Aside type="note">
+  `command` runs whatever you put there — if it's `docker compose up ...`, Docker (and Compose) need to be installed and running; nothing about that is Warpforge-specific.
+</Aside>
+
 ## `portforwards`
 
-A list of Kubernetes port-forwards to keep alive alongside local services. Each entry:
+A list of Kubernetes port-forwards to keep alive alongside local services. Requires `kubectl` on `PATH`, pointed at the right cluster via your current kubeconfig context — Warpforge doesn't select or switch contexts for you. Each entry:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |

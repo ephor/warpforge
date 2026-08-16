@@ -46,6 +46,8 @@ The build is signed with a Developer ID certificate and notarized by Apple, so i
 > [!NOTE]
 > macOS on Apple Silicon is the validated desktop target. Windows and Linux packaging exists as an opt-in release preview, but those platforms have not been tested on real machines and are not claimed as publicly supported.
 
+Two features shell out to CLIs the app doesn't bundle: **Node.js/`npm`** for one-click agent install/update, and the **[GitHub CLI](https://cli.github.com/)** (`gh`, authenticated via `gh auth login`) for **Open pull request** — commit and push don't need it. See **[Install → Requirements](https://docs.warpforge.dev/getting-started/install/#requirements-beyond-the-app-itself)** for details.
+
 ### Reuse your existing agent login
 
 Warpforge adds no model account or API-key layer. It looks for supported agent binaries on your `PATH`, speaks the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) to them over stdio, and stores your enabled-agent selection locally. If Claude Code, Codex, or OpenCode is already installed and authenticated, that setup is reused as-is — the CLI keeps owning authentication, model access, and the coding itself.
