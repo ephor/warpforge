@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.3
+
+### Patch Changes
+
+- [`11b28da`](https://github.com/ephor/warpforge/commit/11b28dae4871b6af325c400cfbaf8a729b59eb70) Thanks [@ephor](https://github.com/ephor)! - The desktop agent setup now detects and can install more coding agents: Cursor, Pi, and Junie. Pick any of them in the setup wizard just like the existing agents — the daemon finds, installs, and keeps each one updated for you.
+
 ## 0.6.2
 
 ### Patch Changes
