@@ -83,6 +83,9 @@ Warpforge detects agents as globally installed binaries and spawns them directly
 | OpenCode | `opencode` | `opencode acp` | `npm install -g opencode-ai` |
 | Qwen Code | `qwen` | `qwen --acp` | `npm install -g @qwen-code/qwen-code` |
 | Goose | `goose` | `goose acp` | `brew install block-goose-cli` |
+| Junie | `junie` | `junie --acp true` | `npm install -g @jetbrains/junie-cli` |
+| Cursor | `cursor-agent-acp` | `cursor-agent-acp` | `npm install -g @blowmage/cursor-agent-acp` |
+| Pi | `pi-acp` | `pi-acp` | `npm install -g @earendil-works/pi-coding-agent pi-acp` |
 
 Claude Code and Codex reach ACP through small adapter binaries. Warpforge shows whether each agent is present, which version is installed, and whether a newer one exists — and installs or updates it in one click from the agent panel. Any other ACP-compatible agent can be added with a custom command, globally or per project through `agentTemplates`.
 
