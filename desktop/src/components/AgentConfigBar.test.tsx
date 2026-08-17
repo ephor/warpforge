@@ -78,6 +78,24 @@ describe("AgentConfigBar", () => {
     expect(screen.queryByText(/^Default/)).not.toBeInTheDocument();
   });
 
+  it("stays open once the search box takes focus from the trigger", async () => {
+    const opt: ConfigOption = {
+      category: "model",
+      currentValue: "v0",
+      id: "model",
+      name: "Model",
+      options: Array.from({ length: 12 }, (_, i) => ({ name: `Choice ${i}`, value: `v${i}` })),
+    };
+    render(<AgentConfigBar taskId="task-1" options={[opt]} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /^Model:/ }));
+    // The menu used to close itself shortly after opening, because focus moving
+    // into its own search box counted as the trigger losing focus. Nothing may
+    // close it while focus is still inside.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(screen.getByPlaceholderText("Search model…")).toBeInTheDocument();
+  });
+
   it("shows the pick right away, then undoes it when the agent refuses", async () => {
     const opt: ConfigOption = {
       category: "model",

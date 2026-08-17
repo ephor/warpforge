@@ -188,12 +188,20 @@ function AgentConfigSelect({
     : opt.options;
 
   return (
-    <div className="relative">
+    // Close on focus leaving the whole picker, not the trigger alone: the search
+    // box takes focus away from the trigger the moment the menu opens, and a
+    // trigger-level blur would shut the menu the user just opened.
+    <div
+      className="relative"
+      onBlur={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        onClose();
+      }}
+    >
       <button
         type="button"
         aria-label={`${opt.name}: ${cur}`}
         onClick={onToggle}
-        onBlur={() => setTimeout(onClose, 120)}
         title={opt.name}
         className="flex items-center gap-0.5 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground"
       >
