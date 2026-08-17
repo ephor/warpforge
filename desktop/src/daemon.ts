@@ -914,6 +914,12 @@ export class DaemonClient {
     await this.request("agents.update", { agents });
   }
 
+  /** Re-read an agent's model list from its harness. Rejects if the probe
+   *  fails; the refreshed list arrives separately as `agents.updated`. */
+  async probeAgent(id: string) {
+    await this.request("agents.probe", { id });
+  }
+
   // ── Agent accounts ──
   // Every mutation answers with the full list, so callers replace rather than
   // patch; the daemon also broadcasts `accounts.updated` for other clients.
@@ -1003,6 +1009,14 @@ export class DaemonClient {
       task_id: taskId,
     })) as { text: string };
     return result.text;
+  }
+
+  /** Full message of the task repo's latest commit; empty if it has none. */
+  async lastCommitMessage(taskId: string): Promise<string> {
+    const result = (await this.request("git.lastCommitMessage", { task_id: taskId })) as {
+      message?: string;
+    };
+    return result?.message ?? "";
   }
 
   /** Update a task's title. */

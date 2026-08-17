@@ -89,8 +89,17 @@ pub enum AcpUpdate {
 
 pub enum AcpCommand {
     Prompt(PreparedPrompt),
-    AnswerPermission { request_id: String, outcome: String },
-    SetConfigOption { config_id: String, value: String },
+    AnswerPermission {
+        request_id: String,
+        outcome: String,
+    },
+    SetConfigOption {
+        config_id: String,
+        value: String,
+        /// Carries the agent's verdict back to the caller so a rejected or
+        /// timed-out selector change surfaces instead of vanishing.
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     Cancel,
 }
 
@@ -119,10 +128,24 @@ impl AcpHandle {
             outcome,
         });
     }
-    pub fn set_config_option(&self, config_id: String, value: String) {
-        let _ = self
+    /// Change a selector and wait for the agent to confirm. `Err` means the
+    /// agent rejected it, went away, or never answered — the caller is expected
+    /// to tell the user rather than leave a stale selection on screen.
+    pub async fn set_config_option(&self, config_id: String, value: String) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        if self
             .cmd_tx
-            .send(AcpCommand::SetConfigOption { config_id, value });
+            .send(AcpCommand::SetConfigOption {
+                config_id,
+                value,
+                reply: tx,
+            })
+            .is_err()
+        {
+            return Err("agent session is no longer running".into());
+        }
+        rx.await
+            .unwrap_or_else(|_| Err("agent session is no longer running".into()))
     }
     pub fn cancel(&self) {
         self.process.stop_intentionally();
@@ -1200,7 +1223,11 @@ pub fn spawn_acp_session(
                             );
                         }
                     }
-                    AcpCommand::SetConfigOption { config_id, value } => {
+                    AcpCommand::SetConfigOption {
+                        config_id,
+                        value,
+                        reply,
+                    } => {
                         let out_tx = out_tx.clone();
                         let pending = Arc::clone(&pending);
                         let next_id = Arc::clone(&next_id);
@@ -1208,26 +1235,50 @@ pub fn spawn_acp_session(
                         let task_id = task_id.clone();
                         let session_id = session_id.clone();
                         tokio::spawn(async move {
-                            let res = rpc(
-                                &out_tx,
-                                &pending,
-                                &next_id,
-                                "session/set_config_option",
-                                json!({
-                                    "sessionId": session_id, "configId": config_id, "value": value
-                                }),
+                            let res = tokio::time::timeout(
+                                RPC_TIMEOUT,
+                                rpc(
+                                    &out_tx,
+                                    &pending,
+                                    &next_id,
+                                    "session/set_config_option",
+                                    json!({
+                                        "sessionId": session_id, "configId": config_id, "value": value
+                                    }),
+                                ),
                             )
                             .await;
-                            // The reply carries the full updated configOptions.
-                            if let Some(result) = res.as_ref().and_then(|v| v.get("result")) {
-                                let opts = parse_config_options(result.get("configOptions"));
-                                if !opts.is_empty() {
-                                    let _ = updates.send((
-                                        task_id,
-                                        AcpUpdate::ConfigOptions { options: opts },
-                                    ));
+                            let verdict = match res {
+                                Ok(Some(resp)) if resp.get("error").is_none() => {
+                                    // The reply carries the full updated configOptions.
+                                    if let Some(result) = resp.get("result") {
+                                        let opts =
+                                            parse_config_options(result.get("configOptions"));
+                                        if !opts.is_empty() {
+                                            let _ = updates.send((
+                                                task_id,
+                                                AcpUpdate::ConfigOptions { options: opts },
+                                            ));
+                                        }
+                                    }
+                                    Ok(())
                                 }
+                                Ok(Some(resp)) => Err(format!(
+                                    "agent rejected '{config_id}'.{}",
+                                    acp_error_detail(&resp)
+                                )),
+                                Ok(None) => Err(format!(
+                                    "agent connection closed while setting '{config_id}'"
+                                )),
+                                Err(_) => Err(format!(
+                                    "agent did not answer within {}s while setting '{config_id}'",
+                                    RPC_TIMEOUT.as_secs()
+                                )),
+                            };
+                            if let Err(ref message) = verdict {
+                                eprintln!("[daemon] set_config_option: {message}");
                             }
+                            let _ = reply.send(verdict);
                         });
                     }
                     AcpCommand::Cancel => {
@@ -1299,7 +1350,12 @@ fn send_prompt(
             }
         };
         if response.get("error").is_some() {
-            reporter.report("The agent rejected the ACP session/prompt request.".into());
+            // Carry the agent's own words — without them this is the one failure
+            // in the session that tells the user nothing at all.
+            reporter.report(format!(
+                "The agent rejected the ACP session/prompt request.{}",
+                acp_error_detail(&response)
+            ));
             let _ = kill_tx.send(());
             return;
         }
