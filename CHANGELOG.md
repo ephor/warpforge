@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.4
+
+### Patch Changes
+
+- [#34](https://github.com/ephor/warpforge/pull/34) [`c18d59d`](https://github.com/ephor/warpforge/commit/c18d59d577b4fe9bbf7012455530181de199e575) Thanks [@ephor](https://github.com/ephor)! - Amending a commit now starts from the message you already wrote. Tick amend in the Changes rail and the box fills with the commit you're rewriting, ready to edit or leave as it is — handy when you just forgot a file. Anything you had already typed is kept, and amending without touching the message no longer refuses to commit.
+
+- [#34](https://github.com/ephor/warpforge/pull/34) [`c18d59d`](https://github.com/ephor/warpforge/commit/c18d59d577b4fe9bbf7012455530181de199e575) Thanks [@ephor](https://github.com/ephor)! - Model lists now keep up with your agents. Add a provider or model in the agent itself and Warpforge picks it up next time it starts — or right away with the refresh button next to the agent in Settings, which also shows how many models it currently knows about. Switching model or reasoning effort mid-conversation now shows your pick immediately and tells you if the agent turned it down, instead of leaving you guessing whether the click landed.
+
+- [#34](https://github.com/ephor/warpforge/pull/34) [`c18d59d`](https://github.com/ephor/warpforge/commit/c18d59d577b4fe9bbf7012455530181de199e575) Thanks [@ephor](https://github.com/ephor)! - Long model lists are now searchable. Open the model picker in the composer and a search box sits pinned at the top of the list — type to narrow hundreds of models down to the one you want, clear it with the × button, and press Esc to close. Selectors with only a handful of choices stay as simple lists, so nothing extra gets in the way when you just need to switch reasoning effort.
+
+- [#34](https://github.com/ephor/warpforge/pull/34) [`c18d59d`](https://github.com/ephor/warpforge/commit/c18d59d577b4fe9bbf7012455530181de199e575) Thanks [@ephor](https://github.com/ephor)! - Failures in the Changes rail now arrive as a notification with the reason instead of a block of text wedged under the commit box, and long output — a rejected pre-commit hook, say — comes with a Copy button for the full log. When an agent turns down a request, such as drafting a commit message, the message now includes the reason the agent gave, which is usually enough to tell a wrong model or a missing login from a real failure.
+
+- [`024451f`](https://github.com/ephor/warpforge/commit/024451fae1d1dec2e1758e1379da832c6a818b58) Thanks [@ephor](https://github.com/ephor)! - The model picker no longer closes itself a moment after you open it. Searching a long model list now works the same everywhere Warpforge runs, instead of the menu disappearing before you finish typing.
+
 ## 0.6.3
 
 ### Patch Changes
