@@ -876,6 +876,11 @@ pub enum Command {
         amend: bool,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// Read the task repo's latest commit message (for pre-filling an amend).
+    GitLastCommitMessage {
+        task_id: String,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
     /// Fetch + rebase the task's repo onto its upstream (autostash, rollback).
     GitUpdate {
         task_id: String,
@@ -965,11 +970,13 @@ pub enum Command {
         request_id: String,
         outcome: String,
     },
-    /// Change a session selector (model/mode/…) the agent exposes.
+    /// Change a session selector (model/mode/…) the agent exposes. The reply
+    /// carries the agent's verdict so the UI can undo a rejected pick.
     SessionSetConfigOption {
         task_id: String,
         config_id: String,
         value: String,
+        reply: oneshot::Sender<Result<(), String>>,
     },
     /// Detect installed ACP-capable agents (runs which/where, returns list).
     DetectAgents {
@@ -1005,9 +1012,11 @@ pub enum Command {
         reply: oneshot::Sender<Result<Vec<wire::AccountInfo>, String>>,
     },
     /// Trigger an ACP probe for one agent's model selectors. The probe runs in
-    /// a background task and reports back via [`Command::AgentProbed`].
+    /// a background task and reports back via [`Command::AgentProbed`]. `reply`
+    /// is set only for a user-requested refresh, which waits for the verdict.
     ProbeAgent {
         id: String,
+        reply: Option<oneshot::Sender<Result<(), String>>>,
     },
     /// A probe finished — persist the discovered models and re-emit agents.
     AgentProbed {
@@ -1419,6 +1428,16 @@ impl DaemonHandle {
         })
         .await;
         rx.await.unwrap_or_default()
+    }
+
+    pub async fn git_last_commit_message(&self, task_id: &str) -> Result<String, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitLastCommitMessage {
+            task_id: task_id.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| Err("daemon stopped".into()))
     }
 
     pub async fn git_commit(
@@ -1844,13 +1863,34 @@ impl DaemonHandle {
         rx.await.unwrap_or_else(|_| Err("daemon stopped".into()))
     }
 
-    pub async fn session_set_config_option(&self, task_id: &str, config_id: &str, value: &str) {
+    /// Re-read an agent's selectors from the harness. Resolves when the probe
+    /// finishes so the caller can report a failure instead of silently keeping
+    /// the old list.
+    pub async fn probe_agent(&self, id: &str) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::ProbeAgent {
+            id: id.into(),
+            reply: Some(tx),
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| Err("daemon stopped".into()))
+    }
+
+    pub async fn session_set_config_option(
+        &self,
+        task_id: &str,
+        config_id: &str,
+        value: &str,
+    ) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
         self.send(Command::SessionSetConfigOption {
             task_id: task_id.into(),
             config_id: config_id.into(),
             value: value.into(),
+            reply: tx,
         })
         .await;
+        rx.await.unwrap_or_else(|_| Err("daemon stopped".into()))
     }
 
     pub async fn session_permission(&self, task_id: &str, request_id: &str, outcome: &str) {
@@ -2178,9 +2218,13 @@ impl Daemon {
         // without waiting on live detection; version/install state is layered on
         // later by `agents.detect`.
         let configured_agents = super::agents::reconcile_agents_config(&configured_agents);
+        // Re-probe every enabled agent, cached list or not: the user may have
+        // added a provider inside the harness (a new OpenCode provider, say)
+        // since we last looked, and a cached list would hide it forever. The
+        // cache still serves the UI instantly; the probe refreshes it behind it.
         let probe_candidates: Vec<String> = configured_agents
             .iter()
-            .filter(|a| a.enabled && a.models.is_empty())
+            .filter(|a| a.enabled)
             .map(|a| a.id.clone())
             .collect();
 
@@ -2285,14 +2329,14 @@ impl Daemon {
 
         tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx, acp_rx, policy_rx));
 
-        // Kick off background ACP probes for agents whose cached model list is
-        // stale (enabled + empty `models`). Probes update the cache via
+        // Kick off background ACP probes so every enabled agent's model list is
+        // whatever the harness reports right now. Probes update the cache via
         // `Command::AgentProbed`; cheap to issue even before `run` is ready.
         let probe_tx = handle.cmd_tx.clone();
         if !probe_candidates.is_empty() {
             tokio::spawn(async move {
                 for id in probe_candidates {
-                    let _ = probe_tx.send(Command::ProbeAgent { id }).await;
+                    let _ = probe_tx.send(Command::ProbeAgent { id, reply: None }).await;
                 }
             });
         }
@@ -3484,6 +3528,19 @@ impl Daemon {
                     let _ = reply.send(result);
                 });
             }
+            Command::GitLastCommitMessage { task_id, reply } => {
+                // Read-only, but still shells out — resolve here, run off the loop.
+                let repo = self.task_repo_path(&task_id);
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(p) => super::diff::last_commit_message(&p)
+                            .await
+                            .map_err(|e| e.to_string()),
+                        None => Err(format!("no repo for task {task_id}")),
+                    };
+                    let _ = reply.send(result);
+                });
+            }
             Command::GitUpdate { task_id, reply } => {
                 // git shells out; resolve the repo here and run it off
                 // the loop, reporting what changed back as
@@ -4371,9 +4428,21 @@ impl Daemon {
                 task_id,
                 config_id,
                 value,
+                reply,
             } => {
-                if let Some(handle) = self.sessions.get(&task_id) {
-                    handle.set_config_option(config_id, value);
+                match self.sessions.get(&task_id).cloned() {
+                    Some(handle) => {
+                        // The agent round-trip can take seconds; don't hold the
+                        // actor loop hostage waiting for it.
+                        tokio::spawn(async move {
+                            let _ = reply.send(handle.set_config_option(config_id, value).await);
+                        });
+                    }
+                    None => {
+                        let _ = reply.send(Err(
+                            "this task has no running agent session to configure".into(),
+                        ));
+                    }
                 }
             }
             Command::DetectAgents { reply } => {
@@ -4398,7 +4467,10 @@ impl Daemon {
                     .map(|a| a.id.clone())
                     .collect();
                 for id in probe_ids {
-                    let _ = self.cmd_tx.send(Command::ProbeAgent { id }).await;
+                    let _ = self
+                        .cmd_tx
+                        .send(Command::ProbeAgent { id, reply: None })
+                        .await;
                 }
             }
             Command::ListAccounts { reply } => {
@@ -4440,26 +4512,26 @@ impl Daemon {
                 let result = self.set_active_account(&agent_id, &account_id).await;
                 let _ = reply.send(result);
             }
-            Command::ProbeAgent { id } => {
-                if let Some(agent) = self.configured_agents.iter().find(|a| a.id == id) {
-                    if !agent.enabled || agent.models.is_empty() {
-                        let acp_command = agent.acp_command.clone();
-                        let agent_id = agent.id.clone();
-                        let last_model = agent.last_model.clone();
-                        let cmd_tx = self.cmd_tx.clone();
-                        let cwd = std::env::current_dir()
-                            .unwrap_or_else(|_| std::path::PathBuf::from("."));
-                        tokio::spawn(async move {
-                            let res = super::agent_probe::probe_models(&acp_command, &cwd).await;
-                            let models = match res {
-                                Ok(m) => m,
-                                Err(e) => {
-                                    eprintln!(
-                                        "[daemon] ACP probe failed for agent '{agent_id}': {e}"
-                                    );
-                                    Vec::new()
-                                }
-                            };
+            Command::ProbeAgent { id, reply } => {
+                let agent = self
+                    .configured_agents
+                    .iter()
+                    .find(|a| a.id == id && a.enabled);
+                let Some(agent) = agent else {
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(format!("no enabled agent '{id}'")));
+                    }
+                    return;
+                };
+                let acp_command = agent.acp_command.clone();
+                let agent_id = agent.id.clone();
+                let last_model = agent.last_model.clone();
+                let cmd_tx = self.cmd_tx.clone();
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                tokio::spawn(async move {
+                    let res = super::agent_probe::probe_models(&acp_command, &cwd).await;
+                    let outcome = match res {
+                        Ok(models) => {
                             let _ = cmd_tx
                                 .send(Command::AgentProbed {
                                     id: agent_id,
@@ -4467,15 +4539,30 @@ impl Daemon {
                                     last_model,
                                 })
                                 .await;
-                        });
+                            Ok(())
+                        }
+                        Err(e) => {
+                            eprintln!("[daemon] ACP probe failed for agent '{agent_id}': {e}");
+                            Err(format!("could not read models from {agent_id}: {e}"))
+                        }
+                    };
+                    if let Some(reply) = reply {
+                        let _ = reply.send(outcome);
                     }
-                }
+                });
             }
             Command::AgentProbed {
                 id,
                 models,
                 last_model,
             } => {
+                // A probe that came back with nothing means the agent answered
+                // without advertising selectors — treat it as "no news" rather
+                // than truth, or one flaky probe would wipe a working list and
+                // leave the picker empty until the next restart.
+                if models.is_empty() {
+                    return;
+                }
                 if let Some(agent) = self.configured_agents.iter_mut().find(|a| a.id == id) {
                     agent.models = models.clone();
                     agent.last_model = last_model.clone();

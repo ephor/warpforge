@@ -1,12 +1,14 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DetectedAgent } from "@/protocol";
 
-const { daemonState, detectAgents, installAgent, saveAgents } = vi.hoisted(() => ({
+const { daemonState, detectAgents, installAgent, probeAgent, saveAgents } = vi.hoisted(() => ({
   daemonState: { snapshot: { agents: [] as unknown[] } },
   detectAgents: vi.fn<() => Promise<DetectedAgent[]>>(),
   installAgent: vi.fn<(id: string) => Promise<{ ok: boolean; command: string; output: string }>>(),
+  probeAgent: vi.fn<(id: string) => Promise<void>>(),
   saveAgents: vi.fn<() => Promise<void>>(),
 }));
 
@@ -14,6 +16,7 @@ vi.mock("@/daemon", () => ({
   daemon: {
     detectAgents,
     installAgent,
+    probeAgent,
     saveAgents,
     // The panel seeds its rows from the configured-agent snapshot. getState must
     // return a stable reference or useSyncExternalStore re-renders forever.
@@ -78,5 +81,52 @@ describe("AgentSetupPanel", () => {
     expect(screen.getByText("Copilot")).toBeInTheDocument();
     expect(screen.getByText("update available")).toBeInTheDocument();
     expect(screen.getByText("v0.5.0 → v0.6.0")).toBeInTheDocument();
+  });
+
+  describe("model refresh", () => {
+    const configured = (models: unknown[]) => [
+      {
+        acpCommand: "acp-claude",
+        displayName: "Claude",
+        enabled: true,
+        id: "claude",
+        models,
+      },
+    ];
+    const modelOption = (count: number) => ({
+      category: "model",
+      currentValue: "m0",
+      id: "model",
+      name: "Model",
+      options: Array.from({ length: count }, (_, i) => ({ name: `M${i}`, value: `m${i}` })),
+    });
+
+    it("re-reads the model list on demand and shows how many are cached", async () => {
+      daemonState.snapshot.agents = configured([modelOption(3)]);
+      probeAgent.mockResolvedValue();
+      render(<AgentSetupPanel detected={[agent("claude", { installed: true })]} />);
+
+      expect(screen.getByText(/3 models/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Refresh Claude models" }));
+      expect(probeAgent).toHaveBeenCalledWith("claude");
+    });
+
+    it("reports a failed probe instead of leaving the stale list unexplained", async () => {
+      daemonState.snapshot.agents = configured([modelOption(1)]);
+      probeAgent.mockRejectedValue(new Error("agent exited before replying"));
+      render(<AgentSetupPanel detected={[agent("claude", { installed: true })]} />);
+
+      await userEvent.click(screen.getByRole("button", { name: "Refresh Claude models" }));
+      expect(await screen.findByText(/agent exited before replying/)).toBeInTheDocument();
+    });
+
+    it("offers no refresh for an agent that is not enabled yet", async () => {
+      daemonState.snapshot.agents = [];
+      render(<AgentSetupPanel detected={[agent("claude", { installed: true })]} />);
+
+      expect(
+        screen.queryByRole("button", { name: "Refresh Claude models" }),
+      ).not.toBeInTheDocument();
+    });
   });
 });

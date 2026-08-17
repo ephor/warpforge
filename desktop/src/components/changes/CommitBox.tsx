@@ -12,7 +12,6 @@ interface CommitBoxProps {
   setAmend: (v: boolean) => void;
   busy: boolean;
   generating: boolean;
-  error: string | null;
   canCommit: boolean;
   onCommit: () => void;
   onGenerate: () => void;
@@ -29,7 +28,6 @@ export function CommitBox({
   setAmend,
   busy,
   generating,
-  error,
   canCommit,
   onCommit,
   onGenerate,
@@ -79,7 +77,6 @@ export function CommitBox({
               )}
             </button>
           </div>
-          {error && <p className="text-xs text-destructive">{error}</p>}
           <div className="flex items-center gap-2">
             <label className="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground">
               <input

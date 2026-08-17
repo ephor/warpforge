@@ -1330,11 +1330,20 @@ pub async fn commit(
         );
     }
 
-    // Commit.
+    // Commit. An empty box on amend means "same message, new content" — the UI
+    // allows it deliberately — so reuse the previous message instead of handing
+    // git an empty `-m`, which it refuses.
     let mut ci = Command::new("git");
-    ci.args(["-C", repo, "commit", "-m", message]);
+    ci.args(["-C", repo, "commit"]);
     if amend {
         ci.arg("--amend");
+        if message.trim().is_empty() {
+            ci.arg("--no-edit");
+        } else {
+            ci.args(["-m", message]);
+        }
+    } else {
+        ci.args(["-m", message]);
     }
     let out = ci.output().await?;
     if !out.status.success() {
@@ -1348,6 +1357,20 @@ pub async fn commit(
         bail!("git commit failed: {}", msg.trim());
     }
     Ok(())
+}
+
+/// Full message (subject and body) of the repo's most recent commit. Returns an
+/// empty string when there is nothing to read — a fresh repo with no commits is
+/// not an error for callers, just nothing to amend.
+pub async fn last_commit_message(repo: &str) -> Result<String> {
+    let out = Command::new("git")
+        .args(["-C", repo, "log", "-1", "--pretty=%B"])
+        .output()
+        .await?;
+    if !out.status.success() {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
 }
 
 /// Revert exactly one hunk of one file in the working tree.
@@ -1576,6 +1599,39 @@ mod tests {
         assert!(
             working_diff(repo).await.unwrap().is_empty(),
             "no changes after reject"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An empty message on amend must keep the message being rewritten. Git
+    /// refuses `-m ""`, so this used to abort the commit outright.
+    #[tokio::test]
+    async fn amend_without_a_message_keeps_the_previous_one() {
+        let dir = std::env::temp_dir().join(format!("wf-amend-{}", uuid::Uuid::new_v4()));
+        init_repo(&dir).await;
+        let repo = dir.to_str().unwrap();
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        commit(repo, "feat: first\n\nwith a body", None, false)
+            .await
+            .unwrap();
+
+        std::fs::write(dir.join("b.txt"), "two\n").unwrap();
+        commit(repo, "", None, true).await.unwrap();
+
+        assert_eq!(
+            last_commit_message(repo).await.unwrap(),
+            "feat: first\n\nwith a body"
+        );
+        let log = Command::new("git")
+            .args(["-C", repo, "log", "--oneline"])
+            .output()
+            .await
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&log.stdout).lines().count(),
+            1,
+            "amend rewrites rather than adds"
         );
 
         std::fs::remove_dir_all(&dir).ok();
