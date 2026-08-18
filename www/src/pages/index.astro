@@ -8,7 +8,7 @@ import { config } from "virtual:nimbus/config";
 const agents = [
   { name: "Claude Code", cmd: "claude-agent-acp --acp", logo: "/logos/claude-ai-icon.svg" },
   { name: "Codex", cmd: "codex-acp", logo: "/logos/codex_dark.svg" },
-  { name: "OpenCode", cmd: "opencode acp", logo: "/logos/openCode_dark.svg", tile: true },
+  { name: "OpenCode", cmd: "opencode acp", logo: "/logos/openCode_dark.svg" },
   { name: "Qwen Code", cmd: "qwen --acp", logo: "/logos/qwen_dark.svg" },
   { name: "Goose", cmd: "goose acp", logo: "/logos/goose_dark.png" },
   { name: "Junie", cmd: "junie --acp true", logo: "/logos/junie.svg" },
@@ -43,7 +43,8 @@ const features = [
   {
     icon: "ph:tree-structure",
     title: "One task, several harnesses",
-    body: "The orchestrator can spawn Claude Code, Codex, and OpenCode sub-agents in the same task and track every result.",
+    body: "The orchestrator can spawn Claude Code, Codex, and OpenCode sub-agents in the same task and track every result — no other tool coordinates across harnesses like this.",
+    featured: true,
   },
   {
     icon: "ph:code",
@@ -58,7 +59,8 @@ const features = [
   {
     icon: "ph:flow-arrow",
     title: "Repeatable workflows, not just a prompt",
-    body: "Plan, implement, review, and fix as explicit stages. Warpforge drives the transitions and stops for a human decision.",
+    body: "Plan, implement, review, and fix as explicit stages, each on its own agent and model. The daemon drives the transitions — not a manager LLM — and stops for a human decision at the review limit.",
+    featured: true,
   },
   {
     icon: "ph:git-branch",
@@ -125,11 +127,12 @@ const features = [
               <Icon name="ph:check-circle" size={14} />
               Open source · Local-first · macOS
             </p>
-            <h1 class="wf-h1">Run parallel coding agents<br />without losing the workspace.</h1>
+            <h1 class="wf-h1">One task, every harness,<br />one place to review it.</h1>
             <p class="wf-sub">
-              The operating layer around your coding agents — conversations, project runtime, live
-              services, and human review, all in one place. Claude Code, Codex, and OpenCode still do
-              the coding; Warpforge keeps you from managing five terminals to watch them do it.
+              Warpforge is an <strong>agentic development environment</strong>: orchestrator, project
+              runtime, and review surface in one local app — not a wrapper around a single model.
+              Claude Code, Codex, and OpenCode still do the coding; Warpforge is where you run,
+              coordinate, and review all of it.
             </p>
             <div class="wf-cta-row wf-center">
               <a href="https://github.com/ephor/warpforge/releases/latest" class="wf-btn wf-btn-primary wf-btn-lg">
@@ -178,7 +181,7 @@ const features = [
               {
                 agents.map((agent) => (
                   <div class="wf-agent-card">
-                    <span class:list={["wf-agent-logo", agent.tile && "wf-agent-logo-tile"]}>
+                    <span class="wf-agent-logo">
                       <img src={agent.logo} alt="" width="20" height="20" loading="lazy" />
                     </span>
                     <div>
@@ -226,20 +229,20 @@ const features = [
         <!-- Review split -->
         <section class="wf-section" id="workflow">
           <div class="wf-shell wf-split">
-            <div class="wf-window wf-window-small">
-              <div class="wf-window-bar">
-                <span class="wf-dot wf-dot-r"></span>
-                <span class="wf-dot wf-dot-y"></span>
-                <span class="wf-dot wf-dot-g"></span>
-                <span class="wf-window-title">Pipeline — implement → review ⇄ fix</span>
+            <div class="wf-shot-wrap">
+              <div class="wf-glow wf-glow-sm" aria-hidden="true"></div>
+              <div class="wf-window wf-window-small wf-window-minimal">
+                <div class="wf-window-bar">
+                  <span class="wf-window-title wf-window-title-left">Pipeline — implement → review ⇄ fix</span>
+                </div>
+                <img
+                  src="/images/workflow-pipeline-crop.png"
+                  alt="Workflow pipeline stages (implement, reviewer) marked done, with the reviewer's verdict and check results"
+                  width="940"
+                  height="660"
+                  loading="lazy"
+                />
               </div>
-              <img
-                src="/images/workflow-pipeline.png"
-                alt="Workflow pipeline with implement, review, and fix stages and a reviewer verdict"
-                width="2000"
-                height="1256"
-                loading="lazy"
-              />
             </div>
             <div class="wf-split-copy">
               <h2 class="wf-h2">From agent output to a reviewed branch.</h2>
@@ -258,16 +261,20 @@ const features = [
         </section>
 
         <!-- Feature grid -->
-        <section class="wf-section">
+        <section class="wf-section wf-section-spine">
           <div class="wf-shell">
             <p class="wf-eyebrow wf-eyebrow-center">Why Warpforge</p>
-            <h2 class="wf-h2 wf-center">Coordination is the problem. This is the fix.</h2>
+            <p class="wf-spine">
+              Other tools give you an agent, or a diff viewer, or a task board. Warpforge is
+              the <span class="wf-spine-accent">orchestrator</span>, the <span class="wf-spine-accent">runtime</span>,
+              and the <span class="wf-spine-accent">review surface</span> — in one local app.
+            </p>
             <div class="wf-feature-grid">
               {
                 features.map((f) => (
-                  <div class="wf-feature-card">
+                  <div class:list={["wf-feature-card", f.featured && "wf-feature-card-featured"]}>
                     <div class="wf-feature-icon">
-                      <Icon name={f.icon} size={20} />
+                      <Icon name={f.icon} size={f.featured ? 24 : 20} />
                     </div>
                     <h3>{f.title}</h3>
                     <p>{f.body}</p>
@@ -304,12 +311,9 @@ const features = [
                 </a>
               </div>
             </div>
-            <div class="wf-window wf-window-small wf-terminal">
+            <div class="wf-window wf-window-small wf-window-minimal wf-terminal">
               <div class="wf-window-bar">
-                <span class="wf-dot wf-dot-r"></span>
-                <span class="wf-dot wf-dot-y"></span>
-                <span class="wf-dot wf-dot-g"></span>
-                <span class="wf-window-title">~/code/my-app</span>
+                <span class="wf-window-title wf-window-title-left">~/code/my-app</span>
               </div>
               <pre class="wf-term"><code><span class="wf-term-prompt">$</span> warpforge add ~/code/my-app
 <span class="wf-term-out">✓ registered my-app · ports 4000–4099</span>
@@ -325,9 +329,9 @@ lingoverse 4100–4199   1 service running</span>
 
         <!-- Final CTA -->
         <section class="wf-cta-band">
-          <div class="wf-dotgrid" aria-hidden="true"></div>
+          <div class="wf-glow wf-glow-band" aria-hidden="true"></div>
           <div class="wf-shell wf-cta-band-inner">
-            <h2 class="wf-h1 wf-h1-tight">Stop juggling terminals.<br />Start shipping.</h2>
+            <h2 class="wf-h1 wf-h1-tight">Stop babysitting agent panes.<br />Start reviewing one diff.</h2>
             <p class="wf-sub wf-center">Free, open source, and it runs entirely on your machine.</p>
             <div class="wf-cta-row wf-center">
               <a href="https://github.com/ephor/warpforge/releases/latest" class="wf-btn wf-btn-primary wf-btn-lg">
@@ -588,6 +592,10 @@ lingoverse 4100–4199   1 service running</span>
     line-height: 1.6;
     color: var(--wf-fg-muted);
   }
+  .wf-sub strong {
+    color: var(--wf-fg);
+    font-weight: 600;
+  }
   .wf-sub-left {
     margin-inline: 0;
   }
@@ -622,6 +630,20 @@ lingoverse 4100–4199   1 service running</span>
     background: radial-gradient(ellipse at center, color-mix(in oklch, var(--wf-accent) 28%, transparent), transparent 70%);
     filter: blur(40px);
     pointer-events: none;
+  }
+  .wf-glow-sm {
+    inset: -15% 15% auto 15%;
+    height: 50%;
+    background: radial-gradient(ellipse at center, color-mix(in oklch, var(--wf-accent) 16%, transparent), transparent 70%);
+    filter: blur(32px);
+  }
+  .wf-glow-band {
+    inset: -20% 20% auto 20%;
+    height: 70%;
+    background: radial-gradient(ellipse at center, color-mix(in oklch, var(--wf-accent) 14%, transparent), transparent 72%);
+  }
+  .wf-shot-wrap {
+    position: relative;
   }
   .wf-window {
     position: relative;
@@ -665,8 +687,26 @@ lingoverse 4100–4199   1 service running</span>
     color: var(--wf-fg-faint);
     font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
   }
+  .wf-window-title-left {
+    margin-inline: 0;
+    padding-right: 0;
+  }
   .wf-window-small {
     max-width: 100%;
+  }
+  .wf-window-minimal .wf-window-bar {
+    padding-block: 0.5rem;
+    background: transparent;
+  }
+  .wf-window-minimal .wf-window-title-left::before {
+    content: "";
+    display: inline-block;
+    width: 0.4rem;
+    height: 0.4rem;
+    margin-right: 0.5rem;
+    border-radius: 999px;
+    background: var(--wf-accent);
+    vertical-align: middle;
   }
 
   /* ---- Sections ---- */
@@ -708,20 +748,13 @@ lingoverse 4100–4199   1 service running</span>
     width: 2rem;
     height: 2rem;
     border-radius: 0.5rem;
+    background: color-mix(in oklch, var(--wf-fg) 6%, transparent);
     flex-shrink: 0;
   }
   .wf-agent-logo img {
     width: 1.25rem;
     height: 1.25rem;
     object-fit: contain;
-  }
-  .wf-agent-logo-tile {
-    background: #131010;
-    overflow: hidden;
-  }
-  .wf-agent-logo-tile img {
-    width: 100%;
-    height: 100%;
   }
   .wf-agent-name {
     font-size: 0.875rem;
@@ -821,12 +854,30 @@ lingoverse 4100–4199   1 service running</span>
     }
   }
 
+  /* ---- Spine statement (positioning-critical section only) ---- */
+  .wf-section-spine {
+    padding-block: 6rem 5.5rem;
+  }
+  .wf-spine {
+    margin: 0 auto 3rem;
+    max-width: 42rem;
+    text-align: center;
+    font-size: clamp(1.375rem, 2.8vw, 1.875rem);
+    font-weight: 550;
+    line-height: 1.45;
+    letter-spacing: -0.01em;
+    color: var(--wf-fg-muted);
+  }
+  .wf-spine-accent {
+    color: var(--wf-fg);
+    font-weight: 650;
+  }
+
   /* ---- Feature grid ---- */
   .wf-feature-grid {
     display: grid;
     grid-template-columns: 1fr;
     gap: 1rem;
-    margin-top: 2.75rem;
   }
   @media (min-width: 640px) {
     .wf-feature-grid {
@@ -844,6 +895,16 @@ lingoverse 4100–4199   1 service running</span>
     border: 1px solid var(--wf-border);
     background: var(--wf-card);
   }
+  .wf-feature-card-featured {
+    padding: 1.75rem;
+    background: color-mix(in oklch, var(--wf-accent) 6%, var(--wf-card));
+    border-color: color-mix(in oklch, var(--wf-accent) 30%, var(--wf-border));
+  }
+  @media (min-width: 640px) {
+    .wf-feature-card-featured {
+      grid-column: span 2;
+    }
+  }
   .wf-feature-icon {
     display: inline-flex;
     align-items: center;
@@ -855,17 +916,28 @@ lingoverse 4100–4199   1 service running</span>
     color: var(--wf-accent);
     margin-bottom: 0.875rem;
   }
+  .wf-feature-card-featured .wf-feature-icon {
+    width: 2.75rem;
+    height: 2.75rem;
+    background: color-mix(in oklch, var(--wf-accent) 22%, transparent);
+  }
   .wf-feature-card h3 {
     margin: 0 0 0.375rem;
     font-size: 0.9375rem;
     font-weight: 600;
     color: var(--wf-fg);
   }
+  .wf-feature-card-featured h3 {
+    font-size: 1.0625rem;
+  }
   .wf-feature-card p {
     margin: 0;
     font-size: 0.8438rem;
     line-height: 1.55;
     color: var(--wf-fg-muted);
+  }
+  .wf-feature-card-featured p {
+    font-size: 0.9375rem;
   }
 
   /* ---- Terminal ---- */
