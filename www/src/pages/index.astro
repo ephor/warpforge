@@ -6,14 +6,32 @@ import NimbusHead from "@cloudflare/nimbus-docs/components/NimbusHead.astro";
 import { config } from "virtual:nimbus/config";
 
 const agents = [
-  { name: "Claude Code", cmd: "claude-agent-acp --acp", icon: "ph:sparkle" },
-  { name: "Codex", cmd: "codex-acp", icon: "ph:terminal-window" },
-  { name: "OpenCode", cmd: "opencode acp", icon: "ph:code" },
-  { name: "Qwen Code", cmd: "qwen --acp", icon: "ph:lightning" },
-  { name: "Goose", cmd: "goose acp", icon: "ph:bird" },
-  { name: "Junie", cmd: "junie --acp true", icon: "ph:graduation-cap" },
-  { name: "Cursor", cmd: "cursor-agent-acp", icon: "ph:cursor-click" },
-  { name: "Pi", cmd: "pi-acp", icon: "ph:asterisk" },
+  { name: "Claude Code", cmd: "claude-agent-acp --acp", logo: "/logos/claude-ai-icon.svg" },
+  { name: "Codex", cmd: "codex-acp", logo: "/logos/codex_dark.svg" },
+  { name: "OpenCode", cmd: "opencode acp", logo: "/logos/openCode_dark.svg", tile: true },
+  { name: "Qwen Code", cmd: "qwen --acp", logo: "/logos/qwen_dark.svg" },
+  { name: "Goose", cmd: "goose acp", logo: "/logos/goose_dark.png" },
+  { name: "Junie", cmd: "junie --acp true", logo: "/logos/junie.svg" },
+  { name: "Cursor", cmd: "cursor-agent-acp", logo: "/logos/cursor_dark.svg" },
+  { name: "Pi", cmd: "pi-acp", logo: "/logos/pi_dark.svg" },
+];
+
+const drafted = [
+  {
+    icon: "ph:tag",
+    title: "Task titles",
+    body: "Drop a rough prompt in — a short, imperative title shows up on the task within seconds. Nothing to name yourself.",
+  },
+  {
+    icon: "ph:git-commit",
+    title: "Commit messages",
+    body: "Conventional Commits, written from the actual diff, not the prompt. Edit before you commit, or don't.",
+  },
+  {
+    icon: "ph:git-pull-request",
+    title: "Pull request descriptions",
+    body: "Title and Markdown body drafted from the branch's outgoing commits and their combined diff.",
+  },
 ];
 
 const features = [
@@ -23,9 +41,24 @@ const features = [
     body: "Running, blocked, interrupted, and review-ready sessions across every project, with live conversation previews.",
   },
   {
-    icon: "ph:path",
-    title: "The environment travels with the task",
-    body: "Agents get live service URLs, resolved ports, and project context instead of guessing how to run the app.",
+    icon: "ph:tree-structure",
+    title: "One task, several harnesses",
+    body: "The orchestrator can spawn Claude Code, Codex, and OpenCode sub-agents in the same task and track every result.",
+  },
+  {
+    icon: "ph:code",
+    title: "An editor, not just a diff",
+    body: "Full file tree, CodeMirror syntax highlighting, inline edits — read and fix code without leaving the task.",
+  },
+  {
+    icon: "ph:kanban",
+    title: "Board and Mission Control views",
+    body: "Kanban grouping when you're planning, live session tiles when you're watching agents work.",
+  },
+  {
+    icon: "ph:flow-arrow",
+    title: "Repeatable workflows, not just a prompt",
+    body: "Plan, implement, review, and fix as explicit stages. Warpforge drives the transitions and stops for a human decision.",
   },
   {
     icon: "ph:git-branch",
@@ -33,14 +66,9 @@ const features = [
     body: "A task can run in its own git worktree while staying attached to the same project.",
   },
   {
-    icon: "ph:tree-structure",
-    title: "A lead agent when one session isn't enough",
-    body: "An orchestrator delegates bounded work to sub-agents — every child task stays visible, nothing runs in a black box.",
-  },
-  {
-    icon: "ph:flow-arrow",
-    title: "Repeatable workflows, not just a prompt",
-    body: "Plan, implement, review, and fix as explicit stages. Warpforge drives the transitions and stops for a human decision.",
+    icon: "ph:path",
+    title: "The environment travels with the task",
+    body: "Agents get live service URLs, resolved ports, and project context instead of guessing how to run the app.",
   },
   {
     icon: "ph:hand-palm",
@@ -150,7 +178,9 @@ const features = [
               {
                 agents.map((agent) => (
                   <div class="wf-agent-card">
-                    <Icon name={agent.icon} size={20} class="wf-agent-icon" />
+                    <span class:list={["wf-agent-logo", agent.tile && "wf-agent-logo-tile"]}>
+                      <img src={agent.logo} alt="" width="20" height="20" loading="lazy" />
+                    </span>
                     <div>
                       <div class="wf-agent-name">{agent.name}</div>
                       <div class="wf-agent-cmd">{agent.cmd}</div>
@@ -165,6 +195,31 @@ const features = [
               <li><Icon name="ph:check-circle" size={16} />One-click install &amp; update</li>
               <li><Icon name="ph:check-circle" size={16} />Any ACP-compatible agent, custom command</li>
             </ul>
+          </div>
+        </section>
+
+        <!-- Drafted for you -->
+        <section class="wf-section">
+          <div class="wf-shell">
+            <p class="wf-eyebrow wf-eyebrow-center">Nothing left blank</p>
+            <h2 class="wf-h2 wf-center">Drafted for you, not typed by you.</h2>
+            <p class="wf-sub wf-center">
+              Three things every workflow makes you write by hand, that Warpforge writes for you —
+              you stay the editor, not the author.
+            </p>
+            <div class="wf-drafted-grid">
+              {
+                drafted.map((d) => (
+                  <div class="wf-feature-card">
+                    <div class="wf-feature-icon">
+                      <Icon name={d.icon} size={20} />
+                    </div>
+                    <h3>{d.title}</h3>
+                    <p>{d.body}</p>
+                  </div>
+                ))
+              }
+            </div>
           </div>
         </section>
 
@@ -646,9 +701,27 @@ lingoverse 4100–4199   1 service running</span>
     border-color: var(--wf-fg-faint);
     background: var(--wf-card-hover);
   }
-  .wf-agent-icon {
-    color: var(--wf-accent);
+  .wf-agent-logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.5rem;
     flex-shrink: 0;
+  }
+  .wf-agent-logo img {
+    width: 1.25rem;
+    height: 1.25rem;
+    object-fit: contain;
+  }
+  .wf-agent-logo-tile {
+    background: #131010;
+    overflow: hidden;
+  }
+  .wf-agent-logo-tile img {
+    width: 100%;
+    height: 100%;
   }
   .wf-agent-name {
     font-size: 0.875rem;
@@ -735,6 +808,19 @@ lingoverse 4100–4199   1 service running</span>
     border: 1px solid var(--wf-border);
   }
 
+  /* ---- Drafted grid (3-up, always) ---- */
+  .wf-drafted-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1rem;
+    margin-top: 2.75rem;
+  }
+  @media (min-width: 720px) {
+    .wf-drafted-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
   /* ---- Feature grid ---- */
   .wf-feature-grid {
     display: grid;
@@ -749,7 +835,7 @@ lingoverse 4100–4199   1 service running</span>
   }
   @media (min-width: 1024px) {
     .wf-feature-grid {
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
     }
   }
   .wf-feature-card {
