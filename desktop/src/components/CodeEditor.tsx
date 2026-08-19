@@ -24,6 +24,7 @@ import { Markdown } from "./Markdown";
 type SaveStatus = "clean" | "unsaved" | "saved";
 
 const isMarkdownPath = (path: string) => /\.(md|markdown|mdx)$/i.test(path);
+const isHtmlPath = (path: string) => /\.html?$/i.test(path);
 const LSP_LABELS: Record<string, string> = {
   typescript: "TypeScript/JavaScript",
   rust: "Rust",
@@ -111,10 +112,11 @@ export function CodeEditor({
     y: number;
   } | null>(null);
   const markdown = isMarkdownPath(doc.path);
+  const htmlDoc = isHtmlPath(doc.path);
   const svgImage = isSvgPath(doc.path);
   const binaryImage = isBinaryImagePath(doc.path);
   const themeMode = useThemeMode();
-  const showPreview = (markdown || svgImage) && preview;
+  const showPreview = (markdown || htmlDoc || svgImage) && preview;
   const previewText = text;
   const isReadOnly = binaryImage || svgImage;
 
@@ -465,7 +467,7 @@ export function CodeEditor({
             </>
           ) : null}
         </span>
-        {(markdown || svgImage) && (
+        {(markdown || htmlDoc || svgImage) && (
           <button
             type="button"
             onClick={() => setPreview((p) => !p)}
@@ -599,7 +601,14 @@ export function CodeEditor({
             )}
             {showPreview && (
               <div className="h-full overflow-auto px-4 py-3">
-                {svgImage ? (
+                {htmlDoc ? (
+                  <iframe
+                    title={doc.path}
+                    srcDoc={previewText}
+                    sandbox=""
+                    className="h-full w-full border-0 bg-white"
+                  />
+                ) : svgImage ? (
                   <div className="flex h-full items-center justify-center">
                     {doc.newDataBase64 ? (
                       <img
