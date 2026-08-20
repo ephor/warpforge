@@ -276,9 +276,35 @@ spawn_agent (or spawn_workflow for review-worthy changes), tell the user what \
 you dispatched, and continue the conversation. The user can keep messaging you \
 while sub-agents and pipelines run.";
 
-/// The warpforge MCP bridge config handed to an orchestrator session so the
-/// agent can call spawn_agent / read_inbox back into this daemon.
-fn orchestrator_mcp_servers(task_id: &str, project: &str) -> Vec<serde_json::Value> {
+/// System preamble prepended to a plain task session's first prompt. The task's
+/// dev services run under the warpforge daemon, so their stdout and status are
+/// invisible to the agent's own shell — these MCP tools are how the agent sees
+/// the runtime it is supposed to be working against.
+const RUNTIME_MCP_SYSTEM: &str = "\
+You have these warpforge MCP tools for observing and controlling the project's \
+dev runtime (services and port-forwards are managed by the warpforge daemon, so \
+their stdout and lifecycle are NOT visible to your shell):\n\
+- list_runtime(): list the project's running services and port-forwards with \
+their status and allocated ports. Call it first to see what is up and which \
+ports to hit.\n\
+- read_service_logs(service, filter?, after?, limit?): read a window of a \
+service's stdout/stderr. Use it to diagnose crashes or check request output. \
+Pass a case-insensitive `filter` substring to find specific lines (errors, \
+request ids); paginate old history with `after` (offset into the buffer) and \
+`limit` (page size, default 100). read_portforward_logs(name) does the same \
+for a port-forward.\n\
+- service_start(service) / service_stop(service) / service_restart(service): \
+start, stop, or restart a service. These dispatch asynchronously and return \
+immediately — follow up with read_service_logs to watch the outcome.\n\
+- portforward_start(name) / portforward_stop(name): start or stop a \
+port-forward.";
+
+/// The warpforge MCP bridge config handed to every ACP session so the agent
+/// can call back into this daemon (read service logs, restart a service,
+/// and — for orchestrator-chat sessions — spawn_agent / read_inbox). The
+/// `WF_MODE` env lets the bridge expose the orchestrator-only tools only to
+/// sessions that are actually orchestrators.
+fn mcp_servers(task_id: &str, project: &str, is_orchestrator: bool) -> Vec<serde_json::Value> {
     let exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.to_str().map(String::from))
@@ -288,8 +314,9 @@ fn orchestrator_mcp_servers(task_id: &str, project: &str) -> Vec<serde_json::Val
         "command": exe,
         "args": ["__mcp-orchestrator"],
         "env": [
-            { "name": "WF_ORCH_TASK", "value": task_id },
-            { "name": "WF_ORCH_PROJECT", "value": project },
+            { "name": "WF_TASK", "value": task_id },
+            { "name": "WF_PROJECT", "value": project },
+            { "name": "WF_MODE", "value": if is_orchestrator { "orchestrator" } else { "single" } },
         ],
     })]
 }
@@ -5349,14 +5376,16 @@ impl Daemon {
                 }
             }
         }
-        // An orchestrator-chat session gets the warpforge MCP bridge (spawn_agent
-        // / read_inbox tools) and an orchestrator system preamble; a plain task
-        // gets neither.
+        // Every session gets the warpforge MCP bridge (read service logs,
+        // restart a service, …). An orchestrator-chat session additionally gets
+        // the orchestrator system preamble and, via WF_MODE=orchestrator, the
+        // spawn_agent / read_inbox tools. A plain task gets the core tools only.
         let is_orchestrator = self
             .tasks
             .get(task_id)
             .is_some_and(|t| t.tags.iter().any(|x| x == "orchestrator-chat"));
-        let (mcp_servers, base_prompt) = if is_orchestrator {
+        let mcp_servers = mcp_servers(task_id, project, is_orchestrator);
+        let base_prompt = if is_orchestrator {
             let agents = self.available_agent_ids();
             let roster = if agents.is_empty() {
                 String::new()
@@ -5375,12 +5404,9 @@ impl Daemon {
                     workflows.join(", ")
                 )
             };
-            (
-                orchestrator_mcp_servers(task_id, project),
-                format!("{ORCHESTRATOR_SYSTEM}{roster}{workflow_roster}\n\n{prompt}"),
-            )
+            format!("{ORCHESTRATOR_SYSTEM}{roster}{workflow_roster}\n\n{RUNTIME_MCP_SYSTEM}\n\n{prompt}")
         } else {
-            (Vec::new(), prompt.to_string())
+            format!("{RUNTIME_MCP_SYSTEM}\n\n{prompt}")
         };
         let full_prompt = match include_runtime_context
             .then(|| self.runtime_context(project))

@@ -1055,6 +1055,20 @@ async fn dispatch(
             let lines = handle.portforward_logs(&project, &name, after, limit).await;
             Ok(json!({ "lines": lines }))
         }
+        RuntimeList { project } => {
+            let snapshot = handle.snapshot().await;
+            let services: Vec<_> = snapshot
+                .services
+                .into_iter()
+                .filter(|s| s.project == project)
+                .collect();
+            let portforwards: Vec<_> = snapshot
+                .portforwards
+                .into_iter()
+                .filter(|pf| pf.project == project)
+                .collect();
+            Ok(json!({ "services": services, "portforwards": portforwards }))
+        }
         // ── Legacy PTY terminals (the TUI's live agent panes) ──
         TerminalSpawn {
             project,
@@ -1494,6 +1508,7 @@ fn method_runs_concurrently(method: &wire::Method) -> bool {
             | GitLastCommitMessage { .. }
             | ServiceLogs { .. }
             | PortForwardLogs { .. }
+            | RuntimeList { .. }
             | TaskListWorktrees { .. }
             | SessionsList { .. }
             | OrchestratorListAgents { .. }
@@ -1514,6 +1529,7 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | StateSubscribe { .. }
             | ServiceLogs { .. }
             | PortForwardLogs { .. }
+            | RuntimeList { .. }
             | TaskListWorktrees { .. }
             | SessionsList { .. }
             | OrchestratorListAgents { .. }
