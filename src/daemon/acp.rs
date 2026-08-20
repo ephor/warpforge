@@ -1632,6 +1632,12 @@ fn tool_title(update: &Value, id: &str, kind: &str) -> String {
         .map(str::trim)
         .filter(|title| !title.is_empty() && *title != id)
     {
+        // MCP tools arrive titled `mcp__<server>__<tool>`. Render a human label
+        // (and surface the spawned agent for spawn_agent) so the UI, toasts and
+        // permission prompts don't show the raw underscore name.
+        if let Some(pretty) = pretty_mcp_tool_title(title, update) {
+            return pretty;
+        }
         return title.to_string();
     }
 
@@ -1675,6 +1681,67 @@ fn tool_title(update: &Value, id: &str, kind: &str) -> String {
         _ => "Use tool",
     }
     .to_string()
+}
+
+/// MCP tools arrive titled `mcp__<server>__<tool>`. Turn that into a human
+/// label; for `spawn_agent` also surface which agent + task is being dispatched
+/// so the orchestrator's spawn is visible without expanding the tool. Returns
+/// `None` when the title is not an MCP-shaped tool name.
+fn pretty_mcp_tool_title(title: &str, update: &Value) -> Option<String> {
+    let mut parts = title.splitn(3, "__");
+    if parts.next()? != "mcp" {
+        return None;
+    }
+    parts.next()?; // server
+    let tool = parts.next()?;
+    if tool == "spawn_agent" {
+        let raw = update.get("rawInput");
+        let agent = raw.and_then(|i| input_value(i, &["agent", "name"]));
+        let task = raw.and_then(|i| input_value(i, &["task", "description"]));
+        return Some(match (agent, task) {
+            (Some(a), Some(t)) => format!("Spawn agent {a}: {t}"),
+            (Some(a), None) => format!("Spawn agent {a}"),
+            (None, Some(t)) => format!("Spawn agent: {t}"),
+            (None, None) => "Spawn agent".to_string(),
+        });
+    }
+    Some(pretty_mcp_tool_label(title))
+}
+
+/// Render `mcp__<server>__<tool>` as `Server · Tool` (snake_case → words,
+/// title-cased). Falls back to the original string when not MCP-shaped.
+pub fn pretty_mcp_tool_label(title: &str) -> String {
+    let mut parts = title.splitn(3, "__");
+    if parts.next() != Some("mcp") {
+        return title.to_string();
+    }
+    let Some(server) = parts.next() else {
+        return title.to_string();
+    };
+    let Some(tool) = parts.next() else {
+        return title.to_string();
+    };
+    let server_title = title_case(server);
+    let tool_title = title_case(&snake_to_words(tool));
+    if server_title.is_empty() || tool_title.is_empty() {
+        return title.to_string();
+    }
+    format!("{server_title} · {tool_title}")
+}
+
+fn snake_to_words(s: &str) -> String {
+    s.split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn title_case(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 fn input_value(input: &Value, keys: &[&str]) -> Option<String> {
@@ -2065,8 +2132,13 @@ fn parse_permission(params: &Value) -> (String, Vec<String>, HashMap<String, Str
         .get("toolCall")
         .and_then(|t| t.get("title"))
         .and_then(|t| t.as_str())
-        .unwrap_or("Permission request")
-        .to_string();
+        .unwrap_or("Permission request");
+    // Prettify an MCP `mcp__server__tool` title for the permission line too.
+    let title = if title.contains("__") {
+        pretty_mcp_tool_label(title)
+    } else {
+        title.to_string()
+    };
 
     let mut map: HashMap<String, String> = HashMap::new();
     if let Some(opts) = params.get("options").and_then(|o| o.as_array()) {
@@ -2098,6 +2170,40 @@ fn parse_permission(params: &Value) -> (String, Vec<String>, HashMap<String, Str
 mod tests {
     use super::*;
     use crate::daemon::prompt::{PreparedPrompt, PromptContent};
+
+    #[test]
+    fn mcp_tool_titles_render_as_human_labels() {
+        assert_eq!(
+            pretty_mcp_tool_label("mcp__warpforge__list_runtime"),
+            "Warpforge · List runtime"
+        );
+        assert_eq!(
+            pretty_mcp_tool_label("mcp__warpforge__read_service_logs"),
+            "Warpforge · Read service logs"
+        );
+        // Not MCP-shaped — leave untouched.
+        assert_eq!(pretty_mcp_tool_label("Read file"), "Read file");
+    }
+
+    #[test]
+    fn spawn_agent_title_surfaces_the_agent_and_task() {
+        let update = json!({
+            "title": "mcp__warpforge__spawn_agent",
+            "rawInput": { "agent": "codex", "task": "Refactor the auth module" }
+        });
+        let title = tool_title(&update, "call-1", "other");
+        assert_eq!(title, "Spawn agent codex: Refactor the auth module");
+    }
+
+    #[test]
+    fn permission_title_prettifies_mcp_names() {
+        let (title, options, _map) = parse_permission(&json!({
+            "toolCall": { "title": "mcp__warpforge__service_start" },
+            "options": []
+        }));
+        assert_eq!(title, "Warpforge · Service start");
+        assert!(options.is_empty());
+    }
 
     fn test_process_guard() -> Arc<ProcessGuard> {
         let (kill_tx, _kill_rx) = mpsc::unbounded_channel();
