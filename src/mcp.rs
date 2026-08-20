@@ -48,12 +48,22 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// Entry point for the hidden `wf __mcp-orchestrator` subcommand.
 pub async fn run() -> Result<()> {
-    let parent_task = std::env::var("WF_ORCH_TASK")
-        .context("WF_ORCH_TASK not set — this binary is spawned by the daemon")?;
-    let project = std::env::var("WF_ORCH_PROJECT").unwrap_or_default();
+    let parent_task = std::env::var("WF_TASK")
+        .or_else(|_| std::env::var("WF_ORCH_TASK"))
+        .context("WF_TASK not set — this binary is spawned by the daemon")?;
+    let project = std::env::var("WF_PROJECT")
+        .or_else(|_| std::env::var("WF_ORCH_PROJECT"))
+        .unwrap_or_default();
+    let is_orchestrator =
+        std::env::var("WF_MODE").as_deref() == Ok("orchestrator") || parent_task_env_is_orch();
 
     log(&format!(
-        "starting: parent_task={parent_task} project={project}"
+        "starting: parent_task={parent_task} project={project} mode={}",
+        if is_orchestrator {
+            "orchestrator"
+        } else {
+            "single"
+        }
     ));
     // Serve MCP immediately and connect to the daemon lazily on the first tool
     // call. If we connected up-front and the daemon were briefly unreachable,
@@ -63,7 +73,13 @@ pub async fn run() -> Result<()> {
         ws: None,
         next_id: 1,
     };
-    serve_stdio(client, parent_task, project).await
+    serve_stdio(client, parent_task, project, is_orchestrator).await
+}
+
+/// A legacy daemon sets `WF_ORCH_TASK` but not `WF_MODE`; treat that as an
+/// orchestrator session so the old env still yields the orchestrator tools.
+fn parent_task_env_is_orch() -> bool {
+    std::env::var("WF_MODE").is_err() && std::env::var("WF_ORCH_TASK").is_ok()
 }
 
 /// Diagnostics to stderr (the ACP agent may forward this to the daemon's
@@ -157,7 +173,12 @@ impl DaemonClient {
 }
 
 /// The MCP stdio loop: newline-delimited JSON-RPC 2.0 with the agent.
-async fn serve_stdio(mut client: DaemonClient, parent_task: String, project: String) -> Result<()> {
+async fn serve_stdio(
+    mut client: DaemonClient,
+    parent_task: String,
+    project: String,
+    is_orchestrator: bool,
+) -> Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
 
@@ -178,13 +199,20 @@ async fn serve_stdio(mut client: DaemonClient, parent_task: String, project: Str
                 "protocolVersion": MCP_VERSION,
                 "capabilities": { "tools": {} },
                 "serverInfo": {
-                    "name": "warpforge-orchestrator",
+                    "name": "warpforge",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
             })),
-            "tools/list" => Some(json!({ "tools": tool_defs() })),
+            "tools/list" => Some(json!({ "tools": tool_defs(is_orchestrator) })),
             "tools/call" => Some(
-                match handle_tool_call(&mut client, &parent_task, &project, req.get("params")).await
+                match handle_tool_call(
+                    &mut client,
+                    &parent_task,
+                    &project,
+                    is_orchestrator,
+                    req.get("params"),
+                )
+                .await
                 {
                     Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
                     Err(e) => json!({
@@ -207,7 +235,191 @@ async fn serve_stdio(mut client: DaemonClient, parent_task: String, project: Str
     Ok(())
 }
 
-fn tool_defs() -> Value {
+fn tool_defs(is_orchestrator: bool) -> Value {
+    let mut tools: Vec<Value> = vec![
+        json!({
+            "name": "list_runtime",
+            "description": "List the project's dev services and port-forwards with their \
+                live status and allocated ports. Use this to discover what is running \
+                (names, ports, URLs) before reading logs or restarting a service.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "read_service_logs",
+            "description": "Read a window of a dev service's retained stdout/stderr log \
+                lines. Use to diagnose why a service failed, inspect request output, or \
+                tail recent output. Fetch is non-destructive; read with a fresh call to \
+                see newer lines (log_seq advances as the service runs).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "Service name as declared in .warpforge.yaml (see list_runtime)."
+                    },
+                    "after": {
+                        "type": "integer",
+                        "description": "Index of the first retained line to return. 0 = from the oldest retained line. It is an index into the unfiltered ring buffer, NOT a log sequence number. To page, advance it by the limit you used."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of lines to return (newest kept). Defaults to 100."
+                    },
+                    "filter": {
+                        "type": "string",
+                        "description": "Optional case-insensitive substring; only matching lines are returned. The filter applies after the window is taken."
+                    }
+                },
+                "required": ["service"]
+            }
+        }),
+        json!({
+            "name": "read_portforward_logs",
+            "description": "Read a window of a port-forward's retained log lines.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Port-forward name as declared in .warpforge.yaml (see list_runtime)."
+                    },
+                    "after": {
+                        "type": "integer",
+                        "description": "Index of the first retained line to return. 0 = from the oldest retained line. It is an index into the unfiltered ring buffer, NOT a log sequence number. To page, advance it by the limit you used."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of lines to return (newest kept). Defaults to 100."
+                    },
+                    "filter": {
+                        "type": "string",
+                        "description": "Optional case-insensitive substring; only matching lines are returned. The filter applies after the window is taken."
+                    }
+                },
+                "required": ["name"]
+            }
+        }),
+        json!({
+            "name": "service_start",
+            "description": "Start a dev service (async; returns immediately, the service \
+                starts in the background). If it is already running this is a no-op. \
+                Read its progress with read_service_logs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "Service name as declared in .warpforge.yaml."
+                    }
+                },
+                "required": ["service"]
+            }
+        }),
+        json!({
+            "name": "service_stop",
+            "description": "Stop a dev service (async; returns immediately).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "Service name as declared in .warpforge.yaml."
+                    }
+                },
+                "required": ["service"]
+            }
+        }),
+        json!({
+            "name": "service_restart",
+            "description": "Restart a dev service (async; returns immediately). Use when \
+                a service crashed or you changed its config and want a clean start. \
+                Read its progress with read_service_logs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "Service name as declared in .warpforge.yaml."
+                    }
+                },
+                "required": ["service"]
+            }
+        }),
+        json!({
+            "name": "portforward_start",
+            "description": "Start a port-forward (async; returns immediately).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Port-forward name as declared in .warpforge.yaml."
+                    }
+                },
+                "required": ["name"]
+            }
+        }),
+        json!({
+            "name": "portforward_stop",
+            "description": "Stop a port-forward (async; returns immediately).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Port-forward name as declared in .warpforge.yaml."
+                    }
+                },
+                "required": ["name"]
+            }
+        }),
+    ];
+
+    if is_orchestrator {
+        if let Value::Array(orch) = orchestrator_tool_defs() {
+            tools.extend(orch);
+        }
+    }
+    Value::Array(tools)
+}
+
+fn orchestrator_tool_defs() -> Value {
     json!([
         {
             "name": "spawn_agent",
@@ -465,7 +677,106 @@ fn scoped_project(args: &Value, orchestrator_project: &str) -> Result<Option<Str
         return Ok(Some(orchestrator_project.to_string()));
     }
 
-    Ok(requested)
+    // No bound project scope: a requested project would let a session reach a
+    // project it does not own. Refuse rather than fall back to the caller's arg.
+    match requested {
+        None => Ok(None),
+        Some(_) => Err(anyhow!(
+            "this session is not bound to a project; cannot target another project"
+        )),
+    }
+}
+
+/// Parse a tool's optional `limit`, clamped to the daemon's u32 window size,
+/// defaulting to 100 lines so an omitted limit cannot dump the whole buffer.
+fn tool_limit(args: &Value) -> u32 {
+    args.get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v.min(u32::MAX as u64) as u32)
+        .unwrap_or(100)
+}
+
+/// Fetch a window of retained log lines from the daemon and render them. The
+/// `after` index and `limit` window the raw buffer first; `filter`, when set,
+/// keeps only case-insensitively matching lines from that window.
+async fn read_logs(
+    client: &mut DaemonClient,
+    method: &str,
+    project: &str,
+    kind: &str,
+    key_field: &str,
+    key: &str,
+    args: &Value,
+) -> Result<String> {
+    let after = args.get("after").and_then(Value::as_u64).unwrap_or(0);
+    let limit = tool_limit(args);
+    let filter = args
+        .get("filter")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty());
+    let mut params = json!({ "project": project, "after": after, "limit": limit });
+    params[key_field] = json!(key);
+    let result = client.request(method, params).await?;
+    let mut lines: Vec<String> = result
+        .get("lines")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| anyhow!("daemon returned an invalid log response"))?
+        .iter()
+        .filter_map(|l| l.as_str().map(str::to_string))
+        .collect();
+    if let Some(filter) = filter {
+        let needle = filter.to_lowercase();
+        lines.retain(|line| line.to_lowercase().contains(&needle));
+    }
+    if lines.is_empty() {
+        return Ok(format!("[{kind}:{key}] no matching logs"));
+    }
+    let body = lines.join("\n");
+    Ok(format!("[{kind}:{key}]\n```\n{body}\n```"))
+}
+
+/// Confirm a service is declared for the project before claiming a control
+/// dispatch succeeded (start/stop/restart RPCs return null unconditionally).
+async fn ensure_service(client: &mut DaemonClient, project: &str, service: &str) -> Result<()> {
+    let result = client
+        .request("runtime.list", json!({ "project": project }))
+        .await?;
+    let declared = result
+        .get("services")
+        .and_then(Value::as_array)
+        .is_some_and(|svcs| {
+            svcs.iter()
+                .any(|s| s.get("name").and_then(Value::as_str) == Some(service))
+        });
+    if declared {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "no service '{service}' is declared for project '{project}' (see list_runtime)"
+        ))
+    }
+}
+
+/// Like [`ensure_service`] but for a port-forward name.
+async fn ensure_portforward(client: &mut DaemonClient, project: &str, name: &str) -> Result<()> {
+    let result = client
+        .request("runtime.list", json!({ "project": project }))
+        .await?;
+    let declared = result
+        .get("portforwards")
+        .and_then(Value::as_array)
+        .is_some_and(|pfs| {
+            pfs.iter()
+                .any(|pf| pf.get("name").and_then(Value::as_str) == Some(name))
+        });
+    if declared {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "no port-forward '{name}' is declared for project '{project}' (see list_runtime)"
+        ))
+    }
 }
 
 async fn list_owned_agents(
@@ -543,6 +854,7 @@ async fn handle_tool_call(
     client: &mut DaemonClient,
     parent_task: &str,
     project: &str,
+    is_orchestrator: bool,
     params: Option<&Value>,
 ) -> Result<String> {
     let params = params.ok_or_else(|| anyhow!("missing params"))?;
@@ -553,6 +865,107 @@ async fn handle_tool_call(
         .unwrap_or_else(|| json!({}));
 
     match name {
+        "list_runtime" => {
+            let scoped = scoped_project(&args, project)?;
+            let Some(project) = scoped else {
+                return Err(anyhow!("a project is required to list the runtime"));
+            };
+            let result = client
+                .request("runtime.list", json!({ "project": project }))
+                .await?;
+            json_text(&result)
+        }
+        "read_service_logs" => {
+            let scoped = scoped_project(&args, project)?;
+            let Some(project) = scoped else {
+                return Err(anyhow!("a project is required to read service logs"));
+            };
+            let service = args
+                .get("service")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'service' is required"))?;
+            read_logs(
+                client,
+                "service.logs",
+                &project,
+                "service",
+                "service",
+                service,
+                &args,
+            )
+            .await
+        }
+        "read_portforward_logs" => {
+            let scoped = scoped_project(&args, project)?;
+            let Some(project) = scoped else {
+                return Err(anyhow!("a project is required to read port-forward logs"));
+            };
+            let name = args
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'name' is required"))?;
+            read_logs(
+                client,
+                "portforward.logs",
+                &project,
+                "portforward",
+                "name",
+                name,
+                &args,
+            )
+            .await
+        }
+        "service_start" | "service_stop" | "service_restart" => {
+            let scoped = scoped_project(&args, project)?;
+            let Some(project) = scoped else {
+                return Err(anyhow!("a project is required to control a service"));
+            };
+            let service = args
+                .get("service")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'service' is required"))?;
+            ensure_service(client, &project, service).await?;
+            let method = match name {
+                "service_start" => "service.start",
+                "service_stop" => "service.stop",
+                _ => "service.restart",
+            };
+            client
+                .request(method, json!({ "project": project, "service": service }))
+                .await?;
+            Ok(format!(
+                "{method} dispatched for '{service}' in project '{project}'. \
+                 It runs asynchronously — read read_service_logs to follow its progress."
+            ))
+        }
+        "portforward_start" | "portforward_stop" => {
+            let scoped = scoped_project(&args, project)?;
+            let Some(project) = scoped else {
+                return Err(anyhow!("a project is required to control a port-forward"));
+            };
+            let pf_name = args
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'name' is required"))?;
+            ensure_portforward(client, &project, pf_name).await?;
+            let method = match name {
+                "portforward_start" => "portforward.start",
+                _ => "portforward.stop",
+            };
+            client
+                .request(method, json!({ "project": project, "name": pf_name }))
+                .await?;
+            Ok(format!(
+                "{method} dispatched for '{pf_name}' in project '{project}'."
+            ))
+        }
+        _ if !is_orchestrator => Err(anyhow!(
+            "tool '{name}' is only available in an orchestrator session"
+        )),
         "spawn_agent" => {
             let agent = args
                 .get("agent")
@@ -928,7 +1341,7 @@ mod tests {
 
     #[test]
     fn lifecycle_tools_advertise_stop_and_destructive_cleanup() {
-        let tools = tool_defs();
+        let tools = tool_defs(true);
         let definitions = tools.as_array().expect("tool definitions");
         let names: Vec<&str> = definitions
             .iter()
@@ -950,11 +1363,64 @@ mod tests {
     }
 
     #[test]
+    fn single_mode_hides_orchestrator_tools_but_ships_core_tools() {
+        let core = tool_defs(false)
+            .as_array()
+            .expect("tool definitions")
+            .clone();
+        let core_names: Vec<&str> = core
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .collect();
+        for tool in [
+            "list_runtime",
+            "read_service_logs",
+            "read_portforward_logs",
+            "service_start",
+            "service_stop",
+            "service_restart",
+            "portforward_start",
+            "portforward_stop",
+        ] {
+            assert!(
+                core_names.contains(&tool),
+                "single mode must advertise {tool}"
+            );
+        }
+        for tool in [
+            "spawn_agent",
+            "read_inbox",
+            "spawn_workflow",
+            "decide_workflow",
+        ] {
+            assert!(
+                !core_names.contains(&tool),
+                "single mode must NOT advertise {tool}"
+            );
+        }
+    }
+
+    #[test]
     fn project_scope_cannot_escape_the_orchestrator_project() {
         assert_eq!(
             scoped_project(&json!({}), "demo").unwrap(),
             Some("demo".to_string())
         );
         assert!(scoped_project(&json!({ "project": "other" }), "demo").is_err());
+    }
+
+    #[test]
+    fn unbound_session_cannot_target_a_project_by_argument() {
+        // No bound project scope: requesting a project by argument must fail,
+        // so a project-less session cannot reach another project's runtime.
+        assert_eq!(scoped_project(&json!({}), "").unwrap(), None);
+        assert!(scoped_project(&json!({ "project": "other" }), "").is_err());
+    }
+
+    #[test]
+    fn tool_limit_defaults_to_100_and_clamps_to_u32() {
+        assert_eq!(tool_limit(&json!({})), 100);
+        assert_eq!(tool_limit(&json!({ "limit": 5 })), 5);
+        assert_eq!(tool_limit(&json!({ "limit": 5_000_000_000u64 })), u32::MAX);
     }
 }

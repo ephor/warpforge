@@ -168,6 +168,12 @@ pub enum Method {
         #[serde(default)]
         limit: Option<u32>,
     },
+    /// List the project's declared services and port-forwards with their live
+    /// status and allocated ports. Read-only; used by the MCP bridge so an agent
+    /// can discover what runtime is up before reading logs or restarting a
+    /// service.
+    #[serde(rename = "runtime.list")]
+    RuntimeList { project: String },
 
     // ── Tasks (agent sessions on the board) ──
     #[serde(rename = "task.create")]
