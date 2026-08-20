@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.6
+
+### Patch Changes
+
+- [`768c175`](https://github.com/ephor/warpforge/commit/768c1754f3629d015e3b50beaded2a35f857201e) Thanks [@ephor](https://github.com/ephor)! - Add html files preview in editor.
+
+- [`7c997a4`](https://github.com/ephor/warpforge/commit/7c997a4697722f7a331672c097bb6cc7987be401) Thanks [@ephor](https://github.com/ephor)! - Native notifications now work. When an agent needs your approval, or a task
+  wants attention while Warpforge is in the background, macOS shows a notification
+  with Approve, Reject and Review buttons — and those buttons now do what they
+  say, so you can answer a permission request without switching back to the app.
+  Notifications stay quiet while Warpforge is the window you are looking at, so
+  the in-app toast remains the only interruption when you are already there.
+
 ## 0.6.5
 
 ### Patch Changes
