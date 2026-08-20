@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.7
+
+### Patch Changes
+
+- [#35](https://github.com/ephor/warpforge/pull/35) [`65df616`](https://github.com/ephor/warpforge/commit/65df616be0d21d6dc907d513768fa75d841290bf) Thanks [@ephor](https://github.com/ephor)! - MCP tool names no longer show as raw `mcp__server__tool` strings in the
+  transcript, permission prompts, or notifications. `mcp__warpforge__list_runtime`
+  now renders as "Warpforge · List runtime".
+
+  The orchestrator's `spawn_agent` title now surfaces who is being spawned and on
+  what ("Spawn agent codex: Refactor the auth module") immediately, so a
+  sub-agent dispatch is visible without expanding the tool.
+
+- [#35](https://github.com/ephor/warpforge/pull/35) [`6a2e3e7`](https://github.com/ephor/warpforge/commit/6a2e3e7a17e415e55e10a7b1423d8bc825c0d5b5) Thanks [@ephor](https://github.com/ephor)! - Log reading tools now behave like `kubectl --timestamps | grep | tail`: every line
+  carries a UTC timestamp, `filter` runs over the whole retained buffer before the
+  newest `limit` are kept, and a new `context` option adds surrounding lines around
+  each match (`grep -C`).
+
+  Log cursors are now stable sequence numbers instead of buffer indexes. Each line
+  gets a monotonic `seq`; `after` is inclusive of that seq and the response returns
+  `nextSeq`, so polling for new lines is nearly free even as the ring buffer drops
+  old ones. `logSeq` in `list_runtime` is the live cursor.
+
+  Service lifecycle is now visible in the log stream: `[service running]`,
+  `[service stopped]`, and `[service failed: exit code=N]` markers are injected on
+  state transitions, so a restarting process no longer looks like empty logs.
+
+- [#36](https://github.com/ephor/warpforge/pull/36) [`6ea2bcb`](https://github.com/ephor/warpforge/commit/6ea2bcb2516f563f296c082c588c83e117b69371) Thanks [@ephor](https://github.com/ephor)! - Very long conversations stay where you left them. Sending a message or watching
+  an agent reply keeps the chat pinned to the newest message instead of drifting
+  up into older history, and the chat now only stops following a reply when you
+  actually scroll up — clicking a file link or expanding work updates leaves it
+  pinned. Scroll back down to the newest message and it starts following again on
+  its own.
+
+- [#35](https://github.com/ephor/warpforge/pull/35) [`e19ef2b`](https://github.com/ephor/warpforge/commit/e19ef2b75cf145f55df277fecc8038c552993723) Thanks [@ephor](https://github.com/ephor)! - Agents working on a task can now inspect and control the project's running services on their own. They can read live service and port-forward logs, search them for errors, and start, stop, or restart a service without you copying logs into the chat by hand — the agent checks the runtime itself whenever it needs to.
+
 ## 0.6.6
 
 ### Patch Changes
