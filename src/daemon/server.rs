@@ -499,8 +499,8 @@ async fn dispatch(
             after,
             limit,
         } => {
-            let lines = handle.service_logs(&project, &service, after, limit).await;
-            Ok(json!({ "lines": lines }))
+            let (lines, at, next_seq) = handle.service_logs(&project, &service, after, limit).await;
+            Ok(json!({ "lines": lines, "at": at, "nextSeq": next_seq }))
         }
         ServiceStart { project, service } => {
             handle
@@ -1052,8 +1052,9 @@ async fn dispatch(
             after,
             limit,
         } => {
-            let lines = handle.portforward_logs(&project, &name, after, limit).await;
-            Ok(json!({ "lines": lines }))
+            let (lines, at, next_seq) =
+                handle.portforward_logs(&project, &name, after, limit).await;
+            Ok(json!({ "lines": lines, "at": at, "nextSeq": next_seq }))
         }
         RuntimeList { project } => {
             let snapshot = handle.snapshot().await;
