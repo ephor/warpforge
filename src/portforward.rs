@@ -7,6 +7,7 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, Notify};
 
 use crate::config::PortForwardConfig;
+use crate::service::{now_ms, LogLine};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
@@ -92,10 +93,45 @@ pub struct ManagedPortForward {
     pub status: PfStatus,
     pub last_event: Option<String>,
     /// Captured kubectl stdout + stderr + internal diagnostics
-    pub logs: Vec<String>,
+    pub logs: Vec<LogLine>,
+    /// Sequence number for the next appended log line (see `service::LogLine`).
+    pub next_seq: u64,
     /// Notifying this asks the watcher task to kill its kubectl child and exit
     /// — scoped teardown, so we never `pkill` port-forwards we didn't start.
     stop: Arc<Notify>,
+}
+
+impl ManagedPortForward {
+    /// Append a retained line (assigning its seq + timestamp) and trim the ring.
+    fn push_log(&mut self, line: String) {
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.saturating_add(1);
+        self.logs.push(LogLine {
+            seq,
+            at_ms: now_ms(),
+            line,
+        });
+        if self.logs.len() > 500 {
+            self.logs.drain(..self.logs.len() - 500);
+        }
+    }
+
+    /// Slice the ring by seq cursor and cap to `limit`; returns raw lines, their
+    /// timestamps (millis, index-aligned), and the cursor to pass back as `after`.
+    /// `after` is inclusive ("start from this seq"), so `0` returns the oldest
+    /// retained line and polling with the returned cursor returns only newer ones.
+    pub fn window(&self, after: u64, limit: Option<u32>) -> (Vec<String>, Vec<u64>, u64) {
+        let mut lines: Vec<&LogLine> = self.logs.iter().filter(|l| l.seq >= after).collect();
+        if let Some(n) = limit {
+            let n = n as usize;
+            if lines.len() > n {
+                lines = lines.split_off(lines.len() - n);
+            }
+        }
+        let (text, at): (Vec<String>, Vec<u64>) =
+            lines.iter().map(|l| (l.line.clone(), l.at_ms)).unzip();
+        (text, at, self.next_seq)
+    }
 }
 
 pub struct PortForwardManager {
@@ -139,10 +175,15 @@ impl PortForwardManager {
                     remote_port: cfg.remote_port,
                     status: PfStatus::Starting,
                     last_event: None,
-                    logs: vec![format!(
-                        "Starting port-forward {}:{} → {}:{} ...",
-                        cfg.namespace, cfg.pod, cfg.local_port, cfg.remote_port
-                    )],
+                    logs: vec![LogLine {
+                        seq: 0,
+                        at_ms: now_ms(),
+                        line: format!(
+                            "Starting port-forward {}:{} → {}:{} ...",
+                            cfg.namespace, cfg.pod, cfg.local_port, cfg.remote_port
+                        ),
+                    }],
+                    next_seq: 1,
                     stop: Arc::clone(&stop),
                 },
             );
@@ -176,36 +217,57 @@ impl PortForwardManager {
         match &event {
             PfEvent::Log { line, .. } => {
                 if let Some(pf) = self.forwards.get_mut(&key) {
-                    pf.logs.push(line.clone());
-                    if pf.logs.len() > 500 {
-                        pf.logs.drain(..pf.logs.len() - 500);
-                    }
+                    pf.push_log(line.clone());
                 }
             }
             PfEvent::Active { local_port, .. } => {
                 if let Some(pf) = self.forwards.get_mut(&key) {
                     pf.status = PfStatus::Active;
-                    pf.logs.push(format!("✓ Forwarding :{local_port}"));
+                    pf.push_log(format!("✓ Forwarding :{local_port}"));
                 }
             }
             PfEvent::Restarted { local_port, .. } => {
                 if let Some(pf) = self.forwards.get_mut(&key) {
                     pf.status = PfStatus::Active;
                     pf.last_event = Some(format!("⟳ restarted :{local_port}"));
-                    pf.logs
-                        .push(format!("⟳ Restarted port-forward :{local_port}"));
+                    pf.push_log(format!("⟳ Restarted port-forward :{local_port}"));
                 }
             }
             PfEvent::Failed { local_port, .. } => {
                 if let Some(pf) = self.forwards.get_mut(&key) {
                     pf.status = PfStatus::Failed;
                     pf.last_event = Some(format!("✗ failed :{local_port}"));
-                    pf.logs.push(format!(
+                    pf.push_log(format!(
                         "✗ Port-forward :{local_port} gave up after max retries"
                     ));
                 }
             }
         }
+    }
+
+    /// A window of a port-forward's retained logs (see `service::LogLine` and
+    /// `ManagedPortForward::window` for cursor semantics).
+    pub fn log_window(
+        &self,
+        project_name: &str,
+        name: &str,
+        after: u64,
+        limit: Option<u32>,
+    ) -> (Vec<String>, Vec<u64>, u64) {
+        let key = format!("{project_name}/{name}");
+        self.forwards
+            .get(&key)
+            .map(|pf| pf.window(after, limit))
+            .unwrap_or((Vec::new(), Vec::new(), 0))
+    }
+
+    /// The sequence number of the newest retained line (0 when none).
+    pub fn newest_seq(&self, project_name: &str, name: &str) -> u64 {
+        let key = format!("{project_name}/{name}");
+        self.forwards
+            .get(&key)
+            .map(|pf| pf.next_seq.saturating_sub(1))
+            .unwrap_or(0)
     }
 
     /// Stop every forward we started — signals each watcher, which kills its

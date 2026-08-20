@@ -238,10 +238,12 @@ async fn serve_stdio(
 fn tool_defs(is_orchestrator: bool) -> Value {
     let mut tools: Vec<Value> = vec![
         json!({
-            "name": "list_runtime",
-            "description": "List the project's dev services and port-forwards with their \
+        "name": "list_runtime",
+             "description": "List the project's dev services and port-forwards with their \
                 live status and allocated ports. Use this to discover what is running \
-                (names, ports, URLs) before reading logs or restarting a service.",
+                (names, ports, URLs) before reading logs or restarting a service. Each \
+                entry's logSeq is a log cursor you can pass as `after` to read_service_logs \
+                / read_portforward_logs.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -253,11 +255,13 @@ fn tool_defs(is_orchestrator: bool) -> Value {
             }
         }),
         json!({
-            "name": "read_service_logs",
-            "description": "Read a window of a dev service's retained stdout/stderr log \
+        "name": "read_service_logs",
+             "description": "Read a window of a dev service's retained stdout/stderr log \
                 lines. Use to diagnose why a service failed, inspect request output, or \
-                tail recent output. Fetch is non-destructive; read with a fresh call to \
-                see newer lines (log_seq advances as the service runs).",
+                tail recent output. Fetch is non-destructive. Lines carry UTC timestamps \
+                by default; filter runs over the whole buffer (grep | tail) and context \
+                adds surrounding lines (grep -C). Poll new lines cheaply by passing the \
+                previous response's nextSeq as `after`.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -271,7 +275,7 @@ fn tool_defs(is_orchestrator: bool) -> Value {
                     },
                     "after": {
                         "type": "integer",
-                        "description": "Index of the first retained line to return. 0 = from the oldest retained line. It is an index into the unfiltered ring buffer, NOT a log sequence number. To page, advance it by the limit you used."
+                        "description": "Monotonic log cursor (a sequence number). Return lines with seq >= after (start from this cursor). Start with 0 to read from the oldest retained line, then pass the `nextSeq` from a previous response to cheaply poll for new lines. Stable even as the ring buffer drops old lines."
                     },
                     "limit": {
                         "type": "integer",
@@ -279,7 +283,15 @@ fn tool_defs(is_orchestrator: bool) -> Value {
                     },
                     "filter": {
                         "type": "string",
-                        "description": "Optional case-insensitive substring; only matching lines are returned. The filter applies after the window is taken."
+                        "description": "Optional case-insensitive substring. Runs over the whole retained buffer, then the newest `limit` matching lines are kept (grep | tail)."
+                    },
+                    "context": {
+                        "type": "integer",
+                        "description": "Include N lines of surrounding context before and after each filter match (like grep -C). Ignored when no filter is given. Defaults to 0."
+                    },
+                    "timestamps": {
+                        "type": "boolean",
+                        "description": "Prepend a UTC timestamp to each line (like kubectl --timestamps). Defaults to true. Set false to return raw lines."
                     }
                 },
                 "required": ["service"]
@@ -301,7 +313,7 @@ fn tool_defs(is_orchestrator: bool) -> Value {
                     },
                     "after": {
                         "type": "integer",
-                        "description": "Index of the first retained line to return. 0 = from the oldest retained line. It is an index into the unfiltered ring buffer, NOT a log sequence number. To page, advance it by the limit you used."
+                        "description": "Monotonic log cursor (a sequence number). Return lines with seq >= after (start from this cursor). Start with 0 to read from the oldest retained line, then pass the `nextSeq` from a previous response to cheaply poll for new lines. Stable even as the ring buffer drops old lines."
                     },
                     "limit": {
                         "type": "integer",
@@ -309,7 +321,15 @@ fn tool_defs(is_orchestrator: bool) -> Value {
                     },
                     "filter": {
                         "type": "string",
-                        "description": "Optional case-insensitive substring; only matching lines are returned. The filter applies after the window is taken."
+                        "description": "Optional case-insensitive substring. Runs over the whole retained buffer, then the newest `limit` matching lines are kept (grep | tail)."
+                    },
+                    "context": {
+                        "type": "integer",
+                        "description": "Include N lines of surrounding context before and after each filter match (like grep -C). Ignored when no filter is given. Defaults to 0."
+                    },
+                    "timestamps": {
+                        "type": "boolean",
+                        "description": "Prepend a UTC timestamp to each line (like kubectl --timestamps). Defaults to true. Set false to return raw lines."
                     }
                 },
                 "required": ["name"]
@@ -708,32 +728,150 @@ async fn read_logs(
     key: &str,
     args: &Value,
 ) -> Result<String> {
+    // `after` is a monotonic seq cursor ("start from this seq"), not a buffer
+    // index. Polling with the previous response's `nextSeq` makes reads
+    // nearly free regardless of how many lines the ring has since dropped.
     let after = args.get("after").and_then(Value::as_u64).unwrap_or(0);
     let limit = tool_limit(args);
     let filter = args
         .get("filter")
         .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty());
-    let mut params = json!({ "project": project, "after": after, "limit": limit });
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let context = args.get("context").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let timestamps = args
+        .get("timestamps")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
+    // grep|tail and grep -C must see the whole retained buffer, so when a
+    // filter or context is requested we fetch without a limit; otherwise honor
+    // the window limit. Either way the daemon returns aligned `at` timestamps.
+    let fetch_limit: Option<u32> = if filter.is_some() || context > 0 {
+        None
+    } else {
+        Some(limit)
+    };
+    let mut params = json!({ "project": project, "after": after, "limit": fetch_limit });
     params[key_field] = json!(key);
     let result = client.request(method, params).await?;
-    let mut lines: Vec<String> = result
+    let lines: Vec<String> = result
         .get("lines")
         .and_then(Value::as_array)
-        .cloned()
-        .ok_or_else(|| anyhow!("daemon returned an invalid log response"))?
-        .iter()
-        .filter_map(|l| l.as_str().map(str::to_string))
-        .collect();
-    if let Some(filter) = filter {
+        .map(|a| {
+            a.iter()
+                .filter_map(|l| l.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let at: Vec<u64> = result
+        .get("at")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
+        .unwrap_or_default();
+    let next_seq: u64 = result
+        .get("nextSeq")
+        .and_then(Value::as_u64)
+        .unwrap_or(after);
+
+    let body = render_log_selection(&lines, &at, filter.as_deref(), context, limit, timestamps);
+    if body.is_empty() {
+        return Ok(match filter {
+            Some(f) => format!("[{kind}:{key}] no lines match filter '{f}'"),
+            None => format!("[{kind}:{key}] no matching logs"),
+        });
+    }
+    let count = body.lines().count();
+    let poll = if next_seq > 0 {
+        format!("\n\ncursor: pass `after: {next_seq}` to read only lines newer than these.")
+    } else {
+        String::new()
+    };
+    Ok(format!(
+        "[{kind}:{key}] {count} line(s){poll}\n```\n{body}\n```"
+    ))
+}
+
+/// Pure selection used by [`read_logs`] (and unit-tested here): filter the
+/// whole buffer (grep), expand each match by `context` (grep -C), then keep the
+/// newest `limit` lines (tail). Returns rendered lines with optional UTC
+/// timestamps, or an empty string when nothing survives.
+fn render_log_selection(
+    lines: &[String],
+    at: &[u64],
+    filter: Option<&str>,
+    context: usize,
+    limit: u32,
+    timestamps: bool,
+) -> String {
+    let n = lines.len();
+    let mut keep: Vec<usize> = (0..n).collect();
+    if let Some(filter) = filter.filter(|s| !s.is_empty()) {
         let needle = filter.to_lowercase();
-        lines.retain(|line| line.to_lowercase().contains(&needle));
+        let matches: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.to_lowercase().contains(&needle))
+            .map(|(i, _)| i)
+            .collect();
+        if matches.is_empty() {
+            return String::new();
+        }
+        // Expand each match by `context` and merge overlapping spans.
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        for m in matches {
+            let lo = m.saturating_sub(context);
+            let hi = (m + 1 + context).min(n);
+            match spans.last_mut() {
+                Some((_, last_hi)) if lo <= *last_hi => *last_hi = (*last_hi).max(hi),
+                _ => spans.push((lo, hi)),
+            }
+        }
+        keep = spans.into_iter().flat_map(|(lo, hi)| lo..hi).collect();
     }
-    if lines.is_empty() {
-        return Ok(format!("[{kind}:{key}] no matching logs"));
+    if keep.len() > limit as usize {
+        keep = keep[keep.len() - limit as usize..].to_vec();
     }
-    let body = lines.join("\n");
-    Ok(format!("[{kind}:{key}]\n```\n{body}\n```"))
+    keep.into_iter()
+        .map(|i| {
+            let text = &lines[i];
+            if timestamps {
+                let ts = at.get(i).copied().map(fmt_utc).unwrap_or_default();
+                format!("[{ts}] {text}")
+            } else {
+                text.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Format epoch millis as `YYYY-MM-DD HH:MM:SS` in UTC. Self-contained so we
+/// avoid pulling a chrono-style dependency into the daemon.
+fn fmt_utc(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let (y, mo, d) = civil_from_days(secs.div_euclid(86400));
+    let rem = secs.rem_euclid(86400);
+    format!(
+        "{y:04}-{mo:02}-{d:02} {:02}:{:02}:{:02}",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
+/// Howard Hinnant's `civil_from_days`: days since 1970-01-01 -> (year, month, day).
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 /// Confirm a service is declared for the project before claiming a control
@@ -1422,5 +1560,57 @@ mod tests {
         assert_eq!(tool_limit(&json!({})), 100);
         assert_eq!(tool_limit(&json!({ "limit": 5 })), 5);
         assert_eq!(tool_limit(&json!({ "limit": 5_000_000_000u64 })), u32::MAX);
+    }
+
+    /// Filter runs over the WHOLE buffer, then the newest `limit` are kept
+    /// (grep | tail) — not the first `limit`, and not a window-then-filter.
+    #[test]
+    fn filter_then_tail_keeps_newest_matches_across_the_whole_buffer() {
+        let mut lines: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
+        lines[0] = "ERROR early".into();
+        lines[1] = "ERROR early2".into();
+        lines[42] = "ERROR late".into();
+        lines[43] = "ERROR late2".into();
+        let at: Vec<u64> = lines.iter().map(|_| 0).collect();
+        let body = render_log_selection(&lines, &at, Some("ERROR"), 0, 3, false);
+        assert_eq!(body, "ERROR early2\nERROR late\nERROR late2");
+    }
+
+    #[test]
+    fn context_expands_around_each_match_and_overlapping_spans_merge() {
+        let mut lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
+        lines[5] = "ERR at 5".into();
+        lines[7] = "ERR at 7".into();
+        let at: Vec<u64> = lines.iter().map(|_| 0).collect();
+        // matches at 5 and 7, context 2 -> spans [3,8) and [5,10) merge to [3,10)
+        let body = render_log_selection(&lines, &at, Some("ERR"), 2, 100, false);
+        assert_eq!(
+            body,
+            "line 3\nline 4\nERR at 5\nline 6\nERR at 7\nline 8\nline 9"
+        );
+    }
+
+    #[test]
+    fn no_match_returns_empty_and_timestamps_prepend_utc() {
+        let lines = vec!["a".to_string(), "b".to_string()];
+        let at = vec![0u64, 1_700_000_000_000u64];
+        assert_eq!(
+            render_log_selection(&lines, &at, Some("zzz"), 0, 100, true),
+            ""
+        );
+        let body = render_log_selection(&lines, &at, Some("b"), 0, 100, true);
+        assert!(body.starts_with("[2023-11-14 "), "got: {body}");
+        assert!(body.ends_with("] b"), "got: {body}");
+        // timestamps=false returns the raw line
+        assert_eq!(
+            render_log_selection(&lines, &at, Some("b"), 0, 100, false),
+            "b"
+        );
+    }
+
+    #[test]
+    fn fmt_utc_renders_epoch() {
+        assert_eq!(fmt_utc(0), "1970-01-01 00:00:00");
+        assert_eq!(fmt_utc(86_400_000), "1970-01-02 00:00:00");
     }
 }

@@ -618,12 +618,13 @@ pub enum Command {
     /// sessions alive. Used when the desktop UI closes.
     StopRuntime,
     /// A window of a service's retained log lines (events only carry the tail).
+    /// The reply is (lines, capture-timestamps[ms], nextSeq cursor).
     ServiceLogs {
         project: String,
         service: String,
         after: u64,
         limit: Option<u32>,
-        reply: oneshot::Sender<Vec<String>>,
+        reply: oneshot::Sender<(Vec<String>, Vec<u64>, u64)>,
     },
     /// A window of a port-forward's retained log lines.
     PortForwardLogs {
@@ -631,7 +632,7 @@ pub enum Command {
         name: String,
         after: u64,
         limit: Option<u32>,
-        reply: oneshot::Sender<Vec<String>>,
+        reply: oneshot::Sender<(Vec<String>, Vec<u64>, u64)>,
     },
     /// Start every declared port-forward for a project (port-forwards only).
     StartAllPortForwards {
@@ -1686,7 +1687,7 @@ impl DaemonHandle {
         service: &str,
         after: u64,
         limit: Option<u32>,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, Vec<u64>, u64) {
         let (tx, rx) = oneshot::channel();
         self.send(Command::ServiceLogs {
             project: project.to_string(),
@@ -1707,7 +1708,7 @@ impl DaemonHandle {
         name: &str,
         after: u64,
         limit: Option<u32>,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, Vec<u64>, u64) {
         let (tx, rx) = oneshot::channel();
         self.send(Command::PortForwardLogs {
             project: project.to_string(),
@@ -2443,6 +2444,7 @@ impl Daemon {
             if let Some(declared) = service_map.get_mut(&service.name) {
                 declared.status = wireconv::service_status(&service.status);
                 declared.allocated_port = service.allocated_port;
+                declared.log_seq = self.services.newest_seq(&project.name, &service.name);
                 if matches!(
                     service.status,
                     ServiceStatus::Starting | ServiceStatus::Running
@@ -2500,7 +2502,7 @@ impl Daemon {
                         local_port: pf.local_port,
                         remote_port: pf.remote_port,
                         status: wireconv::pf_status(&pf.status),
-                        log_seq: 0,
+                        log_seq: self.portforwards.newest_seq(&project.name, &pf.name),
                     },
                 );
             }
@@ -2978,22 +2980,9 @@ impl Daemon {
                 limit,
                 reply,
             } => {
-                let lines = self
-                    .services
-                    .get(&project, &service)
-                    .map(|s| {
-                        let start = (after as usize).min(s.logs.len());
-                        let mut window: Vec<String> = s.logs[start..].to_vec();
-                        if let Some(n) = limit {
-                            let n = n as usize;
-                            if window.len() > n {
-                                window = window.split_off(window.len() - n);
-                            }
-                        }
-                        window
-                    })
-                    .unwrap_or_default();
-                let _ = reply.send(lines);
+                let (lines, at, next_seq) =
+                    self.services.log_window(&project, &service, after, limit);
+                let _ = reply.send((lines, at, next_seq));
             }
             Command::StartAllPortForwards { project } => {
                 self.start_portforwards(&project).await;
@@ -3024,24 +3013,9 @@ impl Daemon {
                 limit,
                 reply,
             } => {
-                let key = format!("{project}/{name}");
-                let lines = self
-                    .portforwards
-                    .forwards
-                    .get(&key)
-                    .map(|pf| {
-                        let start = (after as usize).min(pf.logs.len());
-                        let mut window: Vec<String> = pf.logs[start..].to_vec();
-                        if let Some(n) = limit {
-                            let n = n as usize;
-                            if window.len() > n {
-                                window = window.split_off(window.len() - n);
-                            }
-                        }
-                        window
-                    })
-                    .unwrap_or_default();
-                let _ = reply.send(lines);
+                let (lines, at, next_seq) =
+                    self.portforwards.log_window(&project, &name, after, limit);
+                let _ = reply.send((lines, at, next_seq));
             }
             Command::SpawnAgent {
                 project,
