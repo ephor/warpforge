@@ -5,7 +5,8 @@ import { updater } from "@/lib/updater";
 import { cn } from "@/lib/utils";
 
 /**
- * Loud counterpart to the sidebar's update dot: a single header pill that says
+ * Loud counterpart to the sidebar's quiet update dot: a full-width row above
+ * Settings that says
  * an update exists and starts it on one click — no dialog in between. People
  * were missing the quiet indicator entirely, so this one carries the whole
  * flow (download → restart) and only shows up while there is something to do.
@@ -49,7 +50,7 @@ export function UpdateBanner() {
             : undefined
       }
       className={cn(
-        "flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium",
+        "flex h-8 w-full shrink-0 items-center justify-center gap-1.5 rounded-md px-2.5 text-xs font-medium",
         state.status === "error"
           ? "bg-destructive text-destructive-foreground"
           : "bg-primary text-primary-foreground",
