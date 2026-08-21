@@ -1,6 +1,9 @@
 # 0002 — Backlog ↔ issue trackers: one table, daemon-owned links
 
-**Status:** accepted (2026-08-12)
+**Status:** accepted (2026-08-12); presentation superseded by
+[0004](0004-project-page-surfaces.md) (2026-08-21) — the data decisions below
+stand, but the backlog is no longer a paged table, so invariants 11–13 describe
+components that no longer exist.
 
 ## Context
 
