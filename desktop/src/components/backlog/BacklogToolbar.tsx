@@ -1,14 +1,7 @@
-import type { Table } from "@tanstack/react-table";
-import { RefreshCw, Settings2, X } from "lucide-react";
+import { ArrowDownNarrowWide, ArrowUpNarrowWide, RefreshCw, X } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -22,9 +15,10 @@ import { cn } from "@/lib/utils";
 import { PRIORITY_LABEL, SOURCE_LABEL, STATUS_META } from "./labels";
 import { LinearTeamPicker } from "./LinearTeamPicker";
 import {
+  BACKLOG_SORT_LABEL,
   type BacklogParams,
+  type BacklogSortKey,
   hasActiveFilters,
-  type WorkItem,
   WORK_ITEM_PRIORITIES,
   WORK_ITEM_SOURCES,
   WORK_ITEM_STATUSES,
@@ -42,7 +36,6 @@ interface BacklogToolbarProps {
   onReset: () => void;
   onSync: () => void;
   isSyncing: boolean;
-  table: Table<WorkItem>;
 }
 
 export function BacklogToolbar({
@@ -52,10 +45,9 @@ export function BacklogToolbar({
   onReset,
   onSync,
   isSyncing,
-  table,
 }: BacklogToolbarProps) {
   return (
-    <div className="flex w-full flex-wrap items-center gap-2 px-3 py-1">
+    <div className="flex w-full shrink-0 flex-wrap items-center gap-2 border-b border-border/50 px-3 py-1.5">
       <SearchInput value={params.search} onChange={(search) => onChange({ search })} />
       <FilterSelect
         label="Status"
@@ -86,6 +78,11 @@ export function BacklogToolbar({
       )}
 
       <div className="ml-auto flex items-center gap-2">
+        <SortControl
+          sortBy={params.sortBy}
+          sortDesc={params.sortDesc}
+          onChange={(next) => onChange(next)}
+        />
         <LinearTeamPicker project={project} />
         <Button
           type="button"
@@ -98,8 +95,50 @@ export function BacklogToolbar({
           <RefreshCw className={cn("size-3.5", isSyncing && "animate-spin")} />
           Sync
         </Button>
-        <ColumnsMenu table={table} />
       </div>
+    </div>
+  );
+}
+
+/** The list has no column headers to click, so ordering lives here instead. */
+function SortControl({
+  sortBy,
+  sortDesc,
+  onChange,
+}: {
+  sortBy: BacklogSortKey;
+  sortDesc: boolean;
+  onChange: (next: Partial<BacklogParams>) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <Select value={sortBy} onValueChange={(next) => onChange({ sortBy: next as BacklogSortKey })}>
+        <SelectTrigger aria-label="Sort by" className="h-7 w-auto gap-1.5 text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {(Object.keys(BACKLOG_SORT_LABEL) as BacklogSortKey[]).map((key) => (
+            <SelectItem key={key} value={key}>
+              {BACKLOG_SORT_LABEL[key]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="size-7"
+        aria-label={sortDesc ? "Sort ascending" : "Sort descending"}
+        title={sortDesc ? "Descending" : "Ascending"}
+        onClick={() => onChange({ sortDesc: !sortDesc })}
+      >
+        {sortDesc ? (
+          <ArrowDownNarrowWide className="size-3.5" />
+        ) : (
+          <ArrowUpNarrowWide className="size-3.5" />
+        )}
+      </Button>
     </div>
   );
 }
@@ -160,32 +199,5 @@ function FilterSelect<T extends string>({
         ))}
       </SelectContent>
     </Select>
-  );
-}
-
-function ColumnsMenu({ table }: { table: Table<WorkItem> }) {
-  const columns = table.getAllColumns().filter((column) => column.getCanHide());
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="h-7 gap-1.5" aria-label="Toggle columns">
-          <Settings2 className="size-3.5 text-muted-foreground" />
-          View
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-40">
-        {columns.map((column) => (
-          <DropdownMenuCheckboxItem
-            key={column.id}
-            checked={column.getIsVisible()}
-            onCheckedChange={(checked) => column.toggleVisibility(checked)}
-            onSelect={(event) => event.preventDefault()}
-          >
-            {column.columnDef.meta?.label ?? column.id}
-          </DropdownMenuCheckboxItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

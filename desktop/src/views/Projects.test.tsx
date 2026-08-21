@@ -22,6 +22,8 @@ vi.mock("@xterm/xterm", () => {
   return { Terminal: MockTerminal };
 });
 
+vi.mock("@legendapp/list/react", () => import("@/test/legendList"));
+
 vi.mock("@xterm/addon-fit", () => {
   const MockFitAddon = function () {
     return { fit: vi.fn<() => void>() };

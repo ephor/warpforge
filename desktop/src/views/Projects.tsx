@@ -233,7 +233,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
             onAppendToChat={(formattedLogs) => onNewTask(project.name, formattedLogs)}
           />
         ) : (
-          <div className="h-full overflow-y-auto">
+          <div className="h-full">
             <BacklogView
               key={project.name}
               project={project.name}

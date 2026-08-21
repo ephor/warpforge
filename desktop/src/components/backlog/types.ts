@@ -1,9 +1,7 @@
 /**
  * Normalized backlog work items. Every source (local, Linear, GitHub) renders
- * through this one shape — the table knows nothing about providers.
+ * through this one shape — the list knows nothing about providers.
  */
-import type { RowData } from "@tanstack/react-table";
-
 import type { BacklogItem } from "@/protocol";
 
 export type WorkItemSource = "local" | "linear" | "github";
@@ -71,13 +69,25 @@ export type BacklogSortKey =
   | "assignee"
   | "updatedAt";
 
+/** How each sort key reads in the toolbar. */
+export const BACKLOG_SORT_LABEL: Record<BacklogSortKey, string> = {
+  number: "Number",
+  title: "Title",
+  status: "Status",
+  priority: "Priority",
+  source: "Source",
+  assignee: "Assignee",
+  updatedAt: "Updated",
+};
+
 /**
- * Everything the daemon needs to answer one page. Sorting, paging and filtering
- * all happen server-side, so this object *is* the query — it goes into the
- * React Query key verbatim, and any change to it is a new fetch.
+ * Everything the daemon needs to answer the listing. Sorting and filtering
+ * happen server-side, so this object *is* the query — it goes into the React
+ * Query key verbatim, and any change to it is a new fetch from the top. The
+ * page is deliberately absent: it belongs to the infinite query's cursor, not
+ * to view state anyone can set.
  */
 export interface BacklogParams {
-  page: number;
   pageSize: number;
   sortBy: BacklogSortKey;
   sortDesc: boolean;
@@ -88,8 +98,7 @@ export interface BacklogParams {
 }
 
 export const DEFAULT_BACKLOG_PARAMS: BacklogParams = {
-  page: 0,
-  pageSize: 10,
+  pageSize: 30,
   sortBy: "updatedAt",
   sortDesc: true,
   search: "",
@@ -131,25 +140,4 @@ export function toWorkItem(item: BacklogItem): WorkItem {
     taskId: item.taskId ?? null,
     assignee: item.assignee ?? null,
   };
-}
-
-declare module "@tanstack/react-table" {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  interface ColumnMeta<TData extends RowData, TValue> {
-    /** Human label, used by the column-visibility menu. */
-    label?: string;
-  }
-
-  /**
-   * Row actions travel here rather than in a closure inside the column defs,
-   * which lets `backlogColumns` stay a module constant. TanStack reads
-   * `options.meta` on every render but never rebuilds the table for it.
-   */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  interface TableMeta<TData extends RowData> {
-    /** Start (or resume) the agent task backing this item. */
-    onStartTask?: (item: WorkItem) => void;
-    /** Open the daemon task this item already became. */
-    onOpenTask?: (taskId: string) => void;
-  }
 }

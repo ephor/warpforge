@@ -1,13 +1,18 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { daemon } from "@/daemon";
 
 import { BacklogView } from "./BacklogView";
+import type { WorkItem } from "./types";
 
-const allItems = Array.from({ length: 60 }, (_, index) => ({
+vi.mock("@legendapp/list/react", () => import("@/test/legendList"));
+
+const PAGE_SIZE = 30;
+
+const allItems = Array.from({ length: 70 }, (_, index) => ({
   id: `b-${index + 1}`,
   number: index + 1,
   project: "warpforge",
@@ -25,21 +30,22 @@ const allItems = Array.from({ length: 60 }, (_, index) => ({
   taskId: null,
 }));
 
-function renderBacklog() {
+function renderBacklog(props: Partial<React.ComponentProps<typeof BacklogView>> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <BacklogView project="warpforge" />
+      <BacklogView project="warpforge" {...props} />
     </QueryClientProvider>,
   );
 }
 
 function rowTitles(): string[] {
-  return screen
-    .getAllByRole("row")
-    .slice(1)
-    .map((row) => within(row).queryAllByText(/^Issue \d+$/)[0]?.textContent ?? "")
-    .filter(Boolean);
+  return screen.queryAllByText(/^Issue \d+$/).map((node) => node.textContent ?? "");
+}
+
+async function loadMore() {
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  await user.click(screen.getByRole("button", { name: "scroll to end" }));
 }
 
 beforeEach(() => {
@@ -64,120 +70,73 @@ beforeEach(() => {
 });
 
 describe("BacklogView", () => {
-  it("loads one server page", async () => {
+  it("loads the first server page", async () => {
     renderBacklog();
-    await vi.waitFor(() => expect(rowTitles()).toHaveLength(10));
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
+    expect(rowTitles()[0]).toBe("Issue 70");
   });
 
-  it("reports server page count", async () => {
+  it("appends the next page at the end of the list, without repeating rows", async () => {
     renderBacklog();
-    await vi.waitFor(() => expect(screen.getByText(/Page 1 of 6/)).toBeInTheDocument());
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
+
+    await loadMore();
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE * 2));
+    // Earlier rows stay put — the list grows downwards rather than swapping.
+    expect(rowTitles()[0]).toBe("Issue 70");
+    expect(rowTitles()[PAGE_SIZE]).toBe("Issue 40");
+    expect(new Set(rowTitles()).size).toBe(rowTitles().length);
   });
 
-  it("requests the next server page", async () => {
+  it("stops asking once every item has been listed", async () => {
     renderBacklog();
-    await vi.waitFor(() => expect(rowTitles()[0]).toBe("Issue 60"));
-    fireEvent.click(screen.getByRole("button", { name: /go to next page/i }));
-    await vi.waitFor(() => expect(rowTitles()[0]).toBe("Issue 50"));
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
+
+    await loadMore();
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE * 2));
+    await loadMore();
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(allItems.length));
+
+    const calls = vi.mocked(daemon.listBacklog).mock.calls.length;
+    await loadMore();
+    expect(vi.mocked(daemon.listBacklog).mock.calls).toHaveLength(calls);
+    expect(screen.getByText("End of backlog")).toBeInTheDocument();
   });
 
-  it("pages back while the next page is still in flight", async () => {
-    // The real daemon answers over a socket, so every click lands during a
-    // pending fetch. A pager driven by the *response* disables itself here.
-    let release: (() => void) | undefined;
-    const listSpy = vi.spyOn(daemon, "listBacklog");
-    const answer = listSpy.getMockImplementation()!;
-    listSpy.mockImplementation(async (input) => {
-      if (input.page > 0) {
-        await new Promise<void>((resolve) => {
-          release = resolve;
-        });
-      }
-      return answer(input);
-    });
-
+  it("requests server sorting from the toolbar", async () => {
     renderBacklog();
-    await vi.waitFor(() => expect(rowTitles()).toHaveLength(10));
-
-    fireEvent.click(screen.getByRole("button", { name: /go to next page/i }));
-    await vi.waitFor(() => expect(screen.getByText(/Page 2 of 6/)).toBeInTheDocument());
-    // Still fetching page 2, and "previous" must already be usable.
-    const previous = screen.getByRole("button", { name: /go to previous page/i });
-    expect(previous).toBeEnabled();
-
-    fireEvent.click(previous);
-    await vi.waitFor(() => expect(screen.getByText(/Page 1 of 6/)).toBeInTheDocument());
-    release?.();
-    await vi.waitFor(() => expect(rowTitles()[0]).toBe("Issue 60"));
-    expect(rowTitles()).toHaveLength(10);
-  });
-
-  it("renders full rows again when paging back", async () => {
-    renderBacklog();
-    await vi.waitFor(() => expect(rowTitles()[0]).toBe("Issue 60"));
-    fireEvent.click(screen.getByRole("button", { name: /go to next page/i }));
-    await vi.waitFor(() => expect(screen.getByText(/Page 2 of 6/)).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole("button", { name: /go to previous page/i }));
-    await vi.waitFor(() => expect(screen.getByText(/Page 1 of 6/)).toBeInTheDocument());
-    // The cached page must come back with its cells populated, not as empty rows.
-    await vi.waitFor(() => expect(rowTitles()).toHaveLength(10));
-    expect(rowTitles()[0]).toBe("Issue 60");
-    expect(screen.getAllByText("Unassigned")).toHaveLength(10);
-  });
-
-  it("keeps one column set across re-renders", async () => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { rerender } = render(
-      <QueryClientProvider client={client}>
-        <BacklogView project="warpforge" onStartTask={() => {}} />
-      </QueryClientProvider>,
-    );
-    await vi.waitFor(() => expect(rowTitles()).toHaveLength(10));
-    const headers = screen.getAllByRole("columnheader").map((cell) => cell.textContent);
-
-    // A parent that re-renders with fresh inline callbacks (Projects does this on
-    // every daemon snapshot) must not rebuild the table's columns.
-    rerender(
-      <QueryClientProvider client={client}>
-        <BacklogView project="warpforge" onStartTask={() => {}} />
-      </QueryClientProvider>,
-    );
-    expect(screen.getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual(headers);
-    expect(rowTitles()).toHaveLength(10);
-  });
-
-  it("requests server sorting from a header click", async () => {
-    renderBacklog();
-    await vi.waitFor(() => expect(rowTitles()[0]).toBe("Issue 60"));
+    await vi.waitFor(() => expect(rowTitles()[0]).toBe("Issue 70"));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    await user.click(screen.getByRole("button", { name: "Title" }));
+
+    await user.click(screen.getByRole("combobox", { name: "Sort by" }));
+    await user.click(await screen.findByRole("option", { name: "Title" }));
+    await vi.waitFor(() => expect(rowTitles()[0]).toBe("Issue 70"));
+
+    await user.click(screen.getByRole("button", { name: "Sort ascending" }));
     await vi.waitFor(() => expect(rowTitles()[0]).toBe("Issue 01"));
-    await user.click(screen.getByRole("button", { name: "Title" }));
-    await vi.waitFor(() => expect(rowTitles()[0]).toBe("Issue 60"));
   });
 
-  it("sends the status filter to the daemon and returns to page one", async () => {
+  it("restarts the listing from the top when a filter changes", async () => {
     const listSpy = vi.spyOn(daemon, "listBacklog");
     renderBacklog();
-    await vi.waitFor(() => expect(rowTitles()).toHaveLength(10));
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
+    await loadMore();
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE * 2));
+
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-
-    fireEvent.click(screen.getByRole("button", { name: /go to next page/i }));
-    await vi.waitFor(() => expect(screen.getByText(/Page 2 of 6/)).toBeInTheDocument());
-
     await user.click(screen.getByRole("combobox", { name: "Status" }));
     await user.click(await screen.findByRole("option", { name: "Done" }));
 
     await vi.waitFor(() =>
       expect(listSpy).toHaveBeenCalledWith(expect.objectContaining({ status: "done", page: 0 })),
     );
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
   });
 
   it("sends the priority filter to the daemon", async () => {
     const listSpy = vi.spyOn(daemon, "listBacklog");
     renderBacklog();
-    await vi.waitFor(() => expect(rowTitles()).toHaveLength(10));
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await user.click(screen.getByRole("combobox", { name: "Priority" }));
@@ -191,7 +150,7 @@ describe("BacklogView", () => {
   it("clears every filter with Reset", async () => {
     const listSpy = vi.spyOn(daemon, "listBacklog");
     renderBacklog();
-    await vi.waitFor(() => expect(rowTitles()).toHaveLength(10));
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await user.click(screen.getByRole("combobox", { name: "Source" }));
@@ -207,14 +166,15 @@ describe("BacklogView", () => {
     expect(screen.getByRole("combobox", { name: "Source" })).toHaveTextContent("All source");
   });
 
-  it("requests server page size", async () => {
-    renderBacklog();
-    await vi.waitFor(() => expect(screen.getByText(/Page 1 of 6/)).toBeInTheDocument());
+  it("opens an item's details from its row", async () => {
+    const onOpenItem = vi.fn<(item: WorkItem) => void>();
+    renderBacklog({ onOpenItem });
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
+
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    await user.click(screen.getByRole("combobox", { name: /rows per page/i }));
-    await user.click(await screen.findByRole("option", { name: "20" }));
-    await vi.waitFor(() => expect(screen.getByText(/Page 1 of 3/)).toBeInTheDocument());
-    expect(rowTitles()).toHaveLength(20);
+    await user.click(screen.getByText("Issue 70"));
+
+    expect(onOpenItem).toHaveBeenCalledWith(expect.objectContaining({ title: "Issue 70" }));
   });
 
   it("runs import before the first backlog page", async () => {
@@ -235,7 +195,7 @@ describe("BacklogView", () => {
     });
 
     renderBacklog();
-    await vi.waitFor(() => expect(rowTitles()).toHaveLength(10));
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
     expect(order.slice(0, 2)).toEqual(["sync", "list"]);
   });
 
@@ -249,7 +209,7 @@ describe("BacklogView", () => {
         <BacklogView project="warpforge" />
       </QueryClientProvider>,
     );
-    await vi.waitFor(() => expect(rowTitles()).toHaveLength(10));
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
     expect(importSpy).toHaveBeenCalledWith("warpforge");
     const warpforgeCalls = () => importSpy.mock.calls.filter(([p]) => p === "warpforge").length;
     expect(warpforgeCalls()).toBe(1);
@@ -268,7 +228,7 @@ describe("BacklogView", () => {
         <BacklogView project="warpforge" />
       </QueryClientProvider>,
     );
-    await vi.waitFor(() => expect(rowTitles()).toHaveLength(10));
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
     expect(warpforgeCalls()).toBe(1);
   });
 });
