@@ -1,7 +1,6 @@
 import { Loader2, Play, RotateCw, Square } from "lucide-react";
 import { memo } from "react";
 
-import { Button } from "@/components/ui/button";
 import { pfBadge, serviceBadge } from "@/lib/status";
 import { cn } from "@/lib/utils";
 
@@ -81,6 +80,25 @@ function SectionHeader({
   );
 }
 
+/**
+ * A row action. Hidden until the row is hovered, focused or selected: a list of
+ * fifteen forwards otherwise renders fifteen identical bordered play buttons
+ * down the edge, which reads as a control panel rather than a list of names.
+ * The slot keeps its width either way so nothing shifts as the pointer moves,
+ * and it toggles `invisible` rather than fading — the Tauri WebView mispaints
+ * opacity transitions that start and cancel inside a frame (ADR-0002
+ * invariant 13).
+ */
+const ROW_ACTION =
+  "flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-background/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+function rowActionsClass(selected: boolean): string {
+  return cn(
+    "flex shrink-0 items-center gap-px",
+    selected ? "visible" : "invisible group-hover:visible group-focus-within:visible",
+  );
+}
+
 const ServiceRow = memo(function ServiceRow({
   project,
   service,
@@ -101,7 +119,7 @@ const ServiceRow = memo(function ServiceRow({
   return (
     <div
       className={cn(
-        "flex w-full items-center gap-1.5 px-2 py-1 text-xs",
+        "group flex w-full items-center gap-1.5 px-2 py-1 text-xs",
         selected ? "bg-secondary text-foreground" : "text-muted-foreground",
       )}
     >
@@ -123,13 +141,11 @@ const ServiceRow = memo(function ServiceRow({
         <span className="min-w-0 flex-1 truncate font-medium">{service.name}</span>
         <span className="sr-only">{badge.label}</span>
       </button>
-      <div className="flex shrink-0 items-center gap-px">
+      <div className={rowActionsClass(selected)}>
         {!canStop && (
-          <Button
+          <button
             type="button"
-            variant="outline"
-            size="icon"
-            className="size-5"
+            className={ROW_ACTION}
             title={`Start ${service.name}`}
             aria-label={`Start ${service.name}`}
             onClick={() =>
@@ -137,14 +153,12 @@ const ServiceRow = memo(function ServiceRow({
             }
           >
             <Play className="size-3" />
-          </Button>
+          </button>
         )}
         {canRestart && (
-          <Button
+          <button
             type="button"
-            variant="outline"
-            size="icon"
-            className="size-5"
+            className={ROW_ACTION}
             title={`Restart ${service.name}`}
             aria-label={`Restart ${service.name}`}
             onClick={() =>
@@ -152,20 +166,18 @@ const ServiceRow = memo(function ServiceRow({
             }
           >
             <RotateCw className="size-3" />
-          </Button>
+          </button>
         )}
         {canStop && (
-          <Button
+          <button
             type="button"
-            variant="outline"
-            size="icon"
-            className="size-5 border-destructive/20 bg-destructive/5 text-destructive/75 hover:border-destructive/35 hover:bg-destructive/10 hover:text-destructive"
+            className={cn(ROW_ACTION, "hover:text-destructive")}
             title={`Stop ${service.name}`}
             aria-label={`Stop ${service.name}`}
             onClick={() => safeRequest("service.stop", { project, service: service.name }, onError)}
           >
             <Square className="size-3" />
-          </Button>
+          </button>
         )}
       </div>
     </div>
@@ -193,7 +205,7 @@ const PortForwardRow = memo(function PortForwardRow({
   return (
     <div
       className={cn(
-        "flex w-full items-center gap-1.5 px-2 py-1 text-xs",
+        "group flex w-full items-center gap-1.5 px-2 py-1 text-xs",
         selected ? "bg-secondary text-foreground" : "text-muted-foreground",
       )}
     >
@@ -218,7 +230,7 @@ const PortForwardRow = memo(function PortForwardRow({
         <span className="min-w-0 flex-1 truncate font-medium">{pf.name}</span>
         <span className="sr-only">{badge.label}</span>
       </button>
-      <div className="flex shrink-0 items-center gap-px">
+      <div className={rowActionsClass(selected)}>
         {isStarting && (
           <span
             className="flex size-5 items-center justify-center text-muted-foreground"
@@ -229,30 +241,26 @@ const PortForwardRow = memo(function PortForwardRow({
           </span>
         )}
         {isStopped && (
-          <Button
+          <button
             type="button"
-            variant="outline"
-            size="icon"
-            className="size-5"
+            className={ROW_ACTION}
             title={`Start ${pf.name}`}
             aria-label={`Start ${pf.name}`}
             onClick={() => safeRequest("portforward.start", { project, name: pf.name }, onError)}
           >
             <Play className="size-3" />
-          </Button>
+          </button>
         )}
         {isActive && (
-          <Button
+          <button
             type="button"
-            variant="outline"
-            size="icon"
-            className="size-5 border-destructive/20 bg-destructive/5 text-destructive/75 hover:border-destructive/35 hover:bg-destructive/10 hover:text-destructive"
+            className={cn(ROW_ACTION, "hover:text-destructive")}
             title={`Stop ${pf.name}`}
             aria-label={`Stop ${pf.name}`}
             onClick={() => safeRequest("portforward.stop", { project, name: pf.name }, onError)}
           >
             <Square className="size-3" />
-          </Button>
+          </button>
         )}
       </div>
     </div>
