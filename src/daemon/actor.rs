@@ -870,6 +870,7 @@ pub enum Command {
     GetFileContents {
         task_id: String,
         path: String,
+        project: Option<String>,
         reply: oneshot::Sender<Option<wire::FileDoc>>,
     },
     /// List files in a task's project working tree.
@@ -1516,11 +1517,17 @@ impl DaemonHandle {
         rx.await.unwrap_or_default()
     }
 
-    pub async fn file_contents(&self, task_id: &str, path: &str) -> Option<wire::FileDoc> {
+    pub async fn file_contents(
+        &self,
+        task_id: &str,
+        path: &str,
+        project: Option<String>,
+    ) -> Option<wire::FileDoc> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::GetFileContents {
             task_id: task_id.to_string(),
             path: path.to_string(),
+            project,
             reply: tx,
         })
         .await;
@@ -3643,12 +3650,16 @@ impl Daemon {
             Command::GetFileContents {
                 task_id,
                 path,
+                project,
                 reply,
             } => {
+                // Same fallback as `ListFiles`: no task means read the
+                // project's own checkout, so a tree and its preview agree.
                 let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|_| self.task_repo_path(&task_id));
+                    .and_then(|_| self.task_repo_path(&task_id))
+                    .or_else(|| project.as_deref().and_then(|name| self.project_path(name)));
                 tokio::spawn(async move {
                     let doc = match repo {
                         Some(p) => super::diff::file_doc(&p, &path).await.ok(),

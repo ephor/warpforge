@@ -19,6 +19,7 @@ import { BacklogView } from "../components/backlog/BacklogView";
 import { NewWorkItemDrawer } from "../components/backlog/NewWorkItemDrawer";
 import { daemon } from "../daemon";
 import type { ServiceInfo, Snapshot } from "../protocol";
+import { ProjectFilesSurface } from "./projects/ProjectFilesSurface";
 import { ProjectRuntimeSurface } from "./projects/ProjectRuntimeSurface";
 import { PROJECT_SURFACE_TABS, ProjectSurfaceBar } from "./projects/ProjectSurfaceBar";
 import { type ProjectLiveCounts, RemoveProjectDialog } from "./projects/RemoveProjectDialog";
@@ -220,7 +221,9 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
       />
 
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-        {surface === "runtime" ? (
+        {surface === "files" ? (
+          <ProjectFilesSurface project={project.name} rootPath={project.path} />
+        ) : surface === "runtime" ? (
           <ProjectRuntimeSurface
             project={project.name}
             services={runtimeServices}

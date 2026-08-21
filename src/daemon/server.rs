@@ -646,7 +646,11 @@ async fn dispatch(
                 .await;
             Ok(json!(null))
         }
-        FileContents { task_id, path } => match handle.file_contents(&task_id, &path).await {
+        FileContents {
+            task_id,
+            path,
+            project,
+        } => match handle.file_contents(&task_id, &path, project).await {
             Some(doc) => serde_json::to_value(doc).map_err(|e| wire::RpcError {
                 code: wire::ErrorCode::Internal,
                 message: e.to_string(),

@@ -370,7 +370,15 @@ pub enum Method {
     /// Full old (HEAD) + new (working-tree) contents of one file — powers the
     /// editable side-by-side (CodeMirror merge) review.
     #[serde(rename = "file.contents")]
-    FileContents { task_id: String, path: String },
+    FileContents {
+        #[serde(default)]
+        task_id: String,
+        path: String,
+        /// Read from the project's own checkout when no task owns the file
+        /// (the project page's read-only Files surface).
+        #[serde(default)]
+        project: Option<String>,
+    },
     /// List files in the task's project working tree.
     #[serde(rename = "file.list")]
     FileList {

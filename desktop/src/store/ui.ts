@@ -19,8 +19,8 @@ export type RepositoryOperation = { taskId: string; kind: "pull" | "push" };
 export type TaskSurface = "files" | "diff" | "runtime" | "pipeline";
 export const DEFAULT_TASK_SURFACE: TaskSurface = "diff";
 
-/** Project-page surface. Files, Git and Pull Requests join this union later. */
-export type ProjectSurface = "backlog" | "runtime";
+/** Project-page surface. Git and Pull Requests join this union later. */
+export type ProjectSurface = "backlog" | "files" | "runtime";
 export const DEFAULT_PROJECT_SURFACE: ProjectSurface = "backlog";
 
 /** Transient intent to open a task already showing a specific file/diff. */
@@ -294,8 +294,7 @@ export const useUi = create<UiState>()(
         set((s) => ({ filesPanelCollapsed: !s.filesPanelCollapsed })),
       toggleRuntimeSidebarCollapsed: () =>
         set((s) => ({ runtimeSidebarCollapsed: !s.runtimeSidebarCollapsed })),
-      toggleDiffPanelCollapsed: () =>
-        set((s) => ({ diffPanelCollapsed: !s.diffPanelCollapsed })),
+      toggleDiffPanelCollapsed: () => set((s) => ({ diffPanelCollapsed: !s.diffPanelCollapsed })),
 
       // ── Font size settings ──
       setFontSize: (fontSize) => set({ fontSize: clampFontSize(fontSize) }),

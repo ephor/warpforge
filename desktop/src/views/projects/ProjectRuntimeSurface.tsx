@@ -77,10 +77,9 @@ export function ProjectRuntimeSurface({
               label={allServicesRunning ? "Stop all services" : "Start all services"}
               text={allServicesRunning ? "Stop services" : "Start services"}
               onClick={() =>
-                void runRuntimeAction(
-                  allServicesRunning ? "service.stopAll" : "service.startAll",
-                  { project },
-                )
+                void runRuntimeAction(allServicesRunning ? "service.stopAll" : "service.startAll", {
+                  project,
+                })
               }
             />
           )}
