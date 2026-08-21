@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- [`ce453d4`](https://github.com/ephor/warpforge/commit/ce453d40b2f68d96c6c059254f40e48f32f141ea) Thanks [@ephor](https://github.com/ephor)! - Search a whole project without leaving the task. Press ⌘⇧F (Ctrl ⇧ F) to open Find
+  in Files: type anything and see every matching line grouped by file, with a live
+  peek at the code around the highlighted hit. Enter opens the file right at that
+  line, centered in the editor with the cursor already there, ready to type. The
+  quick-open palette (double ⇧ Shift or ⌘P) now finds text too — matching source
+  lines appear under the file names and jump straight to the line you picked, with a
+  spinner while the search runs. Both palettes close on Escape from anywhere, or on a
+  click outside, so an accidental open is never a trap.
+
+### Patch Changes
+
+- [`1b3503d`](https://github.com/ephor/warpforge/commit/1b3503defba03e4924752c223829e26e54d21350) Thanks [@ephor](https://github.com/ephor)! - New versions are now impossible to miss. When an update is available, a bright
+  button appears in the top bar naming the version — one click downloads it, and a
+  second one restarts Warpforge to finish. Progress and any failure stay on that same
+  button, so the update never quietly stalls out of sight. The updates panel is still
+  there for release notes and manual checks.
+
+- [`9491bfd`](https://github.com/ephor/warpforge/commit/9491bfda05c80863e18d7f5d71d78ca0fe930f4b) Thanks [@ephor](https://github.com/ephor)! - Warpforge can now be installed with a single Homebrew command:
+  `brew install --cask ephor/tap/warpforge`. The cask installs the same signed,
+  notarized build as the DMG, and the built-in updater stays in charge of
+  updates afterwards — Homebrew only handles the initial install.
+
+- [`abb14af`](https://github.com/ephor/warpforge/commit/abb14af9c14836fac22afadbbd3d08e4df5ba43d) Thanks [@ephor](https://github.com/ephor)! - Project search now keeps up with your typing. Searching a mid-sized repository used
+  to take seconds and stall while results trickled in; it now finishes in a fraction
+  of that, so Find in Files and the quick-open palette respond as you type. Searches
+  also stay on the files that belong to the project — build output, dependencies and
+  other ignored files no longer bury the results you want.
+
 ## 0.6.8
 
 ### Patch Changes
