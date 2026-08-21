@@ -37,6 +37,7 @@ export function FilesSurface({
   onSelectTab,
   onCloseTab,
   fileDoc,
+  fileDocError,
   editable,
   taskId,
   onSave,
@@ -56,6 +57,8 @@ export function FilesSurface({
   onSelectTab: (path: string) => void;
   onCloseTab: (path: string) => void;
   fileDoc: FileDoc | null;
+  /** Why the active file could not be read; null while it still might load. */
+  fileDocError?: string | null;
   editable: boolean;
   taskId: string;
   onSave: (content: string) => void;
@@ -151,6 +154,10 @@ export function FilesSurface({
                 onAskFile={onAskFile}
               />
             </Suspense>
+          ) : fileDocError ? (
+            <p className="p-3 text-sm text-muted-foreground">
+              Could not read {activeFilePath}: {fileDocError}
+            </p>
           ) : (
             <p className="p-3 text-sm text-muted-foreground">Loading file…</p>
           )}

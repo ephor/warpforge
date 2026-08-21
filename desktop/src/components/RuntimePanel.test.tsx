@@ -511,6 +511,64 @@ describe("RuntimePanel — Start all port-forwards", () => {
   });
 });
 
+// Services used to have no bulk control at all while port-forwards did, which
+// read as a missing feature rather than a distinction between the two lists.
+describe("RuntimePanel — bulk controls are the same for both lists", () => {
+  function renderWith(services: ServiceInfo[], portforwards: PortForwardInfo[]) {
+    vi.spyOn(daemon, "fetchServiceLogs").mockReturnValue(new Promise(() => {}));
+    vi.spyOn(daemon, "fetchPortForwardLogs").mockReturnValue(new Promise(() => {}));
+    return render(
+      <RuntimePanel project="warpforge" services={services} portforwards={portforwards} />,
+    );
+  }
+
+  it("offers start-all for services with something stopped", () => {
+    const requestSpy = vi.spyOn(daemon, "request").mockResolvedValue({});
+    renderWith([webService, stoppedService], []);
+
+    fireEvent.click(screen.getByLabelText("Start all services"));
+
+    expect(requestSpy).toHaveBeenCalledWith("service.startAll", { project: "warpforge" });
+  });
+
+  it("offers stop-all for services with something up", () => {
+    const requestSpy = vi.spyOn(daemon, "request").mockResolvedValue({});
+    renderWith([webService], []);
+
+    // Everything is running, so starting is not on offer — stopping is.
+    expect(screen.queryByLabelText("Start all services")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Stop all services"));
+
+    expect(requestSpy).toHaveBeenCalledWith("service.stopAll", { project: "warpforge" });
+  });
+
+  it("waits for a starting service instead of firing start-all again", () => {
+    renderWith([stoppedService, startingService], []);
+
+    expect(screen.getByLabelText("Start all services")).toBeDisabled();
+  });
+
+  it("offers stop-all for port-forwards that are up", () => {
+    const requestSpy = vi.spyOn(daemon, "request").mockResolvedValue({});
+    renderWith([], [activePf]);
+
+    fireEvent.click(screen.getByLabelText("Stop all port-forwards"));
+
+    expect(requestSpy).toHaveBeenCalledWith("portforward.stopAll", { project: "warpforge" });
+  });
+
+  it("reports a failed bulk action in the panel's error line", async () => {
+    vi.spyOn(daemon, "request").mockRejectedValue(new Error("port 4000 is taken"));
+    renderWith([stoppedService], []);
+
+    fireEvent.click(screen.getByLabelText("Start all services"));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("port 4000 is taken");
+    });
+  });
+});
+
 describe("RuntimePanel — log viewer isolation", () => {
   it("fetches logs only once per target (not per logSeq change)", () => {
     const fetchSpy = vi.spyOn(daemon, "fetchServiceLogs").mockResolvedValue(["line1"]);

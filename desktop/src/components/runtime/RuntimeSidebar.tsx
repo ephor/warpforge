@@ -1,4 +1,4 @@
-import { Loader2, Play, PlugZap, RotateCw, Square } from "lucide-react";
+import { Loader2, Play, RotateCw, Square } from "lucide-react";
 import { memo } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -16,43 +16,65 @@ function safeRequest(method: string, params: unknown, onError: (msg: string) => 
   });
 }
 
-export function PortForwardSectionHeader({
-  project,
-  portforwards,
+/**
+ * A list heading with its own bulk controls, in the same shape every other
+ * panel heading in the app uses (`Files`, `Changes`): 44px tall, bottom rule,
+ * title left, icon actions right. Services and port-forwards both get one, so
+ * the two lists read as siblings — a control present for one and missing for
+ * the other looked like an oversight rather than a distinction.
+ *
+ * Start shows while anything is still down and stop while anything is still
+ * up, instead of one button whose meaning you have to infer from the rows.
+ */
+function SectionHeader({
+  label,
+  bulk,
   onError,
 }: {
-  project: string;
-  portforwards: PortForwardInfo[];
+  label: string;
+  bulk: {
+    noun: string;
+    project: string;
+    startMethod: string;
+    stopMethod: string;
+    hasStartable: boolean;
+    hasStoppable: boolean;
+    isSettling: boolean;
+    allUp: boolean;
+  };
   onError: (msg: string) => void;
 }) {
-  const hasStartable = portforwards.some((pf) => pf.status === "stopped" || pf.status === "failed");
-  const allActive = portforwards.every((pf) => pf.status === "active");
-  const hasStarting = portforwards.some(
-    (pf) => pf.status === "starting" || pf.status === "restarting",
-  );
-  const startAllDisabled = !hasStartable || hasStarting || allActive;
-
+  const { allUp, hasStartable, hasStoppable, isSettling, noun, project } = bulk;
   return (
-    <div className="sticky top-0 z-10 flex items-center bg-card px-3 py-1.5">
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-        Port Forwards
-      </span>
-      {!allActive && (
+    <div className="sticky top-0 z-10 flex h-11 items-center gap-2 border-b bg-card px-3 text-sm font-semibold">
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {!allUp && (
         <button
           type="button"
-          disabled={startAllDisabled}
-          className="ml-auto rounded p-px text-muted-foreground/60 hover:text-foreground disabled:pointer-events-none disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          disabled={!hasStartable || isSettling}
+          className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           title={
-            hasStarting
-              ? "Port-forwards starting…"
+            isSettling
+              ? `${noun} starting…`
               : hasStartable
-                ? "Start all port-forwards"
-                : "No startable port-forwards"
+                ? `Start all ${noun}`
+                : `No startable ${noun}`
           }
-          aria-label="Start all port-forwards"
-          onClick={() => safeRequest("portforward.startAll", { project }, onError)}
+          aria-label={`Start all ${noun}`}
+          onClick={() => safeRequest(bulk.startMethod, { project }, onError)}
         >
-          <Play className="size-3" />
+          <Play className="size-3.5" />
+        </button>
+      )}
+      {hasStoppable && (
+        <button
+          type="button"
+          className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          title={`Stop all ${noun}`}
+          aria-label={`Stop all ${noun}`}
+          onClick={() => safeRequest(bulk.stopMethod, { project }, onError)}
+        >
+          <Square className="size-3.5" />
         </button>
       )}
     </div>
@@ -189,7 +211,10 @@ const PortForwardRow = memo(function PortForwardRow({
         aria-pressed={selected}
         title={pf.name}
       >
-        <PlugZap className="size-3 shrink-0" />
+        {/* Same status dot as a service row: which list a row is in already
+            says what kind of thing it is, so the icon is free to carry the
+            status instead — and the two lists scan as one. */}
+        <StatusDot variant={badge.variant} />
         <span className="min-w-0 flex-1 truncate font-medium">{pf.name}</span>
         <span className="sr-only">{badge.label}</span>
       </button>
@@ -254,11 +279,26 @@ export function RuntimeSidebar({
       className="shrink-0 self-stretch overflow-y-auto border-l"
       style={{ width: SIDEBAR_WIDTH, minWidth: SIDEBAR_WIDTH }}
     >
-      <div className="flex h-11 shrink-0 items-center border-b px-3 text-sm font-semibold">
-        Services
-      </div>
       {services.length > 0 && (
         <div className="flex flex-col">
+          <SectionHeader
+            label="Services"
+            onError={onError}
+            bulk={{
+              allUp: services.every((svc) => svc.status === "running"),
+              hasStartable: services.some(
+                (svc) => svc.status === "stopped" || svc.status === "failed",
+              ),
+              hasStoppable: services.some(
+                (svc) => svc.status === "running" || svc.status === "starting",
+              ),
+              isSettling: services.some((svc) => svc.status === "starting"),
+              noun: "services",
+              project,
+              startMethod: "service.startAll",
+              stopMethod: "service.stopAll",
+            }}
+          />
           {services.map((svc) => (
             <ServiceRow
               key={svc.name}
@@ -273,10 +313,23 @@ export function RuntimeSidebar({
       )}
       {portforwards.length > 0 && (
         <div className="flex flex-col">
-          <PortForwardSectionHeader
-            project={project}
-            portforwards={portforwards}
+          <SectionHeader
+            label="Port Forwards"
             onError={onError}
+            bulk={{
+              allUp: portforwards.every((pf) => pf.status === "active"),
+              hasStartable: portforwards.some(
+                (pf) => pf.status === "stopped" || pf.status === "failed",
+              ),
+              hasStoppable: portforwards.some((pf) => pf.status === "active"),
+              isSettling: portforwards.some(
+                (pf) => pf.status === "starting" || pf.status === "restarting",
+              ),
+              noun: "port-forwards",
+              project,
+              startMethod: "portforward.startAll",
+              stopMethod: "portforward.stopAll",
+            }}
           />
           {portforwards.map((pf) => (
             <PortForwardRow

@@ -246,14 +246,13 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
 
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {surface === "files" ? (
-          <ProjectFilesSurface project={project.name} rootPath={project.path} />
+          <ProjectFilesSurface key={project.name} project={project.name} rootPath={project.path} />
         ) : surface === "runtime" ? (
           <ProjectRuntimeSurface
             project={project.name}
             services={runtimeServices}
             portforwards={pfs}
             terminals={projectTerminals}
-            declaredServices={project.declaredServices}
             onAppendToChat={(formattedLogs) => onNewTask(project.name, formattedLogs)}
           />
         ) : (
