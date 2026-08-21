@@ -893,14 +893,16 @@ fn render_log_selection(
         .join("\n")
 }
 
-/// Format epoch millis as `YYYY-MM-DD HH:MM:SS` in UTC. Self-contained so we
-/// avoid pulling a chrono-style dependency into the daemon.
+/// Format epoch millis as `YYYY-MM-DD HH:MM:SSZ` in UTC. Self-contained so we
+/// avoid pulling a chrono-style dependency into the daemon. The `Z` is not
+/// decoration: without it a reader in a non-UTC zone reads the offset from
+/// their own clock as the daemon lagging behind.
 fn fmt_utc(ms: u64) -> String {
     let secs = (ms / 1000) as i64;
     let (y, mo, d) = civil_from_days(secs.div_euclid(86400));
     let rem = secs.rem_euclid(86400);
     format!(
-        "{y:04}-{mo:02}-{d:02} {:02}:{:02}:{:02}",
+        "{y:04}-{mo:02}-{d:02} {:02}:{:02}:{:02}Z",
         rem / 3600,
         (rem % 3600) / 60,
         rem % 60
@@ -1681,7 +1683,7 @@ mod tests {
 
     #[test]
     fn fmt_utc_renders_epoch() {
-        assert_eq!(fmt_utc(0), "1970-01-01 00:00:00");
-        assert_eq!(fmt_utc(86_400_000), "1970-01-02 00:00:00");
+        assert_eq!(fmt_utc(0), "1970-01-01 00:00:00Z");
+        assert_eq!(fmt_utc(86_400_000), "1970-01-02 00:00:00Z");
     }
 }
