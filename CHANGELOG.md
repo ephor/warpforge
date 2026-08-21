@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.8
+
+### Patch Changes
+
+- [`b6c5c64`](https://github.com/ephor/warpforge/commit/b6c5c64552bdec13a988edf899ed8fb53327919d) Thanks [@ephor](https://github.com/ephor)! - Connect Warpforge's service tools to your terminal agent once, and they follow you
+  between projects. Previously a hand-configured connection had to name a single
+  project up front, so an agent started in any other repository read the wrong
+  runtime — or refused to start at all. Now the project is picked from the folder
+  the agent runs in, including task worktrees, so one setup covers every project you
+  have registered. Agents launched from Warpforge itself are unchanged.
+
+- [`94f0a8a`](https://github.com/ephor/warpforge/commit/94f0a8a61804458512ace9bb20592f8490956df0) Thanks [@ephor](https://github.com/ephor)! - Service log timestamps now say they are UTC. Outside the UTC zone the bare
+  timestamp read as a clock that had fallen hours behind, so a healthy service
+  looked stalled; the lines now end in `Z`.
+
 ## 0.6.7
 
 ### Patch Changes
