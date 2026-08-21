@@ -15,7 +15,7 @@ use warpforge_protocol as wire;
 /// Build/dependency directories, skipped at any depth. Keeping them costs
 /// ~162k entries on this repo alone, and the editor tree never wants them —
 /// but other .gitignore'd files (`.env` and friends) stay listed.
-const HEAVY_DIRS: &[&str] = &[".git", "node_modules", "target", "dist", ".next"];
+pub(super) const HEAVY_DIRS: &[&str] = &[".git", "node_modules", "target", "dist", ".next"];
 
 /// OS / editor junk never shown in the file tree.
 const IGNORED_NAMES: &[&str] = &[
@@ -86,96 +86,7 @@ pub async fn list_files(repo: &str, include_ignored: bool) -> Result<Vec<wire::P
     .await?
 }
 
-/// Case-insensitive substring search across the project working tree. Reuses
-/// the same fs walk as `list_files` so heavy dirs stay out, and stops once
-/// `limit` matches accumulate. Returns path + 1-based line/column + the line.
-pub fn search_files(repo: &str, query: &str, limit: u32) -> Result<Vec<wire::SymbolMatch>> {
-    if query.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let needle = query.to_lowercase();
-    let mut out = Vec::new();
-    search_walk(
-        std::path::Path::new(repo),
-        std::path::Path::new(repo),
-        &needle,
-        limit,
-        &mut out,
-    )?;
-    Ok(out)
-}
-
-fn search_walk(
-    root: &std::path::Path,
-    dir: &std::path::Path,
-    needle: &str,
-    limit: u32,
-    out: &mut Vec<wire::SymbolMatch>,
-) -> Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        if out.len() as u32 >= limit {
-            break;
-        }
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if HEAVY_DIRS.contains(&name.as_ref()) {
-            continue;
-        }
-        if name.ends_with(".swp") || name.ends_with("~") {
-            continue;
-        }
-        if path.is_dir() {
-            search_walk(root, &path, needle, limit, out)?;
-        } else if path.is_file() {
-            if let Ok(rel) = path.strip_prefix(root) {
-                scan_file(
-                    &rel.to_string_lossy().replace('\\', "/"),
-                    &path,
-                    needle,
-                    limit,
-                    out,
-                )?;
-                if out.len() as u32 >= limit {
-                    break;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn scan_file(
-    rel: &str,
-    path: &std::path::Path,
-    needle: &str,
-    limit: u32,
-    out: &mut Vec<wire::SymbolMatch>,
-) -> Result<()> {
-    // Skip obvious binaries cheaply (~\0 in the first chunk).
-    let cheap = std::fs::read(path)?;
-    if cheap.iter().take(8000).any(|&b| b == 0) {
-        return Ok(());
-    }
-    let text = String::from_utf8_lossy(&cheap);
-    for (line, l) in (1u32..).zip(text.split('\n')) {
-        if out.len() as u32 >= limit {
-            break;
-        }
-        if let Some(col) = l.to_lowercase().find(needle) {
-            out.push(wire::SymbolMatch {
-                path: rel.to_string(),
-                line,
-                column: col as u32 + 1,
-                text: l.to_string(),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn is_ignored_path(path: &str) -> bool {
+pub(super) fn is_ignored_path(path: &str) -> bool {
     if path.split('/').any(|part| HEAVY_DIRS.contains(&part)) {
         return true;
     }
@@ -1330,11 +1241,20 @@ pub async fn commit(
         );
     }
 
-    // Commit.
+    // Commit. An empty box on amend means "same message, new content" — the UI
+    // allows it deliberately — so reuse the previous message instead of handing
+    // git an empty `-m`, which it refuses.
     let mut ci = Command::new("git");
-    ci.args(["-C", repo, "commit", "-m", message]);
+    ci.args(["-C", repo, "commit"]);
     if amend {
         ci.arg("--amend");
+        if message.trim().is_empty() {
+            ci.arg("--no-edit");
+        } else {
+            ci.args(["-m", message]);
+        }
+    } else {
+        ci.args(["-m", message]);
     }
     let out = ci.output().await?;
     if !out.status.success() {
@@ -1348,6 +1268,20 @@ pub async fn commit(
         bail!("git commit failed: {}", msg.trim());
     }
     Ok(())
+}
+
+/// Full message (subject and body) of the repo's most recent commit. Returns an
+/// empty string when there is nothing to read — a fresh repo with no commits is
+/// not an error for callers, just nothing to amend.
+pub async fn last_commit_message(repo: &str) -> Result<String> {
+    let out = Command::new("git")
+        .args(["-C", repo, "log", "-1", "--pretty=%B"])
+        .output()
+        .await?;
+    if !out.status.success() {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
 }
 
 /// Revert exactly one hunk of one file in the working tree.
@@ -1581,47 +1515,44 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// An empty message on amend must keep the message being rewritten. Git
+    /// refuses `-m ""`, so this used to abort the commit outright.
+    #[tokio::test]
+    async fn amend_without_a_message_keeps_the_previous_one() {
+        let dir = std::env::temp_dir().join(format!("wf-amend-{}", uuid::Uuid::new_v4()));
+        init_repo(&dir).await;
+        let repo = dir.to_str().unwrap();
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        commit(repo, "feat: first\n\nwith a body", None, false)
+            .await
+            .unwrap();
+
+        std::fs::write(dir.join("b.txt"), "two\n").unwrap();
+        commit(repo, "", None, true).await.unwrap();
+
+        assert_eq!(
+            last_commit_message(repo).await.unwrap(),
+            "feat: first\n\nwith a body"
+        );
+        let log = Command::new("git")
+            .args(["-C", repo, "log", "--oneline"])
+            .output()
+            .await
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&log.stdout).lines().count(),
+            1,
+            "amend rewrites rather than adds"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     async fn init_repo(dir: &std::path::Path) {
         std::fs::create_dir_all(dir).unwrap();
         git(dir, &["init", "-q"]).await;
         git(dir, &["config", "user.email", "t@t"]).await;
         git(dir, &["config", "user.name", "t"]).await;
-    }
-
-    #[test]
-    fn search_finds_substring_with_line_and_column() {
-        let dir = std::env::temp_dir().join(format!("wf-search-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("a.txt"), "hello world\nfn helper() {\n}\nfoo\n").unwrap();
-        std::fs::create_dir_all(dir.join("sub")).unwrap();
-        std::fs::write(
-            dir.join("sub").join("b.txt"),
-            "line with helper here\nanother\n",
-        )
-        .unwrap();
-        // A heavy dir must be skipped.
-        std::fs::create_dir_all(dir.join("node_modules")).unwrap();
-        std::fs::write(dir.join("node_modules").join("x.txt"), "helper\n").unwrap();
-
-        let matches = search_files(dir.to_str().unwrap(), "helper", 50).unwrap();
-
-        // node_modules excluded; only two real hits across two files.
-        assert_eq!(matches.len(), 2);
-        let a = matches.iter().find(|m| m.path == "a.txt").unwrap();
-        assert_eq!((a.line, a.column), (2, 4));
-        let b = matches.iter().find(|m| m.path == "sub/b.txt").unwrap();
-        assert_eq!((b.line, b.column), (1, 11));
-
-        // Case-insensitive.
-        let upper = search_files(dir.to_str().unwrap(), "Helper", 50).unwrap();
-        assert_eq!(upper.len(), 2);
-
-        // Empty query yields nothing.
-        assert!(search_files(dir.to_str().unwrap(), "", 50)
-            .unwrap()
-            .is_empty());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

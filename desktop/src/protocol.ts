@@ -517,7 +517,6 @@ export interface GitBranchList {
   remotes?: string[];
 }
 
-
 export interface GitPushFile {
   path: string;
   status: string;

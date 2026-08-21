@@ -27,40 +27,61 @@ pub fn notify_attention(
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        use notify_rust::Notification;
+        use mac_usernotifications::{Action, Notification};
 
-        let mut builder = Notification::new();
-        builder.summary(&payload.title);
-        builder.subtitle(&payload.subtitle);
-        builder.body(&payload.body);
+        let mut notification = Notification::new()
+            .title(&payload.title)
+            .subtitle(&payload.subtitle)
+            .message(&payload.body);
         if payload.kind == "permission" {
-            builder.action("approve", "Approve");
-            builder.action("reject", "Reject");
+            notification = notification
+                .action(Action::button("approve", "Approve"))
+                .action(Action::button("reject", "Reject"));
         }
-        builder.action("review", "Review");
+        notification = notification.action(Action::button("review", "Review"));
 
-        let handle = builder.show().map_err(|e| e.to_string())?;
+        let AttentionPayload {
+            kind,
+            task_id,
+            request_id,
+            ..
+        } = payload;
 
-        // wait_for_action blocks the calling thread until the user responds, so it
-        // runs on a background thread. Tauri is a GUI app: the main thread already
-        // spins the run loop that macOS delivers the response to, so the callback
-        // fires here and we relay it to the web UI, which owns the daemon client.
-        let app = app.clone();
-        let kind = payload.kind.clone();
-        let task_id = payload.task_id.clone();
-        let request_id = payload.request_id.clone();
-        std::thread::spawn(move || {
-            handle.wait_for_action(move |action| {
-                let _ = app.emit(
-                    "notification-action",
-                    serde_json::json!({
-                        "kind": kind,
-                        "task_id": task_id,
-                        "request_id": request_id,
-                        "action": action,
-                    }),
-                );
-            });
+        // macOS delivers the response on the main thread's run loop, so waiting for
+        // it must not block: the crate's blocking wrappers only work off the main
+        // thread while that run loop happens to be idle, which it is not right after
+        // an IPC call. Awaiting the async API sidesteps the timing entirely.
+        tauri::async_runtime::spawn(async move {
+            let handle = match notification.send().await {
+                Ok(handle) => handle,
+                Err(error) => {
+                    eprintln!("warpforge: notification send failed: {error:?}");
+                    return;
+                }
+            };
+            let response = match handle.response().await {
+                Ok(response) => response,
+                Err(error) => {
+                    eprintln!("warpforge: notification response failed: {error:?}");
+                    return;
+                }
+            };
+            let action = if response.is_dismiss_action() {
+                "__closed"
+            } else if response.is_default_action() {
+                "default"
+            } else {
+                &response.action_identifier
+            };
+            let _ = app.emit(
+                "notification-action",
+                serde_json::json!({
+                    "kind": kind,
+                    "task_id": task_id,
+                    "request_id": request_id,
+                    "action": action,
+                }),
+            );
         });
     }
     Ok(())

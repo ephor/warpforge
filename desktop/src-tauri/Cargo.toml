@@ -7,7 +7,7 @@
 
 [package]
 name = "warpforge-desktop"
-version = "0.6.2"
+version = "0.6.8"
 edition = "2021"
 description = "Warpforge desktop shell — a thin Tauri client for the warpforge daemon"
 
@@ -26,11 +26,11 @@ serde_json = "1"
 dirs = "5"
 # Wire types only — never daemon internals.
 warpforge-protocol = { path = "../../crates/warpforge-protocol" }
+env_logger = "0.11"
 
 # Keep this last. Placed mid-`[dependencies]` it silently swallows every entry
 # below it, so `serde_json`, `dirs` and `warpforge-protocol` become macOS-only
 # and the Linux build fails on unresolved imports rather than on anything to do
 # with notifications.
 [target.'cfg(target_os = "macos")'.dependencies]
-notify-rust = { version = "4.18", features = ["preview-macos-un"] }
 mac-usernotifications = "0.3.1"

@@ -21,7 +21,7 @@ export const DEFAULT_TASK_SURFACE: TaskSurface = "diff";
 
 /** Transient intent to open a task already showing a specific file/diff. */
 export type TaskOpenNav =
-  | { surface: "files"; path: string }
+  | { surface: "files"; path: string; line?: number; column?: number }
   | { surface: "diff"; path: string; hunks?: EditHunk[] };
 
 export interface PinnedTileLayout {
@@ -111,6 +111,8 @@ interface UiState extends SettingsState {
   sidebarWidth: number;
   /** Sidebar shrunk to its icon rail. */
   sidebarCollapsed: boolean;
+  /** File-tree panel inside the Files surface collapsed to a thin rail. */
+  filesPanelCollapsed: boolean;
   // Editor: language-server (LSP) features — persisted, user-toggled.
   lspEnabled: boolean;
 
@@ -137,6 +139,7 @@ interface UiState extends SettingsState {
   setPinnedLayout: (id: string, layout: PinnedTileLayout) => void;
   setSidebarWidth: (w: number) => void;
   toggleSidebarCollapsed: () => void;
+  toggleFilesPanelCollapsed: () => void;
   toggleLsp: () => void;
 }
 
@@ -168,6 +171,7 @@ export const useUi = create<UiState>()(
       pinnedLayout: {},
       sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
       sidebarCollapsed: false,
+      filesPanelCollapsed: false,
       fontSize: DEFAULT_FONT_SIZE,
       monoFontSize: DEFAULT_MONO_FONT_SIZE,
       theme: DEFAULT_THEME,
@@ -255,6 +259,8 @@ export const useUi = create<UiState>()(
         })),
       setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: clampSidebarWidth(sidebarWidth) }),
       toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      toggleFilesPanelCollapsed: () =>
+        set((s) => ({ filesPanelCollapsed: !s.filesPanelCollapsed })),
 
       // ── Font size settings ──
       setFontSize: (fontSize) => set({ fontSize: clampFontSize(fontSize) }),

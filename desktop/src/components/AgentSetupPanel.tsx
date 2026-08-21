@@ -1,7 +1,8 @@
-import { Download, Loader2 } from "lucide-react";
+import { Download, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { Button } from "@/components/ui/button";
+import { configRole } from "@/lib/configRole";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
@@ -60,6 +61,7 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
       ),
   );
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
+  const [probing, setProbing] = useState<Set<string>>(() => new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState(!detected);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -146,6 +148,28 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
     }
   };
 
+  /** Re-read the agent's model list from its harness. Needed when a provider
+   *  or model was added outside Warpforge — the daemon caches the list and only
+   *  refreshes it on its own at startup. */
+  const refreshModels = async (id: string) => {
+    setProbing((prev) => new Set(prev).add(id));
+    setErrors((prev) => {
+      const { [id]: _cleared, ...rest } = prev;
+      return rest;
+    });
+    try {
+      await daemon.probeAgent(id);
+    } catch (e) {
+      setErrors((prev) => ({ ...prev, [id]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setProbing((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
   const save = async () => {
     // Write every known agent, not just the enabled ones: dropping the rest
     // would erase the record that the user deliberately turned them off. Cached
@@ -191,11 +215,17 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
 
   return (
     <>
-      <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {agents.map((agent) => {
           const on = enabled.has(agent.id);
           const isBusy = busy.has(agent.id);
           const behind = agent.status === "behind";
+          // Only a saved-enabled agent has a cached list the daemon can refresh.
+          const savedConfig = configured?.find((c) => c.id === agent.id);
+          const canRefresh = !!savedConfig?.enabled;
+          const modelCount = savedConfig?.models.find((o) => configRole(o) === "model")?.options
+            .length;
+          const isProbing = probing.has(agent.id);
           return (
             <div
               key={agent.id}
@@ -222,21 +252,21 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
                 {on && <div className="size-2 rounded-sm bg-primary-foreground" />}
               </div>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 text-sm font-medium">
+                <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
                   <AgentLogo agentId={agent.id} displayName={agent.displayName} />
-                  {agent.displayName}
+                  <span className="truncate">{agent.displayName}</span>
                   {agent.installed ? (
                     behind ? (
-                      <span className="rounded-full bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
+                      <span className="shrink-0 whitespace-nowrap rounded-full bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
                         update available
                       </span>
                     ) : (
-                      <span className="rounded-full bg-ok/15 px-1.5 py-0.5 text-[10px] font-medium text-ok">
+                      <span className="shrink-0 whitespace-nowrap rounded-full bg-ok/15 px-1.5 py-0.5 text-[10px] font-medium text-ok">
                         {agent.version ? `v${agent.version}` : "installed"}
                       </span>
                     )
                   ) : (
-                    <span className="flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    <span className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                       <Download className="size-2.5" />
                       not found
                     </span>
@@ -244,6 +274,9 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
                 </div>
                 <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
                   {agent.defaultAcpCommand}
+                  {modelCount !== undefined && (
+                    <span className="font-sans"> · {modelCount} models</span>
+                  )}
                 </p>
                 {behind && agent.latestVersion && (
                   <p className="mt-0.5 text-[11px] text-warn">
@@ -261,33 +294,55 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
                   </p>
                 )}
               </div>
-              {agent.canManage && (!agent.installed || behind) && (
-                <Button
-                  size="sm"
-                  variant={behind ? "default" : "secondary"}
-                  disabled={isBusy}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void manage(agent.id);
-                  }}
-                >
-                  {isBusy && <Loader2 className="size-3 animate-spin" />}
-                  {isBusy ? "Working…" : agent.installed ? "Update" : "Install"}
-                </Button>
-              )}
+              <div className="flex shrink-0 items-center gap-1">
+                {canRefresh && (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-7"
+                    disabled={isProbing}
+                    title="Re-read this agent's model list from the agent itself. Use it after adding a provider or model outside Warpforge."
+                    aria-label={`Refresh ${agent.displayName} models`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void refreshModels(agent.id);
+                    }}
+                  >
+                    <RefreshCw className={cn("size-3.5", isProbing && "animate-spin")} />
+                  </Button>
+                )}
+                {agent.canManage && (!agent.installed || behind) && (
+                  <Button
+                    size="sm"
+                    variant={behind ? "default" : "secondary"}
+                    className="h-7 whitespace-nowrap px-2 text-xs"
+                    disabled={isBusy}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void manage(agent.id);
+                    }}
+                  >
+                    {isBusy && <Loader2 className="size-3 animate-spin" />}
+                    {isBusy ? "Working…" : agent.installed ? "Update" : "Install"}
+                  </Button>
+                )}
+              </div>
             </div>
           );
         })}
       </div>
       <div className="flex items-center justify-end gap-3 pt-3">
+        <span className="mr-auto text-[11px] text-muted-foreground">
+          Enable the agents you want available for new tasks, then Save.
+        </span>
         {refreshing && (
-          <span className="mr-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <Loader2 className="size-3 animate-spin" />
             Checking versions…
           </span>
         )}
         {loadError && !refreshing && (
-          <span className="mr-auto text-[11px] text-muted-foreground">
+          <span className="text-[11px] text-muted-foreground">
             Version check failed: {loadError}
           </span>
         )}

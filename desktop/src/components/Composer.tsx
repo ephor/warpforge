@@ -353,11 +353,12 @@ export const Composer = forwardRef<
           setRefDrag(false);
           const mimePath = e.dataTransfer.getData?.(FILE_REF_MIME) ?? "";
           const plainPath = e.dataTransfer.getData?.("text/plain") ?? "";
-          const refPath = mimePath && fileSet.has(mimePath)
-            ? mimePath
-            : plainPath && fileSet.has(plainPath)
-              ? plainPath
-              : "";
+          const refPath =
+            mimePath && fileSet.has(mimePath)
+              ? mimePath
+              : plainPath && fileSet.has(plainPath)
+                ? plainPath
+                : "";
           if (refPath) {
             const dropCaret = textRef.current?.selectionStart ?? value.length;
             const result = insertFileRef(value, dropCaret, refPath);

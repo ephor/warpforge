@@ -18,13 +18,10 @@ import {
   showContextMenu,
   useNativeContextMenu,
 } from "../../hooks/useNativeContextMenu";
-import type { ProjectFile } from "../../protocol";
 import { FILE_REF_MIME } from "../../lib/composerMentions";
+import type { ProjectFile } from "../../protocol";
+import { FileSystemActionDialog, type FileSystemAction } from "./FileSystemActionDialog";
 import { projectFileParentFolders } from "./projectFileTree";
-import {
-  FileSystemActionDialog,
-  type FileSystemAction,
-} from "./FileSystemActionDialog";
 
 export interface ProjectTreeNode {
   name: string;
@@ -175,13 +172,16 @@ export function ProjectFilesPanel({
   const targetRef = useRef<{ path?: string; fKey?: string }>({});
   const [fileAction, setFileAction] = useState<FileSystemAction | null>(null);
 
-  const openExternalPath = useCallback(async (path: string, reveal: boolean) => {
-    if (!("__TAURI_INTERNALS__" in window) || !rootPath) return;
-    const absolute = `${rootPath.replace(/\/+$/, "")}/${path}`;
-    const { openPath, revealItemInDir } = await import("@tauri-apps/plugin-opener");
-    if (reveal) await revealItemInDir(absolute);
-    else await openPath(absolute);
-  }, [rootPath]);
+  const openExternalPath = useCallback(
+    async (path: string, reveal: boolean) => {
+      if (!("__TAURI_INTERNALS__" in window) || !rootPath) return;
+      const absolute = `${rootPath.replace(/\/+$/, "")}/${path}`;
+      const { openPath, revealItemInDir } = await import("@tauri-apps/plugin-opener");
+      if (reveal) await revealItemInDir(absolute);
+      else await openPath(absolute);
+    },
+    [rootPath],
+  );
 
   const menuHandlers = useMemo(
     () =>
@@ -200,31 +200,55 @@ export function ProjectFilesPanel({
             if (t.path) void navigator.clipboard.writeText(t.path);
           },
         ],
-        ["reveal", () => {
-          const t = targetRef.current;
-          if (t.path) void openExternalPath(t.path, true);
-        }],
-        ["terminal", () => {
-          const t = targetRef.current;
-          if (t.path) void openExternalPath(t.path, false);
-        }],
+        [
+          "reveal",
+          () => {
+            const t = targetRef.current;
+            if (t.path) void openExternalPath(t.path, true);
+          },
+        ],
+        [
+          "terminal",
+          () => {
+            const t = targetRef.current;
+            if (t.path) void openExternalPath(t.path, false);
+          },
+        ],
         ["refresh", () => onRefresh?.()],
-        ["new-file", () => {
-          const t = targetRef.current;
-          setFileAction({ kind: "create-file", parent: t.fKey ?? t.path?.split("/").slice(0, -1).join("/") ?? "" });
-        }],
-        ["new-folder", () => {
-          const t = targetRef.current;
-          setFileAction({ kind: "create-folder", parent: t.fKey ?? t.path?.split("/").slice(0, -1).join("/") ?? "" });
-        }],
-        ["rename", () => {
-          const t = targetRef.current;
-          if (t.path) setFileAction({ kind: "rename", path: t.path });
-        }],
-        ["delete", () => {
-          const t = targetRef.current;
-          if (t.path || t.fKey) setFileAction({ kind: "delete", path: t.path ?? t.fKey! });
-        }],
+        [
+          "new-file",
+          () => {
+            const t = targetRef.current;
+            setFileAction({
+              kind: "create-file",
+              parent: t.fKey ?? t.path?.split("/").slice(0, -1).join("/") ?? "",
+            });
+          },
+        ],
+        [
+          "new-folder",
+          () => {
+            const t = targetRef.current;
+            setFileAction({
+              kind: "create-folder",
+              parent: t.fKey ?? t.path?.split("/").slice(0, -1).join("/") ?? "",
+            });
+          },
+        ],
+        [
+          "rename",
+          () => {
+            const t = targetRef.current;
+            if (t.path) setFileAction({ kind: "rename", path: t.path });
+          },
+        ],
+        [
+          "delete",
+          () => {
+            const t = targetRef.current;
+            if (t.path || t.fKey) setFileAction({ kind: "delete", path: t.path ?? t.fKey! });
+          },
+        ],
         [
           "expand",
           () => {

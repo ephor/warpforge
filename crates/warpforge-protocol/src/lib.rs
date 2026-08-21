@@ -168,6 +168,12 @@ pub enum Method {
         #[serde(default)]
         limit: Option<u32>,
     },
+    /// List the project's declared services and port-forwards with their live
+    /// status and allocated ports. Read-only; used by the MCP bridge so an agent
+    /// can discover what runtime is up before reading logs or restarting a
+    /// service.
+    #[serde(rename = "runtime.list")]
+    RuntimeList { project: String },
 
     // ── Tasks (agent sessions on the board) ──
     #[serde(rename = "task.create")]
@@ -299,6 +305,12 @@ pub enum Method {
     /// install/update command and returns `{ ok, output }` when it finishes.
     #[serde(rename = "agents.install")]
     AgentsInstall { id: String },
+    /// Re-read an agent's model/selector list from the harness, replacing the
+    /// cached one. Use after adding a provider or model outside Warpforge.
+    /// Resolves once the probe finishes; the refreshed list arrives as
+    /// `agents.updated`.
+    #[serde(rename = "agents.probe")]
+    AgentsProbe { id: String },
 
     // ── Agent accounts (several logins per agent, one active) ──
     /// All registered accounts. Returns `{ accounts: AccountInfo[] }`.
@@ -479,6 +491,10 @@ pub enum Method {
     /// Describe the commits and files that would be sent by `git.push`.
     #[serde(rename = "git.pushInfo")]
     GitPushInfo { task_id: String },
+    /// Full message of the task repo's latest commit, for pre-filling an amend.
+    /// Returns `{ message }`, empty when the repo has no commits yet.
+    #[serde(rename = "git.lastCommitMessage")]
+    GitLastCommitMessage { task_id: String },
     /// Push the current branch. With `force`, uses `--force-with-lease`.
     #[serde(rename = "git.push")]
     GitPush {
@@ -2284,6 +2300,25 @@ mod tests {
         let req: Request = serde_json::from_value(json).unwrap();
         assert_eq!(req.id, 1);
         assert!(matches!(req.method, Method::AgentsDetect {}));
+    }
+
+    #[test]
+    fn agents_probe_roundtrip() {
+        let json: serde_json::Value =
+            serde_json::from_str(r#"{"id":4,"method":"agents.probe","params":{"id":"opencode"}}"#)
+                .unwrap();
+        let req: Request = serde_json::from_value(json).unwrap();
+        assert!(matches!(req.method, Method::AgentsProbe { id } if id == "opencode"));
+    }
+
+    #[test]
+    fn git_last_commit_message_roundtrip() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{"id":5,"method":"git.lastCommitMessage","params":{"task_id":"t1"}}"#,
+        )
+        .unwrap();
+        let req: Request = serde_json::from_value(json).unwrap();
+        assert!(matches!(req.method, Method::GitLastCommitMessage { task_id } if task_id == "t1"));
     }
 
     #[test]

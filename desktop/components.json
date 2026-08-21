@@ -15,6 +15,6 @@
     "utils": "@/lib/utils"
   },
   "registries": {
-    "@diceui": "https://diceui.com/r/{name}.json"
+    "@svgl": "https://svgl.app/r/{name}.json"
   }
 }

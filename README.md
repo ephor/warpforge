@@ -22,6 +22,10 @@
   <a href="#build-from-source">Build from source</a>
 </p>
 
+<p align="center">
+  <img src="docs/images/task-detail.png" alt="Warpforge task view: agent conversation, live diff, and staged changes" width="100%">
+</p>
+
 Warpforge is an **agentic development environment (ADE)**: the operating layer around your coding agents. Agent conversations, project runtime, isolated worktrees, live services, configurable multi-agent workflows, and human review live in one place — so running several agents does not turn into managing several terminals.
 
 It does not replace Claude Code, Codex, or OpenCode; those tools still do the coding. Warpforge gives them shared project context, parallel execution, runtime visibility, and a reviewable path from prompt to commit. Everything runs on your machine: there is no separate Warpforge account or API key, and your existing agent authentication stays with the underlying CLI.
@@ -30,6 +34,14 @@ It does not replace Claude Code, Codex, or OpenCode; those tools still do the co
 
 ### macOS Apple Silicon
 
+**Homebrew:**
+
+```bash
+brew install --cask ephor/tap/warpforge
+```
+
+**Or manually:**
+
 1. Open the [latest Warpforge release](https://github.com/ephor/warpforge/releases/latest).
 2. Download `Warpforge_<version>_aarch64.dmg`.
 3. Open the DMG and drag **Warpforge** into **Applications**.
@@ -37,7 +49,7 @@ It does not replace Claude Code, Codex, or OpenCode; those tools still do the co
 
 The build is signed with a Developer ID certificate and notarized by Apple, so it opens without Gatekeeper workarounds. It needs macOS 11 or newer on an Apple Silicon Mac and ships its own daemon — no Rust toolchain or source checkout required.
 
-**Updates are built in and signed.** Warpforge checks the release feed shortly after its daemon comes up, and on demand from the app. Downloading and installing are always explicit actions — nothing installs in the background. An update carries both the desktop UI and its matching daemon, verifies an exact version and protocol handshake, and is refused with a clear list of blockers while agent tasks or runtime transitions are still active rather than interrupting work.
+**Updates are built in and signed.** The in-app updater is the primary update channel for both install methods — Homebrew performs the initial install, and Warpforge keeps itself current afterwards (`auto_updates` is declared in the cask, so `brew upgrade` never fights the built-in updater). Warpforge checks the release feed shortly after its daemon comes up, and on demand from the app. Downloading and installing are always explicit actions — nothing installs in the background. An update carries both the desktop UI and its matching daemon, verifies an exact version and protocol handshake, and is refused with a clear list of blockers while agent tasks or runtime transitions are still active rather than interrupting work.
 
 > [!NOTE]
 > macOS on Apple Silicon is the validated desktop target. Windows and Linux packaging exists as an opt-in release preview, but those platforms have not been tested on real machines and are not claimed as publicly supported.
@@ -79,6 +91,9 @@ Warpforge detects agents as globally installed binaries and spawns them directly
 | OpenCode | `opencode` | `opencode acp` | `npm install -g opencode-ai` |
 | Qwen Code | `qwen` | `qwen --acp` | `npm install -g @qwen-code/qwen-code` |
 | Goose | `goose` | `goose acp` | `brew install block-goose-cli` |
+| Junie | `junie` | `junie --acp true` | `npm install -g @jetbrains/junie-cli` |
+| Cursor | `cursor-agent-acp` | `cursor-agent-acp` | `npm install -g @blowmage/cursor-agent-acp` |
+| Pi | `pi-acp` | `pi-acp` | `npm install -g @earendil-works/pi-coding-agent pi-acp` |
 
 Claude Code and Codex reach ACP through small adapter binaries. Warpforge shows whether each agent is present, which version is installed, and whether a newer one exists — and installs or updates it in one click from the agent panel. Any other ACP-compatible agent can be added with a custom command, globally or per project through `agentTemplates`.
 
@@ -87,6 +102,10 @@ Agent capabilities vary. Image input, session resume, slash commands, model sele
 ## Orchestration and workflows
 
 Warpforge supports two complementary ways to coordinate agents.
+
+<p align="center">
+  <img src="docs/images/new-task.png" alt="New task composer in orchestrator mode, choosing the lead agent and previewing the delegated split" width="100%">
+</p>
 
 ### The orchestrator agent
 
@@ -103,6 +122,10 @@ Orchestration stays inside a real conversation you can keep steering while child
 For repeatable work, choose one of the built-in **Plan + implement + review loop** or **Implement + review loop** workflows. The daemon—not a manager model—drives the fixed `plan? → implement → review ⇄ fix` sequence. Each stage is a visible child task with its own agent session, and each stage can use a different configured agent and model. Multiple reviewers can run in a review round, findings can point to exact lines, and repair rounds continue until approval or a configured limit.
 
 Workflows pause at safe boundaries, survive a daemon restart, and stop for structured human input when an agent asks a question or the review limit is reached. A completed pipeline never commits automatically; it lands in **Needs review** with its chats, timeline, and diff available for inspection.
+
+<p align="center">
+  <img src="docs/images/workflow-pipeline.png" alt="Workflow pipeline with implement, review, and fix stages and a reviewer verdict" width="100%">
+</p>
 
 Workflow definitions are versioned YAML files in `.warpforge/workflows/`. Built-ins can be copied into a project and customized there, so the process travels with the code instead of living in one person's UI settings.
 

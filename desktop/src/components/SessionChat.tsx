@@ -29,10 +29,7 @@ import { latestContextUsage } from "@/lib/sessionUsage";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
-import {
-  showContextMenu,
-  useNativeContextMenu,
-} from "../hooks/useNativeContextMenu";
+import { showContextMenu, useNativeContextMenu } from "../hooks/useNativeContextMenu";
 import { useWorkflowSend } from "../hooks/useWorkflowSend";
 import type {
   AgentConfig,
@@ -57,7 +54,21 @@ const CHAT_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: { dataChange: true, itemLayout: true, layout: true },
 } as const;
-const CHAT_MAINTAIN_VISIBLE_CONTENT_POSITION = { data: true, size: true } as const;
+/**
+ * The follow zone, as a fraction of the viewport. One number for both the
+ * `following` flag and the list's own end-pinning threshold: if they differ,
+ * the band between them is a window where we believe we are following but the
+ * list has stopped pinning, and nothing stabilises the scroll position.
+ */
+const CHAT_FOLLOW_THRESHOLD = 0.2;
+/**
+ * `size` stabilisation stays on in both modes. Unmeasured rows are sized from a
+ * running per-type average, so every measurement shifts the total content size
+ * by the drift times the unmeasured row count — thousands of pixels in a long
+ * transcript. Without it the view silently slides into old messages.
+ */
+const CHAT_MVCP_FOLLOWING = { data: false, size: true } as const;
+const CHAT_MVCP_PAUSED = { data: true, size: true } as const;
 const CHAT_LIST_HEADER = <div className="h-4" />;
 const CHAT_LIST_FOOTER = <div className="h-14" />;
 const CHAT_LIST_EMPTY = <p className="px-2 py-4 text-muted-foreground">No session activity yet.</p>;
@@ -406,39 +417,50 @@ export function SessionChat({
     ],
   );
   const listRef = useRef<LegendListRef | null>(null);
-  const manualNavigationRef = useRef(false);
+  const previousScrollRef = useRef(0);
   const [following, setFollowing] = useState(true);
+
+  /**
+   * Pin through the DOM node rather than `listRef.scrollToEnd()`. The
+   * imperative method resolves an absolute target from per-type size
+   * *estimates* and freezes those estimates for the duration of the scroll, so
+   * in a long transcript it lands where the estimate claimed the end was —
+   * possibly outside the follow zone, where nothing re-pins us. This is why
+   * `maintainScrollAtEnd` scrolls the raw scroller instead.
+   */
+  const pinToLatest = useCallback(() => {
+    const node = listRef.current?.getScrollableNode();
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+    previousScrollRef.current = node.scrollTop;
+  }, []);
 
   useEffect(() => {
     if (!active || !following) return;
-    const frame = requestAnimationFrame(() => {
-      void listRef.current?.scrollToEnd({ animated: false });
-    });
+    const frame = requestAnimationFrame(pinToLatest);
     return () => cancelAnimationFrame(frame);
-  }, [active, following]);
+  }, [active, following, pinToLatest, transcriptRows]);
 
   const onTranscriptScroll = useCallback(() => {
     const state = listRef.current?.getState();
-    if (manualNavigationRef.current) {
-      if (state?.isAtEnd === true) {
-        manualNavigationRef.current = false;
-        setFollowing(true);
-      } else {
-        setFollowing(false);
-      }
+    if (!state) return;
+    const previousScroll = previousScrollRef.current;
+    previousScrollRef.current = state.scroll;
+    if (state.isWithinMaintainScrollAtEndThreshold) {
+      setFollowing(true);
       return;
     }
-    const atEnd = state?.isNearEnd ?? state?.isAtEnd;
-    if (typeof atEnd === "boolean") setFollowing(atEnd);
+    // Content growing above us does not move `scroll` — it only pushes the end
+    // further away — so a drifting size estimate can no longer detach
+    // following. Only a real upward move does.
+    if (state.scroll < previousScroll - 1) setFollowing(false);
   }, []);
 
   const resumeLatest = useCallback(() => {
-    manualNavigationRef.current = false;
     setFollowing(true);
-    void listRef.current?.scrollToEnd({ animated: false });
-  }, []);
+    pinToLatest();
+  }, [pinToLatest]);
   const cancelLiveFollow = useCallback(() => {
-    manualNavigationRef.current = true;
     setFollowing(false);
   }, []);
   const pauseFollowingOnNavigationKey = useCallback(
@@ -449,17 +471,35 @@ export function SessionChat({
   );
 
   useEffect(() => {
+    previousScrollRef.current = 0;
     let removeListeners: (() => void) | null = null;
     const frame = requestAnimationFrame(() => {
       const scrollNode = listRef.current?.getScrollableNode();
       if (!scrollNode) return;
-      scrollNode.addEventListener("wheel", cancelLiveFollow, { passive: true });
-      scrollNode.addEventListener("touchmove", cancelLiveFollow, { passive: true });
-      scrollNode.addEventListener("pointerdown", cancelLiveFollow, { passive: true });
+      // Only an upward gesture detaches following. Scrolling *down* is not
+      // navigation away from the latest message, and a click inside the
+      // transcript — a file link, a work group, selecting text — is not a
+      // scroll at all.
+      let touchY: number | null = null;
+      const onWheel = (event: WheelEvent) => {
+        if (event.deltaY < 0) cancelLiveFollow();
+      };
+      const onTouchStart = (event: TouchEvent) => {
+        touchY = event.touches[0]?.clientY ?? null;
+      };
+      const onTouchMove = (event: TouchEvent) => {
+        const nextY = event.touches[0]?.clientY;
+        if (nextY === undefined) return;
+        if (touchY !== null && nextY > touchY + 1) cancelLiveFollow();
+        touchY = nextY;
+      };
+      scrollNode.addEventListener("wheel", onWheel, { passive: true });
+      scrollNode.addEventListener("touchstart", onTouchStart, { passive: true });
+      scrollNode.addEventListener("touchmove", onTouchMove, { passive: true });
       removeListeners = () => {
-        scrollNode.removeEventListener("wheel", cancelLiveFollow);
-        scrollNode.removeEventListener("touchmove", cancelLiveFollow);
-        scrollNode.removeEventListener("pointerdown", cancelLiveFollow);
+        scrollNode.removeEventListener("wheel", onWheel);
+        scrollNode.removeEventListener("touchstart", onTouchStart);
+        scrollNode.removeEventListener("touchmove", onTouchMove);
       };
     });
     return () => {
@@ -501,7 +541,8 @@ export function SessionChat({
             estimatedItemSize={90}
             initialScrollAtEnd
             maintainScrollAtEnd={following ? CHAT_MAINTAIN_SCROLL_AT_END : false}
-            maintainVisibleContentPosition={CHAT_MAINTAIN_VISIBLE_CONTENT_POSITION}
+            maintainScrollAtEndThreshold={CHAT_FOLLOW_THRESHOLD}
+            maintainVisibleContentPosition={following ? CHAT_MVCP_FOLLOWING : CHAT_MVCP_PAUSED}
             onScroll={onTranscriptScroll}
             onKeyDown={pauseFollowingOnNavigationKey}
             tabIndex={0}

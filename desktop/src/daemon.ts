@@ -467,7 +467,11 @@ export class DaemonClient {
       case "lsp.detect":
         return Promise.resolve([]);
       case "lsp.install":
-        return Promise.resolve({ ok: false, command: "", output: "demo mode: install unavailable" });
+        return Promise.resolve({
+          ok: false,
+          command: "",
+          output: "demo mode: install unavailable",
+        });
       case "git.pushInfo": {
         const taskId = String(p.task_id);
         const task = this.state.snapshot.tasks.find((item) => item.id === taskId);
@@ -926,6 +930,12 @@ export class DaemonClient {
     await this.request("agents.update", { agents });
   }
 
+  /** Re-read an agent's model list from its harness. Rejects if the probe
+   *  fails; the refreshed list arrives separately as `agents.updated`. */
+  async probeAgent(id: string) {
+    await this.request("agents.probe", { id });
+  }
+
   // ── Agent accounts ──
   // Every mutation answers with the full list, so callers replace rather than
   // patch; the daemon also broadcasts `accounts.updated` for other clients.
@@ -1242,6 +1252,14 @@ export class DaemonClient {
    *  not reach). */
   async deleteBacklog(itemId: string, project: string): Promise<void> {
     await this.request("backlog.delete", { item_id: itemId, project });
+  }
+
+  /** Full message of the task repo's latest commit; empty if it has none. */
+  async lastCommitMessage(taskId: string): Promise<string> {
+    const result = (await this.request("git.lastCommitMessage", { task_id: taskId })) as {
+      message?: string;
+    };
+    return result?.message ?? "";
   }
 
   /** Update a task's title. */

@@ -9,27 +9,21 @@ import {
   Search,
   Send,
 } from "lucide-react";
-import {
-  useEffect,
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useCallback, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { daemon } from "../../daemon";
 import type { GitBranchList, GitOpResult } from "../../protocol";
 import { daemonQuery } from "../../query";
 import { useUi } from "../../store/ui";
+import { BranchActionsDialog, type BranchAction } from "./BranchActionsDialog";
+import { BranchList } from "./BranchList";
 import {
   buildBranchTree,
   defaultOpenFolders,
   flattenBranchTree,
   type BranchRow,
 } from "./branchTree";
-import { BranchActionsDialog, type BranchAction } from "./BranchActionsDialog";
-import { BranchList } from "./BranchList";
 
 function handleGitOpResult(r: GitOpResult) {
   switch (r.status) {
@@ -184,9 +178,12 @@ export function GitWorkspaceControls({
   openActionDialogRef.current = openActionDialog;
 
   const menuHandlers = new Map<string, () => void>([
-    ["new-branch", () => {
-      if (branch) openActionDialogRef.current({ kind: "create", from: branch });
-    }],
+    [
+      "new-branch",
+      () => {
+        if (branch) openActionDialogRef.current({ kind: "create", from: branch });
+      },
+    ],
     ["checkout", () => switchToRef.current(actionRef.current?.branch ?? "")],
     [
       "checkout-as-remote",
@@ -213,38 +210,62 @@ export function GitWorkspaceControls({
         openActionDialogRef.current({ kind: "checkout-update", branch: t.branch });
       },
     ],
-    ["rebase", () => {
-      const t = actionRef.current;
-      if (t) openActionDialogRef.current({ kind: "rebase", branch: t.branch });
-    }],
-    ["rebase-remote", () => {
-      const t = actionRef.current;
-      if (t && branch) {
-        openActionDialogRef.current({ kind: "rebase", branch, target: t.branch });
-      }
-    }],
-    ["rebase-main", () => {
-      const t = actionRef.current;
-      if (t) openActionDialogRef.current({ kind: "rebase", branch: t.branch, target: "main" });
-    }],
+    [
+      "rebase",
+      () => {
+        const t = actionRef.current;
+        if (t) openActionDialogRef.current({ kind: "rebase", branch: t.branch });
+      },
+    ],
+    [
+      "rebase-remote",
+      () => {
+        const t = actionRef.current;
+        if (t && branch) {
+          openActionDialogRef.current({ kind: "rebase", branch, target: t.branch });
+        }
+      },
+    ],
+    [
+      "rebase-main",
+      () => {
+        const t = actionRef.current;
+        if (t) openActionDialogRef.current({ kind: "rebase", branch: t.branch, target: "main" });
+      },
+    ],
     ["merge", () => openActionDialogRef.current({ kind: "merge" })],
     ["merge-main", () => openActionDialogRef.current({ kind: "merge", target: "main" })],
-    ["merge-remote", () => {
-      const t = actionRef.current;
-      if (t) openActionDialogRef.current({ kind: "merge", target: t.branch });
-    }],
-    ["pull-rebase", () => {
-      const t = actionRef.current;
-      if (t && branch) {
-        openActionDialogRef.current({ kind: "rebase", branch, target: t.branch });
-      }
-    }],
-    ["pull-merge", () => {
-      const t = actionRef.current;
-      if (t) openActionDialogRef.current({ kind: "merge", target: t.branch });
-    }],
+    [
+      "merge-remote",
+      () => {
+        const t = actionRef.current;
+        if (t) openActionDialogRef.current({ kind: "merge", target: t.branch });
+      },
+    ],
+    [
+      "pull-rebase",
+      () => {
+        const t = actionRef.current;
+        if (t && branch) {
+          openActionDialogRef.current({ kind: "rebase", branch, target: t.branch });
+        }
+      },
+    ],
+    [
+      "pull-merge",
+      () => {
+        const t = actionRef.current;
+        if (t) openActionDialogRef.current({ kind: "merge", target: t.branch });
+      },
+    ],
     ["update", () => updateMut.mutate()],
-    ["push", () => { setOpen(false); onOpenPush(); }],
+    [
+      "push",
+      () => {
+        setOpen(false);
+        onOpenPush();
+      },
+    ],
     [
       "rename",
       () => {
@@ -445,13 +466,9 @@ export function GitWorkspaceControls({
                   onToggleFolder={toggleFolder}
                 />
               )}
-              {!branchesQuery.isLoading &&
-                searching &&
-                searchRows.length === 0 && (
-                  <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                    No matching branches
-                  </p>
-                )}
+              {!branchesQuery.isLoading && searching && searchRows.length === 0 && (
+                <p className="px-2 py-1.5 text-xs text-muted-foreground">No matching branches</p>
+              )}
             </div>
           </div>
         )}

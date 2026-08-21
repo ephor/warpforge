@@ -23,6 +23,7 @@ import type { ComposerHandle } from "../components/Composer";
 import { RuntimePanel } from "../components/RuntimePanel";
 import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { daemon } from "../daemon";
+import { mentionToken } from "../lib/composerMentions";
 import type {
   CommandInfo,
   EditHunk,
@@ -32,7 +33,6 @@ import type {
   Snapshot,
   TaskInfo,
 } from "../protocol";
-import { mentionToken } from "../lib/composerMentions";
 import { useUi } from "../store/ui";
 import { DiffSurface } from "./task-detail/DiffSurface";
 import { type DiffWorkspaceHandle } from "./task-detail/DiffWorkspace";
@@ -245,7 +245,10 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
       return;
     }
     if (openTaskNav.surface === "files") {
-      openFileTab(openTaskNav.path);
+      openFileTab(
+        openTaskNav.path,
+        openTaskNav.line ? { column: openTaskNav.column ?? 1, line: openTaskNav.line } : undefined,
+      );
     } else {
       openDiffFile(openTaskNav.path, openTaskNav.hunks ?? []);
     }

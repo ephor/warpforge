@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::process::Command;
@@ -11,6 +11,24 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout};
 
 use crate::ports;
+
+/// A single retained log line with a monotonic per-service sequence number and
+/// the wall-clock time (epoch millis) it was captured. Sequence numbers let
+/// clients read "everything after cursor X" cheaply and never lose/gain lines
+/// as the ring buffer drops old entries; timestamps let tooling show age.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogLine {
+    pub seq: u64,
+    pub at_ms: u64,
+    pub line: String,
+}
+
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]
@@ -38,7 +56,10 @@ pub struct ManagedService {
     pub project_name: String,
     pub command: String,
     pub status: ServiceStatus,
-    pub logs: Vec<String>,
+    pub logs: Vec<LogLine>,
+    /// Sequence number for the next appended log line (monotonic, never reused,
+    /// even across restarts). Log `seq` values are assigned from this.
+    pub next_seq: u64,
     /// Port declared in .warpforge.yaml (0 = none)
     pub original_port: u16,
     /// Actual port the process is listening on (allocated from range)
@@ -63,6 +84,9 @@ pub enum ServiceEvent {
         key: String,
         run_id: u64,
         status: ServiceStatus,
+        /// Exit code from a stopped/crashed process, when known (None for a
+        /// signal kill). Drives the `[service failed: exit code=N]` marker.
+        exit_code: Option<i32>,
     },
 }
 
@@ -104,6 +128,7 @@ fn spawn_port_ready_probe(
                     key,
                     run_id,
                     status: ServiceStatus::Running,
+                    exit_code: None,
                 });
                 return;
             }
@@ -206,6 +231,39 @@ pub struct ServiceManager {
     next_run_id: u64,
 }
 
+impl ManagedService {
+    /// Append a retained line (assigning its seq + timestamp) and trim the ring.
+    pub fn push_log(&mut self, line: String) {
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.saturating_add(1);
+        self.logs.push(LogLine {
+            seq,
+            at_ms: now_ms(),
+            line,
+        });
+        if self.logs.len() > 2000 {
+            self.logs.drain(..self.logs.len() - 2000);
+        }
+    }
+
+    /// Slice the ring by seq cursor and cap to `limit`; returns raw lines, their
+    /// timestamps (millis, index-aligned), and the cursor to pass back as `after`.
+    /// `after` is inclusive ("start from this seq"), so `0` returns the oldest
+    /// retained line and polling with the returned cursor returns only newer ones.
+    pub fn window(&self, after: u64, limit: Option<u32>) -> (Vec<String>, Vec<u64>, u64) {
+        let mut lines: Vec<&LogLine> = self.logs.iter().filter(|l| l.seq >= after).collect();
+        if let Some(n) = limit {
+            let n = n as usize;
+            if lines.len() > n {
+                lines = lines.split_off(lines.len() - n);
+            }
+        }
+        let (text, at): (Vec<String>, Vec<u64>) =
+            lines.iter().map(|l| (l.line.clone(), l.at_ms)).unzip();
+        (text, at, self.next_seq)
+    }
+}
+
 #[allow(dead_code)]
 impl ServiceManager {
     pub fn new(event_tx: mpsc::UnboundedSender<ServiceEvent>) -> Self {
@@ -304,6 +362,10 @@ impl ServiceManager {
             .get(&key)
             .map(|s| s.logs.clone())
             .unwrap_or_default();
+        let next_seq = existing_logs
+            .last()
+            .map(|l| l.seq.saturating_add(1))
+            .unwrap_or(0);
 
         let managed = ManagedService {
             name: service_name.to_string(),
@@ -311,6 +373,7 @@ impl ServiceManager {
             command: command.to_string(),
             status: ServiceStatus::Starting,
             logs: existing_logs,
+            next_seq,
             original_port,
             allocated_port,
             pgid,
@@ -342,6 +405,7 @@ impl ServiceManager {
                             key: k.clone(),
                             run_id: rid,
                             status: ServiceStatus::Running,
+                            exit_code: None,
                         });
                     }
                     let _ = tx.send(ServiceEvent::Log {
@@ -368,6 +432,7 @@ impl ServiceManager {
                             key: k.clone(),
                             run_id: rid,
                             status: ServiceStatus::Running,
+                            exit_code: None,
                         });
                     }
                     let _ = tx.send(ServiceEvent::Log {
@@ -389,6 +454,7 @@ impl ServiceManager {
             let flag = Arc::clone(&stopping);
             tokio::spawn(async move {
                 let result = child.wait().await;
+                let exit_code = result.as_ref().ok().and_then(|s| s.code());
                 let clean_exit = result.map(|s| s.success()).unwrap_or(false);
                 let status = if flag.load(Ordering::SeqCst) || clean_exit {
                     ServiceStatus::Stopped
@@ -399,6 +465,7 @@ impl ServiceManager {
                     key: k,
                     run_id: rid,
                     status,
+                    exit_code,
                 });
             });
         }
@@ -476,6 +543,24 @@ impl ServiceManager {
             .get_mut(&format!("{project_name}/{service_name}"))
     }
 
+    /// A window of a service's retained logs: every line with `seq > after`,
+    /// trimmed to the last `limit` lines when a limit is given. Returns the raw
+    /// lines, their capture timestamps (millis, index-aligned), and the cursor
+    /// (`next_seq`) to pass back as `after` to poll for new lines. `after=0`
+    /// returns the full buffer — with no limit, that is everything retained.
+    pub fn log_window(
+        &self,
+        project_name: &str,
+        service_name: &str,
+        after: u64,
+        limit: Option<u32>,
+    ) -> (Vec<String>, Vec<u64>, u64) {
+        let Some(svc) = self.get(project_name, service_name) else {
+            return (Vec::new(), Vec::new(), 0);
+        };
+        svc.window(after, limit)
+    }
+
     pub fn list_for_project(&self, project_name: &str) -> Vec<&ManagedService> {
         self.services
             .values()
@@ -499,16 +584,14 @@ impl ServiceManager {
                     if svc.run_id != run_id {
                         return;
                     }
-                    svc.logs.push(line);
-                    if svc.logs.len() > 2000 {
-                        svc.logs.drain(..svc.logs.len() - 2000);
-                    }
+                    svc.push_log(line);
                 }
             }
             ServiceEvent::StatusChange {
                 key,
                 run_id,
                 status,
+                exit_code,
             } => {
                 if let Some(svc) = self.services.get_mut(&key) {
                     if svc.run_id != run_id {
@@ -518,10 +601,30 @@ impl ServiceManager {
                     if svc.status == ServiceStatus::Stopped && status == ServiceStatus::Running {
                         return;
                     }
+                    let old = svc.status.clone();
                     svc.status = status;
+                    if old != svc.status {
+                        svc.push_log(match svc.status {
+                            ServiceStatus::Running => "[service running]".to_string(),
+                            ServiceStatus::Stopped => "[service stopped]".to_string(),
+                            ServiceStatus::Failed => match exit_code {
+                                Some(code) => format!("[service failed: exit code={code}]"),
+                                None => "[service failed]".to_string(),
+                            },
+                            ServiceStatus::Starting => "[service starting]".to_string(),
+                        });
+                    }
                 }
             }
         }
+    }
+
+    /// The sequence number of the newest retained line (0 when empty). Used to
+    /// expose a monotonic log cursor in runtime listings.
+    pub fn newest_seq(&self, project_name: &str, service_name: &str) -> u64 {
+        self.get(project_name, service_name)
+            .map(|s| s.next_seq.saturating_sub(1))
+            .unwrap_or(0)
     }
 }
 
@@ -639,6 +742,7 @@ mod tests {
                 command: "dev".into(),
                 status: ServiceStatus::Starting,
                 logs: Vec::new(),
+                next_seq: 0,
                 original_port: 4000,
                 allocated_port: 4000,
                 pgid: None,
@@ -651,6 +755,7 @@ mod tests {
             key: key.clone(),
             run_id: 1,
             status: ServiceStatus::Stopped,
+            exit_code: None,
         });
         mgr.apply_event(ServiceEvent::Log {
             key: key.clone(),
@@ -666,10 +771,79 @@ mod tests {
             key: key.clone(),
             run_id: 2,
             status: ServiceStatus::Running,
+            exit_code: None,
         });
         assert_eq!(
             mgr.services.get(&key).unwrap().status,
             ServiceStatus::Running
         );
+    }
+
+    /// Seq cursor semantics + lifecycle markers: a status change injects a
+    /// marker into the log stream, sequences stay monotonic, and `log_window`
+    /// returns only lines newer than the cursor plus the next cursor to poll.
+    #[test]
+    fn log_window_cursor_and_lifecycle_markers() {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut mgr = ServiceManager::new(tx);
+        let key = "p/web".to_string();
+        mgr.services.insert(
+            key.clone(),
+            ManagedService {
+                name: "web".into(),
+                project_name: "p".into(),
+                command: "dev".into(),
+                status: ServiceStatus::Starting,
+                logs: Vec::new(),
+                next_seq: 0,
+                original_port: 4000,
+                allocated_port: 4000,
+                pgid: None,
+                run_id: 1,
+                stopping: Arc::new(AtomicBool::new(false)),
+            },
+        );
+
+        mgr.apply_event(ServiceEvent::Log {
+            key: key.clone(),
+            run_id: 1,
+            line: "boot".into(),
+        });
+        mgr.apply_event(ServiceEvent::StatusChange {
+            key: key.clone(),
+            run_id: 1,
+            status: ServiceStatus::Running,
+            exit_code: None,
+        });
+        mgr.apply_event(ServiceEvent::StatusChange {
+            key: key.clone(),
+            run_id: 1,
+            status: ServiceStatus::Failed,
+            exit_code: Some(7),
+        });
+
+        let svc = mgr.get("p", "web").unwrap();
+        let (all, at, cursor) = svc.window(0, None);
+        assert_eq!(
+            all,
+            vec!["boot", "[service running]", "[service failed: exit code=7]"]
+        );
+        assert_eq!(at.len(), 3, "timestamps must align with lines");
+        assert_eq!(cursor, 3, "three lines => next seq 3");
+
+        // Cursor reads only what is newer than it; a limit tails to the newest.
+        let (newer, _, _) = svc.window(1, None);
+        assert_eq!(
+            newer,
+            vec!["[service running]", "[service failed: exit code=7]"]
+        );
+        let (tail, _, _) = svc.window(0, Some(2));
+        assert_eq!(
+            tail,
+            vec!["[service running]", "[service failed: exit code=7]"]
+        );
+
+        // Snapshot-visible newest_seq.
+        assert_eq!(mgr.newest_seq("p", "web"), 2);
     }
 }

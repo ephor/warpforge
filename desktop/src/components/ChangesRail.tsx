@@ -1,22 +1,13 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { RefreshCw, Undo2 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type MouseEvent,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { useUi } from "@/store/ui";
 
 import { daemon } from "../daemon";
-import {
-  showContextMenu,
-  useNativeContextMenu,
-} from "../hooks/useNativeContextMenu";
+import { showContextMenu, useNativeContextMenu } from "../hooks/useNativeContextMenu";
 import type { FileDiff } from "../protocol";
 import { CommitBox } from "./changes/CommitBox";
 import { FileTreeRow } from "./changes/FileTreeRow";
@@ -40,6 +31,29 @@ import {
  */
 
 const ROW_HEIGHT = 28;
+
+/**
+ * Git failures arrive with whatever the command printed attached, and a hook
+ * that ran first can bury the reason under its own log. Git states why it gave
+ * up on the last line, so lead with that and keep the log a click away.
+ */
+function reportGitFailure(title: string, cause: unknown) {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  const lines = detail.split("\n").filter((line) => line.trim().length > 0);
+  const last = lines[lines.length - 1]?.trim() ?? detail;
+  const reason = last.length > 200 ? `${last.slice(0, 200)}…` : last;
+  toast.error(title, {
+    description: reason,
+    duration: 10_000,
+    action:
+      reason === detail
+        ? undefined
+        : {
+            label: "Copy",
+            onClick: () => void navigator.clipboard.writeText(detail),
+          },
+  });
+}
 
 export function ChangesRail({
   project,
@@ -79,7 +93,6 @@ export function ChangesRail({
   const textGenModel = useUi((s) => s.textGenModel);
   const [rollbackBusy, setRollbackBusy] = useState(false);
   const [rollbackConfirmation, setRollbackConfirmation] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   // Small change sets: expand all folders. Large ones: start collapsed for performance.
   const [openFolders, setOpenFolders] = useState<Set<string>>(() => {
     if (files.length <= 50) {
@@ -195,9 +208,9 @@ export function ChangesRail({
         requestId,
         items: [
           { type: "item", id: "toggle", label: allStaged ? "Unstage folder" : "Stage folder" },
-            { type: "separator" },
-            { type: "item", id: "copy", label: "Copy Path" },
-            { type: "item", id: "refresh", label: "Refresh" },
+          { type: "separator" },
+          { type: "item", id: "copy", label: "Copy Path" },
+          { type: "item", id: "refresh", label: "Refresh" },
         ],
       });
     },
@@ -213,9 +226,7 @@ export function ChangesRail({
             const t = targetRef.current;
             if (!t) return;
             const on =
-              t.kind === "file"
-                ? !staged.has(t.path!)
-                : !t.paths.every((p) => staged.has(p));
+              t.kind === "file" ? !staged.has(t.path!) : !t.paths.every((p) => staged.has(p));
             toggle(t.paths, on);
           },
         ],
@@ -267,11 +278,37 @@ export function ChangesRail({
   useNativeContextMenu(requestId, menuHandlers);
 
   const canCommit = !busy && staged.size > 0 && (message.trim().length > 0 || amend);
+
+  /**
+   * Turning on amend fills the box with the commit being rewritten, so the
+   * message is there to edit instead of having to be retyped. Anything the user
+   * wrote themselves is left alone, and unchecking only takes back a message we
+   * put there ourselves.
+   */
+  const prefilledMessage = useRef<string | null>(null);
+  const toggleAmend = async (next: boolean) => {
+    setAmend(next);
+    if (!next) {
+      if (prefilledMessage.current !== null && message === prefilledMessage.current) {
+        setMessage("");
+      }
+      prefilledMessage.current = null;
+      return;
+    }
+    if (message.trim().length > 0) return;
+    try {
+      const last = await daemon.lastCommitMessage(taskId);
+      if (!last) return;
+      prefilledMessage.current = last;
+      setMessage((current) => (current.trim().length > 0 ? current : last));
+    } catch (e) {
+      reportGitFailure("Could not read the last commit message", e);
+    }
+  };
   const canRollback = !rollbackBusy && staged.size > 0;
 
   const commit = async () => {
     setBusy(true);
-    setError(null);
     try {
       const all = staged.size === allPaths.length;
       await daemon.request("git.commit", {
@@ -285,7 +322,7 @@ export function ChangesRail({
       setCommitExpanded(false);
       onCommitted();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      reportGitFailure(amend ? "Could not amend the commit" : "Could not commit", e);
     } finally {
       setBusy(false);
     }
@@ -296,7 +333,6 @@ export function ChangesRail({
       return;
     }
     setGenerating(true);
-    setError(null);
     try {
       const text = await daemon.generateText(
         taskId,
@@ -306,7 +342,7 @@ export function ChangesRail({
       );
       setMessage(text);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      reportGitFailure("Could not draft a commit message", e);
     } finally {
       setGenerating(false);
     }
@@ -321,7 +357,6 @@ export function ChangesRail({
       return;
     }
     setRollbackBusy(true);
-    setError(null);
     try {
       await Promise.all(
         [...staged].flatMap((path) => {
@@ -341,7 +376,7 @@ export function ChangesRail({
       setRollbackConfirmation(null);
       onRefresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      reportGitFailure("Could not roll back the selected changes", e);
     } finally {
       setRollbackBusy(false);
     }
@@ -427,10 +462,9 @@ export function ChangesRail({
           message={message}
           setMessage={setMessage}
           amend={amend}
-          setAmend={setAmend}
+          setAmend={(v) => void toggleAmend(v)}
           busy={busy}
           generating={generating}
-          error={error}
           canCommit={canCommit}
           onCommit={commit}
           onGenerate={generateMessage}

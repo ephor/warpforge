@@ -1,9 +1,8 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { ProjectFile, SymbolMatch } from "../protocol";
 import { QuickOpen } from "./QuickOpen";
-
-import type { ProjectFile } from "../protocol";
 
 const files: ProjectFile[] = [
   { path: "src/components/CodeEditor.tsx", changed: true },
@@ -14,7 +13,7 @@ const files: ProjectFile[] = [
 ];
 
 function setup(props: Partial<React.ComponentProps<typeof QuickOpen>> = {}) {
-  const onPick = vi.fn<(path: string) => void>();
+  const onPick = vi.fn<(path: string, location?: { line: number; column: number }) => void>();
   const onClose = vi.fn<() => void>();
   render(
     <QuickOpen
@@ -81,5 +80,40 @@ describe("QuickOpen", () => {
   it("shows a loading state", () => {
     setup({ loading: true, files: [] });
     expect(screen.getByText("Loading files…")).toBeInTheDocument();
+  });
+
+  it("closes on an overlay click", () => {
+    const { onClose } = setup();
+    fireEvent.mouseDown(document.querySelector(".fixed.inset-0")!);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("shows a spinner while the text search is in flight", async () => {
+    let release: (matches: SymbolMatch[]) => void = () => {};
+    const onSearch = vi.fn<(query: string) => Promise<SymbolMatch[]>>(
+      () => new Promise((resolve) => (release = resolve)),
+    );
+    setup({ onSearch });
+    fireEvent.change(screen.getByPlaceholderText("Jump to file…"), {
+      target: { value: "daemon" },
+    });
+    // Shown from the keystroke, before the debounced request even starts.
+    expect(await screen.findByText("Searching text")).toBeInTheDocument();
+    await waitFor(() => expect(onSearch).toHaveBeenCalledWith("daemon"));
+    release([]);
+    await waitFor(() => expect(screen.queryByText("Searching text")).not.toBeInTheDocument());
+  });
+
+  it("lists text matches under the files and opens them at their line", async () => {
+    const onSearch = vi.fn<(query: string) => Promise<SymbolMatch[]>>(async () => [
+      { column: 7, line: 42, path: "src/daemon.ts", text: "const daemonPort = 61814;" },
+    ]);
+    const { onPick } = setup({ onSearch });
+    fireEvent.change(screen.getByPlaceholderText("Jump to file…"), {
+      target: { value: "daemonPort" },
+    });
+    await screen.findByText("daemon.ts:42");
+    fireEvent.mouseDown(screen.getByText("daemon.ts:42").closest("button")!);
+    expect(onPick).toHaveBeenCalledWith("src/daemon.ts", { column: 7, line: 42 });
   });
 });

@@ -6,8 +6,15 @@ import { cn } from "@/lib/utils";
 import claudeLogo from "../assets/app-logos/claude-ai-icon.svg?no-inline";
 import codexDark from "../assets/app-logos/codex_dark.svg?no-inline";
 import codexLight from "../assets/app-logos/codex_light.svg?no-inline";
+import cursorDark from "../assets/app-logos/cursor_dark.svg?no-inline";
+import cursorLight from "../assets/app-logos/cursor_light.svg?no-inline";
+import gooseDark from "../assets/app-logos/goose_dark.png";
+import gooseLight from "../assets/app-logos/goose_light.png";
+import junieLogo from "../assets/app-logos/junie.svg?no-inline";
 import opencodeDark from "../assets/app-logos/openCode_dark.svg?no-inline";
 import opencodeLight from "../assets/app-logos/openCode_light.svg?no-inline";
+import piDark from "../assets/app-logos/pi_dark.svg?no-inline";
+import piLight from "../assets/app-logos/pi_light.svg?no-inline";
 import qwenDark from "../assets/app-logos/qwen_dark.svg?no-inline";
 import qwenLight from "../assets/app-logos/qwen_light.svg?no-inline";
 
@@ -27,6 +34,10 @@ const AGENT_ICONS: Record<string, AgentIconAsset> = {
   codex: { dark: codexDark, light: codexLight },
   opencode: { dark: opencodeDark, light: opencodeLight },
   qwen: { dark: qwenDark, light: qwenLight },
+  goose: { dark: gooseDark, light: gooseLight },
+  junie: { dark: junieLogo, light: junieLogo },
+  cursor: { dark: cursorDark, light: cursorLight },
+  pi: { dark: piDark, light: piLight },
 };
 
 const AGENT_COLORS: Record<string, string> = {
@@ -35,6 +46,9 @@ const AGENT_COLORS: Record<string, string> = {
   opencode: "#607d8b",
   qwen: "#7c3aed",
   goose: "#f59e0b",
+  junie: "#48e054",
+  cursor: "#6366f1",
+  pi: "#16a34a",
 };
 
 function initials(name: string): string {

@@ -28,13 +28,19 @@
 //! - `decide_workflow(task_id, decision, rounds?, note?)` — decide what an
 //!   owned pipeline does once it has exhausted its review rounds.
 //!
-//! Environment (set by the daemon when it starts the orchestrator session):
-//! - `WF_ORCH_TASK`    — the orchestrator's task id (the inbox owner / parent).
-//! - `WF_ORCH_PROJECT` — the project sub-agents run in.
+//! Environment (set by the daemon when it starts the session; legacy daemons
+//! set the `WF_ORCH_*` spellings instead):
+//! - `WF_TASK`    — the session's task id (the inbox owner / parent).
+//! - `WF_PROJECT` — the project this session is scoped to. Unset falls back to
+//!   the registered project containing the working directory, so the bridge can
+//!   also be configured once globally and run outside the daemon.
+//! - `WF_MODE`    — `orchestrator` to expose the spawn/inbox/workflow tools on
+//!   top of the runtime ones. Anything else (or unset) means a single session.
 
 use anyhow::{anyhow, Context, Result};
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -48,12 +54,31 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// Entry point for the hidden `wf __mcp-orchestrator` subcommand.
 pub async fn run() -> Result<()> {
-    let parent_task = std::env::var("WF_ORCH_TASK")
-        .context("WF_ORCH_TASK not set — this binary is spawned by the daemon")?;
-    let project = std::env::var("WF_ORCH_PROJECT").unwrap_or_default();
+    let is_orchestrator =
+        std::env::var("WF_MODE").as_deref() == Ok("orchestrator") || parent_task_env_is_orch();
+    let parent_task = std::env::var("WF_TASK")
+        .or_else(|_| std::env::var("WF_ORCH_TASK"))
+        .ok();
+    if is_orchestrator && parent_task.is_none() {
+        return Err(anyhow!(
+            "WF_TASK not set — an orchestrator bridge is spawned by the daemon"
+        ));
+    }
+    let parent_task = parent_task.unwrap_or_default();
+    let project = std::env::var("WF_PROJECT")
+        .or_else(|_| std::env::var("WF_ORCH_PROJECT"))
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .or_else(project_from_cwd)
+        .unwrap_or_default();
 
     log(&format!(
-        "starting: parent_task={parent_task} project={project}"
+        "starting: parent_task={parent_task} project={project} mode={}",
+        if is_orchestrator {
+            "orchestrator"
+        } else {
+            "single"
+        }
     ));
     // Serve MCP immediately and connect to the daemon lazily on the first tool
     // call. If we connected up-front and the daemon were briefly unreachable,
@@ -63,7 +88,45 @@ pub async fn run() -> Result<()> {
         ws: None,
         next_id: 1,
     };
-    serve_stdio(client, parent_task, project).await
+    serve_stdio(client, parent_task, project, is_orchestrator).await
+}
+
+/// A legacy daemon sets `WF_ORCH_TASK` but not `WF_MODE`; treat that as an
+/// orchestrator session so the old env still yields the orchestrator tools.
+fn parent_task_env_is_orch() -> bool {
+    std::env::var("WF_MODE").is_err() && std::env::var("WF_ORCH_TASK").is_ok()
+}
+
+/// Fall back to the registered project whose path contains the working
+/// directory. This is what lets the bridge be configured once, globally
+/// (`claude mcp add --scope user`, no env), instead of per project: an agent
+/// started inside a project's checkout scopes itself to that project. The
+/// deepest matching path wins, so a project nested inside another resolves to
+/// the inner one.
+fn project_from_cwd() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?.canonicalize().ok()?;
+    let roots: Vec<(String, PathBuf)> = crate::registry::list_projects()
+        .ok()?
+        .into_iter()
+        .filter_map(|p| {
+            Path::new(&p.path)
+                .canonicalize()
+                .ok()
+                .map(|root| (p.name, root))
+        })
+        .collect();
+    pick_project(&roots, &cwd)
+}
+
+/// The deepest registered root containing `cwd`. Deepest rather than first so a
+/// project nested inside another resolves to the inner one; a task worktree
+/// under `<project>/.worktrees/<task>` resolves to its project.
+fn pick_project(roots: &[(String, PathBuf)], cwd: &Path) -> Option<String> {
+    roots
+        .iter()
+        .filter(|(_, root)| cwd.starts_with(root))
+        .max_by_key(|(_, root)| root.components().count())
+        .map(|(name, _)| name.clone())
 }
 
 /// Diagnostics to stderr (the ACP agent may forward this to the daemon's
@@ -157,7 +220,12 @@ impl DaemonClient {
 }
 
 /// The MCP stdio loop: newline-delimited JSON-RPC 2.0 with the agent.
-async fn serve_stdio(mut client: DaemonClient, parent_task: String, project: String) -> Result<()> {
+async fn serve_stdio(
+    mut client: DaemonClient,
+    parent_task: String,
+    project: String,
+    is_orchestrator: bool,
+) -> Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
 
@@ -178,13 +246,20 @@ async fn serve_stdio(mut client: DaemonClient, parent_task: String, project: Str
                 "protocolVersion": MCP_VERSION,
                 "capabilities": { "tools": {} },
                 "serverInfo": {
-                    "name": "warpforge-orchestrator",
+                    "name": "warpforge",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
             })),
-            "tools/list" => Some(json!({ "tools": tool_defs() })),
+            "tools/list" => Some(json!({ "tools": tool_defs(is_orchestrator) })),
             "tools/call" => Some(
-                match handle_tool_call(&mut client, &parent_task, &project, req.get("params")).await
+                match handle_tool_call(
+                    &mut client,
+                    &parent_task,
+                    &project,
+                    is_orchestrator,
+                    req.get("params"),
+                )
+                .await
                 {
                     Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
                     Err(e) => json!({
@@ -207,7 +282,211 @@ async fn serve_stdio(mut client: DaemonClient, parent_task: String, project: Str
     Ok(())
 }
 
-fn tool_defs() -> Value {
+fn tool_defs(is_orchestrator: bool) -> Value {
+    let mut tools: Vec<Value> = vec![
+        json!({
+        "name": "list_runtime",
+             "description": "List the project's dev services and port-forwards with their \
+                live status and allocated ports. Use this to discover what is running \
+                (names, ports, URLs) before reading logs or restarting a service. Each \
+                entry's logSeq is a log cursor you can pass as `after` to read_service_logs \
+                / read_portforward_logs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    }
+                }
+            }
+        }),
+        json!({
+        "name": "read_service_logs",
+             "description": "Read a window of a dev service's retained stdout/stderr log \
+                lines. Use to diagnose why a service failed, inspect request output, or \
+                tail recent output. Fetch is non-destructive. Lines carry UTC timestamps \
+                by default; filter runs over the whole buffer (grep | tail) and context \
+                adds surrounding lines (grep -C). Poll new lines cheaply by passing the \
+                previous response's nextSeq as `after`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "Service name as declared in .warpforge.yaml (see list_runtime)."
+                    },
+                    "after": {
+                        "type": "integer",
+                        "description": "Monotonic log cursor (a sequence number). Return lines with seq >= after (start from this cursor). Start with 0 to read from the oldest retained line, then pass the `nextSeq` from a previous response to cheaply poll for new lines. Stable even as the ring buffer drops old lines."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of lines to return (newest kept). Defaults to 100."
+                    },
+                    "filter": {
+                        "type": "string",
+                        "description": "Optional case-insensitive substring. Runs over the whole retained buffer, then the newest `limit` matching lines are kept (grep | tail)."
+                    },
+                    "context": {
+                        "type": "integer",
+                        "description": "Include N lines of surrounding context before and after each filter match (like grep -C). Ignored when no filter is given. Defaults to 0."
+                    },
+                    "timestamps": {
+                        "type": "boolean",
+                        "description": "Prepend a UTC timestamp to each line (like kubectl --timestamps). Defaults to true. Set false to return raw lines."
+                    }
+                },
+                "required": ["service"]
+            }
+        }),
+        json!({
+            "name": "read_portforward_logs",
+            "description": "Read a window of a port-forward's retained log lines.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Port-forward name as declared in .warpforge.yaml (see list_runtime)."
+                    },
+                    "after": {
+                        "type": "integer",
+                        "description": "Monotonic log cursor (a sequence number). Return lines with seq >= after (start from this cursor). Start with 0 to read from the oldest retained line, then pass the `nextSeq` from a previous response to cheaply poll for new lines. Stable even as the ring buffer drops old lines."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of lines to return (newest kept). Defaults to 100."
+                    },
+                    "filter": {
+                        "type": "string",
+                        "description": "Optional case-insensitive substring. Runs over the whole retained buffer, then the newest `limit` matching lines are kept (grep | tail)."
+                    },
+                    "context": {
+                        "type": "integer",
+                        "description": "Include N lines of surrounding context before and after each filter match (like grep -C). Ignored when no filter is given. Defaults to 0."
+                    },
+                    "timestamps": {
+                        "type": "boolean",
+                        "description": "Prepend a UTC timestamp to each line (like kubectl --timestamps). Defaults to true. Set false to return raw lines."
+                    }
+                },
+                "required": ["name"]
+            }
+        }),
+        json!({
+            "name": "service_start",
+            "description": "Start a dev service (async; returns immediately, the service \
+                starts in the background). If it is already running this is a no-op. \
+                Read its progress with read_service_logs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "Service name as declared in .warpforge.yaml."
+                    }
+                },
+                "required": ["service"]
+            }
+        }),
+        json!({
+            "name": "service_stop",
+            "description": "Stop a dev service (async; returns immediately).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "Service name as declared in .warpforge.yaml."
+                    }
+                },
+                "required": ["service"]
+            }
+        }),
+        json!({
+            "name": "service_restart",
+            "description": "Restart a dev service (async; returns immediately). Use when \
+                a service crashed or you changed its config and want a clean start. \
+                Read its progress with read_service_logs.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "Service name as declared in .warpforge.yaml."
+                    }
+                },
+                "required": ["service"]
+            }
+        }),
+        json!({
+            "name": "portforward_start",
+            "description": "Start a port-forward (async; returns immediately).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Port-forward name as declared in .warpforge.yaml."
+                    }
+                },
+                "required": ["name"]
+            }
+        }),
+        json!({
+            "name": "portforward_stop",
+            "description": "Stop a port-forward (async; returns immediately).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Optional project name. Defaults to the current project."
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Port-forward name as declared in .warpforge.yaml."
+                    }
+                },
+                "required": ["name"]
+            }
+        }),
+    ];
+
+    if is_orchestrator {
+        if let Value::Array(orch) = orchestrator_tool_defs() {
+            tools.extend(orch);
+        }
+    }
+    Value::Array(tools)
+}
+
+fn orchestrator_tool_defs() -> Value {
     json!([
         {
             "name": "spawn_agent",
@@ -465,7 +744,226 @@ fn scoped_project(args: &Value, orchestrator_project: &str) -> Result<Option<Str
         return Ok(Some(orchestrator_project.to_string()));
     }
 
-    Ok(requested)
+    // No bound project scope: a requested project would let a session reach a
+    // project it does not own. Refuse rather than fall back to the caller's arg.
+    match requested {
+        None => Ok(None),
+        Some(_) => Err(anyhow!(
+            "this session is not bound to a project; cannot target another project"
+        )),
+    }
+}
+
+/// Parse a tool's optional `limit`, clamped to the daemon's u32 window size,
+/// defaulting to 100 lines so an omitted limit cannot dump the whole buffer.
+fn tool_limit(args: &Value) -> u32 {
+    args.get("limit")
+        .and_then(Value::as_u64)
+        .map(|v| v.min(u32::MAX as u64) as u32)
+        .unwrap_or(100)
+}
+
+/// Fetch a window of retained log lines from the daemon and render them. The
+/// `after` index and `limit` window the raw buffer first; `filter`, when set,
+/// keeps only case-insensitively matching lines from that window.
+async fn read_logs(
+    client: &mut DaemonClient,
+    method: &str,
+    project: &str,
+    kind: &str,
+    key_field: &str,
+    key: &str,
+    args: &Value,
+) -> Result<String> {
+    // `after` is a monotonic seq cursor ("start from this seq"), not a buffer
+    // index. Polling with the previous response's `nextSeq` makes reads
+    // nearly free regardless of how many lines the ring has since dropped.
+    let after = args.get("after").and_then(Value::as_u64).unwrap_or(0);
+    let limit = tool_limit(args);
+    let filter = args
+        .get("filter")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string);
+    let context = args.get("context").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let timestamps = args
+        .get("timestamps")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
+    // grep|tail and grep -C must see the whole retained buffer, so when a
+    // filter or context is requested we fetch without a limit; otherwise honor
+    // the window limit. Either way the daemon returns aligned `at` timestamps.
+    let fetch_limit: Option<u32> = if filter.is_some() || context > 0 {
+        None
+    } else {
+        Some(limit)
+    };
+    let mut params = json!({ "project": project, "after": after, "limit": fetch_limit });
+    params[key_field] = json!(key);
+    let result = client.request(method, params).await?;
+    let lines: Vec<String> = result
+        .get("lines")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|l| l.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let at: Vec<u64> = result
+        .get("at")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
+        .unwrap_or_default();
+    let next_seq: u64 = result
+        .get("nextSeq")
+        .and_then(Value::as_u64)
+        .unwrap_or(after);
+
+    let body = render_log_selection(&lines, &at, filter.as_deref(), context, limit, timestamps);
+    if body.is_empty() {
+        return Ok(match filter {
+            Some(f) => format!("[{kind}:{key}] no lines match filter '{f}'"),
+            None => format!("[{kind}:{key}] no matching logs"),
+        });
+    }
+    let count = body.lines().count();
+    let poll = if next_seq > 0 {
+        format!("\n\ncursor: pass `after: {next_seq}` to read only lines newer than these.")
+    } else {
+        String::new()
+    };
+    Ok(format!(
+        "[{kind}:{key}] {count} line(s){poll}\n```\n{body}\n```"
+    ))
+}
+
+/// Pure selection used by [`read_logs`] (and unit-tested here): filter the
+/// whole buffer (grep), expand each match by `context` (grep -C), then keep the
+/// newest `limit` lines (tail). Returns rendered lines with optional UTC
+/// timestamps, or an empty string when nothing survives.
+fn render_log_selection(
+    lines: &[String],
+    at: &[u64],
+    filter: Option<&str>,
+    context: usize,
+    limit: u32,
+    timestamps: bool,
+) -> String {
+    let n = lines.len();
+    let mut keep: Vec<usize> = (0..n).collect();
+    if let Some(filter) = filter.filter(|s| !s.is_empty()) {
+        let needle = filter.to_lowercase();
+        let matches: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.to_lowercase().contains(&needle))
+            .map(|(i, _)| i)
+            .collect();
+        if matches.is_empty() {
+            return String::new();
+        }
+        // Expand each match by `context` and merge overlapping spans.
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        for m in matches {
+            let lo = m.saturating_sub(context);
+            let hi = (m + 1 + context).min(n);
+            match spans.last_mut() {
+                Some((_, last_hi)) if lo <= *last_hi => *last_hi = (*last_hi).max(hi),
+                _ => spans.push((lo, hi)),
+            }
+        }
+        keep = spans.into_iter().flat_map(|(lo, hi)| lo..hi).collect();
+    }
+    if keep.len() > limit as usize {
+        keep = keep[keep.len() - limit as usize..].to_vec();
+    }
+    keep.into_iter()
+        .map(|i| {
+            let text = &lines[i];
+            if timestamps {
+                let ts = at.get(i).copied().map(fmt_utc).unwrap_or_default();
+                format!("[{ts}] {text}")
+            } else {
+                text.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Format epoch millis as `YYYY-MM-DD HH:MM:SSZ` in UTC. Self-contained so we
+/// avoid pulling a chrono-style dependency into the daemon. The `Z` is not
+/// decoration: without it a reader in a non-UTC zone reads the offset from
+/// their own clock as the daemon lagging behind.
+fn fmt_utc(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let (y, mo, d) = civil_from_days(secs.div_euclid(86400));
+    let rem = secs.rem_euclid(86400);
+    format!(
+        "{y:04}-{mo:02}-{d:02} {:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
+/// Howard Hinnant's `civil_from_days`: days since 1970-01-01 -> (year, month, day).
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Confirm a service is declared for the project before claiming a control
+/// dispatch succeeded (start/stop/restart RPCs return null unconditionally).
+async fn ensure_service(client: &mut DaemonClient, project: &str, service: &str) -> Result<()> {
+    let result = client
+        .request("runtime.list", json!({ "project": project }))
+        .await?;
+    let declared = result
+        .get("services")
+        .and_then(Value::as_array)
+        .is_some_and(|svcs| {
+            svcs.iter()
+                .any(|s| s.get("name").and_then(Value::as_str) == Some(service))
+        });
+    if declared {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "no service '{service}' is declared for project '{project}' (see list_runtime)"
+        ))
+    }
+}
+
+/// Like [`ensure_service`] but for a port-forward name.
+async fn ensure_portforward(client: &mut DaemonClient, project: &str, name: &str) -> Result<()> {
+    let result = client
+        .request("runtime.list", json!({ "project": project }))
+        .await?;
+    let declared = result
+        .get("portforwards")
+        .and_then(Value::as_array)
+        .is_some_and(|pfs| {
+            pfs.iter()
+                .any(|pf| pf.get("name").and_then(Value::as_str) == Some(name))
+        });
+    if declared {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "no port-forward '{name}' is declared for project '{project}' (see list_runtime)"
+        ))
+    }
 }
 
 async fn list_owned_agents(
@@ -543,6 +1041,7 @@ async fn handle_tool_call(
     client: &mut DaemonClient,
     parent_task: &str,
     project: &str,
+    is_orchestrator: bool,
     params: Option<&Value>,
 ) -> Result<String> {
     let params = params.ok_or_else(|| anyhow!("missing params"))?;
@@ -553,6 +1052,107 @@ async fn handle_tool_call(
         .unwrap_or_else(|| json!({}));
 
     match name {
+        "list_runtime" => {
+            let scoped = scoped_project(&args, project)?;
+            let Some(project) = scoped else {
+                return Err(anyhow!("a project is required to list the runtime"));
+            };
+            let result = client
+                .request("runtime.list", json!({ "project": project }))
+                .await?;
+            json_text(&result)
+        }
+        "read_service_logs" => {
+            let scoped = scoped_project(&args, project)?;
+            let Some(project) = scoped else {
+                return Err(anyhow!("a project is required to read service logs"));
+            };
+            let service = args
+                .get("service")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'service' is required"))?;
+            read_logs(
+                client,
+                "service.logs",
+                &project,
+                "service",
+                "service",
+                service,
+                &args,
+            )
+            .await
+        }
+        "read_portforward_logs" => {
+            let scoped = scoped_project(&args, project)?;
+            let Some(project) = scoped else {
+                return Err(anyhow!("a project is required to read port-forward logs"));
+            };
+            let name = args
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'name' is required"))?;
+            read_logs(
+                client,
+                "portforward.logs",
+                &project,
+                "portforward",
+                "name",
+                name,
+                &args,
+            )
+            .await
+        }
+        "service_start" | "service_stop" | "service_restart" => {
+            let scoped = scoped_project(&args, project)?;
+            let Some(project) = scoped else {
+                return Err(anyhow!("a project is required to control a service"));
+            };
+            let service = args
+                .get("service")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'service' is required"))?;
+            ensure_service(client, &project, service).await?;
+            let method = match name {
+                "service_start" => "service.start",
+                "service_stop" => "service.stop",
+                _ => "service.restart",
+            };
+            client
+                .request(method, json!({ "project": project, "service": service }))
+                .await?;
+            Ok(format!(
+                "{method} dispatched for '{service}' in project '{project}'. \
+                 It runs asynchronously — read read_service_logs to follow its progress."
+            ))
+        }
+        "portforward_start" | "portforward_stop" => {
+            let scoped = scoped_project(&args, project)?;
+            let Some(project) = scoped else {
+                return Err(anyhow!("a project is required to control a port-forward"));
+            };
+            let pf_name = args
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'name' is required"))?;
+            ensure_portforward(client, &project, pf_name).await?;
+            let method = match name {
+                "portforward_start" => "portforward.start",
+                _ => "portforward.stop",
+            };
+            client
+                .request(method, json!({ "project": project, "name": pf_name }))
+                .await?;
+            Ok(format!(
+                "{method} dispatched for '{pf_name}' in project '{project}'."
+            ))
+        }
+        _ if !is_orchestrator => Err(anyhow!(
+            "tool '{name}' is only available in an orchestrator session"
+        )),
         "spawn_agent" => {
             let agent = args
                 .get("agent")
@@ -927,8 +1527,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cwd_resolves_to_the_deepest_registered_project() {
+        let roots = vec![
+            ("outer".to_string(), PathBuf::from("/w/outer")),
+            (
+                "inner".to_string(),
+                PathBuf::from("/w/outer/packages/inner"),
+            ),
+            ("sibling".to_string(), PathBuf::from("/w/outer-sibling")),
+        ];
+
+        let pick = |cwd: &str| pick_project(&roots, Path::new(cwd));
+        assert_eq!(pick("/w/outer/src").as_deref(), Some("outer"));
+        assert_eq!(
+            pick("/w/outer/packages/inner/src").as_deref(),
+            Some("inner")
+        );
+        // A task worktree lives under its project root.
+        assert_eq!(pick("/w/outer/.worktrees/t_1").as_deref(), Some("outer"));
+        // A sibling sharing a name prefix is not a parent directory.
+        assert_eq!(pick("/w/outer-sibling/src").as_deref(), Some("sibling"));
+        assert_eq!(pick("/tmp/unregistered"), None);
+    }
+
+    #[test]
     fn lifecycle_tools_advertise_stop_and_destructive_cleanup() {
-        let tools = tool_defs();
+        let tools = tool_defs(true);
         let definitions = tools.as_array().expect("tool definitions");
         let names: Vec<&str> = definitions
             .iter()
@@ -950,11 +1574,116 @@ mod tests {
     }
 
     #[test]
+    fn single_mode_hides_orchestrator_tools_but_ships_core_tools() {
+        let core = tool_defs(false)
+            .as_array()
+            .expect("tool definitions")
+            .clone();
+        let core_names: Vec<&str> = core
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+            .collect();
+        for tool in [
+            "list_runtime",
+            "read_service_logs",
+            "read_portforward_logs",
+            "service_start",
+            "service_stop",
+            "service_restart",
+            "portforward_start",
+            "portforward_stop",
+        ] {
+            assert!(
+                core_names.contains(&tool),
+                "single mode must advertise {tool}"
+            );
+        }
+        for tool in [
+            "spawn_agent",
+            "read_inbox",
+            "spawn_workflow",
+            "decide_workflow",
+        ] {
+            assert!(
+                !core_names.contains(&tool),
+                "single mode must NOT advertise {tool}"
+            );
+        }
+    }
+
+    #[test]
     fn project_scope_cannot_escape_the_orchestrator_project() {
         assert_eq!(
             scoped_project(&json!({}), "demo").unwrap(),
             Some("demo".to_string())
         );
         assert!(scoped_project(&json!({ "project": "other" }), "demo").is_err());
+    }
+
+    #[test]
+    fn unbound_session_cannot_target_a_project_by_argument() {
+        // No bound project scope: requesting a project by argument must fail,
+        // so a project-less session cannot reach another project's runtime.
+        assert_eq!(scoped_project(&json!({}), "").unwrap(), None);
+        assert!(scoped_project(&json!({ "project": "other" }), "").is_err());
+    }
+
+    #[test]
+    fn tool_limit_defaults_to_100_and_clamps_to_u32() {
+        assert_eq!(tool_limit(&json!({})), 100);
+        assert_eq!(tool_limit(&json!({ "limit": 5 })), 5);
+        assert_eq!(tool_limit(&json!({ "limit": 5_000_000_000u64 })), u32::MAX);
+    }
+
+    /// Filter runs over the WHOLE buffer, then the newest `limit` are kept
+    /// (grep | tail) — not the first `limit`, and not a window-then-filter.
+    #[test]
+    fn filter_then_tail_keeps_newest_matches_across_the_whole_buffer() {
+        let mut lines: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
+        lines[0] = "ERROR early".into();
+        lines[1] = "ERROR early2".into();
+        lines[42] = "ERROR late".into();
+        lines[43] = "ERROR late2".into();
+        let at: Vec<u64> = lines.iter().map(|_| 0).collect();
+        let body = render_log_selection(&lines, &at, Some("ERROR"), 0, 3, false);
+        assert_eq!(body, "ERROR early2\nERROR late\nERROR late2");
+    }
+
+    #[test]
+    fn context_expands_around_each_match_and_overlapping_spans_merge() {
+        let mut lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
+        lines[5] = "ERR at 5".into();
+        lines[7] = "ERR at 7".into();
+        let at: Vec<u64> = lines.iter().map(|_| 0).collect();
+        // matches at 5 and 7, context 2 -> spans [3,8) and [5,10) merge to [3,10)
+        let body = render_log_selection(&lines, &at, Some("ERR"), 2, 100, false);
+        assert_eq!(
+            body,
+            "line 3\nline 4\nERR at 5\nline 6\nERR at 7\nline 8\nline 9"
+        );
+    }
+
+    #[test]
+    fn no_match_returns_empty_and_timestamps_prepend_utc() {
+        let lines = vec!["a".to_string(), "b".to_string()];
+        let at = vec![0u64, 1_700_000_000_000u64];
+        assert_eq!(
+            render_log_selection(&lines, &at, Some("zzz"), 0, 100, true),
+            ""
+        );
+        let body = render_log_selection(&lines, &at, Some("b"), 0, 100, true);
+        assert!(body.starts_with("[2023-11-14 "), "got: {body}");
+        assert!(body.ends_with("] b"), "got: {body}");
+        // timestamps=false returns the raw line
+        assert_eq!(
+            render_log_selection(&lines, &at, Some("b"), 0, 100, false),
+            "b"
+        );
+    }
+
+    #[test]
+    fn fmt_utc_renders_epoch() {
+        assert_eq!(fmt_utc(0), "1970-01-01 00:00:00Z");
+        assert_eq!(fmt_utc(86_400_000), "1970-01-02 00:00:00Z");
     }
 }

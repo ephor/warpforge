@@ -500,8 +500,8 @@ async fn dispatch(
             after,
             limit,
         } => {
-            let lines = handle.service_logs(&project, &service, after, limit).await;
-            Ok(json!({ "lines": lines }))
+            let (lines, at, next_seq) = handle.service_logs(&project, &service, after, limit).await;
+            Ok(json!({ "lines": lines, "at": at, "nextSeq": next_seq }))
         }
         ServiceStart { project, service } => {
             handle
@@ -853,6 +853,14 @@ async fn dispatch(
                 message: e.to_string(),
             })
         }
+        GitLastCommitMessage { task_id } => handle
+            .git_last_commit_message(&task_id)
+            .await
+            .map(|message| json!({ "message": message }))
+            .map_err(|message| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message,
+            }),
         GitPushInfo { task_id } => {
             let info = handle
                 .git_push_info(&task_id)
@@ -1023,12 +1031,14 @@ async fn dispatch(
             task_id,
             config_id,
             value,
-        } => {
-            handle
-                .session_set_config_option(&task_id, &config_id, &value)
-                .await;
-            Ok(json!(null))
-        }
+        } => handle
+            .session_set_config_option(&task_id, &config_id, &value)
+            .await
+            .map(|()| json!(null))
+            .map_err(|message| wire::RpcError {
+                code: wire::ErrorCode::InvalidRequest,
+                message,
+            }),
         SessionPermission {
             task_id,
             request_id,
@@ -1060,8 +1070,23 @@ async fn dispatch(
             after,
             limit,
         } => {
-            let lines = handle.portforward_logs(&project, &name, after, limit).await;
-            Ok(json!({ "lines": lines }))
+            let (lines, at, next_seq) =
+                handle.portforward_logs(&project, &name, after, limit).await;
+            Ok(json!({ "lines": lines, "at": at, "nextSeq": next_seq }))
+        }
+        RuntimeList { project } => {
+            let snapshot = handle.snapshot().await;
+            let services: Vec<_> = snapshot
+                .services
+                .into_iter()
+                .filter(|s| s.project == project)
+                .collect();
+            let portforwards: Vec<_> = snapshot
+                .portforwards
+                .into_iter()
+                .filter(|pf| pf.project == project)
+                .collect();
+            Ok(json!({ "services": services, "portforwards": portforwards }))
         }
         // ── Legacy PTY terminals (the TUI's live agent panes) ──
         TerminalSpawn {
@@ -1138,6 +1163,16 @@ async fn dispatch(
             };
             let (ok, output) = crate::daemon::agents::run_manage_command(&command).await;
             Ok(json!({ "ok": ok, "command": command, "output": output }))
+        }
+        AgentsProbe { id } => {
+            handle
+                .probe_agent(&id)
+                .await
+                .map(|()| json!(null))
+                .map_err(|message| wire::RpcError {
+                    code: wire::ErrorCode::InvalidRequest,
+                    message,
+                })
         }
         // ── Agent accounts ──
         AccountsList {} => Ok(json!({ "accounts": handle.list_accounts().await })),
@@ -1779,6 +1814,8 @@ fn method_runs_concurrently(method: &wire::Method) -> bool {
         method,
         TextGenerate { .. }
             | AgentsInstall { .. }
+            | AgentsProbe { .. }
+            | SessionSetConfigOption { .. }
             | LanguageServersInstall { .. }
             | DiffGet { .. }
             | FileContents { .. }
@@ -1786,8 +1823,10 @@ fn method_runs_concurrently(method: &wire::Method) -> bool {
             | FileSearch { .. }
             | GitBranches { .. }
             | GitPushInfo { .. }
+            | GitLastCommitMessage { .. }
             | ServiceLogs { .. }
             | PortForwardLogs { .. }
+            | RuntimeList { .. }
             | TaskListWorktrees { .. }
             | SessionsList { .. }
             | OrchestratorListAgents { .. }
@@ -1808,6 +1847,7 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | StateSubscribe { .. }
             | ServiceLogs { .. }
             | PortForwardLogs { .. }
+            | RuntimeList { .. }
             | TaskListWorktrees { .. }
             | SessionsList { .. }
             | OrchestratorListAgents { .. }
@@ -1819,6 +1859,7 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | FileSearch { .. }
             | GitBranches { .. }
             | GitPushInfo { .. }
+            | GitLastCommitMessage { .. }
             | OrchestrateList {}
             | OrchestrateGetConfig {}
             | WorkflowList { .. }

@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.6.8
+
+### Patch Changes
+
+- [`b6c5c64`](https://github.com/ephor/warpforge/commit/b6c5c64552bdec13a988edf899ed8fb53327919d) Thanks [@ephor](https://github.com/ephor)! - Connect Warpforge's service tools to your terminal agent once, and they follow you
+  between projects. Previously a hand-configured connection had to name a single
+  project up front, so an agent started in any other repository read the wrong
+  runtime — or refused to start at all. Now the project is picked from the folder
+  the agent runs in, including task worktrees, so one setup covers every project you
+  have registered. Agents launched from Warpforge itself are unchanged.
+
+- [`94f0a8a`](https://github.com/ephor/warpforge/commit/94f0a8a61804458512ace9bb20592f8490956df0) Thanks [@ephor](https://github.com/ephor)! - Service log timestamps now say they are UTC. Outside the UTC zone the bare
+  timestamp read as a clock that had fallen hours behind, so a healthy service
+  looked stalled; the lines now end in `Z`.
+
+## 0.6.7
+
+### Patch Changes
+
+- [#35](https://github.com/ephor/warpforge/pull/35) [`65df616`](https://github.com/ephor/warpforge/commit/65df616be0d21d6dc907d513768fa75d841290bf) Thanks [@ephor](https://github.com/ephor)! - MCP tool names no longer show as raw `mcp__server__tool` strings in the
+  transcript, permission prompts, or notifications. `mcp__warpforge__list_runtime`
+  now renders as "Warpforge · List runtime".
+
+  The orchestrator's `spawn_agent` title now surfaces who is being spawned and on
+  what ("Spawn agent codex: Refactor the auth module") immediately, so a
+  sub-agent dispatch is visible without expanding the tool.
+
+- [#35](https://github.com/ephor/warpforge/pull/35) [`6a2e3e7`](https://github.com/ephor/warpforge/commit/6a2e3e7a17e415e55e10a7b1423d8bc825c0d5b5) Thanks [@ephor](https://github.com/ephor)! - Log reading tools now behave like `kubectl --timestamps | grep | tail`: every line
+  carries a UTC timestamp, `filter` runs over the whole retained buffer before the
+  newest `limit` are kept, and a new `context` option adds surrounding lines around
+  each match (`grep -C`).
+
+  Log cursors are now stable sequence numbers instead of buffer indexes. Each line
+  gets a monotonic `seq`; `after` is inclusive of that seq and the response returns
+  `nextSeq`, so polling for new lines is nearly free even as the ring buffer drops
+  old ones. `logSeq` in `list_runtime` is the live cursor.
+
+  Service lifecycle is now visible in the log stream: `[service running]`,
+  `[service stopped]`, and `[service failed: exit code=N]` markers are injected on
+  state transitions, so a restarting process no longer looks like empty logs.
+
+- [#36](https://github.com/ephor/warpforge/pull/36) [`6ea2bcb`](https://github.com/ephor/warpforge/commit/6ea2bcb2516f563f296c082c588c83e117b69371) Thanks [@ephor](https://github.com/ephor)! - Very long conversations stay where you left them. Sending a message or watching
+  an agent reply keeps the chat pinned to the newest message instead of drifting
+  up into older history, and the chat now only stops following a reply when you
+  actually scroll up — clicking a file link or expanding work updates leaves it
+  pinned. Scroll back down to the newest message and it starts following again on
+  its own.
+
+- [#35](https://github.com/ephor/warpforge/pull/35) [`e19ef2b`](https://github.com/ephor/warpforge/commit/e19ef2b75cf145f55df277fecc8038c552993723) Thanks [@ephor](https://github.com/ephor)! - Agents working on a task can now inspect and control the project's running services on their own. They can read live service and port-forward logs, search them for errors, and start, stop, or restart a service without you copying logs into the chat by hand — the agent checks the runtime itself whenever it needs to.
+
+## 0.6.6
+
+### Patch Changes
+
+- [`768c175`](https://github.com/ephor/warpforge/commit/768c1754f3629d015e3b50beaded2a35f857201e) Thanks [@ephor](https://github.com/ephor)! - Add html files preview in editor.
+
+- [`7c997a4`](https://github.com/ephor/warpforge/commit/7c997a4697722f7a331672c097bb6cc7987be401) Thanks [@ephor](https://github.com/ephor)! - Native notifications now work. When an agent needs your approval, or a task
+  wants attention while Warpforge is in the background, macOS shows a notification
+  with Approve, Reject and Review buttons — and those buttons now do what they
+  say, so you can answer a permission request without switching back to the app.
+  Notifications stay quiet while Warpforge is the window you are looking at, so
+  the in-app toast remains the only interruption when you are already there.
+
+## 0.6.5
+
+### Patch Changes
+
+- [`0c75c45`](https://github.com/ephor/warpforge/commit/0c75c45d212b3490bc99cbff39510b5ff90af76a) Thanks [@ephor](https://github.com/ephor)! - Fixes the whole UI freezing after closing a dialog. Creating a project, opening settings, or any other modal could leave the page unclickable and text unselectable until restart.
+
+  The freeze came from Radix shipping several copies of `@radix-ui/react-dismissable-layer` with different versions, each keeping its own lock on the page body. When a dialog and a dropdown or selector overlapped, the copies fought over the body's pointer-events and one of them never let go. Bumping the Radix packages and pinning `@radix-ui/react-dismissable-layer` to a single version so only one copy ships, removing the conflict at the root.
+
+## 0.6.4
+
+### Patch Changes
+
+- [#34](https://github.com/ephor/warpforge/pull/34) [`c18d59d`](https://github.com/ephor/warpforge/commit/c18d59d577b4fe9bbf7012455530181de199e575) Thanks [@ephor](https://github.com/ephor)! - Amending a commit now starts from the message you already wrote. Tick amend in the Changes rail and the box fills with the commit you're rewriting, ready to edit or leave as it is — handy when you just forgot a file. Anything you had already typed is kept, and amending without touching the message no longer refuses to commit.
+
+- [#34](https://github.com/ephor/warpforge/pull/34) [`c18d59d`](https://github.com/ephor/warpforge/commit/c18d59d577b4fe9bbf7012455530181de199e575) Thanks [@ephor](https://github.com/ephor)! - Model lists now keep up with your agents. Add a provider or model in the agent itself and Warpforge picks it up next time it starts — or right away with the refresh button next to the agent in Settings, which also shows how many models it currently knows about. Switching model or reasoning effort mid-conversation now shows your pick immediately and tells you if the agent turned it down, instead of leaving you guessing whether the click landed.
+
+- [#34](https://github.com/ephor/warpforge/pull/34) [`c18d59d`](https://github.com/ephor/warpforge/commit/c18d59d577b4fe9bbf7012455530181de199e575) Thanks [@ephor](https://github.com/ephor)! - Long model lists are now searchable. Open the model picker in the composer and a search box sits pinned at the top of the list — type to narrow hundreds of models down to the one you want, clear it with the × button, and press Esc to close. Selectors with only a handful of choices stay as simple lists, so nothing extra gets in the way when you just need to switch reasoning effort.
+
+- [#34](https://github.com/ephor/warpforge/pull/34) [`c18d59d`](https://github.com/ephor/warpforge/commit/c18d59d577b4fe9bbf7012455530181de199e575) Thanks [@ephor](https://github.com/ephor)! - Failures in the Changes rail now arrive as a notification with the reason instead of a block of text wedged under the commit box, and long output — a rejected pre-commit hook, say — comes with a Copy button for the full log. When an agent turns down a request, such as drafting a commit message, the message now includes the reason the agent gave, which is usually enough to tell a wrong model or a missing login from a real failure.
+
+- [`024451f`](https://github.com/ephor/warpforge/commit/024451fae1d1dec2e1758e1379da832c6a818b58) Thanks [@ephor](https://github.com/ephor)! - The model picker no longer closes itself a moment after you open it. Searching a long model list now works the same everywhere Warpforge runs, instead of the menu disappearing before you finish typing.
+
+## 0.6.3
+
+### Patch Changes
+
+- [`11b28da`](https://github.com/ephor/warpforge/commit/11b28dae4871b6af325c400cfbaf8a729b59eb70) Thanks [@ephor](https://github.com/ephor)! - The desktop agent setup now detects and can install more coding agents: Cursor, Pi, and Junie. Pick any of them in the setup wizard just like the existing agents — the daemon finds, installs, and keeps each one updated for you.
+
 ## 0.6.2
 
 ### Patch Changes

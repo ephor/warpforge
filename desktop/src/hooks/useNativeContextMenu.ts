@@ -27,9 +27,7 @@ export interface ShowContextMenuRequest {
   items: ContextMenuItemOrSeparator[];
 }
 
-let invokeFn:
-  | ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>)
-  | undefined;
+let invokeFn: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | undefined;
 
 async function ensureTauri() {
   if (!("__TAURI_INTERNALS__" in window)) return;
@@ -50,10 +48,7 @@ export async function showContextMenu(request: ShowContextMenuRequest): Promise<
  * `requestId` per component; when the OS menu is clicked, only the handler
  * matching `itemId` fires, and only components sharing that `requestId` react.
  */
-export function useNativeContextMenu(
-  requestId: string,
-  handlers: Map<string, () => void>,
-): void {
+export function useNativeContextMenu(requestId: string, handlers: Map<string, () => void>): void {
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
 
@@ -62,21 +57,20 @@ export function useNativeContextMenu(
     let disposed = false;
     let unlisten: (() => void) | undefined;
 
-    void import("@tauri-apps/api/event")
-      .then(async ({ listen }) => {
-        if (disposed) return;
-        unlisten = await listen<{ requestId: string; itemId: string }>(
-          "context-menu:clicked",
-          (event) => {
-            if (event.payload.requestId !== requestId) return;
-            handlersRef.current.get(event.payload.itemId)?.();
-          },
-        );
-        if (disposed) {
-          unlisten();
-          unlisten = undefined;
-        }
-      });
+    void import("@tauri-apps/api/event").then(async ({ listen }) => {
+      if (disposed) return;
+      unlisten = await listen<{ requestId: string; itemId: string }>(
+        "context-menu:clicked",
+        (event) => {
+          if (event.payload.requestId !== requestId) return;
+          handlersRef.current.get(event.payload.itemId)?.();
+        },
+      );
+      if (disposed) {
+        unlisten();
+        unlisten = undefined;
+      }
+    });
 
     return () => {
       disposed = true;

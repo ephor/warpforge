@@ -20,6 +20,9 @@ pub struct KnownAgent {
     pub default_acp_command: &'static str,
     /// npm package that provides the binary (None for brew-only agents).
     pub npm_package: Option<&'static str>,
+    /// Extra npm packages to co-install/co-update alongside `npm_package`
+    /// (e.g. an ACP bridge's target harness). Empty for most agents.
+    pub extra_npm_packages: &'static [&'static str],
     /// Homebrew formula, when brew is the canonical install (None otherwise).
     pub homebrew_formula: Option<&'static str>,
     /// A self-managed install (e.g. opencode's own `~/.opencode/bin`) that ships
@@ -37,6 +40,7 @@ pub static KNOWN_AGENTS: &[KnownAgent] = &[
         binary: "claude-agent-acp",
         default_acp_command: "claude-agent-acp --acp",
         npm_package: Some("@agentclientprotocol/claude-agent-acp"),
+        extra_npm_packages: &[],
         homebrew_formula: None,
         custom_upgrade_command: None,
         install_hint: "npm install -g @agentclientprotocol/claude-agent-acp",
@@ -47,6 +51,7 @@ pub static KNOWN_AGENTS: &[KnownAgent] = &[
         binary: "codex-acp",
         default_acp_command: "codex-acp",
         npm_package: Some("@agentclientprotocol/codex-acp"),
+        extra_npm_packages: &[],
         homebrew_formula: None,
         custom_upgrade_command: None,
         install_hint: "npm install -g @agentclientprotocol/codex-acp",
@@ -57,6 +62,7 @@ pub static KNOWN_AGENTS: &[KnownAgent] = &[
         binary: "opencode",
         default_acp_command: "opencode acp",
         npm_package: Some("opencode-ai"),
+        extra_npm_packages: &[],
         homebrew_formula: None,
         custom_upgrade_command: Some("opencode upgrade"),
         install_hint: "npm install -g opencode-ai",
@@ -67,6 +73,7 @@ pub static KNOWN_AGENTS: &[KnownAgent] = &[
         binary: "qwen",
         default_acp_command: "qwen --acp",
         npm_package: Some("@qwen-code/qwen-code"),
+        extra_npm_packages: &[],
         homebrew_formula: None,
         custom_upgrade_command: None,
         install_hint: "npm install -g @qwen-code/qwen-code",
@@ -77,9 +84,44 @@ pub static KNOWN_AGENTS: &[KnownAgent] = &[
         binary: "goose",
         default_acp_command: "goose acp",
         npm_package: None,
+        extra_npm_packages: &[],
         homebrew_formula: Some("block-goose-cli"),
         custom_upgrade_command: None,
         install_hint: "brew install block-goose-cli",
+    },
+    KnownAgent {
+        id: "junie",
+        display_name: "Junie",
+        binary: "junie",
+        default_acp_command: "junie --acp true",
+        npm_package: Some("@jetbrains/junie-cli"),
+        custom_upgrade_command: None,
+        extra_npm_packages: &[],
+        homebrew_formula: None,
+        install_hint: "npm install -g @jetbrains/junie-cli",
+    },
+    KnownAgent {
+        id: "cursor",
+        display_name: "Cursor",
+        binary: "cursor-agent-acp",
+        default_acp_command: "cursor-agent-acp",
+        npm_package: Some("@blowmage/cursor-agent-acp"),
+        custom_upgrade_command: None,
+        extra_npm_packages: &[],
+        homebrew_formula: None,
+        install_hint: "npm install -g @blowmage/cursor-agent-acp",
+    },
+    KnownAgent {
+        id: "pi",
+        display_name: "Pi",
+        binary: "pi-acp",
+        default_acp_command: "pi-acp",
+        npm_package: Some("pi-acp"),
+        custom_upgrade_command: None,
+        extra_npm_packages: &["@earendil-works/pi-coding-agent"],
+        homebrew_formula: None,
+        install_hint:
+            "npm install -g @earendil-works/pi-coding-agent pi-acp (pi needs Node >=22.19)",
     },
 ];
 
@@ -87,12 +129,44 @@ pub fn known_agent(id: &str) -> Option<&'static KnownAgent> {
     KNOWN_AGENTS.iter().find(|a| a.id == id)
 }
 
+/// Reconcile the persisted agent config against the known registry so the UI
+/// always presents every known agent in canonical (registry) order — even when
+/// the stored config is stale or partial (e.g. agents installed but never
+/// saved). Persisted fields (enabled, models, lastModel, acpCommand) are kept
+/// when present; agents not in the registry anymore are dropped.
+pub fn reconcile_agents_config(stored: &[wire::AgentConfig]) -> Vec<wire::AgentConfig> {
+    let by_id: HashMap<&str, &wire::AgentConfig> =
+        stored.iter().map(|a| (a.id.as_str(), a)).collect();
+    KNOWN_AGENTS
+        .iter()
+        .map(|k| match by_id.get(k.id) {
+            Some(cfg) => (*cfg).clone(),
+            None => wire::AgentConfig {
+                id: k.id.to_string(),
+                display_name: k.display_name.to_string(),
+                acp_command: k.default_acp_command.to_string(),
+                enabled: false,
+                models: vec![],
+                last_model: None,
+            },
+        })
+        .collect()
+}
+
+/// Append any co-install packages to an install/update command.
+fn with_extras(agent: &KnownAgent, base: String) -> String {
+    agent
+        .extra_npm_packages
+        .iter()
+        .fold(base, |acc, extra| format!("{acc} {extra}@latest"))
+}
+
 /// The shell command that installs (when missing) or updates (when present) an
 /// agent, given how its binary is installed. Returns the command string to run
 /// via `sh -c`, or None when there is no safe automated path.
 pub fn install_command(agent: &KnownAgent) -> Option<String> {
     if let Some(pkg) = agent.npm_package {
-        Some(format!("npm install -g {pkg}@latest"))
+        Some(with_extras(agent, format!("npm install -g {pkg}@latest")))
     } else {
         agent.homebrew_formula.map(|f| format!("brew install {f}"))
     }
@@ -108,19 +182,22 @@ fn update_command(agent: &KnownAgent, resolved_path: Option<&str>) -> Option<Str
     let pkg = agent.npm_package?;
     let manager = resolved_path.map(package_manager_for_path);
     match manager {
-        Some(PackageManager::Bun) => Some(format!("bun add -g {pkg}@latest")),
-        Some(PackageManager::Pnpm) => Some(format!("pnpm add -g {pkg}@latest")),
+        Some(PackageManager::Bun) => Some(with_extras(agent, format!("bun add -g {pkg}@latest"))),
+        Some(PackageManager::Pnpm) => Some(with_extras(agent, format!("pnpm add -g {pkg}@latest"))),
         Some(PackageManager::Homebrew) => {
             agent.homebrew_formula.map(|f| format!("brew upgrade {f}"))
         }
         // npm global, or a bare binary name with no path info → assume npm.
-        Some(PackageManager::Npm) | None => Some(format!("npm install -g {pkg}@latest")),
+        Some(PackageManager::Npm) | None => {
+            Some(with_extras(agent, format!("npm install -g {pkg}@latest")))
+        }
         // Unrecognised install dir: use the agent's own upgrade command (e.g.
         // opencode's self-installed `~/.opencode/bin`), if it has one.
         Some(PackageManager::Unknown) => agent.custom_upgrade_command.map(|cmd| cmd.to_string()),
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PackageManager {
     Npm,
     Bun,
@@ -133,9 +210,17 @@ pub(crate) enum PackageManager {
 /// t3code's path heuristics).
 pub(crate) fn package_manager_for_path(path: &str) -> PackageManager {
     let p = path.replace('\\', "/").to_lowercase();
-    // Check npm/bun/pnpm node paths before homebrew: an npm-global binary
-    // installed under a brew-managed Node lives at /opt/homebrew/bin/… (a
-    // symlink into …/lib/node_modules/…) and must resolve to npm, not brew.
+    // A brew formula always lives under Cellar/Caskroom and is unambiguous —
+    // check it before the node paths below, because a brew-packaged Node app
+    // (e.g. gemini-cli) also contains a `node_modules` internally and would
+    // otherwise be misclassified as npm.
+    if p.contains("/cellar/") || p.contains("/caskroom/") {
+        return PackageManager::Homebrew;
+    }
+    // Check npm/bun/pnpm node paths: an npm-global binary installed under a
+    // brew-managed Node lives at /opt/homebrew/bin/… (a symlink into
+    // …/lib/node_modules/…) and must resolve to npm, not brew. These paths do
+    // not contain /cellar, so they only run after the brew check above.
     if p.contains("/.bun/bin/") {
         PackageManager::Bun
     } else if p.contains("/pnpm/")
@@ -145,8 +230,6 @@ pub(crate) fn package_manager_for_path(path: &str) -> PackageManager {
         PackageManager::Pnpm
     } else if p.contains("/node_modules/") || p.contains("/lib/node/") || p.contains("/npm/") {
         PackageManager::Npm
-    } else if p.contains("/cellar/") || p.contains("/caskroom/") {
-        PackageManager::Homebrew
     } else {
         PackageManager::Unknown
     }
@@ -400,5 +483,38 @@ pub async fn run_manage_command(command: &str) -> (bool, String) {
             (output.status.success(), text)
         }
         Err(e) => (false, format!("failed to run '{command}': {e}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn package_manager_prefers_brew_over_inner_node_modules() {
+        // A brew formula that packages a Node app (e.g. gemini-cli) lives under
+        // Cellar but also contains node_modules internally. It must classify as
+        // Homebrew, not Npm, or the daemon would wrongly `npm install -g` it.
+        let gemini = "/opt/homebrew/Cellar/gemini-cli/0.36.0/libexec/lib/node_modules/@google/gemini-cli/bundle/gemini.js";
+        assert_eq!(package_manager_for_path(gemini), PackageManager::Homebrew);
+    }
+
+    #[test]
+    fn package_manager_classifies_npm_under_brew_node() {
+        // npm-global install under a brew-managed Node has no /cellar segment.
+        let npm = "/opt/homebrew/lib/node_modules/@agentclientprotocol/claude-agent-acp/cli.js";
+        assert_eq!(package_manager_for_path(npm), PackageManager::Npm);
+    }
+
+    #[test]
+    fn package_manager_classifies_bun_and_plain_cellar() {
+        assert_eq!(
+            package_manager_for_path("/home/u/.bun/bin/opencode"),
+            PackageManager::Bun
+        );
+        assert_eq!(
+            package_manager_for_path("/opt/homebrew/Cellar/goose/1.16.0/bin/goose"),
+            PackageManager::Homebrew
+        );
     }
 }

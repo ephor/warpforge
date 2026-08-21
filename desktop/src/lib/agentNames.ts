@@ -4,6 +4,9 @@ const AGENT_NAMES: Record<string, string> = {
   opencode: "OpenCode",
   qwen: "Qwen Code",
   goose: "Goose",
+  junie: "Junie",
+  cursor: "Cursor",
+  pi: "Pi",
 };
 
 export function agentDisplayName(agentId: string, override?: string): string {
