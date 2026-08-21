@@ -18,8 +18,7 @@ export function mentionToken(path: string, range?: FileRange): string {
   if (!range) {
     return base;
   }
-  const suffix =
-    range.start === range.end ? `#L${range.start}` : `#L${range.start}-${range.end}`;
+  const suffix = range.start === range.end ? `#L${range.start}` : `#L${range.start}-${range.end}`;
   return `${base}${suffix}`;
 }
 

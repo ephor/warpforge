@@ -29,10 +29,7 @@ import { latestContextUsage } from "@/lib/sessionUsage";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
-import {
-  showContextMenu,
-  useNativeContextMenu,
-} from "../hooks/useNativeContextMenu";
+import { showContextMenu, useNativeContextMenu } from "../hooks/useNativeContextMenu";
 import { useWorkflowSend } from "../hooks/useWorkflowSend";
 import type {
   AgentConfig,

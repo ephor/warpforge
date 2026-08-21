@@ -177,8 +177,7 @@ export default function SettingsView({ open, onOpenChange }: Props) {
             <div className="grid grid-cols-4 gap-2 p-4">
               {THEMES.map((t) => {
                 const active = t.id === theme;
-                const swatch = (key: keyof typeof t.colors) =>
-                  hsl(t.colors[key]);
+                const swatch = (key: keyof typeof t.colors) => hsl(t.colors[key]);
                 return (
                   <button
                     key={t.id}

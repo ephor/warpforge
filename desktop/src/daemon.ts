@@ -455,7 +455,11 @@ export class DaemonClient {
       case "lsp.detect":
         return Promise.resolve([]);
       case "lsp.install":
-        return Promise.resolve({ ok: false, command: "", output: "demo mode: install unavailable" });
+        return Promise.resolve({
+          ok: false,
+          command: "",
+          output: "demo mode: install unavailable",
+        });
       case "git.pushInfo": {
         const taskId = String(p.task_id);
         const task = this.state.snapshot.tasks.find((item) => item.id === taskId);

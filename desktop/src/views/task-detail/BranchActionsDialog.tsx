@@ -29,7 +29,7 @@ export type BranchAction =
   | { kind: "create"; from: string; defaultName?: string }
   | { kind: "rebase"; branch: string; target?: string }
   | { kind: "merge"; target?: string }
-  | { kind: "checkout-update"; branch: string }
+  | { kind: "checkout-update"; branch: string };
 
 interface DialogProps {
   action: BranchAction | null;
@@ -77,8 +77,8 @@ export function BranchActionsDialog({
   const [overwrite, setOverwrite] = useState(false);
 
   useEffect(() => {
-    setNewName(action?.kind === "create" ? action.defaultName ?? "" : "");
-    setTarget(action?.kind === "rebase" || action?.kind === "merge" ? action.target ?? "" : "");
+    setNewName(action?.kind === "create" ? (action.defaultName ?? "") : "");
+    setTarget(action?.kind === "rebase" || action?.kind === "merge" ? (action.target ?? "") : "");
     setCheckout(true);
     setOverwrite(false);
   }, [action]);
@@ -151,16 +151,14 @@ export function BranchActionsDialog({
   const candidates = branches.filter((b) => b !== targetBranch);
   const remoteName = newName.trim();
   const remoteConflict = remotes.some((ref) => ref.split("/").slice(1).join("/") === remoteName);
-  const needsTarget =
-    (action.kind === "rebase" || action.kind === "merge") && !action.target;
+  const needsTarget = (action.kind === "rebase" || action.kind === "merge") && !action.target;
   const canRun =
     action.kind === "rename"
       ? newName.trim().length > 0 && newName.trim() !== action.branch
       : action.kind === "delete"
         ? true
         : action.kind === "create"
-          ? newName.trim().length > 0
-            && (!remoteConflict || overwrite)
+          ? newName.trim().length > 0 && (!remoteConflict || overwrite)
           : needsTarget
             ? Boolean(action.target ?? target)
             : true;
@@ -182,23 +180,37 @@ export function BranchActionsDialog({
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && canRun && mutate.mutate()}
-              placeholder={action.kind === "create" ? action.defaultName ?? "new-branch" : action.branch}
+              placeholder={
+                action.kind === "create" ? (action.defaultName ?? "new-branch") : action.branch
+              }
               className={`h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring ${remoteConflict ? "border-warn" : "border-input"}`}
             />
             {action.kind === "create" && (
               <div className="flex items-center gap-5 text-sm">
                 <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={checkout} onChange={(e) => setCheckout(e.target.checked)} />
+                  <input
+                    type="checkbox"
+                    checked={checkout}
+                    onChange={(e) => setCheckout(e.target.checked)}
+                  />
                   Checkout branch
                 </label>
                 <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
-                  <span className={remoteConflict ? "text-warn" : undefined}>Override existing branch</span>
+                  <input
+                    type="checkbox"
+                    checked={overwrite}
+                    onChange={(e) => setOverwrite(e.target.checked)}
+                  />
+                  <span className={remoteConflict ? "text-warn" : undefined}>
+                    Override existing branch
+                  </span>
                 </label>
               </div>
             )}
             {remoteConflict && !overwrite && (
-              <p className="text-xs text-warn">Remote branch with this name already exists. Enable override to continue.</p>
+              <p className="text-xs text-warn">
+                Remote branch with this name already exists. Enable override to continue.
+              </p>
             )}
           </div>
         )}
@@ -261,7 +273,11 @@ function getTitle(action: BranchAction): string {
 function getDescription(action: BranchAction, current: string): ReactNode {
   switch (action.kind) {
     case "rename":
-      return <>Rename <span className="font-mono">{action.branch}</span>.</>;
+      return (
+        <>
+          Rename <span className="font-mono">{action.branch}</span>.
+        </>
+      );
     case "delete":
       return (
         <>

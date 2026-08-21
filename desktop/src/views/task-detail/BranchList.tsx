@@ -1,6 +1,5 @@
 import { Check, ChevronRight, GitBranch } from "lucide-react";
 import { useState } from "react";
-import { cn } from "@/lib/utils";
 
 import {
   DropdownMenu,
@@ -9,6 +8,7 @@ import {
   DropdownMenuPortal,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 
 import type { BranchRow } from "./branchTree";
 
@@ -129,10 +129,7 @@ function BranchSection({
                   style={{ paddingLeft: `${row.depth * 12 + 6}px` }}
                 >
                   <ChevronRight
-                    className={cn(
-                      "size-3 shrink-0 transition-transform",
-                      isOpen && "rotate-90",
-                    )}
+                    className={cn("size-3 shrink-0 transition-transform", isOpen && "rotate-90")}
                   />
                   <span className="truncate">{row.label}</span>
                 </button>
@@ -190,12 +187,7 @@ function BranchRowLine({
         {remote ? (
           <GitBranch className="size-3.5 shrink-0 text-muted-foreground/60" />
         ) : (
-          <Check
-            className={cn(
-              "size-3.5 shrink-0",
-              isCurrent ? "opacity-100" : "opacity-0",
-            )}
-          />
+          <Check className={cn("size-3.5 shrink-0", isCurrent ? "opacity-100" : "opacity-0")} />
         )}
         <ChevronRight
           aria-hidden="true"
@@ -223,11 +215,11 @@ function BranchRowLine({
             aria-label={`Actions for ${branch}`}
           />
         </DropdownMenuTrigger>
-          <BranchActionSubmenu
-            branch={branch}
-            remote={remote}
-            current={isCurrent}
-            currentBranch={current}
+        <BranchActionSubmenu
+          branch={branch}
+          remote={remote}
+          current={isCurrent}
+          currentBranch={current}
           onAction={(action) => {
             onToggleMenu(null);
             onAction(action, branch, remote);
@@ -255,10 +247,7 @@ function BranchActionSubmenu({
     ? [
         ["checkout-as-remote", "Checkout as local…"],
         ["create", `New Branch from '${branch}'…`],
-        [
-          "rebase-remote",
-          `Rebase '${currentBranch ?? "current"}' onto '${branch}'`,
-        ],
+        ["rebase-remote", `Rebase '${currentBranch ?? "current"}' onto '${branch}'`],
         ["merge-remote", `Merge '${branch}' into '${currentBranch ?? "current"}'`],
         ["pull-rebase", `Pull into '${currentBranch ?? "current"}' Using Rebase`],
         ["pull-merge", `Pull into '${currentBranch ?? "current"}' Using Merge`],

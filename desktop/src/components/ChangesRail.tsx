@@ -1,23 +1,13 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { RefreshCw, Undo2 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type MouseEvent,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { useUi } from "@/store/ui";
 
 import { daemon } from "../daemon";
-import {
-  showContextMenu,
-  useNativeContextMenu,
-} from "../hooks/useNativeContextMenu";
+import { showContextMenu, useNativeContextMenu } from "../hooks/useNativeContextMenu";
 import type { FileDiff } from "../protocol";
 import { CommitBox } from "./changes/CommitBox";
 import { FileTreeRow } from "./changes/FileTreeRow";
@@ -218,9 +208,9 @@ export function ChangesRail({
         requestId,
         items: [
           { type: "item", id: "toggle", label: allStaged ? "Unstage folder" : "Stage folder" },
-            { type: "separator" },
-            { type: "item", id: "copy", label: "Copy Path" },
-            { type: "item", id: "refresh", label: "Refresh" },
+          { type: "separator" },
+          { type: "item", id: "copy", label: "Copy Path" },
+          { type: "item", id: "refresh", label: "Refresh" },
         ],
       });
     },
@@ -236,9 +226,7 @@ export function ChangesRail({
             const t = targetRef.current;
             if (!t) return;
             const on =
-              t.kind === "file"
-                ? !staged.has(t.path!)
-                : !t.paths.every((p) => staged.has(p));
+              t.kind === "file" ? !staged.has(t.path!) : !t.paths.every((p) => staged.has(p));
             toggle(t.paths, on);
           },
         ],

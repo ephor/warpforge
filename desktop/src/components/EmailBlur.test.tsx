@@ -1,8 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import EmailBlur from "./EmailBlur";
 import { useUi } from "@/store/ui";
+
+import EmailBlur from "./EmailBlur";
 
 describe("EmailBlur", () => {
   beforeEach(() => {
@@ -25,9 +26,7 @@ describe("EmailBlur", () => {
 
   it("blurs only email-shaped segments of a mixed string", () => {
     useUi.getState().setTheoMod(true);
-    const { container } = render(
-      <EmailBlur text="me@example.com · max" />,
-    );
+    const { container } = render(<EmailBlur text="me@example.com · max" />);
     const blurSpans = container.querySelectorAll(".blur-\\[3px\\]");
     expect(blurSpans).toHaveLength(1);
     expect(blurSpans[0]?.textContent).toBe("me@example.com");
@@ -36,9 +35,7 @@ describe("EmailBlur", () => {
 
   it("blurs every email when several appear", () => {
     useUi.getState().setTheoMod(true);
-    const { container } = render(
-      <EmailBlur text="first@example.com then second@test.org" />,
-    );
+    const { container } = render(<EmailBlur text="first@example.com then second@test.org" />);
     const blurSpans = container.querySelectorAll(".blur-\\[3px\\]");
     expect(blurSpans).toHaveLength(2);
     expect(blurSpans[0]?.textContent).toBe("first@example.com");

@@ -53,9 +53,7 @@ describe("composer mentions", () => {
     });
     expect(mentionToken("src/app.ts", { start: 2, end: 5 })).toBe("@src/app.ts#L2-5");
     expect(mentionToken("src/app.ts", { start: 7, end: 7 })).toBe("@src/app.ts#L7");
-    expect(mentionToken("docs/my file.md", { start: 1, end: 3 })).toBe(
-      '@"docs/my file.md"#L1-3',
-    );
+    expect(mentionToken("docs/my file.md", { start: 1, end: 3 })).toBe('@"docs/my file.md"#L1-3');
     expect(mentionToken("src/app.ts")).toBe("@src/app.ts");
   });
 
