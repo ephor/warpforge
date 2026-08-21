@@ -54,6 +54,29 @@ describe("task-detail UI state", () => {
     expect(useUi.getState().runtimeOpenByProject).toEqual({ beta: false });
   });
 
+  it("tracks and persists the project page surface per project", async () => {
+    useUi.setState({ projectSurfaceByProject: {} });
+    useUi.getState().setProjectSurface("alpha", "runtime");
+    useUi.getState().setProjectSurface("beta", "backlog");
+
+    expect(useUi.getState().projectSurfaceByProject).toEqual({
+      alpha: "runtime",
+      beta: "backlog",
+    });
+
+    const persistedValue = localStorage.getItem("wf-ui");
+    useUi.setState({ projectSurfaceByProject: {} });
+    if (persistedValue) localStorage.setItem("wf-ui", persistedValue);
+    await useUi.persist.rehydrate();
+    expect(useUi.getState().projectSurfaceByProject).toEqual({
+      alpha: "runtime",
+      beta: "backlog",
+    });
+
+    useUi.getState().clearProjectSurface("alpha");
+    expect(useUi.getState().projectSurfaceByProject).toEqual({ beta: "backlog" });
+  });
+
   it("persists and hydrates project Runtime visibility", async () => {
     useUi.getState().setRuntimeOpen("other-project", true);
 

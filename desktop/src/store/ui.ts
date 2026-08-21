@@ -19,6 +19,10 @@ export type RepositoryOperation = { taskId: string; kind: "pull" | "push" };
 export type TaskSurface = "files" | "diff" | "runtime" | "pipeline";
 export const DEFAULT_TASK_SURFACE: TaskSurface = "diff";
 
+/** Project-page surface. Files, Git and Pull Requests join this union later. */
+export type ProjectSurface = "backlog" | "runtime";
+export const DEFAULT_PROJECT_SURFACE: ProjectSurface = "backlog";
+
 /** Transient intent to open a task already showing a specific file/diff. */
 export type TaskOpenNav =
   | { surface: "files"; path: string; line?: number; column?: number }
@@ -105,6 +109,12 @@ interface UiState extends SettingsState {
   rightPanel: RightPanel;
   /** Which of Files/Diff/Runtime/Plan is active in the workspace pane. Task-scoped, like `rightPanel`. */
   activeSurface: TaskSurface;
+  /**
+   * Which surface the project page shows, per project. Persisted like the
+   * other project-scoped layout state: reopening a project should land where
+   * you left it rather than snapping back to Backlog.
+   */
+  projectSurfaceByProject: Record<string, ProjectSurface>;
   runtimeOpenByProject: Record<string, boolean>;
   pinnedTaskIds: string[];
   pinnedLayout: Record<string, PinnedTileLayout>;
@@ -135,6 +145,8 @@ interface UiState extends SettingsState {
   setDiffView: (v: DiffView) => void;
   setRightPanel: (panel: RightPanel) => void;
   setActiveSurface: (surface: TaskSurface) => void;
+  setProjectSurface: (project: string, surface: ProjectSurface) => void;
+  clearProjectSurface: (project: string) => void;
   toggleRuntime: (project: string) => void;
   setRuntimeOpen: (project: string, open: boolean) => void;
   clearRuntimeOpen: (project: string) => void;
@@ -172,6 +184,7 @@ export const useUi = create<UiState>()(
       diffView: "split",
       rightPanel: null,
       activeSurface: DEFAULT_TASK_SURFACE,
+      projectSurfaceByProject: {},
       runtimeOpenByProject: {},
       pinnedTaskIds: [],
       pinnedLayout: {},
@@ -220,6 +233,16 @@ export const useUi = create<UiState>()(
       setDiffView: (diffView) => set({ diffView }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
       setActiveSurface: (activeSurface) => set({ activeSurface }),
+      setProjectSurface: (project, surface) =>
+        set((s) => ({
+          projectSurfaceByProject: { ...s.projectSurfaceByProject, [project]: surface },
+        })),
+      clearProjectSurface: (project) =>
+        set((s) => {
+          const projectSurfaceByProject = { ...s.projectSurfaceByProject };
+          delete projectSurfaceByProject[project];
+          return { projectSurfaceByProject };
+        }),
       toggleRuntime: (project) =>
         set((s) => ({
           runtimeOpenByProject: {

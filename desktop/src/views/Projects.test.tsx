@@ -31,6 +31,7 @@ vi.mock("@xterm/addon-fit", () => {
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RuntimePanel } from "../components/RuntimePanel";
@@ -95,6 +96,12 @@ function renderProjects(
   );
 }
 
+/** Radix tabs select on mousedown, which `fireEvent.click` does not send. */
+async function openSurface(label: RegExp) {
+  const user = userEvent.setup({ pointerEventsCheck: 0 });
+  await user.click(screen.getByRole("tab", { name: label }));
+}
+
 function taskInfo(overrides: Partial<TaskInfo> = {}): TaskInfo {
   return {
     agent: "codex",
@@ -116,7 +123,11 @@ beforeEach(() => {
   currentSnapshot = snapshot;
   xtermInstances.length = 0;
   localStorage.clear();
-  useUi.setState({ runtimeOpenByProject: {} });
+  useUi.setState({
+    projectSurfaceByProject: {},
+    runtimeOpenByProject: {},
+    selectedProjectId: null,
+  });
 
   vi.spyOn(daemon, "subscribeEvents").mockReturnValue(() => {});
   vi.spyOn(daemon, "subscribe").mockReturnValue(() => {});
@@ -155,8 +166,22 @@ describe("Projects", () => {
     renderProjects();
 
     expect(screen.getByRole("heading", { name: "warpforge" })).toBeInTheDocument();
-    expect(screen.getByText("Agent context")).toBeInTheDocument();
-    expect(screen.getByText("No services declared in .warpforge.yaml.")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Backlog/ })).toHaveAttribute("data-state", "active");
+    expect(screen.getByRole("tab", { name: /Runtime/ })).toBeInTheDocument();
+  });
+
+  it("remembers the surface each project was left on", async () => {
+    const other: ProjectInfo = { ...warpforgeProject, name: "other", path: "/workspace/other" };
+    currentSnapshot = { ...snapshot, projects: [warpforgeProject, other] };
+    renderProjects();
+
+    await openSurface(/Runtime/);
+    expect(useUi.getState().projectSurfaceByProject).toEqual({ warpforge: "runtime" });
+
+    // A project that was never switched falls back to Backlog rather than
+    // inheriting the surface of the one before it.
+    act(() => useUi.setState({ selectedProjectId: "other" }));
+    expect(screen.getByRole("tab", { name: /Backlog/ })).toHaveAttribute("data-state", "active");
   });
 
   // Hooks run before the `if (!project)` guard, so an empty registry used to
@@ -225,7 +250,7 @@ describe("Projects", () => {
     expect(screen.getByText(/Create a task in warpforge/)).toBeInTheDocument();
   });
 
-  it("exposes full runtime names on hover", () => {
+  it("exposes full runtime names on hover", async () => {
     const serviceName = "payments-api-with-a-very-long-runtime-name";
     const portForwardName = "production-postgres-primary-port-forward";
     currentSnapshot = {
@@ -257,12 +282,13 @@ describe("Projects", () => {
     };
 
     renderProjects();
+    await openSurface(/Runtime/);
 
     expect(screen.getByTitle(serviceName)).toBeInTheDocument();
     expect(screen.getByTitle(portForwardName)).toBeInTheDocument();
   });
 
-  it("keeps declared service controls available before runtime status arrives", () => {
+  it("keeps declared service controls available before runtime status arrives", async () => {
     currentSnapshot = {
       ...snapshot,
       projects: [{ ...warpforgeProject, declaredServices: ["api"] }],
@@ -271,7 +297,7 @@ describe("Projects", () => {
     renderProjects();
 
     expect(screen.queryByLabelText("Start api")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Toggle warpforge Runtime" }));
+    await openSurface(/Runtime/);
 
     expect(screen.getByLabelText("Start api")).toBeInTheDocument();
   });
@@ -284,17 +310,16 @@ describe("Projects", () => {
     };
     renderProjects();
 
-    expect(screen.getByLabelText("1 active terminal")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Toggle warpforge Runtime" }));
-
-    expect(useUi.getState().runtimeOpenByProject.warpforge).toBe(true);
-    expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute("data-state", "active");
-    expect(screen.getByTestId("term-1")).toBeInTheDocument();
     // The backlog waits for its tracker pull before it can say it is empty.
     expect(await screen.findByText("Nothing here yet.")).toBeInTheDocument();
+    await openSurface(/Runtime/);
+
+    expect(useUi.getState().projectSurfaceByProject.warpforge).toBe("runtime");
+    expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute("data-state", "active");
+    expect(screen.getByTestId("term-1")).toBeInTheDocument();
   });
 
-  it("isolates terminal counts and persisted Runtime visibility by project", async () => {
+  it("isolates terminals and the persisted surface by project", async () => {
     const alpha: ProjectInfo = {
       ...warpforgeProject,
       name: "alpha",
@@ -326,33 +351,25 @@ describe("Projects", () => {
         terminalInfo("beta-1", "beta"),
       ],
     };
-    useUi.setState({ runtimeOpenByProject: { alpha: true, beta: false } });
+    useUi.setState({ projectSurfaceByProject: { alpha: "runtime", beta: "backlog" } });
     renderProjects();
 
-    expect(screen.getByLabelText("2 active terminals")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Toggle alpha Runtime" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
     expect(screen.getByTestId("alpha-1")).toBeInTheDocument();
 
     act(() => useUi.setState({ selectedProjectId: "beta" }));
-    expect(screen.getByRole("button", { name: "Toggle beta Runtime" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    expect(screen.getByRole("tab", { name: /Backlog/ })).toHaveAttribute("data-state", "active");
     expect(screen.queryByTestId("alpha-1")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Toggle beta Runtime" }));
-    expect(useUi.getState().runtimeOpenByProject).toEqual({ alpha: true, beta: true });
+    await openSurface(/Runtime/);
+    expect(useUi.getState().projectSurfaceByProject).toEqual({
+      alpha: "runtime",
+      beta: "runtime",
+    });
     expect(screen.getByTestId("beta-1")).toBeInTheDocument();
 
     act(() => useUi.setState({ selectedProjectId: "alpha" }));
     await waitFor(() => expect(screen.getByTestId("alpha-1")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: "Toggle alpha Runtime" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    expect(screen.getByRole("tab", { name: /Runtime/ })).toHaveAttribute("data-state", "active");
   });
 
   it("reattaches the same project terminal when moving from a task Runtime to Projects", async () => {
@@ -360,7 +377,7 @@ describe("Projects", () => {
       ...snapshot,
       terminals: [terminalInfo("term-1", "warpforge")],
     };
-    useUi.setState({ runtimeOpenByProject: { warpforge: true } });
+    useUi.setState({ projectSurfaceByProject: { warpforge: "runtime" } });
 
     const taskSurface = render(
       <RuntimePanel project="warpforge" services={[]} portforwards={[]} initialTab="terminal" />,

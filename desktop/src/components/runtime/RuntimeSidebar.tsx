@@ -95,6 +95,7 @@ const ServiceRow = memo(function ServiceRow({
         )}
         aria-label={`Select ${service.name}, ${badge.label}`}
         aria-pressed={selected}
+        title={service.name}
       >
         <StatusDot variant={badge.variant} />
         <span className="min-w-0 flex-1 truncate font-medium">{service.name}</span>
@@ -186,6 +187,7 @@ const PortForwardRow = memo(function PortForwardRow({
         )}
         aria-label={`Select ${pf.name}, ${badge.label}`}
         aria-pressed={selected}
+        title={pf.name}
       >
         <PlugZap className="size-3 shrink-0" />
         <span className="min-w-0 flex-1 truncate font-medium">{pf.name}</span>
