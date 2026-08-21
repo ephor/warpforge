@@ -179,7 +179,9 @@ export function QuickOpen({
             autoCapitalize="off"
             className="h-11 min-w-0 flex-1 bg-transparent text-sm placeholder:text-muted-foreground focus:outline-none"
           />
-          {searching && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />}
+          {searching && (
+            <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+          )}
         </div>
         <div ref={listRef} className="max-h-[50vh] overflow-y-auto py-1.5">
           {loading && (

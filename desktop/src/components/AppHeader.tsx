@@ -11,6 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import { daemon } from "@/daemon";
 import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/lib/taskGroups";
 import type { TaskInfo } from "@/protocol";
@@ -118,6 +119,8 @@ export default function AppHeader({ view, openTask, onAddProject, onCloseTask }:
           </strong>
         )}
       </nav>
+
+      <UpdateBanner />
 
       {openTask && (
         <>
