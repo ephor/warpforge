@@ -1229,6 +1229,27 @@ export class DaemonClient {
     })) as BacklogItem;
   }
 
+  /** Edit an item's own fields. Omitted fields are left as they are. */
+  async updateBacklog(input: {
+    itemId: string;
+    project: string;
+    title?: string;
+    body?: string;
+    status?: string;
+    priority?: string;
+    assignee?: string | null;
+  }): Promise<BacklogItem> {
+    return (await this.request("backlog.update", {
+      item_id: input.itemId,
+      project: input.project,
+      title: input.title,
+      body: input.body,
+      status: input.status,
+      priority: input.priority,
+      assignee: input.assignee,
+    })) as BacklogItem;
+  }
+
   async attachBacklogExternal(input: {
     itemId: string;
     project: string;

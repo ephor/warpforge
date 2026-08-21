@@ -1619,6 +1619,29 @@ async fn dispatch(
                 .map_err(rpc_err)?;
             serde_json::to_value(item).map_err(|e| rpc_err(e.to_string()))
         }
+        BacklogUpdate {
+            item_id,
+            project,
+            title,
+            body,
+            status,
+            priority,
+            assignee,
+        } => {
+            let item = handle
+                .backlog_update(crate::daemon::backlog::ItemPatch {
+                    item_id,
+                    project,
+                    title,
+                    body,
+                    status,
+                    priority,
+                    assignee,
+                })
+                .await
+                .map_err(rpc_err)?;
+            serde_json::to_value(item).map_err(|e| rpc_err(e.to_string()))
+        }
         BacklogAttachExternal {
             item_id,
             project,

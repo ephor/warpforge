@@ -824,6 +824,23 @@ pub enum Method {
         #[serde(default)]
         assignee: Option<String>,
     },
+    /// Edit a backlog item's own fields. Every field is optional: absent means
+    /// "leave alone", so one call can change just a priority. Returns the item.
+    #[serde(rename = "backlog.update")]
+    BacklogUpdate {
+        item_id: String,
+        project: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        body: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        priority: Option<String>,
+        #[serde(default)]
+        assignee: Option<String>,
+    },
     #[serde(rename = "backlog.attachExternal")]
     BacklogAttachExternal {
         item_id: String,

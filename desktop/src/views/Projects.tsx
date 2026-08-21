@@ -17,6 +17,8 @@ import { DEFAULT_PROJECT_SURFACE, type ProjectSurface, useUi } from "@/store/ui"
 
 import { BacklogView } from "../components/backlog/BacklogView";
 import { NewWorkItemDrawer } from "../components/backlog/NewWorkItemDrawer";
+import type { WorkItem } from "../components/backlog/types";
+import { WorkItemDrawer } from "../components/backlog/WorkItemDrawer";
 import { daemon } from "../daemon";
 import type { ServiceInfo, Snapshot } from "../protocol";
 import { ProjectFilesSurface } from "./projects/ProjectFilesSurface";
@@ -36,6 +38,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
   const openProject = useUi((state) => state.openProject);
   const [removeProject, setRemoveProject] = useState<string | null>(null);
   const [backlogOpen, setBacklogOpen] = useState(false);
+  const [openItem, setOpenItem] = useState<WorkItem | null>(null);
 
   const project =
     snapshot.projects.find((p) => p.name === selectedProjectId) ?? snapshot.projects[0] ?? null;
@@ -118,6 +121,22 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
       terminals: snapshot.terminals.filter((terminal) => terminal.project === removeProject).length,
     };
   }, [removeProject, snapshot.portforwards, snapshot.services, snapshot.terminals]);
+
+  const startTaskFromItem = useCallback(
+    (item: WorkItem) => {
+      setOpenItem(null);
+      onNewTask(item.project, [item.title, item.body].filter(Boolean).join("\n\n"), item.id);
+    },
+    [onNewTask],
+  );
+
+  const openTaskFromItem = useCallback(
+    (taskId: string) => {
+      setOpenItem(null);
+      onOpenTask(taskId);
+    },
+    [onOpenTask],
+  );
 
   const confirmProjectRemoval = useCallback(async () => {
     if (!removeProject) return;
@@ -238,13 +257,8 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
               key={project.name}
               project={project.name}
               onOpenTask={onOpenTask}
-              onStartTask={(item) =>
-                onNewTask(
-                  project.name,
-                  [item.title, item.body].filter(Boolean).join("\n\n"),
-                  item.id,
-                )
-              }
+              onOpenItem={setOpenItem}
+              onStartTask={startTaskFromItem}
             />
           </div>
         )}
@@ -258,6 +272,13 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
       />
 
       <NewWorkItemDrawer open={backlogOpen} onOpenChange={setBacklogOpen} project={project.name} />
+
+      <WorkItemDrawer
+        item={openItem}
+        onClose={() => setOpenItem(null)}
+        onStartTask={startTaskFromItem}
+        onOpenTask={openTaskFromItem}
+      />
     </div>
   );
 }

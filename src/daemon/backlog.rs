@@ -140,6 +140,40 @@ pub struct NewItem {
     pub assignee: Option<String>,
 }
 
+/// An edit to an existing item. `None` means "leave this field alone", so a
+/// caller that only wants to change a priority sends only that.
+#[derive(Debug, Clone, Default)]
+pub struct ItemPatch {
+    pub item_id: String,
+    pub project: String,
+    pub title: Option<String>,
+    pub body: Option<String>,
+    pub status: Option<String>,
+    pub priority: Option<String>,
+    pub assignee: Option<String>,
+}
+
+impl ItemPatch {
+    /// Apply the set fields to an item. The caller owns `updated_at`.
+    pub fn apply(&self, item: &mut wire::BacklogItem) {
+        if let Some(title) = &self.title {
+            item.title = title.clone();
+        }
+        if let Some(body) = &self.body {
+            item.body = body.clone();
+        }
+        if let Some(status) = &self.status {
+            item.status = status.clone();
+        }
+        if let Some(priority) = &self.priority {
+            item.priority = priority.clone();
+        }
+        if let Some(assignee) = &self.assignee {
+            item.assignee = Some(assignee.clone());
+        }
+    }
+}
+
 /// One backlog listing request. Paging, ordering and every filter travel
 /// together so both storage backends take — and answer — the same shape.
 #[derive(Debug, Clone, Default)]

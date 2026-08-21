@@ -1068,6 +1068,10 @@ pub enum Command {
         item: super::backlog::NewItem,
         reply: oneshot::Sender<Result<wire::BacklogItem, String>>,
     },
+    BacklogUpdate {
+        patch: super::backlog::ItemPatch,
+        reply: oneshot::Sender<Result<wire::BacklogItem, String>>,
+    },
     BacklogAttachExternal {
         item_id: String,
         project: String,
@@ -1945,6 +1949,16 @@ impl DaemonHandle {
         self.send(Command::BacklogCreate { item, reply: tx }).await;
         rx.await
             .unwrap_or_else(|_| Err("daemon dropped backlog create request".into()))
+    }
+
+    pub async fn backlog_update(
+        &self,
+        patch: super::backlog::ItemPatch,
+    ) -> Result<wire::BacklogItem, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogUpdate { patch, reply: tx }).await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog update request".into()))
     }
 
     pub async fn backlog_attach_external(
@@ -4650,6 +4664,39 @@ impl Daemon {
                             super::backlog::write(&path, &item)?;
                         } else {
                             store.upsert_backlog_item(&item)?;
+                        }
+                        Ok(item)
+                    })
+                    .map_err(|e: anyhow::Error| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogUpdate { patch, reply } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        let yaml = store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml;
+                        let path = if yaml {
+                            Some(self.project_path(&patch.project).ok_or_else(|| {
+                                anyhow::anyhow!("unknown project '{}'", patch.project)
+                            })?)
+                        } else {
+                            None
+                        };
+                        let mut item = match &path {
+                            Some(path) => super::backlog::list(path, &patch.project)?
+                                .into_iter()
+                                .find(|item| item.id == patch.item_id),
+                            None => store.get_backlog_item(&patch.item_id)?,
+                        }
+                        .ok_or_else(|| anyhow::anyhow!("backlog item not found"))?;
+                        patch.apply(&mut item);
+                        item.updated_at = super::task::now_secs();
+                        match &path {
+                            Some(path) => super::backlog::write(path, &item)?,
+                            None => store.upsert_backlog_item(&item)?,
                         }
                         Ok(item)
                     })
