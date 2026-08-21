@@ -16,14 +16,6 @@ function safeRequest(method: string, params: unknown, onError: (msg: string) => 
   });
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="sticky top-0 z-10 bg-card px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-      {children}
-    </div>
-  );
-}
-
 export function PortForwardSectionHeader({
   project,
   portforwards,
@@ -257,12 +249,14 @@ export function RuntimeSidebar({
 }) {
   return (
     <div
-      className="shrink-0 self-stretch overflow-y-auto border-r"
+      className="shrink-0 self-stretch overflow-y-auto border-l"
       style={{ width: SIDEBAR_WIDTH, minWidth: SIDEBAR_WIDTH }}
     >
+      <div className="flex h-11 shrink-0 items-center border-b px-3 text-sm font-semibold">
+        Services
+      </div>
       {services.length > 0 && (
         <div className="flex flex-col">
-          <SectionLabel>Services</SectionLabel>
           {services.map((svc) => (
             <ServiceRow
               key={svc.name}

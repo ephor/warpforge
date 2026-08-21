@@ -113,6 +113,10 @@ interface UiState extends SettingsState {
   sidebarCollapsed: boolean;
   /** File-tree panel inside the Files surface collapsed to a thin rail. */
   filesPanelCollapsed: boolean;
+  /** Service/port-forward sidebar inside the Runtime surface collapsed. */
+  runtimeSidebarCollapsed: boolean;
+  /** Changes rail inside the Diff surface collapsed. */
+  diffPanelCollapsed: boolean;
   // Editor: language-server (LSP) features — persisted, user-toggled.
   lspEnabled: boolean;
 
@@ -140,6 +144,8 @@ interface UiState extends SettingsState {
   setSidebarWidth: (w: number) => void;
   toggleSidebarCollapsed: () => void;
   toggleFilesPanelCollapsed: () => void;
+  toggleRuntimeSidebarCollapsed: () => void;
+  toggleDiffPanelCollapsed: () => void;
   toggleLsp: () => void;
 }
 
@@ -172,6 +178,8 @@ export const useUi = create<UiState>()(
       sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
       sidebarCollapsed: false,
       filesPanelCollapsed: false,
+      runtimeSidebarCollapsed: false,
+      diffPanelCollapsed: false,
       fontSize: DEFAULT_FONT_SIZE,
       monoFontSize: DEFAULT_MONO_FONT_SIZE,
       theme: DEFAULT_THEME,
@@ -261,6 +269,10 @@ export const useUi = create<UiState>()(
       toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       toggleFilesPanelCollapsed: () =>
         set((s) => ({ filesPanelCollapsed: !s.filesPanelCollapsed })),
+      toggleRuntimeSidebarCollapsed: () =>
+        set((s) => ({ runtimeSidebarCollapsed: !s.runtimeSidebarCollapsed })),
+      toggleDiffPanelCollapsed: () =>
+        set((s) => ({ diffPanelCollapsed: !s.diffPanelCollapsed })),
 
       // ── Font size settings ──
       setFontSize: (fontSize) => set({ fontSize: clampFontSize(fontSize) }),

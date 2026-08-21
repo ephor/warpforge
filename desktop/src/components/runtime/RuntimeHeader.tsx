@@ -1,8 +1,16 @@
-import { AlertTriangle, Server, TerminalSquare } from "lucide-react";
+import { AlertTriangle, PanelRightClose, PanelRightOpen, Server, TerminalSquare } from "lucide-react";
 
 import { TabsList, TabsTrigger } from "../ui/tabs";
 
-export function RuntimeHeader({ actionError }: { actionError: string | null }) {
+export function RuntimeHeader({
+  actionError,
+  sidebarCollapsed,
+  onToggleSidebar,
+}: {
+  actionError: string | null;
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
+}) {
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
       <TerminalSquare className="size-3.5 text-muted-foreground" />
@@ -30,6 +38,19 @@ export function RuntimeHeader({ actionError }: { actionError: string | null }) {
           </TabsTrigger>
         </TabsList>
       </div>
+      <button
+        type="button"
+        aria-label={sidebarCollapsed ? "Expand runtime sidebar" : "Collapse runtime sidebar"}
+        title={sidebarCollapsed ? "Expand runtime sidebar" : "Collapse runtime sidebar"}
+        onClick={onToggleSidebar}
+        className="ml-2 shrink-0 rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+      >
+        {sidebarCollapsed ? (
+          <PanelRightOpen className="size-4" />
+        ) : (
+          <PanelRightClose className="size-4" />
+        )}
+      </button>
     </div>
   );
 }

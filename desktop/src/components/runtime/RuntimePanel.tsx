@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { useUi } from "@/store/ui";
+
 import type { PortForwardInfo, ServiceInfo } from "../../protocol";
 import { Tabs, TabsContent } from "../ui/tabs";
 import { makeSidebarKey, type SidebarItem } from "./constants";
@@ -25,6 +27,8 @@ export function RuntimePanel({
 }) {
   const hasItems = services.length > 0 || portforwards.length > 0;
   const [actionError, setActionError] = useState<string | null>(null);
+  const sidebarCollapsed = useUi((s) => s.runtimeSidebarCollapsed);
+  const toggleSidebarCollapsed = useUi((s) => s.toggleRuntimeSidebarCollapsed);
 
   const statusSignature = useMemo(() => {
     const svcPart = services.map((s) => `${s.name}:${s.status}`).join(",");
@@ -69,7 +73,11 @@ export function RuntimePanel({
   return (
     <div className="flex h-full min-h-0 flex-col bg-card">
       <Tabs defaultValue={initialTab} className="flex min-h-0 flex-1 flex-col">
-        <RuntimeHeader actionError={actionError} />
+        <RuntimeHeader
+          actionError={actionError}
+          sidebarCollapsed={sidebarCollapsed}
+          onToggleSidebar={toggleSidebarCollapsed}
+        />
 
         <TabsContent value="services" className="min-h-0 flex-1">
           {!hasItems ? (
@@ -78,14 +86,6 @@ export function RuntimePanel({
             </div>
           ) : (
             <div className="flex h-full min-h-0">
-              <RuntimeSidebar
-                project={project}
-                services={services}
-                portforwards={portforwards}
-                selectedKey={resolvedKey}
-                onSelect={handleSelect}
-                onError={setActionError}
-              />
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {selectedService ? (
                   <ServiceDetailPane
@@ -105,6 +105,16 @@ export function RuntimePanel({
                   </div>
                 )}
               </div>
+              {!sidebarCollapsed && (
+                <RuntimeSidebar
+                  project={project}
+                  services={services}
+                  portforwards={portforwards}
+                  selectedKey={resolvedKey}
+                  onSelect={handleSelect}
+                  onError={setActionError}
+                />
+              )}
             </div>
           )}
         </TabsContent>
