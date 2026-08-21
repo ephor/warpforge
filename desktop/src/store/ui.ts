@@ -1,8 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import type { EditHunk } from "../protocol";
 import { DEFAULT_THEME } from "@/lib/themes";
+
+import type { EditHunk } from "../protocol";
 
 /**
  * Client-side UI state (view, panel toggles, prefs) — persisted to localStorage.
@@ -20,7 +21,7 @@ export const DEFAULT_TASK_SURFACE: TaskSurface = "diff";
 
 /** Transient intent to open a task already showing a specific file/diff. */
 export type TaskOpenNav =
-  | { surface: "files"; path: string }
+  | { surface: "files"; path: string; line?: number; column?: number }
   | { surface: "diff"; path: string; hunks?: EditHunk[] };
 
 export interface PinnedTileLayout {
@@ -251,7 +252,8 @@ export const useUi = create<UiState>()(
         })),
       setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: clampSidebarWidth(sidebarWidth) }),
       toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
-      toggleFilesPanelCollapsed: () => set((s) => ({ filesPanelCollapsed: !s.filesPanelCollapsed })),
+      toggleFilesPanelCollapsed: () =>
+        set((s) => ({ filesPanelCollapsed: !s.filesPanelCollapsed })),
 
       // ── Font size settings ──
       setFontSize: (fontSize) => set({ fontSize: clampFontSize(fontSize) }),

@@ -6,6 +6,7 @@ import AppHeader from "@/components/AppHeader";
 import AttentionToast from "@/components/AttentionToast";
 import BootstrapWizard from "@/components/BootstrapWizard";
 import ErrorBoundary from "@/components/ErrorBoundary";
+import { FindInFiles, FIND_LIMIT } from "@/components/FindInFiles";
 import { QuickOpen } from "@/components/QuickOpen";
 import Sidebar from "@/components/Sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -15,12 +16,14 @@ import { useUi } from "@/store/ui";
 import { SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX } from "@/store/ui";
 
 import { useDaemonEvents } from "./hooks/useDaemonEvents";
+import { useFindInFilesShortcut } from "./hooks/useFindInFilesShortcut";
 import { useFontScaling } from "./hooks/useFontScaling";
-import { useTheme } from "./hooks/useTheme";
 import { usePullShortcut } from "./hooks/usePullShortcut";
 import { usePushShortcut } from "./hooks/usePushShortcut";
 import { useQuickOpenShortcut } from "./hooks/useQuickOpenShortcut";
 import { useTauriClose } from "./hooks/useTauriClose";
+import { useTheme } from "./hooks/useTheme";
+import type { FileDoc, SymbolMatch } from "./protocol";
 import { queryClient, useProjectFileListQuery } from "./query";
 import AddProjectDialog from "./views/AddProjectDialog";
 import AgentSetupDialog from "./views/AgentSetupDialog";
@@ -47,9 +50,10 @@ function LiveSidebar(props: Omit<React.ComponentProps<typeof Sidebar>, "state">)
   return <Sidebar state={state} {...props} />;
 }
 
-/** Hosts the quick-open palette: owns the file-list query and the double-Shift
- *  trigger. Rendered as a child of the QueryClientProvider so its hook sees the
- *  client (App's own hooks must not query — they'd render before the provider). */
+/** Hosts the search palettes: owns the file-list query, the search RPCs and the
+ *  double-Shift / ⌘⇧F triggers. Rendered as a child of the QueryClientProvider
+ *  so its hook sees the client (App's own hooks must not query — they'd render
+ *  before the provider). */
 function QuickOpenHost({
   openTaskId,
   hasOpenTask,
@@ -58,22 +62,58 @@ function QuickOpenHost({
   hasOpenTask: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
   const filesQuery = useProjectFileListQuery(hasOpenTask ? openTaskId : null);
   const openTaskThroughNav = useUi((s) => s.openTaskWithNav);
   useQuickOpenShortcut(() => {
     if (hasOpenTask) setOpen(true);
   });
+  useFindInFilesShortcut(() => {
+    if (hasOpenTask) setFindOpen(true);
+  });
+
+  const searchProject = useCallback(
+    (query: string) =>
+      daemon.request("file.search", {
+        limit: FIND_LIMIT,
+        query,
+        task_id: openTaskId,
+      }) as Promise<SymbolMatch[]>,
+    [openTaskId],
+  );
+  const loadFile = useCallback(
+    (path: string) =>
+      (daemon.request("file.contents", { path, task_id: openTaskId }) as Promise<FileDoc>).then(
+        (doc) => doc.newText,
+      ),
+    [openTaskId],
+  );
+  const openAt = useCallback(
+    (path: string, location?: { line: number; column: number }) => {
+      if (openTaskId) openTaskThroughNav(openTaskId, { surface: "files", path, ...location });
+    },
+    [openTaskId, openTaskThroughNav],
+  );
+
   return (
-    <QuickOpen
-      open={open}
-      files={filesQuery.data ?? []}
-      loading={filesQuery.isLoading}
-      error={filesQuery.error?.message ?? null}
-      onPick={(path) => {
-        if (openTaskId) openTaskThroughNav(openTaskId, { surface: "files", path });
-      }}
-      onClose={() => setOpen(false)}
-    />
+    <>
+      <QuickOpen
+        open={open}
+        files={filesQuery.data ?? []}
+        loading={filesQuery.isLoading}
+        error={filesQuery.error?.message ?? null}
+        onSearch={searchProject}
+        onPick={openAt}
+        onClose={() => setOpen(false)}
+      />
+      <FindInFiles
+        open={findOpen}
+        onSearch={searchProject}
+        loadFile={loadFile}
+        onPick={(path, line, column) => openAt(path, { column, line })}
+        onClose={() => setFindOpen(false)}
+      />
+    </>
   );
 }
 
@@ -267,131 +307,133 @@ export default function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-    <TooltipProvider delayDuration={300}>
-      {/* Prototype shell: full-height sidebar beside a column of topbar + content. */}
-      <div className="relative flex h-screen bg-background">
-        {showPersistent && (
-          <>
-            <aside
-              style={{
-                width: persistentWidth,
-                minWidth: persistentWidth,
-                maxWidth: persistentWidth,
-              }}
-              className="flex shrink-0 flex-col overflow-hidden"
-              data-testid="persistent-sidebar"
-            >
-              <LiveSidebar {...sidebarProps} />
-            </aside>
-            {!sidebarCollapsed && (
-              <SidebarResizeHandle width={sidebarWidth} onWidthChange={setSidebarWidth} />
-            )}
-          </>
-        )}
+      <TooltipProvider delayDuration={300}>
+        {/* Prototype shell: full-height sidebar beside a column of topbar + content. */}
+        <div className="relative flex h-screen bg-background">
+          {showPersistent && (
+            <>
+              <aside
+                style={{
+                  width: persistentWidth,
+                  minWidth: persistentWidth,
+                  maxWidth: persistentWidth,
+                }}
+                className="flex shrink-0 flex-col overflow-hidden"
+                data-testid="persistent-sidebar"
+              >
+                <LiveSidebar {...sidebarProps} />
+              </aside>
+              {!sidebarCollapsed && (
+                <SidebarResizeHandle width={sidebarWidth} onWidthChange={setSidebarWidth} />
+              )}
+            </>
+          )}
 
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {!newTaskOpen && (
-            <AppHeader
-              view={view}
-              openTask={openTask}
-              onAddProject={() => setAddProjectOpen(true)}
-              onCloseTask={() => setOpenTaskId(null)}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {!newTaskOpen && (
+              <AppHeader
+                view={view}
+                openTask={openTask}
+                onAddProject={() => setAddProjectOpen(true)}
+                onCloseTask={() => setOpenTaskId(null)}
+              />
+            )}
+            <main
+              className={
+                newTaskOpen
+                  ? "min-h-0 flex-1 overflow-hidden"
+                  : "min-h-0 flex-1 overflow-hidden p-2"
+              }
+            >
+              <ErrorBoundary>
+                {newTaskOpen ? (
+                  <NewTaskDialog
+                    open
+                    onOpenChange={setNewTaskOpen}
+                    snapshot={snapshot}
+                    defaultProject={newTaskProject}
+                    initialPrompt={newTaskPrompt}
+                  />
+                ) : openTask ? (
+                  <TaskDetail
+                    key={openTask.id}
+                    task={openTask}
+                    snapshot={snapshot}
+                    onOpenTask={setOpenTaskId}
+                    onOpenPush={() => setPushOpen(true)}
+                  />
+                ) : view === "control" ? (
+                  <LiveMissionControl onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
+                ) : (
+                  <Projects
+                    snapshot={snapshot}
+                    onOpenTask={setOpenTaskId}
+                    onNewTask={startNewTask}
+                    onAddProject={() => setAddProjectOpen(true)}
+                  />
+                )}
+              </ErrorBoundary>
+            </main>
+          </div>
+
+          {pushOpen && <PushDialog open onOpenChange={setPushOpen} task={openTask} />}
+          <QuickOpenHost
+            openTaskId={openTask ? openTask.id : null}
+            hasOpenTask={!!openTask && !newTaskOpen}
+          />
+          {addProjectOpen && (
+            <AddProjectDialog open onOpenChange={setAddProjectOpen} onAdded={handleProjectAdded} />
+          )}
+          <SettingsView open={settingsOpen} onOpenChange={setSettingsOpen} />
+          {pendingAgentSetup && (
+            <AgentSetupDialog
+              detected={pendingAgentSetup}
+              onClose={() => {
+                daemon.dismissAgentSetup();
+              }}
             />
           )}
-          <main
-            className={
-              newTaskOpen ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-hidden p-2"
-            }
-          >
-            <ErrorBoundary>
-              {newTaskOpen ? (
-                <NewTaskDialog
-                  open
-                  onOpenChange={setNewTaskOpen}
-                  snapshot={snapshot}
-                  defaultProject={newTaskProject}
-                  initialPrompt={newTaskPrompt}
-                />
-              ) : openTask ? (
-                <TaskDetail
-                  key={openTask.id}
-                  task={openTask}
-                  snapshot={snapshot}
-                  onOpenTask={setOpenTaskId}
-                  onOpenPush={() => setPushOpen(true)}
-                />
-              ) : view === "control" ? (
-                <LiveMissionControl onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
-              ) : (
-                <Projects
-                  snapshot={snapshot}
-                  onOpenTask={setOpenTaskId}
-                  onNewTask={startNewTask}
-                  onAddProject={() => setAddProjectOpen(true)}
-                />
-              )}
-            </ErrorBoundary>
-          </main>
+          {wizardProject && (
+            <BootstrapWizard
+              project={wizardProject}
+              agents={snapshot.agents ?? []}
+              open={!!wizardProject}
+              onOpenChange={(v) => {
+                if (!v) setWizardProject(null);
+              }}
+              onStarted={(taskId) => {
+                const projectName = wizardProject;
+                setWizardProject(null);
+                const toastId = `bootstrap:${taskId}`;
+                toast.custom(
+                  (sonnerId) => (
+                    <AttentionToast
+                      title="Config generation started"
+                      identity={projectName ?? "project"}
+                      summary="Agent is writing .warpforge.yaml in background"
+                      onDismiss={() => toast.dismiss(sonnerId)}
+                      onOpen={() => {
+                        useUi.getState().openTask(taskId);
+                        toast.dismiss(sonnerId);
+                      }}
+                    />
+                  ),
+                  {
+                    action: null,
+                    cancel: null,
+                    description: null,
+                    duration: 10_000,
+                    icon: null,
+                    id: toastId,
+                    richColors: false,
+                    unstyled: true,
+                  },
+                );
+              }}
+            />
+          )}
         </div>
-
-        {pushOpen && <PushDialog open onOpenChange={setPushOpen} task={openTask} />}
-        <QuickOpenHost
-          openTaskId={openTask ? openTask.id : null}
-          hasOpenTask={!!openTask && !newTaskOpen}
-        />
-        {addProjectOpen && (
-          <AddProjectDialog open onOpenChange={setAddProjectOpen} onAdded={handleProjectAdded} />
-        )}
-        <SettingsView open={settingsOpen} onOpenChange={setSettingsOpen} />
-        {pendingAgentSetup && (
-          <AgentSetupDialog
-            detected={pendingAgentSetup}
-            onClose={() => {
-              daemon.dismissAgentSetup();
-            }}
-          />
-        )}
-        {wizardProject && (
-          <BootstrapWizard
-            project={wizardProject}
-            agents={snapshot.agents ?? []}
-            open={!!wizardProject}
-            onOpenChange={(v) => {
-              if (!v) setWizardProject(null);
-            }}
-            onStarted={(taskId) => {
-              const projectName = wizardProject;
-              setWizardProject(null);
-              const toastId = `bootstrap:${taskId}`;
-              toast.custom(
-                (sonnerId) => (
-                  <AttentionToast
-                    title="Config generation started"
-                    identity={projectName ?? "project"}
-                    summary="Agent is writing .warpforge.yaml in background"
-                    onDismiss={() => toast.dismiss(sonnerId)}
-                    onOpen={() => {
-                      useUi.getState().openTask(taskId);
-                      toast.dismiss(sonnerId);
-                    }}
-                  />
-                ),
-                {
-                  action: null,
-                  cancel: null,
-                  description: null,
-                  duration: 10_000,
-                  icon: null,
-                  id: toastId,
-                  richColors: false,
-                  unstyled: true,
-                },
-              );
-            }}
-          />
-        )}
-      </div>
-    </TooltipProvider>
+      </TooltipProvider>
     </QueryClientProvider>
   );
 }

@@ -7,7 +7,6 @@ import { Check, Code, Eye, Loader2, Save, Wand2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useThemeMode } from "@/hooks/useTheme";
-import { daemon } from "../daemon";
 import {
   codemirrorLanguageForPath,
   lspDocumentLanguageForPath,
@@ -17,6 +16,7 @@ import { cmChromeForMode } from "@/lib/codemirrorTheme";
 import { acquireLspClient, releaseLspClient } from "@/lib/lspClients";
 import { cn } from "@/lib/utils";
 
+import { daemon } from "../daemon";
 import type { FileDoc, FileRange, SymbolMatch } from "../protocol";
 import { useUi } from "../store/ui";
 import { Markdown } from "./Markdown";
@@ -290,7 +290,16 @@ export function CodeEditor({
               { key: "Mod-s", run: flushSave },
               ...(onGotoDefinition ? [{ key: "Mod-b", run: runGoto, preventDefault: true }] : []),
               ...(onAskFile
-                ? [{ key: "Mod-l", run: () => { askSelectionRef.current(); return true; }, preventDefault: true }]
+                ? [
+                    {
+                      key: "Mod-l",
+                      run: () => {
+                        askSelectionRef.current();
+                        return true;
+                      },
+                      preventDefault: true,
+                    },
+                  ]
                 : []),
             ]),
             ...(onGotoDefinition
@@ -396,9 +405,7 @@ export function CodeEditor({
       setLspMissing(null);
       const uri = `file://${acquired.rootPath}/${doc.path}`;
       view.dispatch({
-        effects: lspCompartment.current.reconfigure(
-          acquired.client.plugin(uri, documentLanguage),
-        ),
+        effects: lspCompartment.current.reconfigure(acquired.client.plugin(uri, documentLanguage)),
       });
       detach = () => {
         viewRef.current?.dispatch({ effects: lspCompartment.current.reconfigure([]) });
@@ -441,9 +448,15 @@ export function CodeEditor({
     const column = Math.min(Math.max(gotoLocation.column - 1, 0), line.length);
     view.dispatch({
       selection: { anchor: line.from + column },
-      scrollIntoView: true,
+      // Centered, not merely "in view": a plain scrollIntoView stops as soon as
+      // the line touches an edge, leaving the jump target glued to the bottom
+      // with no context under it.
+      effects: EditorView.scrollIntoView(line.from + column, { y: "center" }),
       userEvent: "select.goto",
     });
+    // Without focus the caret sits at the target invisibly and the first
+    // keystroke goes nowhere — a jump from search should land ready to type.
+    view.focus();
     gotoLocationKey.current = key;
     onGotoLocationHandled?.();
   }, [editorReady, gotoLocation, onGotoLocationHandled]);
