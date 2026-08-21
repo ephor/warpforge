@@ -120,18 +120,18 @@ const ServiceRow = memo(function ServiceRow({
     <div
       className={cn(
         "group flex w-full items-center gap-1.5 px-2 py-1 text-xs",
-        selected ? "bg-secondary text-foreground" : "text-muted-foreground",
+        selected
+          ? "bg-secondary text-foreground"
+          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
       )}
     >
       <button
         type="button"
         onClick={onSelect}
         className={cn(
-          "flex min-w-0 flex-1 items-center gap-1.5 rounded-sm py-0.5 text-left transition-colors",
+          "flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-          selected
-            ? "text-foreground"
-            : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+          selected ? "text-foreground" : "text-muted-foreground group-hover:text-foreground",
         )}
         aria-label={`Select ${service.name}, ${badge.label}`}
         aria-pressed={selected}
@@ -206,18 +206,18 @@ const PortForwardRow = memo(function PortForwardRow({
     <div
       className={cn(
         "group flex w-full items-center gap-1.5 px-2 py-1 text-xs",
-        selected ? "bg-secondary text-foreground" : "text-muted-foreground",
+        selected
+          ? "bg-secondary text-foreground"
+          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
       )}
     >
       <button
         type="button"
         onClick={onSelect}
         className={cn(
-          "flex min-w-0 flex-1 items-center gap-1.5 rounded-sm py-0.5 text-left transition-colors",
+          "flex min-w-0 flex-1 items-center gap-1.5 py-0.5 text-left",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-          selected
-            ? "text-foreground"
-            : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+          selected ? "text-foreground" : "text-muted-foreground group-hover:text-foreground",
         )}
         aria-label={`Select ${pf.name}, ${badge.label}`}
         aria-pressed={selected}
