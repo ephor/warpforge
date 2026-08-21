@@ -28,13 +28,19 @@
 //! - `decide_workflow(task_id, decision, rounds?, note?)` — decide what an
 //!   owned pipeline does once it has exhausted its review rounds.
 //!
-//! Environment (set by the daemon when it starts the orchestrator session):
-//! - `WF_ORCH_TASK`    — the orchestrator's task id (the inbox owner / parent).
-//! - `WF_ORCH_PROJECT` — the project sub-agents run in.
+//! Environment (set by the daemon when it starts the session; legacy daemons
+//! set the `WF_ORCH_*` spellings instead):
+//! - `WF_TASK`    — the session's task id (the inbox owner / parent).
+//! - `WF_PROJECT` — the project this session is scoped to. Unset falls back to
+//!   the registered project containing the working directory, so the bridge can
+//!   also be configured once globally and run outside the daemon.
+//! - `WF_MODE`    — `orchestrator` to expose the spawn/inbox/workflow tools on
+//!   top of the runtime ones. Anything else (or unset) means a single session.
 
 use anyhow::{anyhow, Context, Result};
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -48,14 +54,23 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 /// Entry point for the hidden `wf __mcp-orchestrator` subcommand.
 pub async fn run() -> Result<()> {
-    let parent_task = std::env::var("WF_TASK")
-        .or_else(|_| std::env::var("WF_ORCH_TASK"))
-        .context("WF_TASK not set — this binary is spawned by the daemon")?;
-    let project = std::env::var("WF_PROJECT")
-        .or_else(|_| std::env::var("WF_ORCH_PROJECT"))
-        .unwrap_or_default();
     let is_orchestrator =
         std::env::var("WF_MODE").as_deref() == Ok("orchestrator") || parent_task_env_is_orch();
+    let parent_task = std::env::var("WF_TASK")
+        .or_else(|_| std::env::var("WF_ORCH_TASK"))
+        .ok();
+    if is_orchestrator && parent_task.is_none() {
+        return Err(anyhow!(
+            "WF_TASK not set — an orchestrator bridge is spawned by the daemon"
+        ));
+    }
+    let parent_task = parent_task.unwrap_or_default();
+    let project = std::env::var("WF_PROJECT")
+        .or_else(|_| std::env::var("WF_ORCH_PROJECT"))
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+        .or_else(project_from_cwd)
+        .unwrap_or_default();
 
     log(&format!(
         "starting: parent_task={parent_task} project={project} mode={}",
@@ -80,6 +95,38 @@ pub async fn run() -> Result<()> {
 /// orchestrator session so the old env still yields the orchestrator tools.
 fn parent_task_env_is_orch() -> bool {
     std::env::var("WF_MODE").is_err() && std::env::var("WF_ORCH_TASK").is_ok()
+}
+
+/// Fall back to the registered project whose path contains the working
+/// directory. This is what lets the bridge be configured once, globally
+/// (`claude mcp add --scope user`, no env), instead of per project: an agent
+/// started inside a project's checkout scopes itself to that project. The
+/// deepest matching path wins, so a project nested inside another resolves to
+/// the inner one.
+fn project_from_cwd() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?.canonicalize().ok()?;
+    let roots: Vec<(String, PathBuf)> = crate::registry::list_projects()
+        .ok()?
+        .into_iter()
+        .filter_map(|p| {
+            Path::new(&p.path)
+                .canonicalize()
+                .ok()
+                .map(|root| (p.name, root))
+        })
+        .collect();
+    pick_project(&roots, &cwd)
+}
+
+/// The deepest registered root containing `cwd`. Deepest rather than first so a
+/// project nested inside another resolves to the inner one; a task worktree
+/// under `<project>/.worktrees/<task>` resolves to its project.
+fn pick_project(roots: &[(String, PathBuf)], cwd: &Path) -> Option<String> {
+    roots
+        .iter()
+        .filter(|(_, root)| cwd.starts_with(root))
+        .max_by_key(|(_, root)| root.components().count())
+        .map(|(name, _)| name.clone())
 }
 
 /// Diagnostics to stderr (the ACP agent may forward this to the daemon's
@@ -1476,6 +1523,30 @@ async fn handle_tool_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cwd_resolves_to_the_deepest_registered_project() {
+        let roots = vec![
+            ("outer".to_string(), PathBuf::from("/w/outer")),
+            (
+                "inner".to_string(),
+                PathBuf::from("/w/outer/packages/inner"),
+            ),
+            ("sibling".to_string(), PathBuf::from("/w/outer-sibling")),
+        ];
+
+        let pick = |cwd: &str| pick_project(&roots, Path::new(cwd));
+        assert_eq!(pick("/w/outer/src").as_deref(), Some("outer"));
+        assert_eq!(
+            pick("/w/outer/packages/inner/src").as_deref(),
+            Some("inner")
+        );
+        // A task worktree lives under its project root.
+        assert_eq!(pick("/w/outer/.worktrees/t_1").as_deref(), Some("outer"));
+        // A sibling sharing a name prefix is not a parent directory.
+        assert_eq!(pick("/w/outer-sibling/src").as_deref(), Some("sibling"));
+        assert_eq!(pick("/tmp/unregistered"), None);
+    }
 
     #[test]
     fn lifecycle_tools_advertise_stop_and_destructive_cleanup() {
