@@ -22,9 +22,13 @@ export function relativeTime(ts: number, now = Date.now()): string {
 }
 
 /**
- * One backlog item as two lines: what it is, then how it is filed. The whole
- * row is the button that opens the details drawer; the tracker link and the
- * task action sit outside it, so a click on them is not a click on the row.
+ * One backlog item on one line. Every field after the title has a fixed width
+ * so the whole list reads down its columns instead of ragging around each
+ * title's length — the width is there, and stacking the metadata under the
+ * title wasted it. Narrow windows drop the least useful columns first.
+ *
+ * The row itself is the button that opens the details; the tracker link and
+ * the task action sit outside it, so clicking them is not clicking the row.
  */
 export const BacklogRow = React.memo(function BacklogRow({
   item,
@@ -37,53 +41,57 @@ export const BacklogRow = React.memo(function BacklogRow({
   const StatusIcon = status.icon;
 
   return (
-    <div className="group flex min-w-0 items-center gap-2 border-b border-border/50 pr-2 hover:bg-secondary/40">
+    <div className="group flex h-9 min-w-0 items-center border-b border-border/40 pr-2 hover:bg-secondary/40">
       <button
         type="button"
         onClick={() => actions.onOpen(item)}
-        className="flex min-w-0 flex-1 flex-col gap-0.5 py-2 pl-3 pr-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        title={item.title}
+        className="flex h-full min-w-0 flex-1 items-center gap-3 pl-3 pr-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
-        <span className="flex min-w-0 items-center gap-2">
-          <SourceDot source={item.source} />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
-            {item.title}
-          </span>
-          <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-            <UserRound className="size-3" />
-            {item.assignee || "Unassigned"}
-          </span>
-          <span
-            className="tnum shrink-0 text-[11px] text-muted-foreground"
-            title={new Date(item.updatedAt).toLocaleString()}
-          >
-            {relativeTime(item.updatedAt)}
-          </span>
+        <SourceDot source={item.source} />
+        <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">{item.title}</span>
+
+        <span
+          className={cn(
+            "hidden w-[7.5rem] shrink-0 items-center gap-1 rounded-md border px-1.5 py-px text-[11px] sm:inline-flex",
+            status.className,
+          )}
+        >
+          <StatusIcon className="size-3 shrink-0" />
+          <span className="truncate">{status.label}</span>
         </span>
-        <span className="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
-          <span
-            className={cn(
-              "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-px",
-              status.className,
-            )}
-          >
-            <StatusIcon className="size-3" />
-            {status.label}
-          </span>
-          <span
-            className={cn(
-              "inline-flex shrink-0 items-center gap-1",
-              item.priority === "none" ? "text-muted-foreground/60" : priorityTone(item.priority),
-            )}
-          >
-            <Flag className="size-3" />
-            {PRIORITY_LABEL[item.priority]}
-          </span>
-          <span className="shrink-0">{SOURCE_LABEL[item.source]}</span>
-          {item.number && <span className="tnum shrink-0 truncate">{item.number}</span>}
+
+        <span
+          className={cn(
+            "hidden w-16 shrink-0 items-center gap-1 text-[11px] lg:inline-flex",
+            item.priority === "none" ? "text-muted-foreground/50" : priorityTone(item.priority),
+          )}
+        >
+          <Flag className="size-3 shrink-0" />
+          <span className="truncate">{PRIORITY_LABEL[item.priority]}</span>
+        </span>
+
+        <span className="hidden w-32 shrink-0 truncate text-[11px] text-muted-foreground xl:block">
+          {SOURCE_LABEL[item.source]}
+          {item.number && <span className="tnum text-muted-foreground/60"> {item.number}</span>}
+        </span>
+
+        <span className="hidden w-28 shrink-0 items-center gap-1 text-[11px] text-muted-foreground md:inline-flex">
+          <UserRound className="size-3 shrink-0" />
+          <span className="truncate">{item.assignee || "Unassigned"}</span>
+        </span>
+
+        <span
+          className="tnum w-16 shrink-0 text-right text-[11px] text-muted-foreground"
+          title={new Date(item.updatedAt).toLocaleString()}
+        >
+          {relativeTime(item.updatedAt)}
         </span>
       </button>
 
-      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+      {/* Reserved width, not conditional rendering: an action appearing on
+          hover must not shift the columns to its left. */}
+      <div className="flex w-[4.5rem] shrink-0 items-center justify-end gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
         {item.url && (
           <Button
             asChild

@@ -5,7 +5,8 @@ import * as React from "react";
 import { BacklogRow, type BacklogRowActions } from "./BacklogRow";
 import type { WorkItem } from "./types";
 
-const ESTIMATED_ROW_HEIGHT = 52;
+/** Matches the `h-9` row plus its border. */
+const ESTIMATED_ROW_HEIGHT = 37;
 
 export interface BacklogListProps {
   items: WorkItem[];
