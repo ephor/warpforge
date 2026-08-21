@@ -3384,7 +3384,7 @@ impl Daemon {
                     Some(p) => {
                         tokio::task::spawn_blocking(move || {
                             let matches =
-                                super::diff::search_files(&p, &query, limit).unwrap_or_default();
+                                super::search::search_files(&p, &query, limit).unwrap_or_default();
                             let _ = reply.send(matches);
                         });
                     }
