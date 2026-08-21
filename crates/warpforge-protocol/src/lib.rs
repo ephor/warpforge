@@ -708,6 +708,14 @@ pub enum Method {
     /// pointed at one. Returns `{ teams: [LinearTeam] }`.
     #[serde(rename = "tracker.linearTeams")]
     TrackerLinearTeams {},
+    /// Read one image embedded in an issue body. The WebView has no tracker
+    /// session of its own, so the daemon fetches the bytes with the
+    /// credentials it already holds. Returns `TrackerAttachment`.
+    #[serde(rename = "tracker.attachment")]
+    TrackerAttachment {
+        /// Absolute https URL, as it appeared in the issue body.
+        url: String,
+    },
     /// Which tracker slice a project reads. Returns `TrackerProjectSettings`.
     #[serde(rename = "tracker.projectSettings")]
     TrackerProjectSettings {
@@ -997,6 +1005,17 @@ pub struct TrackerStatus {
     pub linear: Option<TrackerLinearStatus>,
     #[serde(default)]
     pub github: Option<TrackerGithubStatus>,
+}
+
+/// One image from an issue body, already fetched. Inlined as base64 rather
+/// than handed over as a URL: the renderer has no tracker session, and a
+/// signed storage link expires in minutes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerAttachment {
+    /// The image's MIME type, e.g. `image/png`.
+    pub content_type: String,
+    pub data_base64: String,
 }
 
 /// A Linear team the connected API key can see, so the desktop can point a

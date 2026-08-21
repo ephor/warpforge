@@ -4,13 +4,19 @@ import { ExternalLink, Flag, Play, UserRound, X } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 
+import { Markdown } from "@/components/Markdown";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem } from "@/components/ui/select";
 import { daemon } from "@/daemon";
+import { statusLabel, taskStatusVisual } from "@/lib/statusMeta";
+import { inlineHtmlImages } from "@/lib/trackerMarkdown";
 import { cn } from "@/lib/utils";
+import type { TaskInfo } from "@/protocol";
 
+import { relativeTime } from "./BacklogRow";
 import { PRIORITY_LABEL, SOURCE_LABEL, SourceDot, STATUS_META } from "./labels";
+import { TrackerImage } from "./TrackerImage";
 import {
   type WorkItem,
   type WorkItemPriority,
@@ -24,6 +30,8 @@ export interface WorkItemDrawerProps {
   onClose: () => void;
   onStartTask?: (item: WorkItem) => void;
   onOpenTask?: (taskId: string) => void;
+  /** The task this item became, when the daemon still has it. */
+  linkedTask?: TaskInfo | null;
 }
 
 /**
@@ -31,14 +39,28 @@ export interface WorkItemDrawerProps {
  * its own — closing it leaves the list exactly as it was, scroll and filters
  * included, which is the whole reason the row no longer navigates away.
  */
-export function WorkItemDrawer({ item, onClose, onStartTask, onOpenTask }: WorkItemDrawerProps) {
+export function WorkItemDrawer({
+  item,
+  onClose,
+  onStartTask,
+  onOpenTask,
+  linkedTask,
+}: WorkItemDrawerProps) {
   return (
     <Dialog open={item !== null} onOpenChange={(next) => !next && onClose()}>
       <DialogContent
         hideClose
-        className="fixed inset-y-0 right-0 left-auto top-0 flex h-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-y-0 border-r-0 bg-popover p-0 shadow-2xl data-[state=closed]:zoom-out-100 data-[state=open]:zoom-in-100 w-[min(28rem,calc(100vw-3rem))]"
+        className="fixed inset-y-0 right-0 left-auto top-0 flex h-full w-[min(56rem,calc(100vw-4rem))] max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-y-0 border-r-0 bg-popover p-0 shadow-2xl data-[state=closed]:zoom-out-100 data-[state=open]:zoom-in-100"
       >
-        {item && <WorkItemDetails item={item} onClose={onClose} {...{ onOpenTask, onStartTask }} />}
+        {item && (
+          <WorkItemDetails
+            item={item}
+            onClose={onClose}
+            linkedTask={linkedTask}
+            onOpenTask={onOpenTask}
+            onStartTask={onStartTask}
+          />
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -49,11 +71,13 @@ function WorkItemDetails({
   onClose,
   onStartTask,
   onOpenTask,
+  linkedTask,
 }: {
   item: WorkItem;
   onClose: () => void;
   onStartTask?: (item: WorkItem) => void;
   onOpenTask?: (taskId: string) => void;
+  linkedTask?: TaskInfo | null;
 }) {
   const queryClient = useQueryClient();
   // Optimistic locally so the chip answers the click; the listing refetch
@@ -91,13 +115,17 @@ function WorkItemDetails({
       <DialogDescription className="sr-only">
         Details for work item {item.number ?? item.title}
       </DialogDescription>
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 px-4">
-        <SourceDot source={item.source} />
-        <span className="truncate text-xs text-muted-foreground">
-          {SOURCE_LABEL[item.source]}
-          {item.number && <span className="tnum"> · {item.number}</span>}
-        </span>
-        <div className="ml-auto flex shrink-0 items-center gap-0.5">
+      {/* The title is what the panel is about, so it is the panel's heading;
+          which tracker it came from is metadata, and reads with the rest of it
+          below. */}
+      <header className="flex min-h-12 shrink-0 items-center gap-3 border-b border-border/60 px-6 py-2">
+        <DialogTitle
+          className="min-w-0 flex-1 text-base font-medium leading-snug text-foreground"
+          title={item.title}
+        >
+          {item.title}
+        </DialogTitle>
+        <div className="flex shrink-0 items-center gap-0.5">
           {item.url && (
             <Button
               asChild
@@ -126,12 +154,15 @@ function WorkItemDetails({
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
-        <DialogTitle className="text-base font-medium leading-snug text-foreground">
-          {item.title}
-        </DialogTitle>
-
-        <div className="flex flex-wrap items-center gap-1.5">
+      {/* The panel is wide so a long issue body has room, but prose is capped
+          at a readable measure rather than run edge to edge. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-4">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <span className="inline-flex h-7 items-center gap-1.5 text-xs text-muted-foreground">
+            <SourceDot source={item.source} />
+            {SOURCE_LABEL[item.source]}
+            {item.number && <span className="tnum"> · {item.number}</span>}
+          </span>
           {statusIsRemote ? (
             <span
               className={cn(
@@ -180,22 +211,40 @@ function WorkItemDetails({
         </div>
 
         {item.body ? (
-          <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-muted-foreground">
-            {item.body}
-          </p>
+          // Tracker descriptions are markdown; rendering them as plain text
+          // turned every link and checklist in them into noise.
+          <Markdown
+            density="comfortable"
+            renderImage={TrackerImage}
+            className="max-w-[80ch] text-foreground/90"
+          >
+            {inlineHtmlImages(item.body)}
+          </Markdown>
         ) : (
           <p className="text-[13px] text-muted-foreground/60">No description.</p>
         )}
 
-        <dl className="mt-auto grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 pt-2 text-[11px] text-muted-foreground">
-          <dt>Created</dt>
-          <dd className="tnum">{new Date(item.createdAt).toLocaleString()}</dd>
-          <dt>Updated</dt>
-          <dd className="tnum">{new Date(item.updatedAt).toLocaleString()}</dd>
-        </dl>
+        {linkedTask && <LinkedTaskSummary task={linkedTask} />}
       </div>
 
-      <footer className="flex h-14 shrink-0 items-center justify-end gap-2 border-t border-border/60 px-4">
+      {/* Timestamps ride in the footer rather than closing the description:
+          they are the least-read thing here, and putting them on the action
+          bar's empty half costs no vertical space at all. */}
+      <footer className="flex h-14 shrink-0 items-center justify-between gap-4 border-t border-border/60 px-6">
+        <dl className="flex min-w-0 flex-wrap items-baseline gap-x-4 text-[11px] text-muted-foreground">
+          <div className="flex items-baseline gap-1.5">
+            <dt>Created</dt>
+            <dd className="tnum" title={new Date(item.createdAt).toLocaleString()}>
+              {relativeTime(item.createdAt)}
+            </dd>
+          </div>
+          <div className="flex items-baseline gap-1.5">
+            <dt>Updated</dt>
+            <dd className="tnum" title={new Date(item.updatedAt).toLocaleString()}>
+              {relativeTime(item.updatedAt)}
+            </dd>
+          </div>
+        </dl>
         {item.taskId ? (
           <Button
             type="button"
@@ -220,6 +269,36 @@ function WorkItemDetails({
         )}
       </footer>
     </>
+  );
+}
+
+const TASK_TONE: Record<string, string> = {
+  destructive: "bg-destructive",
+  neutral: "bg-muted-foreground/60",
+  ok: "bg-ok",
+  warn: "bg-warn",
+};
+
+/**
+ * What became of this item, when it became something. Enough to decide whether
+ * opening the task is worth the trip; the task screen has the rest.
+ */
+function LinkedTaskSummary({ task }: { task: TaskInfo }) {
+  const visual = taskStatusVisual(task.status);
+  return (
+    <div className="flex min-w-0 max-w-[80ch] items-center gap-2 rounded-md border border-border/70 bg-background/30 px-3 py-2 text-xs">
+      <span className={cn("size-1.5 shrink-0 rounded-full", TASK_TONE[visual.tone])} aria-hidden />
+      <span className="min-w-0 flex-1 truncate text-foreground">{task.title || task.prompt}</span>
+      <span className="shrink-0 text-muted-foreground">{statusLabel(task.status)}</span>
+      {task.filesChanged > 0 && (
+        <span className="tnum shrink-0 text-muted-foreground/70">
+          {task.filesChanged} file{task.filesChanged === 1 ? "" : "s"}
+        </span>
+      )}
+      <span className="tnum shrink-0 text-muted-foreground/70">
+        {relativeTime(task.updatedAt * 1000)}
+      </span>
+    </div>
   );
 }
 

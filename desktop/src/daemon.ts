@@ -1078,6 +1078,23 @@ export class DaemonClient {
     return result.teams ?? [];
   }
 
+  /**
+   * One image embedded in an issue body, fetched by the daemon because this
+   * WebView holds no tracker session of its own. Comes back as bytes, not a
+   * URL: a signed attachment link expires within minutes.
+   */
+  async trackerAttachment(url: string): Promise<{ contentType: string; dataBase64: string }> {
+    const result = (await this.request("tracker.attachment", { url })) as {
+      contentType?: string;
+      dataBase64?: string;
+    };
+    if (!result?.dataBase64) throw new Error("the daemon returned no image data");
+    return {
+      contentType: result.contentType || "application/octet-stream",
+      dataBase64: result.dataBase64,
+    };
+  }
+
   /** Which tracker slice this project reads. */
   async trackerProjectSettings(project: string): Promise<TrackerProjectSettings> {
     const result = (await this.request("tracker.projectSettings", {

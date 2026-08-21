@@ -26,6 +26,7 @@ use uuid::Uuid;
 use warpforge_protocol as wire;
 
 use super::actor::{Command, DaemonHandle};
+use super::attachment;
 use super::tracker;
 use super::wire as wireconv;
 
@@ -1465,6 +1466,14 @@ async fn dispatch(
                 .await
                 .map_err(|e| rpc_err(format!("{e:#}")))?;
             Ok(json!({ "teams": teams }))
+        }
+        // Network on the request task, never through the actor (ADR-0002
+        // invariant 1) — an image fetch must not stall every other project.
+        TrackerAttachment { url } => {
+            let attachment = attachment::fetch(&url)
+                .await
+                .map_err(|e| rpc_err(format!("{e:#}")))?;
+            serde_json::to_value(attachment).map_err(|e| rpc_err(e.to_string()))
         }
         TrackerProjectSettings { project } => {
             let settings = handle

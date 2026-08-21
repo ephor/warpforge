@@ -62,6 +62,36 @@ describe("WorkItemDrawer", () => {
     expect(screen.getByText("Unassigned")).toBeInTheDocument();
   });
 
+  // GitHub's upload widget pastes a raw <img> tag, which the markdown renderer
+  // does not parse — the tag used to print verbatim in the description. The
+  // bytes come from the daemon because this WebView has no GitHub session.
+  it("shows a screenshot pasted into the description as HTML", async () => {
+    const url = "https://github.com/user-attachments/assets/abc";
+    vi.spyOn(daemon, "trackerAttachment").mockResolvedValue({
+      contentType: "image/png",
+      dataBase64: "AAAA",
+    });
+
+    renderDrawer({
+      ...localItem,
+      body: `Steps:\n<img width="800" alt="Broken chart" src="${url}" />`,
+    });
+
+    const image = await screen.findByRole("img", { name: "Broken chart" });
+    expect(image).toHaveAttribute("src", "data:image/png;base64,AAAA");
+    expect(daemon.trackerAttachment).toHaveBeenCalledWith(url);
+    expect(screen.queryByText(/<img/)).not.toBeInTheDocument();
+  });
+
+  it("falls back to a link when the daemon cannot fetch the screenshot", async () => {
+    const url = "https://github.com/user-attachments/assets/private";
+    vi.spyOn(daemon, "trackerAttachment").mockRejectedValue(new Error("gh is logged out"));
+
+    renderDrawer({ ...localItem, body: `<img alt="Broken chart" src="${url}" />` });
+
+    expect(await screen.findByRole("link", { name: "Broken chart" })).toHaveAttribute("href", url);
+  });
+
   it("saves a status change on a local item", async () => {
     renderDrawer(localItem);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -101,6 +131,31 @@ describe("WorkItemDrawer", () => {
     renderDrawer({ ...localItem, taskId: "task-9" }, { onOpenTask });
     await user.click(screen.getByRole("button", { name: "Open task" }));
     expect(onOpenTask).toHaveBeenCalledWith("task-9");
+  });
+
+  it("summarises the task an item became", () => {
+    renderDrawer(
+      { ...localItem, taskId: "task-9" },
+      {
+        linkedTask: {
+          agent: "codex",
+          blockedReason: null,
+          createdAt: 1,
+          filesChanged: 3,
+          id: "task-9",
+          project: "warpforge",
+          prompt: "Rework the port allocator",
+          status: "running",
+          tags: [],
+          title: "Reworking the allocator",
+          updatedAt: Math.floor(Date.now() / 1000),
+        },
+      },
+    );
+
+    expect(screen.getByText("Reworking the allocator")).toBeInTheDocument();
+    expect(screen.getByText("running")).toBeInTheDocument();
+    expect(screen.getByText("3 files")).toBeInTheDocument();
   });
 
   it("closes from the close button", async () => {

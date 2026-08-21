@@ -122,6 +122,11 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
     };
   }, [removeProject, snapshot.portforwards, snapshot.services, snapshot.terminals]);
 
+  const linkedTask = useMemo(
+    () => snapshot.tasks.find((task) => task.id === openItem?.taskId) ?? null,
+    [openItem?.taskId, snapshot.tasks],
+  );
+
   const startTaskFromItem = useCallback(
     (item: WorkItem) => {
       setOpenItem(null);
@@ -275,6 +280,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
 
       <WorkItemDrawer
         item={openItem}
+        linkedTask={linkedTask}
         onClose={() => setOpenItem(null)}
         onStartTask={startTaskFromItem}
         onOpenTask={openTaskFromItem}

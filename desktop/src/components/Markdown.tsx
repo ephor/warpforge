@@ -7,9 +7,22 @@ import { cn } from "@/lib/utils";
 
 export type FileLinkResolver = (text: string) => string | null;
 
+/**
+ * A source the WebView can put in an `<img>` on its own, plus the pieces the
+ * fallback link needs. An image whose bytes have to be fetched with someone's
+ * tracker credentials cannot be one of these, which is why the whole renderer
+ * is replaceable rather than just the URL.
+ */
+export interface MarkdownImageProps {
+  src: string;
+  alt: string;
+  title?: string;
+}
+
 interface MarkdownContextValue {
   resolveFilePath?: FileLinkResolver;
   onOpenFile?: (path: string) => void;
+  renderImage?: React.ComponentType<MarkdownImageProps>;
 }
 
 const MarkdownContext = createContext<MarkdownContextValue>({});
@@ -80,8 +93,74 @@ const MarkdownCode: NonNullable<Components["code"]> = ({
   );
 };
 
+/** A link out, for an image whose bytes nobody here can get hold of. */
+export function MarkdownImageLink({ href, label }: { href: string; label: string }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="text-primary underline"
+      onClick={(event) => {
+        event.preventDefault();
+        void openExternalLink(href);
+      }}
+    >
+      {label}
+    </a>
+  );
+}
+
+/**
+ * Screenshots pasted into an issue are the whole point of half of them, so the
+ * image is shown inline and opens full size in the browser on click.
+ *
+ * `openHref` is what the click opens, which is not always what is displayed:
+ * a tracker attachment renders from inlined bytes but should still open the
+ * page the URL points at.
+ */
+export function MarkdownImageFrame({
+  src,
+  alt,
+  title,
+  openHref,
+  onError,
+}: MarkdownImageProps & { openHref?: string; onError?: () => void }) {
+  const target = openHref ?? src;
+  return (
+    <button
+      type="button"
+      className="my-2 block max-w-full overflow-hidden rounded-md border border-border/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      title={title ?? `Open ${alt}`}
+      onClick={() => void openExternalLink(target)}
+    >
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        onError={onError}
+        className="block max-h-[28rem] max-w-full object-contain"
+      />
+    </button>
+  );
+}
+
+/** The default: the WebView fetches the URL itself. */
+function DirectImage({ src, alt, title }: MarkdownImageProps) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <MarkdownImageLink href={src} label={alt} />;
+  return <MarkdownImageFrame src={src} alt={alt} title={title} onError={() => setFailed(true)} />;
+}
+
+const MarkdownImage: NonNullable<Components["img"]> = ({ alt, src, title }) => {
+  const { renderImage: Image = DirectImage } = useContext(MarkdownContext);
+  if (typeof src !== "string" || src === "") return null;
+  return <Image src={src} alt={alt || "Image"} title={title} />;
+};
+
 const MARKDOWN_COMPONENTS: Components = {
   a: MarkdownAnchor,
+  img: MarkdownImage,
   blockquote: ({ children: content }) => (
     <blockquote className="my-1 border-l-2 border-border pl-3 text-muted-foreground">
       {content}
@@ -110,24 +189,52 @@ const MARKDOWN_COMPONENTS: Components = {
   ul: ({ children: content }) => <ul className="my-1 list-disc space-y-0.5 pl-5">{content}</ul>,
 };
 
+/**
+ * How much room the prose gets. `compact` is chat: many short messages in a
+ * scroller, where tight spacing is what makes the transcript readable.
+ * `comfortable` is a document read once — an issue description — where the
+ * same spacing reads as cramped. Both scale off the user's font size, so this
+ * is relative density, not a second font-size setting.
+ *
+ * The block rhythm is set here rather than in `MARKDOWN_COMPONENTS` so the two
+ * densities share one set of element renderers: the wrapper spaces the blocks
+ * and cancels their own margins.
+ */
+export type MarkdownDensity = "compact" | "comfortable";
+
+const DENSITY_CLASS: Record<MarkdownDensity, string> = {
+  compact: "space-y-1 text-sm leading-relaxed",
+  comfortable:
+    "space-y-3 text-[0.9375rem] leading-7 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-base [&_li]:my-0.5 [&_ol]:my-0 [&_p]:my-0 [&_ul]:my-0",
+};
+
 /** Agent/user messages rendered as GitHub-flavored markdown, tailwind-styled. */
 export function Markdown({
   children,
   className,
+  density = "compact",
   resolveFilePath,
   onOpenFile,
+  renderImage,
 }: {
   children: string;
   className?: string;
+  density?: MarkdownDensity;
   resolveFilePath?: FileLinkResolver;
   onOpenFile?: (path: string) => void;
+  /** Replaces how images load — see `MarkdownImageProps`. */
+  renderImage?: React.ComponentType<MarkdownImageProps>;
 }) {
-  const context = useMemo(() => ({ onOpenFile, resolveFilePath }), [onOpenFile, resolveFilePath]);
+  const context = useMemo(
+    () => ({ onOpenFile, renderImage, resolveFilePath }),
+    [onOpenFile, renderImage, resolveFilePath],
+  );
 
   return (
     <div
       className={cn(
-        "min-w-0 space-y-1 break-words text-sm leading-relaxed [overflow-wrap:anywhere] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        "min-w-0 break-words [overflow-wrap:anywhere] [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        DENSITY_CLASS[density],
         className,
       )}
     >

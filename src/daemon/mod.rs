@@ -14,6 +14,7 @@ pub mod acp_server;
 pub mod actor;
 pub mod agent_probe;
 pub mod agents;
+pub mod attachment;
 pub mod backlog;
 pub mod claude_auth;
 pub mod diff;
