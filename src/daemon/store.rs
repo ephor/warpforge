@@ -1522,3 +1522,90 @@ mod tests {
         assert_eq!(loaded[0].status, TaskStatus::Waiting);
     }
 }
+
+#[cfg(test)]
+mod backlog_query_tests {
+    use super::*;
+
+    fn item(id: &str, n: u64, title: &str, status: &str, priority: &str) -> wire::BacklogItem {
+        wire::BacklogItem {
+            id: id.into(),
+            number: n,
+            project: "p".into(),
+            title: title.into(),
+            body: String::new(),
+            status: status.into(),
+            priority: priority.into(),
+            source: "local".into(),
+            external_id: None,
+            url: None,
+            remote_status: None,
+            assignee: None,
+            created_at: 1000 + n,
+            updated_at: 1000 + n,
+            task_id: None,
+        }
+    }
+
+    fn query(page: u32) -> crate::daemon::backlog::Query {
+        crate::daemon::backlog::Query {
+            page,
+            page_size: 2,
+            sort_by: "updatedAt".into(),
+            sort_desc: true,
+            search: String::new(),
+            status: None,
+            source: None,
+            priority: None,
+            assignee: None,
+        }
+    }
+
+    #[test]
+    fn backlog_pages_both_directions_and_filters() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        for n in 1..=5 {
+            let status = if n == 2 { "done" } else { "todo" };
+            store
+                .upsert_backlog_item(&item(
+                    &format!("i{n}"),
+                    n,
+                    &format!("Issue {n}"),
+                    status,
+                    "none",
+                ))
+                .unwrap();
+        }
+
+        // Page 0 (newest first): items 5, 4.
+        let page0 = store.list_backlog("p", &query(0)).unwrap();
+        assert_eq!(page0.total, 5);
+        let nums: Vec<u64> = page0.items.iter().map(|i| i.number).collect();
+        assert_eq!(nums, vec![5, 4]);
+        assert!(page0.has_next_page);
+
+        // Page 1 (back from page 1 to 0 must be symmetric).
+        let page1 = store.list_backlog("p", &query(1)).unwrap();
+        let nums1: Vec<u64> = page1.items.iter().map(|i| i.number).collect();
+        assert_eq!(nums1, vec![3, 2]);
+
+        // Back to page 0 again — same result as the first visit.
+        let again = store.list_backlog("p", &query(0)).unwrap();
+        let nums_again: Vec<u64> = again.items.iter().map(|i| i.number).collect();
+        assert_eq!(nums_again, vec![5, 4]);
+
+        // Filter by status.
+        let mut q = query(0);
+        q.status = Some("done".into());
+        let done = store.list_backlog("p", &q).unwrap();
+        assert_eq!(done.total, 1);
+        assert_eq!(done.items[0].number, 2);
+
+        // Search.
+        let mut q = query(0);
+        q.search = "issue 3".into();
+        let found = store.list_backlog("p", &q).unwrap();
+        assert_eq!(found.total, 1);
+        assert_eq!(found.items[0].number, 3);
+    }
+}
