@@ -1,12 +1,18 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ExternalLink, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useSyncExternalStore, useState } from "react";
 import { toast } from "sonner";
 
-import { TRACKER_STATUS_KEY, useTrackerStatus } from "@/components/backlog/use-tracker";
+import { ProjectLinearTeamSelect } from "@/components/backlog/LinearTeamPicker";
+import {
+  TRACKER_PROJECT_SOURCES_KEY,
+  TRACKER_STATUS_KEY,
+  useTrackerStatus,
+} from "@/components/backlog/use-tracker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { daemon } from "@/daemon";
+import { openExternalLink } from "@/lib/externalLinks";
 
 /**
  * Connect the issue trackers the backlog can mirror into.
@@ -18,13 +24,23 @@ import { daemon } from "@/daemon";
 export default function TrackersPanel() {
   const status = useTrackerStatus();
   const queryClient = useQueryClient();
+  const snapshot = useSyncExternalStore(
+    daemon.subscribe,
+    () => daemon.getState().snapshot,
+    () => daemon.getState().snapshot,
+  );
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState<"linear" | "github" | null>(null);
 
   const linear = status.data?.linear;
   const github = status.data?.github;
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: TRACKER_STATUS_KEY });
+  const refresh = async () => {
+    await queryClient.invalidateQueries({ queryKey: TRACKER_STATUS_KEY });
+    // Availability is derived from the connection state, so every project's
+    // probe goes stale with it.
+    await queryClient.invalidateQueries({ queryKey: [...TRACKER_PROJECT_SOURCES_KEY] });
+  };
 
   const run = async (which: "linear" | "github", action: () => Promise<unknown>, ok: string) => {
     setBusy(which);
@@ -100,16 +116,30 @@ export default function TrackersPanel() {
         )}
         <p className="text-xs text-muted-foreground/80">
           A personal API key, stored in your keychain by the daemon.{" "}
-          <a
-            href="https://linear.app/settings/api"
-            target="_blank"
-            rel="noreferrer"
+          <button
+            type="button"
             className="inline-flex items-center gap-0.5 underline underline-offset-2"
+            onClick={() => void openExternalLink("https://linear.app/settings/api")}
           >
             Create one
             <ExternalLink className="size-3" />
-          </a>
+          </button>
         </p>
+        {linear?.connected && snapshot.projects.length > 0 && (
+          <div className="space-y-1.5 rounded-md border border-border/60 p-2.5">
+            <p className="text-[11px] font-medium text-muted-foreground">
+              Which team each project imports from
+            </p>
+            {snapshot.projects.map((project) => (
+              <div key={project.name} className="flex items-center justify-between gap-3">
+                <span className="min-w-0 flex-1 truncate text-xs text-foreground">
+                  {project.name}
+                </span>
+                <ProjectLinearTeamSelect project={project.name} />
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── GitHub ── */}

@@ -346,7 +346,7 @@ export function ProjectFilesPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-11 items-center border-b px-3 text-sm font-semibold">Files</div>
+      <div className="flex h-9 items-center border-b px-3 text-sm font-semibold">Files</div>
       {error && <p className="border-b px-3 py-2 text-xs text-destructive">{error}</p>}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto py-1.5">
         {rows.length === 0 && !error ? (

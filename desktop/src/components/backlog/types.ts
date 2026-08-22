@@ -95,6 +95,13 @@ export interface BacklogParams {
   status: WorkItemStatus | null;
   source: WorkItemSource | null;
   priority: WorkItemPriority | null;
+  /**
+   * Whoever the item is assigned to, matched as a substring by both storage
+   * backends. Holds the assignee exactly as the tracker wrote it — a GitHub
+   * login, a Linear display name — so it is a plain string rather than an
+   * enum like the other filters.
+   */
+  assignee: string | null;
 }
 
 export const DEFAULT_BACKLOG_PARAMS: BacklogParams = {
@@ -105,6 +112,7 @@ export const DEFAULT_BACKLOG_PARAMS: BacklogParams = {
   status: null,
   source: null,
   priority: null,
+  assignee: null,
 };
 
 /** Whether anything narrows the listing, i.e. whether "Reset" is worth showing. */
@@ -113,7 +121,8 @@ export function hasActiveFilters(params: BacklogParams): boolean {
     params.search !== "" ||
     params.status !== null ||
     params.source !== null ||
-    params.priority !== null
+    params.priority !== null ||
+    params.assignee !== null
   );
 }
 

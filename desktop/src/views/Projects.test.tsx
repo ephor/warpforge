@@ -36,7 +36,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { RuntimePanel } from "../components/RuntimePanel";
+import { TerminalWorkspaceView } from "../components/runtime/TerminalWorkspace";
 import { daemon } from "../daemon";
 import { disposeTerminalWorkspace, getTerminalWorkspace } from "../lib/terminalWorkspace";
 import type { ProjectInfo, Snapshot, TaskInfo, TerminalInfo } from "../protocol";
@@ -125,11 +125,7 @@ beforeEach(() => {
   currentSnapshot = snapshot;
   xtermInstances.length = 0;
   localStorage.clear();
-  useUi.setState({
-    projectSurfaceByProject: {},
-    runtimeOpenByProject: {},
-    selectedProjectId: null,
-  });
+  useUi.setState({ projectSurfaceByProject: {}, selectedProjectId: null });
 
   vi.spyOn(daemon, "subscribeEvents").mockReturnValue(() => {});
   vi.spyOn(daemon, "subscribe").mockReturnValue(() => {});
@@ -314,10 +310,9 @@ describe("Projects", () => {
 
     // The backlog waits for its tracker pull before it can say it is empty.
     expect(await screen.findByText("Nothing here yet.")).toBeInTheDocument();
-    await openSurface(/Runtime/);
+    await openSurface(/Terminal/);
 
-    expect(useUi.getState().projectSurfaceByProject.warpforge).toBe("runtime");
-    expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute("data-state", "active");
+    expect(useUi.getState().projectSurfaceByProject.warpforge).toBe("terminal");
     expect(screen.getByTestId("term-1")).toBeInTheDocument();
   });
 
@@ -353,7 +348,7 @@ describe("Projects", () => {
         terminalInfo("beta-1", "beta"),
       ],
     };
-    useUi.setState({ projectSurfaceByProject: { alpha: "runtime", beta: "backlog" } });
+    useUi.setState({ projectSurfaceByProject: { alpha: "terminal", beta: "backlog" } });
     renderProjects();
 
     expect(screen.getByTestId("alpha-1")).toBeInTheDocument();
@@ -362,28 +357,26 @@ describe("Projects", () => {
     expect(screen.getByRole("tab", { name: /Backlog/ })).toHaveAttribute("data-state", "active");
     expect(screen.queryByTestId("alpha-1")).not.toBeInTheDocument();
 
-    await openSurface(/Runtime/);
+    await openSurface(/Terminal/);
     expect(useUi.getState().projectSurfaceByProject).toEqual({
-      alpha: "runtime",
-      beta: "runtime",
+      alpha: "terminal",
+      beta: "terminal",
     });
     expect(screen.getByTestId("beta-1")).toBeInTheDocument();
 
     act(() => useUi.setState({ selectedProjectId: "alpha" }));
     await waitFor(() => expect(screen.getByTestId("alpha-1")).toBeInTheDocument());
-    expect(screen.getByRole("tab", { name: /Runtime/ })).toHaveAttribute("data-state", "active");
+    expect(screen.getByRole("tab", { name: /Terminal/ })).toHaveAttribute("data-state", "active");
   });
 
-  it("reattaches the same project terminal when moving from a task Runtime to Projects", async () => {
+  it("reattaches the same project terminal when moving from a task Terminal to Projects", async () => {
     currentSnapshot = {
       ...snapshot,
       terminals: [terminalInfo("term-1", "warpforge")],
     };
-    useUi.setState({ projectSurfaceByProject: { warpforge: "runtime" } });
+    useUi.setState({ projectSurfaceByProject: { warpforge: "terminal" } });
 
-    const taskSurface = render(
-      <RuntimePanel project="warpforge" services={[]} portforwards={[]} initialTab="terminal" />,
-    );
+    const taskSurface = render(<TerminalWorkspaceView project="warpforge" />);
     const controller = getTerminalWorkspace("warpforge").getController("term-1");
     expect(controller).not.toBeNull();
     const xterm = controller!.term as unknown as MockXterm;

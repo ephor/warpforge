@@ -22,7 +22,7 @@ import { useUi } from "@/store/ui";
 
 import { priorityTone, SOURCE_DOT, STATUS_META } from "./labels";
 import type { WorkItemPriority, WorkItemSource, WorkItemStatus } from "./types";
-import { useTrackerStatus } from "./use-tracker";
+import { sourceAvailable, useProjectSources } from "./use-tracker";
 
 interface NewWorkItemDrawerProps {
   open: boolean;
@@ -102,7 +102,7 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
   const expanded = useUi((state) => state.newWorkItemExpanded);
   const setExpanded = useUi((state) => state.setNewWorkItemExpanded);
   const queryClient = useQueryClient();
-  const trackerStatus = useTrackerStatus();
+  const projectSources = useProjectSources(project);
 
   const [source, setSource] = useState<WorkItemSource>("local");
   const [title, setTitle] = useState("");
@@ -246,23 +246,26 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
   const priorityLabel =
     priority === "none" ? "None" : PRIORITY_OPTIONS.find((o) => o.value === priority)?.label;
 
-  // A tracker the user has not connected stays selectable-but-disabled rather
-  // than hidden, so the option itself is the hint that it exists.
-  const linearConnected = trackerStatus.data?.linear?.connected === true;
-  const githubConnected = trackerStatus.data?.github?.connected === true;
+  // A tracker the user has not connected — or one this project cannot reach
+  // (no mapped Linear team, no resolvable repo) — stays selectable-but-disabled
+  // rather than hidden, so the option itself is the hint that it exists.
+  const linearReady = sourceAvailable(projectSources.data, "linear");
+  const githubReady = sourceAvailable(projectSources.data, "github");
+  const linearHint = linearReady ? undefined : "not connected";
+  const githubHint = githubReady ? undefined : "not connected";
   const sourceOptions = [
     { value: "local" as const, label: SOURCE_LABELS.local },
     {
       value: "github" as const,
       label: SOURCE_LABELS.github,
-      disabled: !githubConnected,
-      hint: githubConnected ? undefined : "not connected",
+      disabled: !githubReady,
+      hint: githubHint,
     },
     {
       value: "linear" as const,
       label: SOURCE_LABELS.linear,
-      disabled: !linearConnected,
-      hint: linearConnected ? undefined : "not connected",
+      disabled: !linearReady,
+      hint: linearHint,
     },
   ];
 

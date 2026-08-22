@@ -18,12 +18,12 @@ export const TaskDetailActions = memo(function TaskDetailActions({ task }: { tas
   const showChat = useUi((state) => state.showChat);
   const showDiff = useUi((state) => state.showDiff);
   const rightPanel = useUi((state) => state.rightPanel);
-  const runtimeOpen = useUi((state) => state.runtimeOpenByProject[task.project] ?? false);
   const toggleChat = useUi((state) => state.toggleChat);
   const toggleDiff = useUi((state) => state.toggleDiff);
   const setShowDiff = useUi((state) => state.setShowDiff);
   const setRightPanel = useUi((state) => state.setRightPanel);
-  const setRuntimeOpen = useUi((state) => state.setRuntimeOpen);
+  const activeSurface = useUi((state) => state.activeSurface);
+  const setActiveSurface = useUi((state) => state.setActiveSurface);
   const lspEnabled = useUi((state) => state.lspEnabled);
   const toggleLsp = useUi((state) => state.toggleLsp);
 
@@ -83,8 +83,8 @@ export const TaskDetailActions = memo(function TaskDetailActions({ task }: { tas
       )}
       <ActionButton
         label="Terminal"
-        active={runtimeOpen}
-        onClick={() => setRuntimeOpen(task.project, !runtimeOpen)}
+        active={activeSurface === "terminal"}
+        onClick={() => setActiveSurface("terminal")}
         icon={<SquareTerminal className="size-3.5" />}
       />
     </div>

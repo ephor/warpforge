@@ -384,7 +384,7 @@ export function ChangesRail({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-card">
-      <div className="flex h-11 items-center gap-2 border-b px-3 text-sm font-semibold">
+      <div className="flex h-9 items-center gap-2 border-b px-3 text-sm font-semibold">
         <span className="min-w-0 flex-1 truncate">Changes</span>
         <button
           type="button"

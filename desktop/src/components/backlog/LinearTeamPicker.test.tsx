@@ -28,6 +28,12 @@ beforeEach(() => {
     linear: { connected: true, email: "a@b.c", organization: "Acme" },
     github: null,
   });
+  vi.spyOn(daemon, "trackerProjectSources").mockResolvedValue({
+    project: "warpforge",
+    local: true,
+    linear: true,
+    github: false,
+  });
   vi.spyOn(daemon, "linearTeams").mockResolvedValue(TEAMS);
   vi.spyOn(daemon, "trackerProjectSettings").mockResolvedValue({
     project: "warpforge",
@@ -42,12 +48,30 @@ describe("LinearTeamPicker", () => {
     renderPicker();
     // Nothing to configure, so a GitHub-only project never sees the control.
     await vi.waitFor(() => expect(daemon.trackerStatus).toHaveBeenCalled());
-    expect(screen.queryByRole("combobox", { name: "Linear team" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Linear team for warpforge" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("stays hidden while the project has no mapped team", async () => {
+    vi.spyOn(daemon, "trackerProjectSources").mockResolvedValue({
+      project: "warpforge",
+      local: true,
+      linear: false,
+      github: true,
+    });
+    renderPicker();
+    // Connected account-wide, but this project reads no Linear slice, so the
+    // toolbar stays clean. Mapping happens in Settings → Trackers.
+    await vi.waitFor(() => expect(daemon.trackerProjectSources).toHaveBeenCalled());
+    expect(
+      screen.queryByRole("combobox", { name: "Linear team for warpforge" }),
+    ).not.toBeInTheDocument();
   });
 
   it("reads unmapped as 'No Linear team'", async () => {
     renderPicker();
-    const trigger = await screen.findByRole("combobox", { name: "Linear team" });
+    const trigger = await screen.findByRole("combobox", { name: "Linear team for warpforge" });
     expect(trigger).toHaveTextContent("No Linear team");
   });
 
@@ -61,7 +85,7 @@ describe("LinearTeamPicker", () => {
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    await user.click(await screen.findByRole("combobox", { name: "Linear team" }));
+    await user.click(await screen.findByRole("combobox", { name: "Linear team for warpforge" }));
     await user.click(await screen.findByRole("option", { name: /Engineering/ }));
 
     await vi.waitFor(() => expect(set).toHaveBeenCalledWith("warpforge", TEAMS[0]));
@@ -85,7 +109,7 @@ describe("LinearTeamPicker", () => {
     renderPicker();
 
     const user = userEvent.setup({ pointerEventsCheck: 0 });
-    const trigger = await screen.findByRole("combobox", { name: "Linear team" });
+    const trigger = await screen.findByRole("combobox", { name: "Linear team for warpforge" });
     await vi.waitFor(() => expect(trigger).toHaveTextContent("Engineering"));
     await user.click(trigger);
     await user.click(await screen.findByRole("option", { name: "No Linear team" }));

@@ -523,7 +523,7 @@ pub async fn github_login() -> Option<String> {
 }
 
 /// Resolve `owner/repo` from the given git directory's origin remote.
-async fn github_owner_repo(repo_dir: &str) -> Result<(String, String)> {
+pub(crate) async fn github_owner_repo(repo_dir: &str) -> Result<(String, String)> {
     let out = gh(
         Some(repo_dir),
         &[

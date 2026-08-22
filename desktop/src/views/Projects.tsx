@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { EllipsisVertical, FolderGit2, Pencil, Trash2 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -19,6 +18,7 @@ import { BacklogView } from "../components/backlog/BacklogView";
 import { NewWorkItemDrawer } from "../components/backlog/NewWorkItemDrawer";
 import type { WorkItem } from "../components/backlog/types";
 import { WorkItemDrawer } from "../components/backlog/WorkItemDrawer";
+import { TerminalWorkspaceView } from "../components/runtime/TerminalWorkspace";
 import { daemon } from "../daemon";
 import type { ServiceInfo, Snapshot } from "../protocol";
 import { ProjectFilesSurface } from "./projects/ProjectFilesSurface";
@@ -65,7 +65,6 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
   );
   const setProjectSurface = useUi((state) => state.setProjectSurface);
   const clearProjectSurface = useUi((state) => state.clearProjectSurface);
-  const clearRuntimeOpen = useUi((state) => state.clearRuntimeOpen);
   const services = useMemo(
     () => snapshot.services.filter((s) => s.project === projectName),
     [snapshot.services, projectName],
@@ -98,11 +97,16 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
     [snapshot.terminals, projectName],
   );
   const surfaceTabs = useMemo<readonly SurfaceTab<ProjectSurface>[]>(() => {
-    const runtimeCount = runtimeServices.length + pfs.length + projectTerminals.length || undefined;
-    return PROJECT_SURFACE_TABS.map((tab) =>
-      tab.id === "runtime" ? { ...tab, count: runtimeCount } : tab,
-    );
-  }, [pfs.length, projectTerminals.length, runtimeServices.length]);
+    const backlogTotal = backlogCount.data?.total || undefined;
+    const runtimeCount = runtimeServices.length + pfs.length || undefined;
+    const terminalCount = projectTerminals.length || undefined;
+    return PROJECT_SURFACE_TABS.map((tab) => {
+      if (tab.id === "backlog") return { ...tab, count: backlogTotal };
+      if (tab.id === "runtime") return { ...tab, count: runtimeCount };
+      if (tab.id === "terminal") return { ...tab, count: terminalCount };
+      return tab;
+    });
+  }, [backlogCount.data?.total, pfs.length, projectTerminals.length, runtimeServices.length]);
   const removeLiveCounts = useMemo<ProjectLiveCounts>(() => {
     if (!removeProject) return { services: 0, portforwards: 0, terminals: 0 };
     return {
@@ -148,20 +152,12 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
     const remainingProjects = snapshot.projects.filter((item) => item.name !== removeProject);
     await daemon.removeProject(removeProject, true);
     disposeTerminalWorkspace(removeProject);
-    clearRuntimeOpen(removeProject);
     clearProjectSurface(removeProject);
     setRemoveProject(null);
     if (selectedProjectId === removeProject) {
       openProject(remainingProjects[0]?.name ?? "");
     }
-  }, [
-    clearProjectSurface,
-    clearRuntimeOpen,
-    openProject,
-    removeProject,
-    selectedProjectId,
-    snapshot.projects,
-  ]);
+  }, [clearProjectSurface, openProject, removeProject, selectedProjectId, snapshot.projects]);
 
   if (!project) {
     return (
@@ -180,24 +176,26 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
-      <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 px-1">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
+      <header className="flex min-h-12 shrink-0 flex-wrap items-end justify-between gap-x-4 gap-y-2 px-1 pb-3 pt-2">
+        <div className="min-w-0 space-y-1.5">
+          <div className="flex items-baseline gap-2.5">
             <h1 className="truncate text-xl font-semibold leading-none tracking-tight">
               {project.name}
             </h1>
-            <Badge variant="outline" className="shrink-0 text-[11px]">
-              {backlogCount.data?.total ?? 0} items
-            </Badge>
           </div>
-          <p className="truncate text-xs text-muted-foreground" title={project.path}>
-            {project.path} · ports{" "}
-            <span className="tnum">
-              {project.portRange[0]}–{project.portRange[1]}
+          <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
+            <span className="truncate" title={project.path}>
+              {project.path}
+            </span>
+            <span aria-hidden className="text-border">
+              ·
+            </span>
+            <span className="tnum shrink-0">
+              ports {project.portRange[0]}–{project.portRange[1]}
             </span>
           </p>
         </div>
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -247,12 +245,13 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
       <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
         {surface === "files" ? (
           <ProjectFilesSurface key={project.name} project={project.name} rootPath={project.path} />
+        ) : surface === "terminal" ? (
+          <TerminalWorkspaceView key={project.name} project={project.name} />
         ) : surface === "runtime" ? (
           <ProjectRuntimeSurface
             project={project.name}
             services={runtimeServices}
             portforwards={pfs}
-            terminals={projectTerminals}
             onAppendToChat={(formattedLogs) => onNewTask(project.name, formattedLogs)}
           />
         ) : (

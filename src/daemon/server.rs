@@ -1493,6 +1493,38 @@ async fn dispatch(
                 .map_err(rpc_err)?;
             serde_json::to_value(settings).map_err(|e| rpc_err(e.to_string()))
         }
+        TrackerProjectSources { project } => {
+            // Same availability rules the import path enforces, surfaced so
+            // the UI can hide what a project cannot use. Linear: connected key
+            // plus a mapped team (an unscoped pull would adopt every project's
+            // issues). GitHub: `gh` session whose repo resolves from this
+            // project dir. Runs on the request task — the `gh` spawn must not
+            // stall the actor loop.
+            let status = tracker::status().await;
+            let linear = status.linear.as_ref().is_some_and(|l| l.connected)
+                && handle
+                    .tracker_project_settings(&project)
+                    .await
+                    .ok()
+                    .and_then(|settings| settings.linear_team_id)
+                    .is_some();
+            let github = status.github.as_ref().is_some_and(|g| g.connected) && {
+                match project_path(handle, &project).await {
+                    Ok(dir) => tracker::github_owner_repo(&dir).await.is_ok(),
+                    Err(_) => false,
+                }
+            };
+            serde_json::to_value(wire::ProjectSources {
+                project,
+                local: true,
+                linear,
+                github,
+            })
+            .map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
+            })
+        }
         WorkItemSyncExternal { ids } => {
             // Three phases, and the middle one deliberately runs here rather
             // than in the actor: the actor loop is single-threaded and awaits

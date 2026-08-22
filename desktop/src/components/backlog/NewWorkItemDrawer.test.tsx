@@ -34,6 +34,12 @@ beforeEach(() => {
     github: { connected: false },
     linear: { connected: true, email: "me@example.com" },
   });
+  vi.spyOn(daemon, "trackerProjectSources").mockResolvedValue({
+    project: "warpforge",
+    local: true,
+    linear: true,
+    github: false,
+  });
   vi.spyOn(daemon, "createBacklog").mockResolvedValue({
     id: "b-1",
     number: 1,

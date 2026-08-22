@@ -1,6 +1,4 @@
-import { AlertTriangle, PanelRightClose, PanelRightOpen, Server, TerminalSquare } from "lucide-react";
-
-import { TabsList, TabsTrigger } from "../ui/tabs";
+import { AlertTriangle, PanelRightClose, PanelRightOpen, Server } from "lucide-react";
 
 export function RuntimeHeader({
   actionError,
@@ -13,7 +11,7 @@ export function RuntimeHeader({
 }) {
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-      <TerminalSquare className="size-3.5 text-muted-foreground" />
+      <Server className="size-3.5 text-muted-foreground" />
       <span className="text-xs font-medium text-muted-foreground">Runtime</span>
       {actionError && (
         <span
@@ -26,24 +24,12 @@ export function RuntimeHeader({
           <span className="max-w-40 truncate">{actionError}</span>
         </span>
       )}
-      <div className="ml-auto">
-        <TabsList>
-          <TabsTrigger value="services">
-            <Server className="size-3.5" />
-            Services
-          </TabsTrigger>
-          <TabsTrigger value="terminal">
-            <TerminalSquare className="size-3.5" />
-            Terminal
-          </TabsTrigger>
-        </TabsList>
-      </div>
       <button
         type="button"
+        className="ml-auto shrink-0 rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
         aria-label={sidebarCollapsed ? "Expand runtime sidebar" : "Collapse runtime sidebar"}
         title={sidebarCollapsed ? "Expand runtime sidebar" : "Collapse runtime sidebar"}
         onClick={onToggleSidebar}
-        className="ml-2 shrink-0 rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
       >
         {sidebarCollapsed ? (
           <PanelRightOpen className="size-4" />

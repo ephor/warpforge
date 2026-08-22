@@ -29,12 +29,12 @@ vi.mock("@xterm/addon-fit", () => {
 });
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { daemon } from "../daemon";
 import { disposeTerminalWorkspace, getTerminalWorkspace } from "../lib/terminalWorkspace";
 import type { PortForwardInfo, ServiceInfo, TerminalInfo } from "../protocol";
+import { TerminalWorkspaceView } from "./runtime/TerminalWorkspace";
 import { RuntimePanel } from "./RuntimePanel";
 
 interface MockXterm {
@@ -167,47 +167,32 @@ describe("RuntimePanel — structure", () => {
     expect(screen.getByText(/No services or port-forwards configured/)).toBeInTheDocument();
   });
 
-  it("renders Services and Terminal tabs", () => {
+  // The shell moved out to a surface of its own, so this panel is services and
+  // port-forwards only — no tab row inside it.
+  it("has no tab row of its own", () => {
     vi.spyOn(daemon, "fetchServiceLogs").mockReturnValue(new Promise(() => {}));
     render(<RuntimePanel project="warpforge" services={[webService]} portforwards={[]} />);
-    expect(screen.getByRole("tab", { name: /services/i })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /terminal/i })).toBeInTheDocument();
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    expect(screen.queryByText("Interactive terminal")).not.toBeInTheDocument();
   });
+});
 
-  it("defaults to Services tab", () => {
-    vi.spyOn(daemon, "fetchServiceLogs").mockReturnValue(new Promise(() => {}));
-    render(<RuntimePanel project="warpforge" services={[webService]} portforwards={[]} />);
-    expect(screen.getByRole("tabpanel", { name: /services/i })).toBeInTheDocument();
-  });
+describe("TerminalWorkspaceView", () => {
+  it("offers to start a shell when the project has none", () => {
+    render(<TerminalWorkspaceView project="warpforge" />);
 
-  it("can default to the Terminal tab without changing the task-surface default", () => {
-    render(
-      <RuntimePanel project="warpforge" services={[]} portforwards={[]} initialTab="terminal" />,
-    );
-
-    expect(screen.getByRole("tab", { name: /terminal/i })).toHaveAttribute("data-state", "active");
-    expect(screen.getByText("Interactive terminal")).toBeInTheDocument();
-  });
-
-  it("renders Terminal tab with start button when activated", async () => {
-    vi.spyOn(daemon, "fetchServiceLogs").mockReturnValue(new Promise(() => {}));
-    render(<RuntimePanel project="warpforge" services={[webService]} portforwards={[]} />);
-    await userEvent.click(screen.getByRole("tab", { name: /terminal/i }));
     expect(screen.getByText("Interactive terminal")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /start terminal/i })).toBeInTheDocument();
   });
 
-  it("terminal tab does not use spinning loader", async () => {
-    vi.spyOn(daemon, "fetchServiceLogs").mockReturnValue(new Promise(() => {}));
-    const { container } = render(
-      <RuntimePanel project="warpforge" services={[webService]} portforwards={[]} />,
-    );
-    await userEvent.click(screen.getByRole("tab", { name: /terminal/i }));
+  it("does not spin while waiting to be started", () => {
+    const { container } = render(<TerminalWorkspaceView project="warpforge" />);
+
     expect(container.querySelector(".animate-spin")).not.toBeInTheDocument();
   });
 });
 
-describe("RuntimePanel — terminal remount ownership", () => {
+describe("TerminalWorkspaceView — remount ownership", () => {
   function RuntimeMount({
     mounted,
     project = "warpforge",
@@ -218,10 +203,10 @@ describe("RuntimePanel — terminal remount ownership", () => {
     taskId: string;
   }) {
     if (!mounted) return null;
-    return <RuntimePanel key={taskId} project={project} services={[]} portforwards={[]} />;
+    return <TerminalWorkspaceView key={taskId} project={project} />;
   }
 
-  it("reattaches the same terminal after Runtime collapses and reopens", async () => {
+  it("reattaches the same terminal after the surface is left and returned to", async () => {
     currentTerminals = [terminalInfo("term-1")];
     const { rerender } = render(<RuntimeMount mounted project="warpforge" taskId="task-a" />);
     const workspace = getTerminalWorkspace("warpforge");

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem } from "@/components/ui/select";
 import { daemon } from "@/daemon";
+import { openExternalLink } from "@/lib/externalLinks";
 import { statusLabel, taskStatusVisual } from "@/lib/statusMeta";
 import { inlineHtmlImages } from "@/lib/trackerMarkdown";
 import { cn } from "@/lib/utils";
@@ -128,16 +129,14 @@ function WorkItemDetails({
         <div className="flex shrink-0 items-center gap-0.5">
           {item.url && (
             <Button
-              asChild
               variant="ghost"
               size="icon"
               className="size-7 text-muted-foreground hover:text-foreground"
               title="Open in tracker"
+              onClick={() => void openExternalLink(item.url!)}
             >
-              <a href={item.url} target="_blank" rel="noreferrer">
-                <ExternalLink className="size-4" />
-                <span className="sr-only">Open in tracker</span>
-              </a>
+              <ExternalLink className="size-4" />
+              <span className="sr-only">Open in tracker</span>
             </Button>
           )}
           <Button

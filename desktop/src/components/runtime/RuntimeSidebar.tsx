@@ -17,7 +17,7 @@ function safeRequest(method: string, params: unknown, onError: (msg: string) => 
 
 /**
  * A list heading with its own bulk controls, in the same shape every other
- * panel heading in the app uses (`Files`, `Changes`): 44px tall, bottom rule,
+ * panel heading in the app uses (`Files`, `Changes`): 36px tall, bottom rule,
  * title left, icon actions right. Services and port-forwards both get one, so
  * the two lists read as siblings — a control present for one and missing for
  * the other looked like an oversight rather than a distinction.
@@ -45,7 +45,7 @@ function SectionHeader({
 }) {
   const { allUp, hasStartable, hasStoppable, isSettling, noun, project } = bulk;
   return (
-    <div className="sticky top-0 z-10 flex h-11 items-center gap-2 border-b bg-card px-3 text-sm font-semibold">
+    <div className="flex h-9 items-center gap-2 border-b px-3 text-sm font-semibold">
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {!allUp && (
         <button

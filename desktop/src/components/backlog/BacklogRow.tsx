@@ -2,6 +2,7 @@ import { ExternalLink, Flag, Play, UserRound } from "lucide-react";
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
+import { openExternalLink } from "@/lib/externalLinks";
 import { cn } from "@/lib/utils";
 
 import { PRIORITY_LABEL, priorityTone, SOURCE_LABEL, SourceDot, STATUS_META } from "./labels";
@@ -94,16 +95,14 @@ export const BacklogRow = React.memo(function BacklogRow({
       <div className="flex w-[4.5rem] shrink-0 items-center justify-end gap-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
         {item.url && (
           <Button
-            asChild
             variant="ghost"
             size="icon"
             className="size-6 text-muted-foreground hover:text-foreground"
             title={`Open ${item.number} in ${item.source}`}
+            onClick={() => void openExternalLink(item.url!)}
           >
-            <a href={item.url} target="_blank" rel="noreferrer">
-              <ExternalLink className="size-3.5" />
-              <span className="sr-only">Open in tracker</span>
-            </a>
+            <ExternalLink className="size-3.5" />
+            <span className="sr-only">Open in tracker</span>
           </Button>
         )}
         {item.taskId

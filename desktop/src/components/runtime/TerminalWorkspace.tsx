@@ -44,7 +44,7 @@ export const TerminalWorkspaceView = memo(function TerminalWorkspaceView({ proje
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[#0b0d0f]">
+    <div className="flex h-full min-h-0 flex-col">
       <TerminalTabBar
         terminals={terminals}
         activeId={activeId}
@@ -80,7 +80,7 @@ function TerminalEmptyState({
   onRetry: () => void;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 bg-[#0b0d0f] px-6 text-center">
+    <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 px-6 text-center">
       <div className="space-y-1">
         <p className="text-sm font-medium text-foreground">Interactive terminal</p>
         <p className="max-w-xs text-xs text-muted-foreground">
@@ -135,7 +135,7 @@ const TerminalTabBar = memo(function TerminalTabBar({
   onNew: () => void;
 }) {
   return (
-    <div className="flex h-8 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border/60 bg-card/50 px-1.5">
+    <div className="flex h-8 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border/60 bg-background/25 px-1.5">
       {terminals.map((entry) => (
         <TerminalTab
           key={entry.terminalId}
@@ -339,7 +339,7 @@ const TerminalPane = memo(function TerminalPane({
     >
       <div ref={mountRef} className="h-full w-full min-h-0 min-w-0" />
       {showOverlay && visible && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#0b0d0f]/80">
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80">
           <div className="flex flex-col items-center gap-2 text-center">
             {lifecycle === "starting" && (
               <p className="text-xs text-muted-foreground">Starting terminal…</p>

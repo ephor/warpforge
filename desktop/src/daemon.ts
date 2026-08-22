@@ -27,6 +27,7 @@ import type {
   FileDoc,
   ImportedWorkItem,
   LinearTeam,
+  ProjectSources,
   ServerMessage,
   SessionUpdate,
   Snapshot,
@@ -1115,6 +1116,15 @@ export class DaemonClient {
       team_name: team ? `${team.name}` : null,
     })) as Partial<TrackerProjectSettings>;
     return { project, ...result };
+  }
+
+  /** Which sources this project can actually read and write — the per-project
+   *  availability the UI gates its filters and pickers on. */
+  async trackerProjectSources(project: string): Promise<ProjectSources> {
+    const result = (await this.request("tracker.projectSources", {
+      project,
+    })) as Partial<ProjectSources>;
+    return { project, local: true, linear: false, github: false, ...result };
   }
 
   /** Every persisted backlog↔tracker link, to hydrate locally-stored items. */

@@ -26,6 +26,7 @@ interface BacklogViewProps {
 
 export function BacklogView({ project, onStartTask, onOpenTask, onOpenItem }: BacklogViewProps) {
   const queryClient = useQueryClient();
+  const [seenAssignees, setSeenAssignees] = React.useState<string[]>([]);
 
   // Sorting and filtering are the daemon's job, so one object holds the whole
   // request and doubles as the query key. Storing the project alongside it
@@ -34,6 +35,7 @@ export function BacklogView({ project, onStartTask, onOpenTask, onOpenItem }: Ba
   const [state, setState] = React.useState({ project, params: DEFAULT_BACKLOG_PARAMS });
   if (state.project !== project) {
     setState({ project, params: DEFAULT_BACKLOG_PARAMS });
+    setSeenAssignees([]);
   }
   const params = state.params;
 
@@ -73,6 +75,7 @@ export function BacklogView({ project, onStartTask, onOpenTask, onOpenItem }: Ba
         status: params.status ?? undefined,
         source: params.source ?? undefined,
         priority: params.priority ?? undefined,
+        assignee: params.assignee ?? undefined,
       }),
     initialPageParam: 0,
     // The daemon reports whether more rows exist; trust that rather than
@@ -98,6 +101,20 @@ export function BacklogView({ project, onStartTask, onOpenTask, onOpenItem }: Ba
     [list.data],
   );
 
+  // Names accumulate rather than being derived from `items`, because `items`
+  // is the *filtered* listing: reading the options out of it meant picking one
+  // assignee narrowed the rows, which then emptied the list of everyone else.
+  // Reset belongs to the project switch above, next to the params reset.
+  React.useEffect(() => {
+    setSeenAssignees((current) => {
+      const merged = new Set(current);
+      for (const item of items) if (item.assignee) merged.add(item.assignee);
+      return merged.size === current.length
+        ? current
+        : [...merged].sort((a, b) => a.localeCompare(b));
+    });
+  }, [items]);
+
   const { fetchNextPage, hasNextPage, isFetchingNextPage } = list;
   const loadMore = React.useCallback(() => {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
@@ -121,6 +138,7 @@ export function BacklogView({ project, onStartTask, onOpenTask, onOpenItem }: Ba
         onReset={reset}
         onSync={() => void syncNow()}
         isSyncing={sync.isFetching}
+        assignees={seenAssignees}
       />
       <div className="min-h-0 flex-1">
         <BacklogList

@@ -682,6 +682,16 @@ export interface TrackerProjectSettings {
   linearTeamName?: string | null;
 }
 
+/** Per-project tracker availability — what source filters and pickers key on.
+ *  Local is always true; Linear needs a connected key plus a mapped team;
+ *  GitHub needs a `gh` session whose repo resolves from the project dir. */
+export interface ProjectSources {
+  project: string;
+  local: boolean;
+  linear: boolean;
+  github: boolean;
+}
+
 /** One persisted backlog-item ↔ external-issue link. */
 export interface TrackerLinkInfo {
   itemId: string;

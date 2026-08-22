@@ -731,6 +731,15 @@ pub enum Method {
         team_id: Option<String>,
         team_name: Option<String>,
     },
+    /// Which sources this project can actually read and write. `local` is
+    /// always true; Linear needs both a connected key and a mapped team;
+    /// GitHub needs a `gh` session whose repo resolves from the project dir.
+    /// Returns `ProjectSources`.
+    #[serde(rename = "tracker.projectSources")]
+    TrackerProjectSources {
+        /// Project key, e.g. "warpforge".
+        project: String,
+    },
     /// Create an issue in an external tracker for a backlog item. Returns
     /// `{ itemId, externalId, url, status }`.
     #[serde(rename = "workItem.createExternal")]
@@ -1039,6 +1048,22 @@ pub struct TrackerProjectSettings {
     pub linear_team_id: Option<String>,
     #[serde(default)]
     pub linear_team_name: Option<String>,
+}
+
+/// Per-project tracker availability. This is what the UI should key its
+/// source filters and pickers on: the global connection state says nothing
+/// about whether *this* project has a repo or a Linear team behind it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSources {
+    pub project: String,
+    /// Local items are always available.
+    pub local: bool,
+    /// Linear is usable only with a team mapped for this project.
+    pub linear: bool,
+    /// GitHub is usable only when the project dir resolves to a repo the
+    /// connected `gh` session can see.
+    pub github: bool,
 }
 
 /// Result of creating an external issue for a backlog item.

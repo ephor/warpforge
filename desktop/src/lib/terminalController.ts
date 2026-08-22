@@ -44,8 +44,11 @@ export class TerminalController {
       fontSize: 13,
       fontFamily:
         "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+      // Let the surface behind it supply the background, so the terminal is the
+      // same colour as every other pane instead of its own shade of near-black.
+      allowTransparency: true,
       theme: {
-        background: "#0b0d0f",
+        background: "rgba(0, 0, 0, 0)",
         foreground: "#d1d5db",
         cursor: "#d1d5db",
         selectionBackground: "#3b82f640",

@@ -16,11 +16,11 @@ export type RightPanel = "changes" | "files" | "subtasks" | null;
 export type RepositoryOperation = { taskId: string; kind: "pull" | "push" };
 
 /** Center-pane workspace surface. Exactly one is active per task at a time. */
-export type TaskSurface = "files" | "diff" | "runtime" | "pipeline";
+export type TaskSurface = "files" | "diff" | "runtime" | "terminal" | "pipeline";
 export const DEFAULT_TASK_SURFACE: TaskSurface = "diff";
 
 /** Project-page surface. Git and Pull Requests join this union later. */
-export type ProjectSurface = "backlog" | "files" | "runtime";
+export type ProjectSurface = "backlog" | "files" | "runtime" | "terminal";
 export const DEFAULT_PROJECT_SURFACE: ProjectSurface = "backlog";
 
 /** Transient intent to open a task already showing a specific file/diff. */
@@ -107,7 +107,7 @@ interface UiState extends SettingsState {
   showDiff: boolean;
   diffView: DiffView;
   rightPanel: RightPanel;
-  /** Which of Files/Diff/Runtime/Plan is active in the workspace pane. Task-scoped, like `rightPanel`. */
+  /** Which workspace surface is active in the centre pane. Task-scoped, like `rightPanel`. */
   activeSurface: TaskSurface;
   /**
    * Which surface the project page shows, per project. Persisted like the
@@ -115,7 +115,6 @@ interface UiState extends SettingsState {
    * you left it rather than snapping back to Backlog.
    */
   projectSurfaceByProject: Record<string, ProjectSurface>;
-  runtimeOpenByProject: Record<string, boolean>;
   pinnedTaskIds: string[];
   pinnedLayout: Record<string, PinnedTileLayout>;
   sidebarWidth: number;
@@ -147,9 +146,6 @@ interface UiState extends SettingsState {
   setActiveSurface: (surface: TaskSurface) => void;
   setProjectSurface: (project: string, surface: ProjectSurface) => void;
   clearProjectSurface: (project: string) => void;
-  toggleRuntime: (project: string) => void;
-  setRuntimeOpen: (project: string, open: boolean) => void;
-  clearRuntimeOpen: (project: string) => void;
   togglePinnedTask: (id: string) => void;
   setPinnedTaskIds: (ids: string[]) => void;
   setPinnedLayout: (id: string, layout: PinnedTileLayout) => void;
@@ -185,7 +181,6 @@ export const useUi = create<UiState>()(
       rightPanel: null,
       activeSurface: DEFAULT_TASK_SURFACE,
       projectSurfaceByProject: {},
-      runtimeOpenByProject: {},
       pinnedTaskIds: [],
       pinnedLayout: {},
       sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
@@ -208,7 +203,7 @@ export const useUi = create<UiState>()(
       openProject: (selectedProjectId) =>
         set({ openTaskId: null, openTaskNav: null, view: "projects", selectedProjectId }),
       // Contextual task tools must not leak from one task into the next.
-      // Project-scoped Runtime visibility and other layout preferences remain persisted.
+      // Project-scoped layout preferences remain persisted.
       openTask: (openTaskId) =>
         set({
           openTaskId,
@@ -242,26 +237,6 @@ export const useUi = create<UiState>()(
           const projectSurfaceByProject = { ...s.projectSurfaceByProject };
           delete projectSurfaceByProject[project];
           return { projectSurfaceByProject };
-        }),
-      toggleRuntime: (project) =>
-        set((s) => ({
-          runtimeOpenByProject: {
-            ...s.runtimeOpenByProject,
-            [project]: !s.runtimeOpenByProject[project],
-          },
-        })),
-      setRuntimeOpen: (project, open) =>
-        set((s) => ({
-          runtimeOpenByProject: {
-            ...s.runtimeOpenByProject,
-            [project]: open,
-          },
-        })),
-      clearRuntimeOpen: (project) =>
-        set((s) => {
-          const runtimeOpenByProject = { ...s.runtimeOpenByProject };
-          delete runtimeOpenByProject[project];
-          return { runtimeOpenByProject };
         }),
       setPinnedTaskIds: (pinnedTaskIds) => set({ pinnedTaskIds }),
       togglePinnedTask: (id) =>

@@ -1,6 +1,5 @@
-import type { RefObject } from "react";
-
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
+import type { RefObject } from "react";
 
 import { cn } from "@/lib/utils";
 import { useUi } from "@/store/ui";

@@ -67,6 +67,15 @@ beforeEach(() => {
     };
   });
   vi.spyOn(daemon, "importExternalWorkItems").mockResolvedValue({ items: [], synced: [] });
+  // No identity and no assignee on any row by default, which is the case where
+  // the assignee filter has nothing to offer.
+  vi.spyOn(daemon, "trackerStatus").mockResolvedValue({});
+  vi.spyOn(daemon, "trackerProjectSources").mockResolvedValue({
+    project: "warpforge",
+    local: true,
+    linear: true,
+    github: true,
+  });
 });
 
 describe("BacklogView", () => {
@@ -101,6 +110,92 @@ describe("BacklogView", () => {
     await loadMore();
     expect(vi.mocked(daemon.listBacklog).mock.calls).toHaveLength(calls);
     expect(screen.getByText("End of backlog")).toBeInTheDocument();
+  });
+
+  // Whoever is doing the work mostly wants their own rows, so the signed-in
+  // GitHub login is offered before any assignee has even been seen in a row.
+  it("filters by the signed-in user", async () => {
+    vi.mocked(daemon.trackerStatus).mockResolvedValue({
+      github: { connected: true, login: "ephor" },
+    });
+    renderBacklog();
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("combobox", { name: "Assignee" }));
+    await user.click(await screen.findByRole("option", { name: /ephor/ }));
+
+    await vi.waitFor(() =>
+      expect(daemon.listBacklog).toHaveBeenCalledWith(
+        expect.objectContaining({ assignee: "ephor" }),
+      ),
+    );
+  });
+
+  it("offers the assignees seen in the rows loaded so far", async () => {
+    vi.mocked(daemon.listBacklog).mockImplementation(async (input) => ({
+      items: allItems
+        .slice(0, input.pageSize)
+        .map((item, index) => ({ ...item, assignee: index % 2 === 0 ? "stas92" : null })),
+      page: input.page,
+      pageSize: input.pageSize,
+      total: allItems.length,
+      hasNextPage: false,
+    }));
+    renderBacklog();
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("combobox", { name: "Assignee" }));
+    await user.click(await screen.findByRole("option", { name: "stas92" }));
+
+    await vi.waitFor(() =>
+      expect(daemon.listBacklog).toHaveBeenCalledWith(
+        expect.objectContaining({ assignee: "stas92" }),
+      ),
+    );
+  });
+
+  // The options must not come from the filtered listing: picking one assignee
+  // narrows the rows, which would then leave that assignee as the only option.
+  it("keeps every seen assignee on offer after filtering by one", async () => {
+    vi.mocked(daemon.listBacklog).mockImplementation(async (input) => {
+      const assigned = allItems
+        .slice(0, input.pageSize)
+        .map((item, index) => ({ ...item, assignee: index % 2 === 0 ? "stas92" : "lapa2112" }));
+      const items = input.assignee
+        ? assigned.filter((item) => item.assignee === input.assignee)
+        : assigned;
+      return {
+        items,
+        page: input.page,
+        pageSize: input.pageSize,
+        total: items.length,
+        hasNextPage: false,
+      };
+    });
+    renderBacklog();
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("combobox", { name: "Assignee" }));
+    await user.click(await screen.findByRole("option", { name: "stas92" }));
+    await vi.waitFor(() =>
+      expect(daemon.listBacklog).toHaveBeenCalledWith(
+        expect.objectContaining({ assignee: "stas92" }),
+      ),
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Assignee" }));
+    expect(await screen.findByRole("option", { name: "lapa2112" })).toBeInTheDocument();
+  });
+
+  // Nothing to choose from should not leave a dead control in the toolbar.
+  it("hides the assignee filter when there is no identity and no assignee", async () => {
+    renderBacklog();
+    await vi.waitFor(() => expect(rowTitles()).toHaveLength(PAGE_SIZE));
+
+    expect(screen.queryByRole("combobox", { name: "Assignee" })).not.toBeInTheDocument();
   });
 
   it("requests server sorting from the toolbar", async () => {

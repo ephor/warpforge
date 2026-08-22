@@ -1,3 +1,4 @@
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, X } from "lucide-react";
 import { useEffect, useSyncExternalStore } from "react";
 
@@ -10,7 +11,6 @@ import { daemon } from "@/daemon";
 import { configRole } from "@/lib/configRole";
 import { THEMES } from "@/lib/themes";
 import { useUi } from "@/store/ui";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 // ── Helpers ──
 
