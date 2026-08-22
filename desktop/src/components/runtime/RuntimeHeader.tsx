@@ -1,18 +1,25 @@
-import { AlertTriangle, PanelRightClose, PanelRightOpen, Server } from "lucide-react";
+import { AlertTriangle, PanelRightClose, PanelRightOpen } from "lucide-react";
 
+/**
+ * The Runtime toolbar row. It shows whichever service or port-forward is
+ * selected rather than the word "Runtime": the tab above already says which
+ * surface this is, so naming it again cost a row of height for nothing.
+ */
 export function RuntimeHeader({
   actionError,
   sidebarCollapsed,
   onToggleSidebar,
+  children,
 }: {
   actionError: string | null;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
+  /** Identity of the selected target, from `RuntimeDetail`. */
+  children?: React.ReactNode;
 }) {
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-      <Server className="size-3.5 text-muted-foreground" />
-      <span className="text-xs font-medium text-muted-foreground">Runtime</span>
+      {children}
       {actionError && (
         <span
           role="alert"

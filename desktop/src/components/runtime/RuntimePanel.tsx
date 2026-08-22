@@ -4,7 +4,12 @@ import { useUi } from "@/store/ui";
 
 import type { PortForwardInfo, ServiceInfo } from "../../protocol";
 import { makeSidebarKey, type SidebarItem } from "./constants";
-import { PortForwardDetailPane, ServiceDetailPane } from "./RuntimeDetail";
+import {
+  PortForwardDetailPane,
+  PortForwardHeading,
+  ServiceDetailPane,
+  ServiceHeading,
+} from "./RuntimeDetail";
 import { RuntimeHeader } from "./RuntimeHeader";
 import { RuntimeSidebar } from "./RuntimeSidebar";
 
@@ -70,7 +75,13 @@ export function RuntimePanel({
         actionError={actionError}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={toggleSidebarCollapsed}
-      />
+      >
+        {selectedService ? (
+          <ServiceHeading service={selectedService} />
+        ) : selectedPf ? (
+          <PortForwardHeading pf={selectedPf} />
+        ) : null}
+      </RuntimeHeader>
 
       <div className="min-h-0 flex-1">
         {!hasItems ? (
