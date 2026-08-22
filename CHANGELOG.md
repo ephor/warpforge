@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.0
+
+### Minor Changes
+
+- [#37](https://github.com/ephor/warpforge/pull/37) [`44d0494`](https://github.com/ephor/warpforge/commit/44d04945da009178fc0dd7db8db75133eb222b7e) Thanks [@ephor](https://github.com/ephor)! - Runtime shows a project's services and port-forwards in one place, with their live logs and the `http://localhost:…` address of anything that is up. A row carries its status and its name, and start, restart and stop appear on it when you point at it; starting or stopping everything at once is a single click in the Services or Port Forwards heading. Whatever you have selected is named in the toolbar itself, so the logs get the height instead. The side panels in Runtime and in the diff view fold away when you want the room.
+
+- [#37](https://github.com/ephor/warpforge/pull/37) [`44d0494`](https://github.com/ephor/warpforge/commit/44d04945da009178fc0dd7db8db75133eb222b7e) Thanks [@ephor](https://github.com/ephor)! - Every project now has a backlog, and it can be fed straight from your issue tracker. Connect GitHub — Warpforge uses the `gh` CLI session you already have — or Linear with a personal API key, which is kept in your OS keychain. A project's open issues are imported when you open it and refresh on Sync. A Linear key is account-wide, so each project picks the Linear team it reads; until you pick one, that project imports nothing from Linear. New work items are created the same way whether they stay local or land in GitHub or Linear — the destination is just a chip on the form.
+
+  The list loads more as you scroll, and each row reads across one line: title, status, priority, tracker, assignee and when it last changed. Search titles and bodies, filter by status, priority, tracker or assignee — your own account is offered first, since most of the time you are looking for your own work — and pick the sort order from the toolbar. Clicking a row opens its details beside the list instead of taking you elsewhere: the full description with any screenshots from the issue shown inline, assignee, timestamps, and a link straight to the issue. Priority is editable there, and so is status for items you wrote yourself; issues that came from a tracker show the tracker's own status, since that is where it is decided. Start task turns an item into an agent task and links the two, so the row offers Open task from then on. Escape or a click outside puts you back exactly where you were in the list.
+
+- [#37](https://github.com/ephor/warpforge/pull/37) [`44d0494`](https://github.com/ephor/warpforge/commit/44d04945da009178fc0dd7db8db75133eb222b7e) Thanks [@ephor](https://github.com/ephor)! - A project opens into tabs, the same way a task does: Backlog, Files, Runtime and Terminal. Files browses the project's own checkout without starting a task — pick anything in the tree and it opens in a syntax-highlighted, read-only preview, with several files open at once across a tab strip. Runtime gets the whole screen for the project's services and port-forwards, and Terminal is a tab of its own beside it. Each project remembers the tab you left it on, and its name, path, port range and New work item stay pinned above them all.
+
+### Patch Changes
+
+- [`cc907fc`](https://github.com/ephor/warpforge/commit/cc907fc5eec374bc29c73223a0c9b9bbde461bb9) Thanks [@ephor](https://github.com/ephor)! - An open task now says which project it belongs to. The breadcrumb above it starts with the project's name instead of the app's, so switching between tasks from different projects no longer leaves you guessing which checkout you are looking at.
+
+- [#37](https://github.com/ephor/warpforge/pull/37) [`44d0494`](https://github.com/ephor/warpforge/commit/44d04945da009178fc0dd7db8db75133eb222b7e) Thanks [@ephor](https://github.com/ephor)! - Surfaces across the app now agree with each other. The terminal and the Runtime panel sit on the same background as every other pane instead of their own shade, list rows highlight across their full width, and screenshots pasted into an issue render as pictures rather than raw markup.
+
 ## 0.7.0
 
 ### Minor Changes
