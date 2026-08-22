@@ -6,7 +6,7 @@
 //! so no locking is needed beyond what rusqlite provides.
 
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -228,6 +228,41 @@ impl Store {
                 agent_id   TEXT PRIMARY KEY,
                 account_id TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS tracker_links (
+                item_id         TEXT PRIMARY KEY,
+                provider        TEXT NOT NULL,
+                project         TEXT NOT NULL DEFAULT '',
+                external_id     TEXT NOT NULL,
+                url             TEXT NOT NULL,
+                status          TEXT NOT NULL,
+                remote_status   TEXT,
+                last_synced_at  INTEGER NOT NULL DEFAULT 0,
+                task_id         TEXT
+            );
+            CREATE TABLE IF NOT EXISTS tracker_project_settings (
+                project          TEXT PRIMARY KEY,
+                linear_team_id   TEXT,
+                linear_team_name TEXT
+            );
+            CREATE TABLE IF NOT EXISTS backlog_items (
+                id TEXT PRIMARY KEY,
+                number INTEGER NOT NULL,
+                project TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'todo',
+                priority TEXT NOT NULL DEFAULT 'none',
+                source TEXT NOT NULL DEFAULT 'local',
+                external_id TEXT,
+                url TEXT,
+                remote_status TEXT,
+                assignee TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                task_id TEXT
+            );
+            CREATE INDEX IF NOT EXISTS backlog_items_project_idx
+                ON backlog_items(project, number);
             "#,
         )?;
         // Existing databases from before config selector persistence won't have
@@ -261,6 +296,15 @@ impl Store {
         // Migration: remember which agent account a task's session ran under, so
         // resume/restart reuses it after the active account changed.
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN account_id TEXT", []);
+        // Migration: link a task back to the backlog item it was started from.
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN backlog_item_id TEXT", []);
+        // Migration: mark links minted by an import, so unmapping a tracker can
+        // drop its mirrored rows without touching items written here and pushed
+        // out. Existing rows default to 0 — not provably imported, never purged.
+        let _ = conn.execute(
+            "ALTER TABLE tracker_links ADD COLUMN imported INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         Ok(Self { conn })
     }
 
@@ -293,8 +337,8 @@ impl Store {
                 (id, session_id, project, prompt, agent, status, tags, title,
                  created_at, updated_at, files_changed, blocked_reason, config_options, worktree,
                  parent_task_id, settled_override, settled_at, snoozed_until, snoozed_at,
-                 account_id)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
+                 account_id, backlog_item_id)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
             ON CONFLICT(id) DO UPDATE SET
                 session_id=excluded.session_id,
                 status=excluded.status,
@@ -309,7 +353,8 @@ impl Store {
                 settled_at=excluded.settled_at,
                 snoozed_until=excluded.snoozed_until,
                 snoozed_at=excluded.snoozed_at,
-                account_id=excluded.account_id
+                account_id=excluded.account_id,
+                backlog_item_id=excluded.backlog_item_id
             "#,
             rusqlite::params![
                 task.id,
@@ -332,6 +377,7 @@ impl Store {
                 task.snoozed_until,
                 task.snoozed_at,
                 task.account_id,
+                task.backlog_item_id,
             ],
         )?;
         Ok(())
@@ -346,7 +392,7 @@ impl Store {
             "SELECT id, session_id, project, prompt, agent, status, tags, \
              created_at, updated_at, files_changed, blocked_reason, config_options, worktree, \
              parent_task_id, title, settled_override, settled_at, snoozed_until, snoozed_at, \
-             account_id \
+             account_id, backlog_item_id \
              FROM tasks",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -380,6 +426,7 @@ impl Store {
                 snoozed_until: row.get::<_, Option<u64>>(17)?,
                 snoozed_at: row.get::<_, Option<u64>>(18)?,
                 account_id: row.get(19)?,
+                backlog_item_id: row.get(20)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -685,6 +732,235 @@ impl Store {
         }
         Ok(map)
     }
+
+    pub fn upsert_backlog_item(&self, item: &wire::BacklogItem) -> Result<()> {
+        self.conn.execute(
+            r#"INSERT INTO backlog_items
+               (id, number, project, title, body, status, priority, source,
+                external_id, url, remote_status, assignee, created_at, updated_at, task_id)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+               ON CONFLICT(id) DO UPDATE SET
+                 title=excluded.title, body=excluded.body, status=excluded.status,
+                 priority=excluded.priority, source=excluded.source,
+                 external_id=excluded.external_id, url=excluded.url,
+                 remote_status=excluded.remote_status, assignee=excluded.assignee,
+                 updated_at=excluded.updated_at, task_id=excluded.task_id"#,
+            rusqlite::params![
+                item.id,
+                item.number,
+                item.project,
+                item.title,
+                item.body,
+                item.status,
+                item.priority,
+                item.source,
+                item.external_id,
+                item.url,
+                item.remote_status,
+                item.assignee,
+                item.created_at,
+                item.updated_at,
+                item.task_id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn patch_backlog_external(
+        &self,
+        item_id: &str,
+        external_id: &str,
+        url: &str,
+        source: &str,
+        remote_status: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE backlog_items SET external_id=?1, url=?2, source=?3, remote_status=?4, updated_at=?5 WHERE id=?6",
+            rusqlite::params![external_id, url, source, remote_status, super::task::now_secs(), item_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_backlog_item(&self, item_id: &str) -> Result<Option<wire::BacklogItem>> {
+        let mut statement = self.conn.prepare("SELECT id,number,project,title,body,status,priority,source,external_id,url,remote_status,assignee,created_at,updated_at,task_id FROM backlog_items WHERE id=?1")?;
+        let mut rows = statement.query_map(rusqlite::params![item_id], backlog_row)?;
+        rows.next().transpose().map_err(Into::into)
+    }
+
+    pub fn link_backlog_task(&self, item_id: &str, task_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE backlog_items SET task_id=?1, status='in_progress', updated_at=?2 WHERE id=?3",
+            rusqlite::params![task_id, super::task::now_secs(), item_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_backlog_remote(
+        &self,
+        item_id: &str,
+        status: &str,
+        remote_status: Option<&str>,
+        url: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE backlog_items SET status=?1, remote_status=?2, url=?3, updated_at=?4 WHERE id=?5",
+            rusqlite::params![status, remote_status, url, super::task::now_secs(), item_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn next_backlog_number(&self, project: &str) -> Result<u64> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(MAX(number), 0) + 1 FROM backlog_items WHERE project = ?1",
+            rusqlite::params![project],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Delete a backlog item row (used to roll back a failed external create).
+    pub fn delete_backlog_item(&self, item_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM backlog_items WHERE id = ?1",
+            rusqlite::params![item_id],
+        )?;
+        Ok(())
+    }
+
+    /// Number of backlog item rows across all projects. Used to refuse a switch
+    /// away from SQLite storage rather than silently hiding existing rows.
+    pub fn count_backlog_items(&self) -> Result<u64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM backlog_items", [], |row| row.get(0))?)
+    }
+
+    pub fn list_backlog(
+        &self,
+        project: &str,
+        query: &super::backlog::Query,
+    ) -> Result<wire::BacklogPage> {
+        // `priority` and `status` are enum-valued words, so ORDER BY on the raw
+        // column sorts them alphabetically ("high" before "low" before
+        // "urgent") — an order nobody asked for. Sort on their rank instead.
+        let sort_column = match query.sort_by.as_str() {
+            "title" => "title COLLATE NOCASE",
+            "status" => super::backlog::STATUS_RANK_SQL,
+            "priority" => super::backlog::PRIORITY_RANK_SQL,
+            "source" => "source",
+            "assignee" => "assignee COLLATE NOCASE",
+            "number" => "number",
+            _ => "updated_at",
+        };
+        let direction = if query.sort_desc { "DESC" } else { "ASC" };
+        let page = query.page;
+        let page_size = query.page_size.clamp(1, 100);
+        let offset = page as u64 * page_size as u64;
+        let search = query.search.trim();
+        let pattern = format!("%{search}%");
+        let (status, source, priority) = (
+            query.status.as_deref(),
+            query.source.as_deref(),
+            query.priority.as_deref(),
+        );
+        let assignee_pattern = query
+            .assignee
+            .as_deref()
+            .map(|value| format!("%{}%", value.trim()));
+        let where_sql = "project = ?1 AND (?2 = '' OR title LIKE ?3 OR body LIKE ?3)\
+                         AND (?4 IS NULL OR status = ?4)\
+                         AND (?5 IS NULL OR source = ?5)\
+                         AND (?6 IS NULL OR priority = ?6)\
+                         AND (?7 IS NULL OR assignee LIKE ?7)";
+        let count: u64 = self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM backlog_items WHERE {where_sql}"),
+            rusqlite::params![
+                project,
+                search,
+                pattern,
+                status,
+                source,
+                priority,
+                assignee_pattern
+            ],
+            |row| row.get(0),
+        )?;
+        let sql = format!(
+            "SELECT id,number,project,title,body,status,priority,source,external_id,url,remote_status,assignee,created_at,updated_at,task_id FROM backlog_items WHERE {where_sql} ORDER BY {sort_column} {direction}, id ASC LIMIT ?8 OFFSET ?9"
+        );
+        let mut statement = self.conn.prepare(&sql)?;
+        let rows = statement.query_map(
+            rusqlite::params![
+                project,
+                search,
+                pattern,
+                status,
+                source,
+                priority,
+                assignee_pattern,
+                page_size,
+                offset
+            ],
+            backlog_row,
+        )?;
+        let items: Vec<wire::BacklogItem> = rows.collect::<std::result::Result<_, _>>()?;
+        Ok(wire::BacklogPage {
+            items,
+            page,
+            page_size,
+            total: count,
+            has_next_page: offset + (page_size as u64) < count,
+        })
+    }
+
+    pub fn set_backlog_storage_mode(&self, mode: wire::BacklogStorageMode) -> Result<()> {
+        let value = serde_json::to_string(&mode)?;
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS backlog_settings (id INTEGER PRIMARY KEY CHECK(id=1), mode TEXT NOT NULL)",
+            [],
+        )?;
+        self.conn.execute(
+            "INSERT INTO backlog_settings(id, mode) VALUES(1, ?1) ON CONFLICT(id) DO UPDATE SET mode=excluded.mode",
+            rusqlite::params![value.trim_matches('"')],
+        )?;
+        Ok(())
+    }
+
+    pub fn backlog_storage_mode(&self) -> Result<wire::BacklogStorageMode> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS backlog_settings (id INTEGER PRIMARY KEY CHECK(id=1), mode TEXT NOT NULL)",
+            [],
+        )?;
+        let mode: Option<String> = self
+            .conn
+            .query_row("SELECT mode FROM backlog_settings WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        Ok(match mode.as_deref() {
+            Some("yaml") => wire::BacklogStorageMode::Yaml,
+            _ => wire::BacklogStorageMode::Sqlite,
+        })
+    }
+}
+
+fn backlog_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<wire::BacklogItem> {
+    Ok(wire::BacklogItem {
+        id: row.get(0)?,
+        number: row.get(1)?,
+        project: row.get(2)?,
+        title: row.get(3)?,
+        body: row.get(4)?,
+        status: row.get(5)?,
+        priority: row.get(6)?,
+        source: row.get(7)?,
+        external_id: row.get(8)?,
+        url: row.get(9)?,
+        remote_status: row.get(10)?,
+        assignee: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+        task_id: row.get(14)?,
+    })
 }
 
 /// Fold a raw history into the shape the desktop snapshot wants: streamed text
@@ -723,6 +999,208 @@ fn parse_status(s: &str) -> TaskStatus {
         // `Queued` to `Interrupted`, so finished work would come back looking
         // like it had been cut short.
         _ => TaskStatus::Waiting,
+    }
+}
+
+/// A persisted backlog-item ↔ external-tracker-issue link. This is what keeps
+/// the desktop's backlog table in sync with GitHub/Linear without the daemon
+/// owning the items themselves (they still live in zustand/localStorage).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackerLink {
+    pub item_id: String,
+    pub provider: String,
+    pub project: String,
+    pub external_id: String,
+    pub url: String,
+    pub status: String,
+    pub remote_status: Option<String>,
+    pub last_synced_at: u64,
+    pub task_id: Option<String>,
+    /// True when `adopt_imported` minted this link from a tracker listing, as
+    /// opposed to an item written here and pushed out. Only imported rows are
+    /// eligible for the purge that follows a mapping change.
+    pub imported: bool,
+}
+
+impl TrackerLink {
+    pub fn to_wire(&self) -> wire::TrackerLinkInfo {
+        wire::TrackerLinkInfo {
+            item_id: self.item_id.clone(),
+            provider: self.provider.clone(),
+            external_id: self.external_id.clone(),
+            url: self.url.clone(),
+            status: self.status.clone(),
+            remote_status: self.remote_status.clone(),
+            last_synced_at: self.last_synced_at,
+            task_id: self.task_id.clone(),
+        }
+    }
+}
+
+impl Store {
+    pub fn upsert_tracker_link(&self, link: &TrackerLink) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO tracker_links
+                (item_id, provider, project, external_id, url, status, remote_status,
+                 last_synced_at, task_id, imported)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+            ON CONFLICT(item_id) DO UPDATE SET
+                provider=excluded.provider,
+                project=excluded.project,
+                external_id=excluded.external_id,
+                url=excluded.url,
+                status=excluded.status,
+                remote_status=excluded.remote_status,
+                last_synced_at=excluded.last_synced_at,
+                task_id=excluded.task_id,
+                imported=excluded.imported
+            "#,
+            rusqlite::params![
+                link.item_id,
+                link.provider,
+                link.project,
+                link.external_id,
+                link.url,
+                link.status,
+                link.remote_status,
+                link.last_synced_at,
+                link.task_id,
+                link.imported,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_tracker_link(&self, item_id: &str) -> Result<Option<TrackerLink>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT item_id, provider, project, external_id, url, status, remote_status, \
+             last_synced_at, task_id, imported FROM tracker_links WHERE item_id = ?1",
+        )?;
+        let mut rows = stmt.query_map(rusqlite::params![item_id], |row| {
+            Ok(TrackerLink {
+                item_id: row.get(0)?,
+                provider: row.get(1)?,
+                project: row.get(2)?,
+                external_id: row.get(3)?,
+                url: row.get(4)?,
+                status: row.get(5)?,
+                remote_status: row.get(6)?,
+                last_synced_at: row.get::<_, u64>(7)?,
+                task_id: row.get(8)?,
+                imported: row.get::<_, i64>(9)? != 0,
+            })
+        })?;
+        rows.next().transpose().map_err(Into::into)
+    }
+
+    pub fn load_all_tracker_links(&self) -> Result<Vec<TrackerLink>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT item_id, provider, project, external_id, url, status, remote_status, \
+             last_synced_at, task_id, imported FROM tracker_links ORDER BY last_synced_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(TrackerLink {
+                item_id: row.get(0)?,
+                provider: row.get(1)?,
+                project: row.get(2)?,
+                external_id: row.get(3)?,
+                url: row.get(4)?,
+                status: row.get(5)?,
+                remote_status: row.get(6)?,
+                last_synced_at: row.get::<_, u64>(7)?,
+                task_id: row.get(8)?,
+                imported: row.get::<_, i64>(9)? != 0,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn tracker_project_settings(&self, project: &str) -> Result<wire::TrackerProjectSettings> {
+        let found = self
+            .conn
+            .query_row(
+                "SELECT linear_team_id, linear_team_name FROM tracker_project_settings \
+                 WHERE project = ?1",
+                rusqlite::params![project],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let (linear_team_id, linear_team_name) = found.unwrap_or((None, None));
+        Ok(wire::TrackerProjectSettings {
+            project: project.to_string(),
+            linear_team_id,
+            linear_team_name,
+        })
+    }
+
+    pub fn set_tracker_project_linear_team(
+        &self,
+        project: &str,
+        team_id: Option<&str>,
+        team_name: Option<&str>,
+    ) -> Result<wire::TrackerProjectSettings> {
+        self.conn.execute(
+            "INSERT INTO tracker_project_settings(project, linear_team_id, linear_team_name) \
+             VALUES(?1, ?2, ?3) ON CONFLICT(project) DO UPDATE SET \
+             linear_team_id = excluded.linear_team_id, \
+             linear_team_name = excluded.linear_team_name",
+            rusqlite::params![project, team_id, team_name],
+        )?;
+        self.tracker_project_settings(project)
+    }
+
+    /// Drop the rows a *previous* Linear mapping imported into one project, when
+    /// that mapping changes or is removed: they mirror a team this project is no
+    /// longer reading, so keeping them means a backlog of other people's work
+    /// with nothing to say where it came from. Returns how many went.
+    ///
+    /// Only rows `adopt_imported` created (`imported = 1`) are eligible. An item
+    /// somebody wrote here and pushed to Linear also carries a link, and its
+    /// title, body and priority are local-only — deleting that would lose work.
+    pub fn delete_imported_linear_items(&self, project: &str) -> Result<usize> {
+        let item_ids: Vec<String> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT item_id FROM tracker_links \
+                 WHERE provider = 'linear' AND project = ?1 AND imported = 1",
+            )?;
+            let rows = stmt.query_map(rusqlite::params![project], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        for item_id in &item_ids {
+            self.conn.execute(
+                "DELETE FROM backlog_items WHERE id = ?1",
+                rusqlite::params![item_id],
+            )?;
+            self.conn.execute(
+                "DELETE FROM tracker_links WHERE item_id = ?1",
+                rusqlite::params![item_id],
+            )?;
+        }
+        Ok(item_ids.len())
+    }
+
+    pub fn delete_tracker_link(&self, item_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM tracker_links WHERE item_id = ?1",
+            rusqlite::params![item_id],
+        )?;
+        Ok(())
+    }
+
+    /// Link a daemon task to a backlog item (also called when the item was
+    /// created locally without an external tracker).
+    pub fn set_tracker_link_task(&self, item_id: &str, task_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracker_links SET task_id = ?1 WHERE item_id = ?2",
+            rusqlite::params![task_id, item_id],
+        )?;
+        Ok(())
     }
 }
 
@@ -1042,5 +1520,92 @@ mod tests {
 
         let loaded = store.load_tasks().unwrap();
         assert_eq!(loaded[0].status, TaskStatus::Waiting);
+    }
+}
+
+#[cfg(test)]
+mod backlog_query_tests {
+    use super::*;
+
+    fn item(id: &str, n: u64, title: &str, status: &str, priority: &str) -> wire::BacklogItem {
+        wire::BacklogItem {
+            id: id.into(),
+            number: n,
+            project: "p".into(),
+            title: title.into(),
+            body: String::new(),
+            status: status.into(),
+            priority: priority.into(),
+            source: "local".into(),
+            external_id: None,
+            url: None,
+            remote_status: None,
+            assignee: None,
+            created_at: 1000 + n,
+            updated_at: 1000 + n,
+            task_id: None,
+        }
+    }
+
+    fn query(page: u32) -> crate::daemon::backlog::Query {
+        crate::daemon::backlog::Query {
+            page,
+            page_size: 2,
+            sort_by: "updatedAt".into(),
+            sort_desc: true,
+            search: String::new(),
+            status: None,
+            source: None,
+            priority: None,
+            assignee: None,
+        }
+    }
+
+    #[test]
+    fn backlog_pages_both_directions_and_filters() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        for n in 1..=5 {
+            let status = if n == 2 { "done" } else { "todo" };
+            store
+                .upsert_backlog_item(&item(
+                    &format!("i{n}"),
+                    n,
+                    &format!("Issue {n}"),
+                    status,
+                    "none",
+                ))
+                .unwrap();
+        }
+
+        // Page 0 (newest first): items 5, 4.
+        let page0 = store.list_backlog("p", &query(0)).unwrap();
+        assert_eq!(page0.total, 5);
+        let nums: Vec<u64> = page0.items.iter().map(|i| i.number).collect();
+        assert_eq!(nums, vec![5, 4]);
+        assert!(page0.has_next_page);
+
+        // Page 1 (back from page 1 to 0 must be symmetric).
+        let page1 = store.list_backlog("p", &query(1)).unwrap();
+        let nums1: Vec<u64> = page1.items.iter().map(|i| i.number).collect();
+        assert_eq!(nums1, vec![3, 2]);
+
+        // Back to page 0 again — same result as the first visit.
+        let again = store.list_backlog("p", &query(0)).unwrap();
+        let nums_again: Vec<u64> = again.items.iter().map(|i| i.number).collect();
+        assert_eq!(nums_again, vec![5, 4]);
+
+        // Filter by status.
+        let mut q = query(0);
+        q.status = Some("done".into());
+        let done = store.list_backlog("p", &q).unwrap();
+        assert_eq!(done.total, 1);
+        assert_eq!(done.items[0].number, 2);
+
+        // Search.
+        let mut q = query(0);
+        q.search = "issue 3".into();
+        let found = store.list_backlog("p", &q).unwrap();
+        assert_eq!(found.total, 1);
+        assert_eq!(found.items[0].number, 3);
     }
 }

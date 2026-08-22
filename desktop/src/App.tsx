@@ -225,6 +225,9 @@ export default function App() {
   const showPersistent = isWide;
   const [newTaskProject, setNewTaskProject] = useState<string | null>(null);
   const [newTaskPrompt, setNewTaskPrompt] = useState<string | undefined>(undefined);
+  // Set when the new-task surface was opened from a backlog item, so the
+  // created task can be linked back to it.
+  const [newTaskBacklogItemId, setNewTaskBacklogItemId] = useState<string | null>(null);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [pushOpen, setPushOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
@@ -253,9 +256,10 @@ export default function App() {
 
   const openTask = snapshot.tasks.find((t) => t.id === openTaskId) ?? null;
 
-  const startNewTask = useCallback((project?: string, prompt?: string) => {
+  const startNewTask = useCallback((project?: string, prompt?: string, backlogItemId?: string) => {
     setNewTaskProject(project ?? null);
     setNewTaskPrompt(prompt);
+    setNewTaskBacklogItemId(backlogItemId ?? null);
     setNewTaskOpen(true);
   }, []);
 
@@ -353,6 +357,7 @@ export default function App() {
                     snapshot={snapshot}
                     defaultProject={newTaskProject}
                     initialPrompt={newTaskPrompt}
+                    backlogItemId={newTaskBacklogItemId}
                   />
                 ) : openTask ? (
                   <TaskDetail

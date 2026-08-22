@@ -151,6 +151,7 @@ async fn handle_connection(
                         vec![],
                         None,
                         std::collections::HashMap::new(),
+                        None,
                     )
                     .await;
 

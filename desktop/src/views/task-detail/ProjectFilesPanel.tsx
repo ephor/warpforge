@@ -272,17 +272,25 @@ export function ProjectFilesPanel({
     e.preventDefault();
     e.stopPropagation();
     targetRef.current = { path, fKey };
+    // `file.create/rename/delete` are addressed by task, so a tree opened
+    // without one (the project page's read-only Files surface) must not offer
+    // them — they would go out with an empty task id and fail.
+    const edits: ContextMenuItemOrSeparator[] = taskId
+      ? [
+          { type: "separator" },
+          { type: "item", id: "new-file", label: "New File…" },
+          { type: "item", id: "new-folder", label: "New Folder…" },
+          { type: "item", id: "rename", label: "Rename…" },
+          { type: "item", id: "delete", label: "Delete…" },
+        ]
+      : [];
     const items: ContextMenuItemOrSeparator[] = path
       ? [
           { type: "item", id: "open", label: "Open" },
           { type: "item", id: "copy", label: "Copy Path" },
           { type: "item", id: "reveal", label: "Reveal in Finder" },
           { type: "item", id: "terminal", label: "Open in Default App" },
-          { type: "separator" },
-          { type: "item", id: "new-file", label: "New File…" },
-          { type: "item", id: "new-folder", label: "New Folder…" },
-          { type: "item", id: "rename", label: "Rename…" },
-          { type: "item", id: "delete", label: "Delete…" },
+          ...edits,
           { type: "separator" },
           { type: "item", id: "refresh", label: "Refresh" },
         ]
@@ -296,11 +304,7 @@ export function ProjectFilesPanel({
             { type: "item", id: "copy", label: "Copy Path" },
             { type: "item", id: "reveal", label: "Reveal in Finder" },
             { type: "item", id: "terminal", label: "Open in Default App" },
-            { type: "separator" },
-            { type: "item", id: "new-file", label: "New File…" },
-            { type: "item", id: "new-folder", label: "New Folder…" },
-            { type: "item", id: "rename", label: "Rename…" },
-            { type: "item", id: "delete", label: "Delete…" },
+            ...edits,
             { type: "separator" },
             { type: "item", id: "refresh", label: "Refresh" },
           ]
@@ -342,7 +346,7 @@ export function ProjectFilesPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-11 items-center border-b px-3 text-sm font-semibold">Files</div>
+      <div className="flex h-9 items-center border-b px-3 text-sm font-semibold">Files</div>
       {error && <p className="border-b px-3 py-2 text-xs text-destructive">{error}</p>}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto py-1.5">
         {rows.length === 0 && !error ? (

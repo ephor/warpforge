@@ -499,6 +499,15 @@ a single imperative line, at most 60 characters, plain text, no quotes, no trail
 period, no markdown. Reply with ONLY the title — no code fences, no preamble, no \
 closing remarks.";
 
+const ENHANCE_PROMPT_INSTRUCTION: &str = "\
+Below is a task description written by a user. Rewrite it into a clear, well-structured \
+task: a strong imperative title on the first line, then a blank line, then a concise \
+Markdown body that states the goal, acceptance criteria (as bullet points where \
+helpful), and any constraints worth keeping. Keep the user's intent and technical \
+details unchanged — only clarify, organise, and improve the phrasing. Do not invent \
+requirements that are not implied by the text. Reply with ONLY the rewritten task — \
+no code fences, no preamble, no closing remarks.";
+
 /// Build the one-shot prompt for `text.generate` from the repo's git state.
 /// When `message` is set (required for `TaskTitle`), it is used verbatim as the
 /// input to describe instead of running git.
@@ -573,6 +582,15 @@ async fn build_textgen_prompt(
             }
             Ok(format!(
                 "{TASK_TITLE_INSTRUCTION}\n\n----- task prompt -----\n{prompt}"
+            ))
+        }
+        wire::TextGenKind::EnhancePrompt => {
+            let prompt = message.unwrap_or("");
+            if prompt.trim().is_empty() {
+                return Err("no prompt to enhance".to_string());
+            }
+            Ok(format!(
+                "{ENHANCE_PROMPT_INSTRUCTION}\n\n----- task prompt -----\n{prompt}"
             ))
         }
     }
@@ -728,6 +746,8 @@ pub enum Command {
         /// Non-model config overrides (reasoning effort, mode, etc.) keyed by
         /// config-option id; applied via `session/setConfigOption` after model.
         config_overrides: std::collections::HashMap<String, String>,
+        /// Id of the backlog item this task was started from, if any.
+        backlog_item_id: Option<String>,
         reply: oneshot::Sender<String>,
     },
     /// Create a workflow-pipeline parent task and start its first stage.
@@ -850,6 +870,7 @@ pub enum Command {
     GetFileContents {
         task_id: String,
         path: String,
+        project: Option<String>,
         reply: oneshot::Sender<Option<wire::FileDoc>>,
     },
     /// List files in a task's project working tree.
@@ -984,6 +1005,91 @@ pub enum Command {
         kind: wire::TextGenKind,
         model: Option<String>,
         reply: oneshot::Sender<Result<String, String>>,
+    },
+    EnhanceText {
+        project: String,
+        agent_id: String,
+        prompt: String,
+        model: Option<String>,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
+    TrackerPersistLink {
+        link: super::store::TrackerLink,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    TrackerLinks {
+        reply: oneshot::Sender<Result<Vec<wire::TrackerLinkInfo>, String>>,
+    },
+    TrackerProjectSettings {
+        project: String,
+        reply: oneshot::Sender<Result<wire::TrackerProjectSettings, String>>,
+    },
+    TrackerSetProjectLinearTeam {
+        project: String,
+        team_id: Option<String>,
+        team_name: Option<String>,
+        reply: oneshot::Sender<Result<wire::TrackerProjectSettings, String>>,
+    },
+    TrackerSyncInputs {
+        ids: Vec<String>,
+        /// Links, each github project's repo dir, each linear project's team id.
+        #[allow(clippy::type_complexity)]
+        reply: oneshot::Sender<(
+            Vec<super::store::TrackerLink>,
+            std::collections::HashMap<String, String>,
+            std::collections::HashMap<String, String>,
+        )>,
+    },
+    TrackerPersistSynced {
+        links: Vec<super::store::TrackerLink>,
+        reply: oneshot::Sender<()>,
+    },
+    TrackerAdoptImported {
+        project: String,
+        fetched: Vec<(String, Vec<super::tracker::RemoteIssue>)>,
+        #[allow(clippy::type_complexity)]
+        reply: oneshot::Sender<
+            Result<(Vec<wire::ImportedWorkItem>, Vec<wire::SyncedExternalItem>), String>,
+        >,
+    },
+    BacklogGetSettings {
+        reply: oneshot::Sender<Result<wire::BacklogSettings, String>>,
+    },
+    BacklogSetStorage {
+        mode: wire::BacklogStorageMode,
+        reply: oneshot::Sender<Result<wire::BacklogSettings, String>>,
+    },
+    BacklogList {
+        project: String,
+        query: super::backlog::Query,
+        reply: oneshot::Sender<Result<wire::BacklogPage, String>>,
+    },
+    BacklogCreate {
+        item: super::backlog::NewItem,
+        reply: oneshot::Sender<Result<wire::BacklogItem, String>>,
+    },
+    BacklogUpdate {
+        patch: super::backlog::ItemPatch,
+        reply: oneshot::Sender<Result<wire::BacklogItem, String>>,
+    },
+    BacklogAttachExternal {
+        item_id: String,
+        project: String,
+        provider: String,
+        external_id: String,
+        url: String,
+        remote_status: Option<String>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    BacklogDelete {
+        item_id: String,
+        project: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    WorkItemLinkTask {
+        item_id: String,
+        task_id: String,
+        reply: oneshot::Sender<Result<(), String>>,
     },
     /// Send a follow-up prompt into a task's running agent session.
     SessionPrompt {
@@ -1332,6 +1438,7 @@ impl DaemonHandle {
         attachments: Vec<wire::PromptAttachment>,
         default_model: Option<String>,
         config_overrides: std::collections::HashMap<String, String>,
+        backlog_item_id: Option<String>,
     ) -> String {
         let (tx, rx) = oneshot::channel();
         self.send(Command::CreateTask {
@@ -1345,6 +1452,7 @@ impl DaemonHandle {
             attachments,
             default_model,
             config_overrides,
+            backlog_item_id,
             reply: tx,
         })
         .await;
@@ -1413,11 +1521,17 @@ impl DaemonHandle {
         rx.await.unwrap_or_default()
     }
 
-    pub async fn file_contents(&self, task_id: &str, path: &str) -> Option<wire::FileDoc> {
+    pub async fn file_contents(
+        &self,
+        task_id: &str,
+        path: &str,
+        project: Option<String>,
+    ) -> Option<wire::FileDoc> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::GetFileContents {
             task_id: task_id.to_string(),
             path: path.to_string(),
+            project,
             reply: tx,
         })
         .await;
@@ -1677,6 +1791,222 @@ impl DaemonHandle {
         .await;
         rx.await
             .unwrap_or_else(|_| Err("daemon dropped the text-generation request".into()))
+    }
+
+    /// Polish a user-written task prompt (title/description) one-shot. Unlike
+    /// `generate_text` this runs before a task exists, so it takes a project
+    /// name and the raw prompt instead of a `task_id`.
+    pub async fn enhance_text(
+        &self,
+        project: &str,
+        agent_id: &str,
+        prompt: &str,
+        model: Option<String>,
+    ) -> Result<String, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::EnhanceText {
+            project: project.to_string(),
+            agent_id: agent_id.to_string(),
+            prompt: prompt.to_string(),
+            model,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the text-enhance request".into()))
+    }
+
+    pub async fn tracker_persist_link(
+        &self,
+        link: super::store::TrackerLink,
+    ) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerPersistLink { link, reply: tx })
+            .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the tracker-link write".into()))
+    }
+
+    pub async fn tracker_links(&self) -> Result<Vec<wire::TrackerLinkInfo>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerLinks { reply: tx }).await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the tracker-links request".into()))
+    }
+
+    /// The links a sync should refresh, plus the git dir of every project they
+    /// belong to. Store read only — the caller does the network itself so the
+    /// actor loop never waits on a tracker.
+    #[allow(clippy::type_complexity)]
+    pub async fn tracker_sync_inputs(
+        &self,
+        ids: Vec<String>,
+    ) -> (
+        Vec<super::store::TrackerLink>,
+        std::collections::HashMap<String, String>,
+        std::collections::HashMap<String, String>,
+    ) {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerSyncInputs { ids, reply: tx })
+            .await;
+        rx.await.unwrap_or_default()
+    }
+
+    pub async fn tracker_project_settings(
+        &self,
+        project: &str,
+    ) -> Result<wire::TrackerProjectSettings, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerProjectSettings {
+            project: project.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped tracker settings request".into()))
+    }
+
+    pub async fn tracker_set_project_linear_team(
+        &self,
+        project: String,
+        team_id: Option<String>,
+        team_name: Option<String>,
+    ) -> Result<wire::TrackerProjectSettings, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerSetProjectLinearTeam {
+            project,
+            team_id,
+            team_name,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped tracker settings request".into()))
+    }
+
+    pub async fn tracker_persist_synced(&self, links: Vec<super::store::TrackerLink>) {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerPersistSynced { links, reply: tx })
+            .await;
+        let _ = rx.await;
+    }
+
+    pub async fn tracker_adopt_imported(
+        &self,
+        project: &str,
+        fetched: Vec<(String, Vec<super::tracker::RemoteIssue>)>,
+    ) -> Result<(Vec<wire::ImportedWorkItem>, Vec<wire::SyncedExternalItem>), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerAdoptImported {
+            project: project.to_string(),
+            fetched,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the external-import request".into()))
+    }
+
+    pub async fn backlog_get_settings(&self) -> Result<wire::BacklogSettings, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogGetSettings { reply: tx }).await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog settings request".into()))
+    }
+
+    pub async fn backlog_set_storage(
+        &self,
+        mode: wire::BacklogStorageMode,
+    ) -> Result<wire::BacklogSettings, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogSetStorage { mode, reply: tx })
+            .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog storage request".into()))
+    }
+
+    pub async fn backlog_list(
+        &self,
+        project: String,
+        query: super::backlog::Query,
+    ) -> Result<wire::BacklogPage, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogList {
+            project,
+            query,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog list request".into()))
+    }
+
+    pub async fn backlog_create(
+        &self,
+        item: super::backlog::NewItem,
+    ) -> Result<wire::BacklogItem, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogCreate { item, reply: tx }).await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog create request".into()))
+    }
+
+    pub async fn backlog_update(
+        &self,
+        patch: super::backlog::ItemPatch,
+    ) -> Result<wire::BacklogItem, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogUpdate { patch, reply: tx }).await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog update request".into()))
+    }
+
+    pub async fn backlog_attach_external(
+        &self,
+        item_id: String,
+        project: String,
+        provider: String,
+        external_id: String,
+        url: String,
+        remote_status: Option<String>,
+    ) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogAttachExternal {
+            item_id,
+            project,
+            provider,
+            external_id,
+            url,
+            remote_status,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog external attach request".into()))
+    }
+
+    pub async fn backlog_delete(&self, item_id: String, project: String) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogDelete {
+            item_id,
+            project,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog delete request".into()))
+    }
+
+    pub async fn work_item_link_task(&self, item_id: &str, task_id: &str) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::WorkItemLinkTask {
+            item_id: item_id.to_string(),
+            task_id: task_id.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the item-link request".into()))
     }
 
     /// A window of a service's retained log lines (for backfill; live tail
@@ -3071,6 +3401,7 @@ impl Daemon {
                 attachments,
                 default_model,
                 config_overrides,
+                backlog_item_id,
                 reply,
             } => {
                 // Conversation branches tag the source task they were forked
@@ -3081,6 +3412,7 @@ impl Daemon {
                     .map(str::to_string);
                 let mut task = Task::new(&project, &prompt, &agent, tags);
                 task.parent_task_id = parent_task_id;
+                task.backlog_item_id = backlog_item_id;
                 // Resolve the model the session should start with: an explicit
                 // UI pick wins; otherwise fall back to the user's last choice
                 // for this agent (so orchestrator-spawned sub-agents inherit it
@@ -3332,12 +3664,16 @@ impl Daemon {
             Command::GetFileContents {
                 task_id,
                 path,
+                project,
                 reply,
             } => {
+                // Same fallback as `ListFiles`: no task means read the
+                // project's own checkout, so a tree and its preview agree.
                 let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|_| self.task_repo_path(&task_id));
+                    .and_then(|_| self.task_repo_path(&task_id))
+                    .or_else(|| project.as_deref().and_then(|name| self.project_path(name)));
                 tokio::spawn(async move {
                     let doc = match repo {
                         Some(p) => super::diff::file_doc(&p, &path).await.ok(),
@@ -3962,6 +4298,520 @@ impl Daemon {
                         let _ = reply.send(Err(format!("no task {task_id}")));
                     }
                 }
+            }
+            Command::EnhanceText {
+                project,
+                agent_id,
+                prompt,
+                model,
+                reply,
+            } => {
+                let resolved = self.project_path(&project).map(|repo| {
+                    let command = self.resolve_agent_command(&project, &agent_id);
+                    let env =
+                        self.resolve_agent_env(&agent_id, super::accounts::SpawnAccount::Active);
+                    (repo, command, env)
+                });
+                match resolved {
+                    Some((repo, command, env)) => {
+                        let prompt = prompt.clone();
+                        tokio::spawn(async move {
+                            let result = match build_textgen_prompt(
+                                &repo,
+                                wire::TextGenKind::EnhancePrompt,
+                                Some(&prompt),
+                            )
+                            .await
+                            {
+                                Ok(prompt) => {
+                                    super::acp::generate_text(command, repo, prompt, model, env)
+                                        .await
+                                }
+                                Err(e) => Err(e),
+                            };
+                            let _ = reply.send(result);
+                        });
+                    }
+                    None => {
+                        let _ = reply.send(Err(format!("no project {project}")));
+                    }
+                }
+            }
+            Command::TrackerPersistLink { link, reply } => {
+                let result = match &self.store {
+                    Some(store) => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        store
+                            .upsert_tracker_link(&link)
+                            .map_err(|e| format!("failed to persist link: {e:#}"))
+                    }
+                    None => Err("daemon has no persistent store (demo mode?)".into()),
+                };
+                let _ = reply.send(result);
+            }
+            Command::TrackerLinks { reply } => {
+                let result = match &self.store {
+                    Some(store) => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        super::tracker::list_links(&store)
+                            .map_err(|e: anyhow::Error| format!("{e:#}"))
+                    }
+                    None => Ok(Vec::new()),
+                };
+                let _ = reply.send(result);
+            }
+            Command::TrackerProjectSettings { project, reply } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| "daemon has no persistent store".to_string())
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        store
+                            .tracker_project_settings(&project)
+                            .map_err(|e| format!("{e:#}"))
+                    });
+                let _ = reply.send(result);
+            }
+            Command::TrackerSetProjectLinearTeam {
+                project,
+                team_id,
+                team_name,
+                reply,
+            } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| "daemon has no persistent store".to_string())
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        // Pointing a project somewhere else (or nowhere) makes the
+                        // rows the old team put here meaningless, so they go with
+                        // the mapping. Only rows an import minted are eligible —
+                        // see `Store::delete_imported_linear_items`.
+                        let previous = store
+                            .tracker_project_settings(&project)
+                            .map_err(|e| format!("{e:#}"))?
+                            .linear_team_id;
+                        if previous.as_deref() != team_id.as_deref() {
+                            match store.delete_imported_linear_items(&project) {
+                                Ok(0) => {}
+                                Ok(n) => eprintln!(
+                                    "[tracker] dropped {n} imported Linear rows from \
+                                     '{project}' after its team mapping changed"
+                                ),
+                                Err(e) => {
+                                    return Err(format!("clearing old Linear rows failed: {e:#}"))
+                                }
+                            }
+                        }
+                        store
+                            .set_tracker_project_linear_team(
+                                &project,
+                                team_id.as_deref(),
+                                team_name.as_deref(),
+                            )
+                            .map_err(|e| format!("{e:#}"))
+                    });
+                let _ = reply.send(result);
+            }
+            Command::TrackerSyncInputs { ids, reply } => {
+                let links: Vec<super::store::TrackerLink> = match &self.store {
+                    Some(store) if ids.is_empty() => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        store.load_all_tracker_links().unwrap_or_default()
+                    }
+                    Some(store) => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        ids.iter()
+                            .filter_map(|id| store.load_tracker_link(id).ok().flatten())
+                            .collect()
+                    }
+                    None => Vec::new(),
+                };
+                let mut repo_dirs = std::collections::HashMap::new();
+                let mut linear_teams = std::collections::HashMap::new();
+                for link in &links {
+                    if link.provider == "github" && !repo_dirs.contains_key(&link.project) {
+                        if let Some(path) = self.project_path(&link.project) {
+                            repo_dirs.insert(link.project.clone(), path);
+                        }
+                    }
+                    if link.provider == "linear" && !linear_teams.contains_key(&link.project) {
+                        if let Some(team) = self
+                            .store
+                            .as_ref()
+                            .and_then(|store| {
+                                let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                                store.tracker_project_settings(&link.project).ok()
+                            })
+                            .and_then(|settings| settings.linear_team_id)
+                        {
+                            linear_teams.insert(link.project.clone(), team);
+                        }
+                    }
+                }
+                let _ = reply.send((links, repo_dirs, linear_teams));
+            }
+            Command::TrackerPersistSynced { links, reply } => {
+                if let Some(store) = &self.store {
+                    let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                    for link in &links {
+                        if let Err(e) = store.upsert_tracker_link(link) {
+                            eprintln!("[tracker] failed to persist sync for {}: {e}", link.item_id);
+                        }
+                        if store.backlog_storage_mode().ok() == Some(wire::BacklogStorageMode::Yaml)
+                        {
+                            if let Some(path) = self.project_path(&link.project) {
+                                let result = super::backlog::update(
+                                    &path,
+                                    &link.project,
+                                    &link.item_id,
+                                    |item| {
+                                        item.status = link.status.clone();
+                                        item.remote_status = link.remote_status.clone();
+                                        item.url = Some(link.url.clone());
+                                        item.updated_at = super::task::now_secs();
+                                    },
+                                );
+                                if let Err(e) = result {
+                                    eprintln!(
+                                        "[backlog] failed to update YAML remote status for {}: {e}",
+                                        link.item_id
+                                    );
+                                }
+                            }
+                        }
+                        if store.backlog_storage_mode().ok()
+                            == Some(wire::BacklogStorageMode::Sqlite)
+                        {
+                            if let Err(e) = store.update_backlog_remote(
+                                &link.item_id,
+                                &link.status,
+                                link.remote_status.as_deref(),
+                                &link.url,
+                            ) {
+                                eprintln!(
+                                    "[backlog] failed to persist remote status for {}: {e}",
+                                    link.item_id
+                                );
+                            }
+                        }
+                    }
+                }
+                let _ = reply.send(());
+            }
+            Command::TrackerAdoptImported {
+                project,
+                fetched,
+                reply,
+            } => {
+                let result = match &self.store {
+                    Some(store) => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        // YAML mode keeps backlog item rows project-local in
+                        // `…/.workforge/backlog/`; SQLite mode keeps them in the
+                        // `backlog_items` table. `adopt_imported` is told which
+                        // so it never writes a shadow row to the other backend.
+                        let yaml_path = if store.backlog_storage_mode().ok()
+                            == Some(wire::BacklogStorageMode::Yaml)
+                        {
+                            self.project_path(&project)
+                        } else {
+                            None
+                        };
+                        super::tracker::adopt_imported(
+                            &store,
+                            &project,
+                            yaml_path.as_deref(),
+                            fetched,
+                        )
+                        .map_err(|e: anyhow::Error| format!("{e:#}"))
+                    }
+                    None => Ok((Vec::new(), Vec::new())),
+                };
+                let _ = reply.send(result);
+            }
+            Command::BacklogGetSettings { reply } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        store.backlog_storage_mode()
+                    })
+                    .map(|mode| wire::BacklogSettings { mode })
+                    .map_err(|e| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogSetStorage { mode, reply } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        let from = store.backlog_storage_mode()?;
+                        if from != mode {
+                            // Switching backends must not silently hide rows in
+                            // the one being left. Refuse until those rows are
+                            // gone (or moved), surfaced as a clear error.
+                            match (from, mode) {
+                                (wire::BacklogStorageMode::Sqlite, wire::BacklogStorageMode::Yaml) => {
+                                    let count = store.count_backlog_items()?;
+                                    if count > 0 {
+                                        anyhow::bail!(
+                                            "Cannot switch backlog to YAML while {count} backlog item(s) still live in SQLite. Delete or move them first."
+                                        );
+                                    }
+                                }
+                                (wire::BacklogStorageMode::Yaml, wire::BacklogStorageMode::Sqlite) => {
+                                    for project in &self.projects {
+                                        let Some(path) = self.project_path(&project.name) else {
+                                            continue;
+                                        };
+                                        if !super::backlog::list(&path, &project.name)?.is_empty() {
+                                            anyhow::bail!(
+                                                "Cannot switch backlog to SQLite while project '{}' has YAML backlog files. Delete or move them first.",
+                                                project.name
+                                            );
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        store.set_backlog_storage_mode(mode)
+                    })
+                    .map(|_| wire::BacklogSettings { mode })
+                    .map_err(|e| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogList {
+                project,
+                query,
+                reply,
+            } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
+                            let path = self
+                                .project_path(&project)
+                                .ok_or_else(|| anyhow::anyhow!("unknown project '{project}'"))?;
+                            let items = super::backlog::list(&path, &project)?;
+                            Ok(super::backlog::page(items, &query))
+                        } else {
+                            store.list_backlog(&project, &query)
+                        }
+                    })
+                    .map_err(|e| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogCreate { item: new, reply } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        let project = new.project;
+                        let now = super::task::now_secs();
+                        let (number, yaml_path) =
+                            if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
+                                let path = self.project_path(&project).ok_or_else(|| {
+                                    anyhow::anyhow!("unknown project '{project}'")
+                                })?;
+                                let items = super::backlog::list(&path, &project)?;
+                                (super::backlog::next_number(&items), Some(path))
+                            } else {
+                                (store.next_backlog_number(&project)?, None)
+                            };
+                        let item = wire::BacklogItem {
+                            id: format!("b_{}", uuid::Uuid::new_v4().simple()),
+                            number,
+                            project,
+                            title: new.title,
+                            body: new.body,
+                            status: if new.status.is_empty() {
+                                "todo".into()
+                            } else {
+                                new.status
+                            },
+                            priority: if new.priority.is_empty() {
+                                "none".into()
+                            } else {
+                                new.priority
+                            },
+                            source: if new.source.is_empty() {
+                                "local".into()
+                            } else {
+                                new.source
+                            },
+                            external_id: None,
+                            url: None,
+                            remote_status: None,
+                            assignee: new.assignee,
+                            created_at: now,
+                            updated_at: now,
+                            task_id: None,
+                        };
+                        if let Some(path) = yaml_path {
+                            super::backlog::write(&path, &item)?;
+                        } else {
+                            store.upsert_backlog_item(&item)?;
+                        }
+                        Ok(item)
+                    })
+                    .map_err(|e: anyhow::Error| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogUpdate { patch, reply } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        let yaml = store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml;
+                        let path = if yaml {
+                            Some(self.project_path(&patch.project).ok_or_else(|| {
+                                anyhow::anyhow!("unknown project '{}'", patch.project)
+                            })?)
+                        } else {
+                            None
+                        };
+                        let mut item = match &path {
+                            Some(path) => super::backlog::list(path, &patch.project)?
+                                .into_iter()
+                                .find(|item| item.id == patch.item_id),
+                            None => store.get_backlog_item(&patch.item_id)?,
+                        }
+                        .ok_or_else(|| anyhow::anyhow!("backlog item not found"))?;
+                        patch.apply(&mut item);
+                        item.updated_at = super::task::now_secs();
+                        match &path {
+                            Some(path) => super::backlog::write(path, &item)?,
+                            None => store.upsert_backlog_item(&item)?,
+                        }
+                        Ok(item)
+                    })
+                    .map_err(|e: anyhow::Error| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogAttachExternal {
+                item_id,
+                project,
+                provider,
+                external_id,
+                url,
+                remote_status,
+                reply,
+            } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
+                            let path = self
+                                .project_path(&project)
+                                .ok_or_else(|| anyhow::anyhow!("unknown project"))?;
+                            let mut item = super::backlog::list(&path, &project)?
+                                .into_iter()
+                                .find(|item| item.id == item_id)
+                                .ok_or_else(|| anyhow::anyhow!("backlog item not found"))?;
+                            item.source = provider;
+                            item.external_id = Some(external_id);
+                            item.url = Some(url);
+                            item.remote_status = remote_status;
+                            super::backlog::write(&path, &item)
+                        } else {
+                            store.patch_backlog_external(
+                                &item_id,
+                                &external_id,
+                                &url,
+                                &provider,
+                                remote_status.as_deref(),
+                            )
+                        }
+                    })
+                    .map_err(|e| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogDelete {
+                item_id,
+                project,
+                reply,
+            } => {
+                // Compensating cleanup for a failed external create: drop the
+                // local item in whichever backend holds it AND its tracker link,
+                // so a remote-create failure never leaves an item that claims to
+                // live in a tracker it never reached.
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
+                            let path = self
+                                .project_path(&project)
+                                .ok_or_else(|| anyhow::anyhow!("unknown project"))?;
+                            super::backlog::remove(&path, &project, &item_id)?;
+                        } else {
+                            store.delete_backlog_item(&item_id)?;
+                        }
+                        store.delete_tracker_link(&item_id)?;
+                        Ok(())
+                    })
+                    .map_err(|e: anyhow::Error| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::WorkItemLinkTask {
+                item_id,
+                task_id,
+                reply,
+            } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store (demo mode?)"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        let project = self
+                            .tasks
+                            .get(&task_id)
+                            .map(|t| t.project.clone())
+                            .unwrap_or_default();
+                        super::tracker::link_task(&store, &item_id, &task_id, "local", &project)
+                            .and_then(|_| {
+                                if store.backlog_storage_mode()? == wire::BacklogStorageMode::Sqlite
+                                {
+                                    store.link_backlog_task(&item_id, &task_id)?;
+                                }
+                                Ok(())
+                            })
+                            .and_then(|_| {
+                                if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
+                                    let path = self.project_path(&project).ok_or_else(|| {
+                                        anyhow::anyhow!("unknown project '{project}'")
+                                    })?;
+                                    super::backlog::update(&path, &project, &item_id, |item| {
+                                        item.task_id = Some(task_id.clone());
+                                        item.status = "in_progress".into();
+                                        item.updated_at = super::task::now_secs();
+                                    })?;
+                                }
+                                Ok(())
+                            })
+                    });
+                let _ = reply.send(result.map_err(|e: anyhow::Error| format!("{e:#}")));
             }
             Command::CancelTask { id, reply } => {
                 let result = if self.workflow_is_active(&id) {
@@ -7626,6 +8476,7 @@ mod project_removal_tests {
                 Vec::new(),
                 None,
                 HashMap::new(),
+                None,
             )
             .await;
         let deleted_task = handle
@@ -7640,6 +8491,7 @@ mod project_removal_tests {
                 Vec::new(),
                 None,
                 HashMap::new(),
+                None,
             )
             .await;
 
@@ -8058,6 +8910,7 @@ mod worktree_start_tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await
     }
@@ -8127,6 +8980,7 @@ mod worktree_start_tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await;
         std::fs::write(dir.path().join("README.md"), "edited\n").unwrap();
@@ -8144,6 +8998,7 @@ mod worktree_start_tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await;
 
@@ -8232,6 +9087,7 @@ mod transcript_projection_tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await;
 
@@ -8258,6 +9114,7 @@ mod transcript_projection_tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await;
         let (tx, rx) = oneshot::channel();

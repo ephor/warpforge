@@ -12,17 +12,30 @@ import { stampSessionHistoryStartTimes } from "./lib/sessionTiming";
 import type {
   AccountInfo,
   AgentConfig,
+  CreateExternalResult,
   DaemonEndpoint,
   DaemonEvent,
   DaemonHandshake,
   DetectedAgent,
   DetectedLanguageServer,
   ExternalSession,
+  BacklogItem,
+  BacklogPage,
+  BacklogSettings,
+  BacklogStorageMode,
+  ExternalWorkItemPage,
   FileDoc,
+  ImportedWorkItem,
+  LinearTeam,
+  ProjectSources,
   ServerMessage,
   SessionUpdate,
   Snapshot,
+  SyncedExternalItem,
   TaskDiff,
+  TrackerLinkInfo,
+  TrackerProjectSettings,
+  TrackerStatus,
   UpdateHandoff,
 } from "./protocol";
 import { EMPTY_SNAPSHOT, isEvent } from "./protocol";
@@ -1013,6 +1026,280 @@ export class DaemonClient {
       task_id: taskId,
     })) as { text: string };
     return result.text;
+  }
+
+  /** Polish a user-written task prompt (title/description) one-shot via the
+   *  chosen agent. Runs before a task exists, so it takes the raw prompt. */
+  async enhancePrompt(
+    project: string,
+    agentId: string,
+    prompt: string,
+    model?: string,
+  ): Promise<string> {
+    const result = (await this.request("text.enhance", {
+      agent_id: agentId,
+      model,
+      project,
+      prompt,
+    })) as { text: string };
+    return result.text;
+  }
+
+  // ── Issue trackers (GitHub / Linear) ──────────────────────────────────────
+
+  /** Current connection state of both trackers. */
+  async trackerStatus(): Promise<TrackerStatus> {
+    return (await this.request("tracker.status", {})) as TrackerStatus;
+  }
+
+  /** Store a Linear personal API key (validated daemon-side, kept in the OS
+   *  keychain — it never touches the renderer's storage). */
+  async connectLinear(apiKey: string): Promise<TrackerStatus> {
+    return (await this.request("tracker.connectLinear", {
+      api_key: apiKey,
+    })) as TrackerStatus;
+  }
+
+  async disconnectLinear(): Promise<TrackerStatus> {
+    return (await this.request("tracker.disconnectLinear", {})) as TrackerStatus;
+  }
+
+  /** Verify the `gh` CLI session; GitHub has no key of its own to store. */
+  async connectGithub(): Promise<TrackerStatus> {
+    return (await this.request("tracker.connectGithub", {})) as TrackerStatus;
+  }
+
+  async disconnectGithub(): Promise<TrackerStatus> {
+    return (await this.request("tracker.disconnectGithub", {})) as TrackerStatus;
+  }
+
+  /** Teams the connected Linear key can see, to point a project at one. */
+  async linearTeams(): Promise<LinearTeam[]> {
+    const result = (await this.request("tracker.linearTeams", {})) as { teams?: LinearTeam[] };
+    return result.teams ?? [];
+  }
+
+  /**
+   * One image embedded in an issue body, fetched by the daemon because this
+   * WebView holds no tracker session of its own. Comes back as bytes, not a
+   * URL: a signed attachment link expires within minutes.
+   */
+  async trackerAttachment(url: string): Promise<{ contentType: string; dataBase64: string }> {
+    const result = (await this.request("tracker.attachment", { url })) as {
+      contentType?: string;
+      dataBase64?: string;
+    };
+    if (!result?.dataBase64) throw new Error("the daemon returned no image data");
+    return {
+      contentType: result.contentType || "application/octet-stream",
+      dataBase64: result.dataBase64,
+    };
+  }
+
+  /** Which tracker slice this project reads. */
+  async trackerProjectSettings(project: string): Promise<TrackerProjectSettings> {
+    const result = (await this.request("tracker.projectSettings", {
+      project,
+    })) as Partial<TrackerProjectSettings>;
+    return { project, ...result };
+  }
+
+  /** Point a project at a Linear team, or `null` to stop importing Linear into
+   *  it. Changing this drops the rows the previous team imported. */
+  async setProjectLinearTeam(
+    project: string,
+    team: LinearTeam | null,
+  ): Promise<TrackerProjectSettings> {
+    const result = (await this.request("tracker.setProjectLinearTeam", {
+      project,
+      team_id: team?.id ?? null,
+      team_name: team ? `${team.name}` : null,
+    })) as Partial<TrackerProjectSettings>;
+    return { project, ...result };
+  }
+
+  /** Which sources this project can actually read and write — the per-project
+   *  availability the UI gates its filters and pickers on. */
+  async trackerProjectSources(project: string): Promise<ProjectSources> {
+    const result = (await this.request("tracker.projectSources", {
+      project,
+    })) as Partial<ProjectSources>;
+    return { project, local: true, linear: false, github: false, ...result };
+  }
+
+  /** Every persisted backlog↔tracker link, to hydrate locally-stored items. */
+  async trackerLinks(): Promise<TrackerLinkInfo[]> {
+    const result = (await this.request("tracker.links", {})) as {
+      links?: TrackerLinkInfo[];
+    };
+    return result.links ?? [];
+  }
+
+  /** Create the external issue backing a backlog item. `itemId` is the
+   *  client-generated id the daemon keys its link row on. */
+  async createExternalWorkItem(input: {
+    itemId: string;
+    project: string;
+    provider: "github" | "linear";
+    title: string;
+    body?: string;
+  }): Promise<CreateExternalResult> {
+    return (await this.request("workItem.createExternal", {
+      body: input.body ?? "",
+      item_id: input.itemId,
+      project: input.project,
+      provider: input.provider,
+      title: input.title,
+    })) as CreateExternalResult;
+  }
+
+  /** Pull remote status for linked items. Empty `ids` syncs every link. */
+  async syncExternalWorkItems(ids: string[] = []): Promise<SyncedExternalItem[]> {
+    const result = (await this.request("workItem.syncExternal", { ids })) as {
+      items?: SyncedExternalItem[];
+    };
+    return result.items ?? [];
+  }
+
+  /** The project's one tracker pull. A single listing per provider answers
+   *  both questions: `items` are issues with no backlog row yet (ids minted and
+   *  linked daemon-side), `synced` are tracked ones whose status moved. */
+  async importExternalWorkItems(
+    project: string,
+    provider?: "github" | "linear",
+  ): Promise<{ items: ImportedWorkItem[]; synced: SyncedExternalItem[] }> {
+    const result = (await this.request("workItem.importExternal", {
+      project,
+      provider,
+    })) as { items?: ImportedWorkItem[]; synced?: SyncedExternalItem[] };
+    return { items: result.items ?? [], synced: result.synced ?? [] };
+  }
+
+  async listExternalWorkItems(input: {
+    project: string;
+    provider: "github" | "linear";
+    page: number;
+    pageSize: number;
+    sortBy?: string;
+    sortDesc?: boolean;
+    search?: string;
+    status?: string;
+  }): Promise<ExternalWorkItemPage> {
+    return (await this.request("workItem.list", {
+      project: input.project,
+      provider: input.provider,
+      page: input.page,
+      page_size: input.pageSize,
+      sort_by: input.sortBy ?? "updatedAt",
+      sort_desc: input.sortDesc ?? true,
+      search: input.search ?? "",
+      status: input.status,
+    })) as ExternalWorkItemPage;
+  }
+
+  /** Record that a backlog item became this daemon task. */
+  async linkWorkItemTask(itemId: string, taskId: string) {
+    await this.request("workItem.linkTask", { item_id: itemId, task_id: taskId });
+  }
+
+  async backlogSettings(): Promise<BacklogSettings> {
+    return (await this.request("backlog.getSettings", {})) as BacklogSettings;
+  }
+
+  async setBacklogStorage(mode: BacklogStorageMode): Promise<BacklogSettings> {
+    return (await this.request("backlog.setStorage", { mode })) as BacklogSettings;
+  }
+
+  async listBacklog(input: {
+    project: string;
+    page: number;
+    pageSize: number;
+    sortBy?: string;
+    sortDesc?: boolean;
+    search?: string;
+    status?: string;
+    source?: string;
+    priority?: string;
+    assignee?: string;
+  }): Promise<BacklogPage> {
+    return (await this.request("backlog.list", {
+      project: input.project,
+      page: input.page,
+      page_size: input.pageSize,
+      sort_by: input.sortBy ?? "updatedAt",
+      sort_desc: input.sortDesc ?? true,
+      search: input.search ?? "",
+      status: input.status,
+      source: input.source,
+      priority: input.priority,
+      assignee: input.assignee,
+    })) as BacklogPage;
+  }
+
+  async createBacklog(input: {
+    project: string;
+    title: string;
+    body?: string;
+    status?: string;
+    priority?: string;
+    source?: string;
+    assignee?: string | null;
+  }): Promise<BacklogItem> {
+    return (await this.request("backlog.create", {
+      project: input.project,
+      title: input.title,
+      body: input.body ?? "",
+      status: input.status ?? "todo",
+      priority: input.priority ?? "none",
+      source: input.source ?? "local",
+      assignee: input.assignee,
+    })) as BacklogItem;
+  }
+
+  /** Edit an item's own fields. Omitted fields are left as they are. */
+  async updateBacklog(input: {
+    itemId: string;
+    project: string;
+    title?: string;
+    body?: string;
+    status?: string;
+    priority?: string;
+    assignee?: string | null;
+  }): Promise<BacklogItem> {
+    return (await this.request("backlog.update", {
+      item_id: input.itemId,
+      project: input.project,
+      title: input.title,
+      body: input.body,
+      status: input.status,
+      priority: input.priority,
+      assignee: input.assignee,
+    })) as BacklogItem;
+  }
+
+  async attachBacklogExternal(input: {
+    itemId: string;
+    project: string;
+    provider: "github" | "linear";
+    externalId: string;
+    url: string;
+    remoteStatus?: string | null;
+  }): Promise<void> {
+    await this.request("backlog.attachExternal", {
+      item_id: input.itemId,
+      project: input.project,
+      provider: input.provider,
+      external_id: input.externalId,
+      url: input.url,
+      remote_status: input.remoteStatus,
+    });
+  }
+
+  /** Delete a backlog item and its tracker link (rollback for a failed
+   *  external create, so a remote-tracking item never claims a tracker it did
+   *  not reach). */
+  async deleteBacklog(itemId: string, project: string): Promise<void> {
+    await this.request("backlog.delete", { item_id: itemId, project });
   }
 
   /** Full message of the task repo's latest commit; empty if it has none. */

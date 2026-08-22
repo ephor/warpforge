@@ -463,7 +463,7 @@ export function CodeEditor({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-3 border-b px-3 text-xs text-muted-foreground">
+      <div className="flex h-9 shrink-0 items-center gap-3 border-b px-3 text-xs text-muted-foreground">
         <span className="min-w-0 flex-1 truncate font-mono">{doc.path}</span>
         <span
           className={cn(
@@ -497,12 +497,13 @@ export function CodeEditor({
             )}
           </button>
         )}
-        {!isReadOnly && (
+        {/* A view that cannot write (a project file outside any task) gets no
+            save control at all, rather than a permanently dead one. */}
+        {!isReadOnly && editable && (
           <button
             type="button"
             onClick={flushSave}
-            disabled={!editable}
-            className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground disabled:opacity-50"
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground"
           >
             <Save className="size-3" />
             save

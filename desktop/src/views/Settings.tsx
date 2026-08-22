@@ -1,9 +1,11 @@
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, X } from "lucide-react";
 import { useEffect, useSyncExternalStore } from "react";
 
 import AccountsPanel from "@/components/AccountsPanel";
 import AgentSetupPanel from "@/components/AgentSetupPanel";
 import LanguageServersPanel from "@/components/LanguageServersPanel";
+import TrackersPanel from "@/components/TrackersPanel";
 import { Button } from "@/components/ui/button";
 import { daemon } from "@/daemon";
 import { configRole } from "@/lib/configRole";
@@ -99,6 +101,15 @@ interface Props {
 }
 
 export default function SettingsView({ open, onOpenChange }: Props) {
+  const queryClient = useQueryClient();
+  const backlogSettings = useQuery({
+    queryKey: ["backlog", "settings"],
+    queryFn: () => daemon.backlogSettings(),
+  });
+  const backlogStorage = useMutation({
+    mutationFn: (mode: "sqlite" | "yaml") => daemon.setBacklogStorage(mode),
+    onSuccess: (settings) => queryClient.setQueryData(["backlog", "settings"], settings),
+  });
   const fontSize = useUi((s) => s.fontSize);
   const monoFontSize = useUi((s) => s.monoFontSize);
   const setFontSize = useUi((s) => s.setFontSize);
@@ -262,6 +273,34 @@ export default function SettingsView({ open, onOpenChange }: Props) {
             <div className="p-4">
               <LanguageServersPanel />
             </div>
+          </Section>
+
+          {/* ── Issue trackers ── */}
+          <Section title="Issue trackers">
+            <div className="p-4">
+              <TrackersPanel />
+            </div>
+          </Section>
+
+          <Section title="Backlog storage">
+            <SettingRow
+              title="Storage format"
+              description="Backlog is owned by daemon. YAML lives in .workforge/backlog; SQLite stays in Warpforge data."
+              control={
+                <select
+                  aria-label="Backlog storage format"
+                  value={backlogSettings.data?.mode ?? "sqlite"}
+                  disabled={backlogSettings.isLoading || backlogStorage.isPending}
+                  onChange={(event) =>
+                    backlogStorage.mutate(event.target.value as "sqlite" | "yaml")
+                  }
+                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                >
+                  <option value="sqlite">SQLite</option>
+                  <option value="yaml">YAML files</option>
+                </select>
+              }
+            />
           </Section>
 
           {/* ── Text generation ── */}

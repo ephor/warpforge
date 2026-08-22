@@ -45,3 +45,17 @@ export function useProjectFileListQuery(taskId: string | null, includeIgnored = 
     queryKey: ["fileList", taskId ?? "", includeIgnored ? "all" : "tracked"],
   });
 }
+
+/** The same listing for a project with no task attached — the project page's
+ *  Files surface reads the registered checkout directly. */
+export function useProjectFilesQuery(project: string | null, includeIgnored = true) {
+  return useQuery({
+    enabled: Boolean(project),
+    placeholderData: (prev: ProjectFile[] | undefined) => prev,
+    queryFn: daemonQuery<ProjectFile[]>("file.list", {
+      include_ignored: includeIgnored,
+      project,
+    }),
+    queryKey: ["projectFileList", project ?? "", includeIgnored ? "all" : "tracked"],
+  });
+}

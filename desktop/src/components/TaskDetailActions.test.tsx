@@ -24,8 +24,8 @@ const task: TaskInfo = {
 describe("TaskDetailActions", () => {
   beforeEach(() => {
     useUi.setState({
+      activeSurface: "diff",
       rightPanel: null,
-      runtimeOpenByProject: {},
       showChat: true,
       showDiff: true,
     });
@@ -47,20 +47,19 @@ describe("TaskDetailActions", () => {
     expect(useUi.getState().rightPanel).toBe("files");
   });
 
-  it("keeps Terminal available when the project has no runtime targets yet", () => {
+  it("opens the Terminal surface and shows it as the active one", () => {
     render(<TaskDetailActions task={task} />);
-    expect(screen.getByRole("button", { name: "Terminal" })).toBeInTheDocument();
-  });
-
-  it("toggles Runtime only for the task project", () => {
-    useUi.setState({ runtimeOpenByProject: { "other-project": true } });
-    render(<TaskDetailActions task={task} />);
+    expect(screen.getByRole("button", { name: "Terminal" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
 
-    expect(useUi.getState().runtimeOpenByProject).toEqual({
-      "other-project": true,
-      warpforge: true,
-    });
+    expect(useUi.getState().activeSurface).toBe("terminal");
+    expect(screen.getByRole("button", { name: "Terminal" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 });

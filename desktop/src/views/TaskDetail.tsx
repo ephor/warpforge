@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 
 import { ChatTranscript } from "../components/ChatTranscript";
 import type { ComposerHandle } from "../components/Composer";
+import { TerminalWorkspaceView } from "../components/runtime/TerminalWorkspace";
 import { RuntimePanel } from "../components/RuntimePanel";
 import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { daemon } from "../daemon";
@@ -132,6 +133,7 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
   const taskGroup = taskGroupIndex.rootByTaskId.get(task.id);
   const services = snapshot.services.filter((s) => s.project === task.project);
   const portforwards = snapshot.portforwards.filter((p) => p.project === task.project);
+  const terminals = snapshot.terminals.filter((t) => t.project === task.project);
 
   const openCommit = useCallback(() => {
     setShowDiff(true);
@@ -349,6 +351,7 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
   const surfaceTabs = useMemo<SurfaceTab[]>(() => {
     const diffCount = diff && diff.files.length > 0 ? diff.files.length : undefined;
     const runtimeCount = services.length + portforwards.length || undefined;
+    const terminalCount = terminals.length || undefined;
     return (
       DEFAULT_SURFACE_TABS
         // Hidden unless this task actually farmed work out: an ordinary
@@ -358,11 +361,12 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
         .map((tab) => {
           if (tab.id === "diff") return { ...tab, count: diffCount };
           if (tab.id === "runtime") return { ...tab, count: runtimeCount };
+          if (tab.id === "terminal") return { ...tab, count: terminalCount };
           if (tab.id === "pipeline") return { ...tab, count: pipelineCount };
           return tab;
         })
     );
-  }, [diff, pipelineCount, portforwards.length, services.length]);
+  }, [diff, pipelineCount, portforwards.length, services.length, terminals.length]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
@@ -508,6 +512,7 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
                       onAppendToChat={appendLogsToChat}
                     />
                   )}
+                  {activeSurface === "terminal" && <TerminalWorkspaceView project={task.project} />}
                   {activeSurface === "pipeline" && (
                     <PipelineSurface
                       task={task}

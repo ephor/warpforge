@@ -1,0 +1,7 @@
+---
+"warpforge": minor
+---
+
+Every project now has a backlog, and it can be fed straight from your issue tracker. Connect GitHub — Warpforge uses the `gh` CLI session you already have — or Linear with a personal API key, which is kept in your OS keychain. A project's open issues are imported when you open it and refresh on Sync. A Linear key is account-wide, so each project picks the Linear team it reads; until you pick one, that project imports nothing from Linear. New work items are created the same way whether they stay local or land in GitHub or Linear — the destination is just a chip on the form.
+
+The list loads more as you scroll, and each row reads across one line: title, status, priority, tracker, assignee and when it last changed. Search titles and bodies, filter by status, priority, tracker or assignee — your own account is offered first, since most of the time you are looking for your own work — and pick the sort order from the toolbar. Clicking a row opens its details beside the list instead of taking you elsewhere: the full description with any screenshots from the issue shown inline, assignee, timestamps, and a link straight to the issue. Priority is editable there, and so is status for items you wrote yourself; issues that came from a tracker show the tracker's own status, since that is where it is decided. Start task turns an item into an agent task and links the two, so the row offers Open task from then on. Escape or a click outside puts you back exactly where you were in the list.

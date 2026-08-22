@@ -1,12 +1,25 @@
-import { AlertTriangle, Server, TerminalSquare } from "lucide-react";
+import { AlertTriangle, PanelRightClose, PanelRightOpen } from "lucide-react";
 
-import { TabsList, TabsTrigger } from "../ui/tabs";
-
-export function RuntimeHeader({ actionError }: { actionError: string | null }) {
+/**
+ * The Runtime toolbar row. It shows whichever service or port-forward is
+ * selected rather than the word "Runtime": the tab above already says which
+ * surface this is, so naming it again cost a row of height for nothing.
+ */
+export function RuntimeHeader({
+  actionError,
+  sidebarCollapsed,
+  onToggleSidebar,
+  children,
+}: {
+  actionError: string | null;
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
+  /** Identity of the selected target, from `RuntimeDetail`. */
+  children?: React.ReactNode;
+}) {
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-      <TerminalSquare className="size-3.5 text-muted-foreground" />
-      <span className="text-xs font-medium text-muted-foreground">Runtime</span>
+      {children}
       {actionError && (
         <span
           role="alert"
@@ -18,18 +31,19 @@ export function RuntimeHeader({ actionError }: { actionError: string | null }) {
           <span className="max-w-40 truncate">{actionError}</span>
         </span>
       )}
-      <div className="ml-auto">
-        <TabsList>
-          <TabsTrigger value="services">
-            <Server className="size-3.5" />
-            Services
-          </TabsTrigger>
-          <TabsTrigger value="terminal">
-            <TerminalSquare className="size-3.5" />
-            Terminal
-          </TabsTrigger>
-        </TabsList>
-      </div>
+      <button
+        type="button"
+        className="ml-auto shrink-0 rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+        aria-label={sidebarCollapsed ? "Expand runtime sidebar" : "Collapse runtime sidebar"}
+        title={sidebarCollapsed ? "Expand runtime sidebar" : "Collapse runtime sidebar"}
+        onClick={onToggleSidebar}
+      >
+        {sidebarCollapsed ? (
+          <PanelRightOpen className="size-4" />
+        ) : (
+          <PanelRightClose className="size-4" />
+        )}
+      </button>
     </div>
   );
 }
