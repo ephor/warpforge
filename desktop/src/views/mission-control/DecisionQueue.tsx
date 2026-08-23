@@ -6,8 +6,10 @@ import { elapsed } from "@/lib/status";
 import { taskLabel } from "@/lib/taskLabel";
 
 import { AgentAvatarGroup } from "../../components/AgentAvatar";
+import { DecisionRowActions } from "../../components/DecisionRowActions";
 import { StatusBadge } from "../../components/StatusBadge";
 import type { AttentionItem } from "../../lib/attentionRail";
+import { decisionActionKinds } from "../../lib/decisionActions";
 
 export function DecisionQueue({
   items,
@@ -37,35 +39,43 @@ export function DecisionQueue({
       ) : (
         <div className="max-h-[28rem] overflow-y-auto">
           {items.map((item) => (
-            <button
-              key={item.task.id}
-              type="button"
-              onClick={() => onOpenTask(item.task.id)}
-              aria-label={`Open ${taskLabel(item.task)}`}
-              className="group flex w-full min-w-0 flex-col gap-1.5 border-b border-border/55 px-3 py-3 text-left transition-colors last:border-b-0 hover:bg-secondary/35 focus-visible:bg-secondary/35 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <StatusBadge status={attentionStatus(item)} size="xs" />
-                <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                  {taskLabel(item.task)}
-                </span>
-                <span className="shrink-0 text-[11px] font-medium text-primary">
-                  {attentionAction(item)}
-                </span>
-              </div>
-              <p className="truncate pl-1 text-xs text-muted-foreground" title={item.reason}>
-                {item.reason}
-              </p>
-              <div className="flex min-w-0 items-center gap-2 pl-1 text-[11px] text-muted-foreground/80">
-                <span className="truncate">{item.task.project}</span>
-                <span
-                  aria-hidden
-                  className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40"
-                />
-                <AgentAvatarGroup agentId={item.task.agent} />
-                <span className="tnum ml-auto shrink-0">{elapsed(item.task.updatedAt)} ago</span>
-              </div>
-            </button>
+            <div key={item.task.id} className="border-b border-border/55 last:border-b-0">
+              <button
+                type="button"
+                onClick={() => onOpenTask(item.task.id)}
+                aria-label={`Open ${taskLabel(item.task)}`}
+                className="group flex w-full min-w-0 flex-col gap-1.5 px-3 py-3 text-left transition-colors hover:bg-secondary/35 focus-visible:bg-secondary/35 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <StatusBadge status={attentionStatus(item)} size="xs" />
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                    {taskLabel(item.task)}
+                  </span>
+                  <span className="shrink-0 text-[11px] font-medium text-primary">
+                    {attentionAction(item)}
+                  </span>
+                </div>
+                <p className="truncate pl-1 text-xs text-muted-foreground" title={item.reason}>
+                  {item.reason}
+                </p>
+                <div className="flex min-w-0 items-center gap-2 pl-1 text-[11px] text-muted-foreground/80">
+                  <span className="truncate">{item.task.project}</span>
+                  <span
+                    aria-hidden
+                    className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40"
+                  />
+                  <AgentAvatarGroup agentId={item.task.agent} />
+                  <span className="tnum ml-auto shrink-0">
+                    {elapsed(item.task.updatedAt)} ago
+                  </span>
+                </div>
+              </button>
+              {decisionActionKinds(item).length > 0 && (
+                <div className="-mt-1 px-3 pb-3">
+                  <DecisionRowActions item={item} />
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}
