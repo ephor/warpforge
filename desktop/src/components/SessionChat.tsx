@@ -41,7 +41,7 @@ import type {
   TaskInfo,
 } from "../protocol";
 import { useUi } from "../store/ui";
-import { StreamLine } from "../views/MissionControl";
+import { StreamLine } from "../views/mission-control/StreamLine";
 import { AgentActivityIndicator } from "./AgentActivityIndicator";
 import { AgentConfigBar } from "./AgentConfigBar";
 import type { ComposerHandle } from "./Composer";
