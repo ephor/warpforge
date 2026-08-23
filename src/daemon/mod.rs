@@ -20,6 +20,9 @@ pub mod claude_auth;
 pub mod diff;
 pub mod lsp;
 pub mod lsp_servers;
+pub mod memory;
+pub mod memory_config;
+pub mod memory_types;
 pub mod prompt;
 pub mod runtime;
 pub mod search;
@@ -121,6 +124,7 @@ mod tests {
                 default_model: None,
                 config_overrides: std::collections::HashMap::new(),
                 backlog_item_id: None,
+                start: true,
                 reply: task_tx,
             })
             .await;

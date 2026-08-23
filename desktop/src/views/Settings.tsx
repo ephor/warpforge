@@ -106,6 +106,10 @@ export default function SettingsView({ open, onOpenChange }: Props) {
     queryKey: ["backlog", "settings"],
     queryFn: () => daemon.backlogSettings(),
   });
+  const memoryStats = useQuery({
+    queryKey: ["memory", "stats"],
+    queryFn: () => daemon.memoryStats(),
+  });
   const backlogStorage = useMutation({
     mutationFn: (mode: "sqlite" | "yaml") => daemon.setBacklogStorage(mode),
     onSuccess: (settings) => queryClient.setQueryData(["backlog", "settings"], settings),
@@ -299,6 +303,46 @@ export default function SettingsView({ open, onOpenChange }: Props) {
                   <option value="sqlite">SQLite</option>
                   <option value="yaml">YAML files</option>
                 </select>
+              }
+            />
+          </Section>
+
+          {/* ── Memory ── */}
+          <Section title="Memory">
+            <SettingRow
+              title="Embedding mode"
+              description="v1 is keyword-only search (FTS). No model download."
+              control={
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {memoryStats.data?.embeddingMode ?? "fts"}
+                </span>
+              }
+            />
+            <SettingRow
+              title="Memories"
+              description="Durable cross-session knowledge shared across harnesses."
+              control={
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {memoryStats.isLoading
+                    ? "…"
+                    : `${memoryStats.data?.globalCount ?? 0} global · ${
+                        memoryStats.data?.projectCount ?? 0
+                      } project`}
+                </span>
+              }
+            />
+            <SettingRow
+              title="Active scopes"
+              description="Which scopes agents can store and search."
+              control={
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {[
+                    memoryStats.data?.scopesEnabled.global ? "global" : null,
+                    memoryStats.data?.scopesEnabled.project ? "project" : null,
+                  ]
+                    .filter(Boolean)
+                    .join(", ") || "none"}
+                </span>
               }
             />
           </Section>

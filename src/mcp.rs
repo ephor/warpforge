@@ -478,7 +478,7 @@ fn tool_defs(is_orchestrator: bool) -> Value {
         }),
         json!({
             "name": "create_task",
-            "description": "Create a new task on the board. Use for follow-up work discovered during implementation.",
+            "description": "Create a new task on the board without auto-running an agent. Task is queued (Queued) for manual start. Use for follow-up work discovered during implementation.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -501,6 +501,124 @@ fn tool_defs(is_orchestrator: bool) -> Value {
                 },
                 "required": ["prompt"]
             }
+        }),
+        json!({
+            "name": "memory_store",
+            "description": "Persist a durable fact to Warpforge shared memory (visible to all harnesses). \
+                Prefer over CLAUDE.md/AGENTS.md for cross-session knowledge.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "description": "The fact/decision/preference/gotcha to remember."
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["global", "project"],
+                        "description": "global (all projects) or project (this project). Defaults to project when project_id is set, else global."
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["fact", "decision", "preference", "gotcha", "note"],
+                        "description": "Kind of memory. Defaults to note."
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional tags for filtering."
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project id for project scope. Defaults to the current project."
+                    }
+                },
+                "required": ["content"]
+            }
+        }),
+        json!({
+            "name": "memory_search",
+            "description": "Search Warpforge shared memory (full-text, relevance-ranked). Returns matching \
+                memories with highlighted snippets.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search terms."
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["all", "global", "project"],
+                        "description": "Which scope to search. Defaults to all enabled scopes."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 10, max 100)."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["fts", "hybrid"],
+                        "description": "fts only in v1; hybrid behaves the same."
+                    }
+                },
+                "required": ["query"]
+            }
+        }),
+        json!({
+            "name": "memory_list",
+            "description": "List stored memories (most recently updated first), optionally filtered by scope and kind.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "scope": {
+                        "type": "string",
+                        "enum": ["all", "global", "project"],
+                        "description": "Which scope to list. Defaults to all enabled scopes."
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": ["fact", "decision", "preference", "gotcha", "note"],
+                        "description": "Filter to one kind."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max results (default 100)."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "description": "Skip this many results (default 0)."
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "memory_update",
+            "description": "Rewrite an existing memory's content (by id, returned from memory_search/memory_list).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Memory id." },
+                    "content": { "type": "string", "description": "New content." }
+                },
+                "required": ["id", "content"]
+            }
+        }),
+        json!({
+            "name": "memory_delete",
+            "description": "Permanently delete a memory (by id). Explicit user/agent action; nothing is auto-deleted.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Memory id." }
+                },
+                "required": ["id"]
+            }
+        }),
+        json!({
+            "name": "memory_stats",
+            "description": "Report memory counts and which scopes are active, so you can adapt your prompts.",
+            "inputSchema": { "type": "object", "properties": {} }
         }),
     ];
 
@@ -1205,7 +1323,7 @@ async fn handle_tool_call(
                 .get("workflow")
                 .and_then(Value::as_str)
                 .filter(|s| !s.trim().is_empty());
-            let mut params = json!({ "project": proj, "prompt": prompt });
+            let mut params = json!({ "project": proj, "prompt": prompt, "start": false });
             if let Some(a) = agent {
                 params["agent"] = json!(a);
             }
@@ -1215,6 +1333,146 @@ async fn handle_tool_call(
             let result = client.request("task.create", params).await?;
             let id = result.get("taskId").and_then(Value::as_str).unwrap_or("?");
             Ok(format!("Created task {id}"))
+        }
+        "memory_store" => {
+            let content = args
+                .get("content")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'content' is required"))?;
+            // Lenient project scoping: an explicit project_id wins, else the
+            // bridge's bound project, else none (global). Deliberately not the
+            // erroring `scoped_project` helper — global-scoped stores must work
+            // even when the session is not bound to a project.
+            let project_id = args
+                .get("project_id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    let p = project.trim();
+                    if p.is_empty() {
+                        None
+                    } else {
+                        Some(p.to_string())
+                    }
+                });
+            let scope = args
+                .get("scope")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string);
+            let kind = args
+                .get("kind")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string);
+            let tags = args
+                .get("tags")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .filter(|t| !t.is_empty());
+            let mut params = json!({ "content": content });
+            if let Some(v) = scope {
+                params["scope"] = json!(v);
+            }
+            if let Some(v) = kind {
+                params["kind"] = json!(v);
+            }
+            if let Some(v) = tags {
+                params["tags"] = json!(v);
+            }
+            if let Some(v) = project_id {
+                params["project_id"] = json!(v);
+            }
+            let result = client.request("memory.store", params).await?;
+            json_text(&result)
+        }
+        "memory_search" => {
+            let query = args
+                .get("query")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'query' is required"))?;
+            let mut params = json!({ "query": query });
+            if let Some(v) = args
+                .get("scope")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                params["scope"] = json!(v);
+            }
+            if let Some(v) = args.get("limit").and_then(Value::as_u64) {
+                params["limit"] = json!(v.min(u32::MAX as u64));
+            }
+            if let Some(v) = args
+                .get("mode")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                params["mode"] = json!(v);
+            }
+            let result = client.request("memory.search", params).await?;
+            json_text(&result)
+        }
+        "memory_list" => {
+            let mut params = json!({});
+            if let Some(v) = args
+                .get("scope")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                params["scope"] = json!(v);
+            }
+            if let Some(v) = args
+                .get("kind")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                params["kind"] = json!(v);
+            }
+            if let Some(v) = args.get("limit").and_then(Value::as_u64) {
+                params["limit"] = json!(v.min(u32::MAX as u64));
+            }
+            if let Some(v) = args.get("offset").and_then(Value::as_u64) {
+                params["offset"] = json!(v.min(u32::MAX as u64));
+            }
+            let result = client.request("memory.list", params).await?;
+            json_text(&result)
+        }
+        "memory_update" => {
+            let id = args
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'id' is required"))?;
+            let content = args
+                .get("content")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'content' is required"))?;
+            let result = client
+                .request("memory.update", json!({ "id": id, "content": content }))
+                .await?;
+            json_text(&result)
+        }
+        "memory_delete" => {
+            let id = args
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'id' is required"))?;
+            let result = client.request("memory.delete", json!({ "id": id })).await?;
+            json_text(&result)
+        }
+        "memory_stats" => {
+            let result = client.request("memory.stats", json!({})).await?;
+            json_text(&result)
         }
         _ if !is_orchestrator => Err(anyhow!(
             "tool '{name}' is only available in an orchestrator session"

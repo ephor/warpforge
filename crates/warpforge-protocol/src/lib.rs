@@ -225,6 +225,9 @@ pub enum Method {
         /// Id of the backlog item this task is started from, if any.
         #[serde(default)]
         backlog_item_id: Option<String>,
+        /// When false, create without starting session. Defaults to true.
+        #[serde(default = "default_true")]
+        start: bool,
     },
     #[serde(rename = "task.cancel")]
     TaskCancel { task_id: String },
@@ -293,6 +296,50 @@ pub enum Method {
         #[serde(default)]
         project: Option<String>,
     },
+
+    // ── Shared memory ──
+    /// Persist a durable fact into shared memory. `scope` defaults to the
+    /// current project when `project_id` is supplied, else `global`.
+    #[serde(rename = "memory.store")]
+    MemoryStore {
+        content: String,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        tags: Option<Vec<String>>,
+        #[serde(default)]
+        project_id: Option<String>,
+    },
+    /// Full-text search over stored memories (FTS5, BM25-ranked).
+    #[serde(rename = "memory.search")]
+    MemorySearch {
+        query: String,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        limit: Option<u32>,
+        #[serde(default)]
+        mode: Option<String>,
+    },
+    #[serde(rename = "memory.list")]
+    MemoryList {
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        limit: Option<u32>,
+        #[serde(default)]
+        offset: Option<u32>,
+    },
+    #[serde(rename = "memory.update")]
+    MemoryUpdate { id: String, content: String },
+    #[serde(rename = "memory.delete")]
+    MemoryDelete { id: String },
+    #[serde(rename = "memory.stats")]
+    MemoryStats {},
 
     // ── Agent registry ──
     /// Detect installed ACP-capable agents. Returns `{ detected: DetectedAgent[] }`.
