@@ -18,11 +18,13 @@ import {
 
 import type { DaemonState } from "../daemon";
 import { buildAttentionQueue } from "../lib/attentionRail";
+import { buildLiveStripItems } from "../lib/liveStrip";
 import { buildFailureList } from "../lib/taskFailures";
 import { useUi } from "../store/ui";
 import { DecisionQueue } from "./mission-control/DecisionQueue";
 import { FailedSection } from "./mission-control/FailedSection";
 import { FocusGroupPane } from "./mission-control/FocusPane";
+import { LiveStrip } from "./mission-control/LiveStrip";
 import { OverviewMetric } from "./mission-control/OverviewMetric";
 
 export { StreamLine } from "./mission-control/StreamLine";
@@ -79,6 +81,10 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
   const live = useMemo(
     () => state.snapshot.tasks.filter((task) => !isSettledTask(task)),
     [state.snapshot.tasks],
+  );
+  const liveStripItems = useMemo(
+    () => buildLiveStripItems(live, state.sessionUpdates, new Set()),
+    [live, state.sessionUpdates],
   );
   const attentionQueue = useMemo(
     () => buildAttentionQueue(state.snapshot.tasks, state.sessionUpdates),
@@ -206,6 +212,8 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
           <DecisionQueue items={decisionItems} onOpenTask={onOpenTask} />
           <FailedSection failures={failures} onOpenTask={onOpenTask} />
         </section>
+
+        <LiveStrip items={liveStripItems} onOpenTask={onOpenTask} />
 
         <section aria-labelledby="pinned-work-heading" className="min-w-0">
           <div className="mb-2 flex items-end justify-between gap-3">
