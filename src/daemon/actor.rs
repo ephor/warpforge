@@ -299,6 +299,16 @@ immediately — follow up with read_service_logs to watch the outcome.\n\
 - portforward_start(name) / portforward_stop(name): start or stop a \
 port-forward.";
 
+/// Shared-memory preamble prepended to every session's first prompt when memory
+/// is enabled. This is the primary channel that teaches harnesses to use
+/// memory_* instead of per-harness CLAUDE.md/AGENTS.md silos. The tool
+/// descriptions are the always-visible secondary channel; the AGENTS.md /
+/// CLAUDE.md snippet fallback is deferred (no file writes in v1).
+const MEMORY_SYSTEM: &str = "\
+You run inside Warpforge. For durable cross-session knowledge use memory_store / \
+memory_search / memory_list (shared across Claude, Codex, opencode). Prefer this \
+over writing CLAUDE.md/AGENTS.md. Check memory_stats for active scopes.";
+
 /// The warpforge MCP bridge config handed to every ACP session so the agent
 /// can call back into this daemon (read service logs, restart a service,
 /// and — for orchestrator-chat sessions — spawn_agent / read_inbox). The
@@ -748,6 +758,8 @@ pub enum Command {
         config_overrides: std::collections::HashMap<String, String>,
         /// Id of the backlog item this task was started from, if any.
         backlog_item_id: Option<String>,
+        /// When false, create the task but do not start its agent session.
+        start: bool,
         reply: oneshot::Sender<String>,
     },
     /// Create a workflow-pipeline parent task and start its first stage.
@@ -1210,6 +1222,43 @@ pub enum Command {
     LspStop {
         server_id: String,
     },
+    /// Persist a durable fact into shared memory.
+    MemoryStore {
+        content: String,
+        scope: Option<String>,
+        kind: Option<String>,
+        tags: Option<Vec<String>>,
+        project_id: Option<String>,
+        created_by: Option<String>,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    /// Full-text search over shared memories.
+    MemorySearch {
+        query: String,
+        scope: Option<String>,
+        limit: Option<u32>,
+        mode: Option<String>,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryList {
+        scope: Option<String>,
+        kind: Option<String>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryUpdate {
+        id: String,
+        content: String,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryDelete {
+        id: String,
+        reply: oneshot::Sender<Result<(), super::memory::MemoryError>>,
+    },
+    MemoryStats {
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
     Shutdown {
         reply: oneshot::Sender<()>,
     },
@@ -1378,6 +1427,12 @@ fn plural(count: usize) -> &'static str {
     }
 }
 
+/// Collapse a dropped memory reply channel into a "disabled" error, matching
+/// what a never-opened store reports.
+fn memory_dropped() -> super::memory::MemoryError {
+    super::memory::MemoryError::Disabled("memory disabled".into())
+}
+
 /// Collapse a failed oneshot into an error `GitOpResult` instead of panicking.
 fn op_result_or_dropped(
     received: Result<wire::GitOpResult, oneshot::error::RecvError>,
@@ -1453,6 +1508,42 @@ impl DaemonHandle {
             default_model,
             config_overrides,
             backlog_item_id,
+            start: true,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_default()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn queue_task(
+        &self,
+        project: &str,
+        prompt: &str,
+        agent: &str,
+        tags: Vec<String>,
+        include_runtime_context: bool,
+        worktree: bool,
+        parent_task_id: Option<String>,
+        attachments: Vec<wire::PromptAttachment>,
+        default_model: Option<String>,
+        config_overrides: std::collections::HashMap<String, String>,
+        backlog_item_id: Option<String>,
+    ) -> String {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::CreateTask {
+            project: project.to_string(),
+            prompt: prompt.to_string(),
+            agent: agent.to_string(),
+            tags,
+            include_runtime_context,
+            worktree,
+            parent_task_id,
+            attachments,
+            default_model,
+            config_overrides,
+            backlog_item_id,
+            start: false,
             reply: tx,
         })
         .await;
@@ -1519,6 +1610,98 @@ impl DaemonHandle {
         })
         .await;
         rx.await.unwrap_or_default()
+    }
+
+    pub async fn memory_store(
+        &self,
+        content: &str,
+        scope: Option<&str>,
+        kind: Option<&str>,
+        tags: Option<&[String]>,
+        project_id: Option<&str>,
+        created_by: Option<&str>,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryStore {
+            content: content.to_string(),
+            scope: scope.map(str::to_string),
+            kind: kind.map(str::to_string),
+            tags: tags.map(|t| t.to_vec()),
+            project_id: project_id.map(str::to_string),
+            created_by: created_by.map(str::to_string),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn memory_search(
+        &self,
+        query: &str,
+        scope: Option<&str>,
+        limit: Option<u32>,
+        mode: Option<&str>,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemorySearch {
+            query: query.to_string(),
+            scope: scope.map(str::to_string),
+            limit,
+            mode: mode.map(str::to_string),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn memory_list(
+        &self,
+        scope: Option<&str>,
+        kind: Option<&str>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryList {
+            scope: scope.map(str::to_string),
+            kind: kind.map(str::to_string),
+            limit,
+            offset,
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn memory_update(
+        &self,
+        id: &str,
+        content: &str,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryUpdate {
+            id: id.to_string(),
+            content: content.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn memory_delete(&self, id: &str) -> Result<(), super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryDelete {
+            id: id.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn memory_stats(&self) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryStats { reply: tx }).await;
+        rx.await.map_err(|_| memory_dropped())?
     }
 
     pub async fn file_contents(
@@ -2529,6 +2712,9 @@ pub struct Daemon {
     workflow_runs: HashMap<String, WorkflowRun>,
     /// Registered agent accounts, mirroring the `agent_accounts` table.
     accounts: Vec<super::store::StoredAccount>,
+    /// Shared memory store (separate `~/.warpforge/memory.db`), owned here so
+    /// all memory ops run on the actor thread against one connection.
+    memory: super::memory::MemoryStore,
 }
 
 impl Daemon {
@@ -2610,6 +2796,11 @@ impl Daemon {
             .and_then(|s| s.load_accounts().ok())
             .unwrap_or_default();
 
+        // Open (or disable) the shared-memory store. `load` never fails: an
+        // unopenable memory.db yields a disabled store whose tools report
+        // "memory disabled" rather than crashing the daemon.
+        let memory = super::memory::MemoryStore::load();
+
         // Everything above read from the store directly — it is startup, the
         // actor is not running yet. From here the connection belongs to the
         // persistence thread and writes go through the queue.
@@ -2648,6 +2839,7 @@ impl Daemon {
             pending_resume: HashMap::new(),
             workflow_runs: HashMap::new(),
             accounts,
+            memory,
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -3402,6 +3594,7 @@ impl Daemon {
                 default_model,
                 config_overrides,
                 backlog_item_id,
+                start,
                 reply,
             } => {
                 // Conversation branches tag the source task they were forked
@@ -3446,37 +3639,39 @@ impl Daemon {
                 self.emit(Event::TaskCreated(task));
                 let _ = reply.send(id.clone());
 
-                let start = PendingSessionStart {
-                    project: project.clone(),
-                    agent: agent.clone(),
-                    prompt: prompt.clone(),
-                    include_runtime_context,
-                    attachments,
-                    default_model: resolved_model,
-                    config_overrides,
-                };
-                // A worktree checkout is git work, so it runs off the loop and
-                // the session starts when it lands. The task is on the board
-                // before then, which is also why a new task no longer delays
-                // every other task's messages (ADR 0002).
-                match use_worktree
-                    .then(|| self.worktree_request(&id, &project, branched_from.as_deref()))
-                    .flatten()
-                {
-                    Some(request) => {
-                        self.pending_session_starts.insert(id.clone(), start);
-                        let cmd_tx = self.cmd_tx.clone();
-                        tokio::spawn(async move {
-                            let created = request.run().await;
-                            let _ = cmd_tx
-                                .send(Command::WorktreeReady {
-                                    task_id: id,
-                                    created,
-                                })
-                                .await;
-                        });
+                if start {
+                    let start = PendingSessionStart {
+                        project: project.clone(),
+                        agent: agent.clone(),
+                        prompt: prompt.clone(),
+                        include_runtime_context,
+                        attachments,
+                        default_model: resolved_model,
+                        config_overrides,
+                    };
+                    // A worktree checkout is git work, so it runs off the loop
+                    // and the session starts when it lands. The task is on the
+                    // board before then, which is also why a new task no longer
+                    // delays every other task's messages (ADR 0002).
+                    match use_worktree
+                        .then(|| self.worktree_request(&id, &project, branched_from.as_deref()))
+                        .flatten()
+                    {
+                        Some(request) => {
+                            self.pending_session_starts.insert(id.clone(), start);
+                            let cmd_tx = self.cmd_tx.clone();
+                            tokio::spawn(async move {
+                                let created = request.run().await;
+                                let _ = cmd_tx
+                                    .send(Command::WorktreeReady {
+                                        task_id: id,
+                                        created,
+                                    })
+                                    .await;
+                            });
+                        }
+                        None => self.start_pending_session(&id, start),
                     }
-                    None => self.start_pending_session(&id, start),
                 }
             }
             Command::WorktreeReady { task_id, created } => {
@@ -5484,6 +5679,75 @@ impl Daemon {
                     self.emit(Event::TaskUpdated(updated));
                 }
             }
+            Command::MemoryStore {
+                content,
+                scope,
+                kind,
+                tags,
+                project_id,
+                created_by,
+                reply,
+            } => {
+                let result = self
+                    .memory
+                    .store(
+                        &content,
+                        scope.as_deref(),
+                        kind.as_deref(),
+                        tags.as_deref(),
+                        project_id.as_deref(),
+                        created_by.as_deref(),
+                    )
+                    .and_then(|m| {
+                        serde_json::to_value(m).map_err(super::memory::MemoryError::from)
+                    });
+                let _ = reply.send(result);
+            }
+            Command::MemorySearch {
+                query,
+                scope,
+                limit,
+                mode,
+                reply,
+            } => {
+                let result = self
+                    .memory
+                    .search(&query, scope.as_deref(), limit, mode.as_deref())
+                    .and_then(|v| {
+                        serde_json::to_value(v).map_err(super::memory::MemoryError::from)
+                    });
+                let _ = reply.send(result);
+            }
+            Command::MemoryList {
+                scope,
+                kind,
+                limit,
+                offset,
+                reply,
+            } => {
+                let result = self
+                    .memory
+                    .list(scope.as_deref(), kind.as_deref(), limit, offset)
+                    .and_then(|v| {
+                        serde_json::to_value(v).map_err(super::memory::MemoryError::from)
+                    });
+                let _ = reply.send(result);
+            }
+            Command::MemoryUpdate { id, content, reply } => {
+                let result = self.memory.update(&id, &content).and_then(|m| {
+                    serde_json::to_value(m).map_err(super::memory::MemoryError::from)
+                });
+                let _ = reply.send(result);
+            }
+            Command::MemoryDelete { id, reply } => {
+                let _ = reply.send(self.memory.delete(&id));
+            }
+            Command::MemoryStats { reply } => {
+                let result = self.memory.stats().and_then(|s| {
+                    serde_json::to_value(s).map_err(super::memory::MemoryError::from)
+                });
+                let _ = reply.send(result);
+            }
         }
     }
 
@@ -6209,6 +6473,11 @@ impl Daemon {
             .get(task_id)
             .is_some_and(|t| t.tags.iter().any(|x| x == "orchestrator-chat"));
         let mcp_servers = mcp_servers(task_id, project, is_orchestrator);
+        let memory_prefix = if self.memory.enabled() {
+            format!("{MEMORY_SYSTEM}\n\n")
+        } else {
+            String::new()
+        };
         let base_prompt = if is_orchestrator {
             let agents = self.available_agent_ids();
             let roster = if agents.is_empty() {
@@ -6228,9 +6497,9 @@ impl Daemon {
                     workflows.join(", ")
                 )
             };
-            format!("{ORCHESTRATOR_SYSTEM}{roster}{workflow_roster}\n\n{RUNTIME_MCP_SYSTEM}\n\n{prompt}")
+            format!("{memory_prefix}{ORCHESTRATOR_SYSTEM}{roster}{workflow_roster}\n\n{RUNTIME_MCP_SYSTEM}\n\n{prompt}")
         } else {
-            format!("{RUNTIME_MCP_SYSTEM}\n\n{prompt}")
+            format!("{memory_prefix}{RUNTIME_MCP_SYSTEM}\n\n{prompt}")
         };
         let full_prompt = match include_runtime_context
             .then(|| self.runtime_context(project))

@@ -775,3 +775,13 @@ export interface BacklogPage {
   total: number;
   hasNextPage: boolean;
 }
+
+export interface MemoryStats {
+  globalCount: number;
+  projectCount: number;
+  embeddingMode: string;
+  scopesEnabled: {
+    global: boolean;
+    project: boolean;
+  };
+}

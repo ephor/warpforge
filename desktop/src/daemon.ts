@@ -27,6 +27,7 @@ import type {
   FileDoc,
   ImportedWorkItem,
   LinearTeam,
+  MemoryStats,
   ProjectSources,
   ServerMessage,
   SessionUpdate,
@@ -1208,6 +1209,10 @@ export class DaemonClient {
 
   async setBacklogStorage(mode: BacklogStorageMode): Promise<BacklogSettings> {
     return (await this.request("backlog.setStorage", { mode })) as BacklogSettings;
+  }
+
+  async memoryStats(): Promise<MemoryStats> {
+    return (await this.request("memory.stats", {})) as MemoryStats;
   }
 
   async listBacklog(input: {

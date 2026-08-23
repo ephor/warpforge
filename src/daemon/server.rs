@@ -375,6 +375,15 @@ async fn handle_conn(
     Ok(())
 }
 
+/// Map a memory-store error onto the wire: scope violations (and the disabled
+/// store) are client errors; anything else is an internal failure.
+fn memory_error(e: super::memory::MemoryError) -> wire::RpcError {
+    wire::RpcError {
+        code: e.code(),
+        message: e.message(),
+    }
+}
+
 /// Translate a request method into daemon commands and a JSON result.
 async fn dispatch(
     handle: &DaemonHandle,
@@ -551,6 +560,7 @@ async fn dispatch(
             config_overrides,
             workflow,
             backlog_item_id,
+            start,
         } => {
             if let Some(workflow) = workflow {
                 let (tx, rx) = oneshot::channel();
@@ -579,21 +589,39 @@ async fn dispatch(
                     })?;
                 return Ok(json!({ "taskId": id }));
             }
-            let id = handle
-                .create_task(
-                    &project,
-                    &prompt,
-                    &agent,
-                    tags,
-                    include_runtime_context,
-                    worktree,
-                    parent_task_id,
-                    attachments,
-                    default_model,
-                    config_overrides,
-                    backlog_item_id,
-                )
-                .await;
+            let id = if !start {
+                handle
+                    .queue_task(
+                        &project,
+                        &prompt,
+                        &agent,
+                        tags,
+                        include_runtime_context,
+                        worktree,
+                        parent_task_id,
+                        attachments,
+                        default_model,
+                        config_overrides,
+                        backlog_item_id,
+                    )
+                    .await
+            } else {
+                handle
+                    .create_task(
+                        &project,
+                        &prompt,
+                        &agent,
+                        tags,
+                        include_runtime_context,
+                        worktree,
+                        parent_task_id,
+                        attachments,
+                        default_model,
+                        config_overrides,
+                        backlog_item_id,
+                    )
+                    .await
+            };
             Ok(json!({ "taskId": id }))
         }
         OrchestratorReadInbox { parent_task_id } => {
@@ -631,6 +659,51 @@ async fn dispatch(
                 message: e.to_string(),
             })
         }
+        MemoryStore {
+            content,
+            scope,
+            kind,
+            tags,
+            project_id,
+        } => handle
+            .memory_store(
+                &content,
+                scope.as_deref(),
+                kind.as_deref(),
+                tags.as_deref(),
+                project_id.as_deref(),
+                None,
+            )
+            .await
+            .map_err(memory_error),
+        MemorySearch {
+            query,
+            scope,
+            limit,
+            mode,
+        } => handle
+            .memory_search(&query, scope.as_deref(), limit, mode.as_deref())
+            .await
+            .map_err(memory_error),
+        MemoryList {
+            scope,
+            kind,
+            limit,
+            offset,
+        } => handle
+            .memory_list(scope.as_deref(), kind.as_deref(), limit, offset)
+            .await
+            .map_err(memory_error),
+        MemoryUpdate { id, content } => handle
+            .memory_update(&id, &content)
+            .await
+            .map_err(memory_error),
+        MemoryDelete { id } => handle
+            .memory_delete(&id)
+            .await
+            .map(|_| json!(null))
+            .map_err(memory_error),
+        MemoryStats {} => handle.memory_stats().await.map_err(memory_error),
         DiffResolveHunk {
             task_id,
             file,
