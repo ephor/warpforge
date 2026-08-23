@@ -1,0 +1,52 @@
+import type { SessionUpdate, TaskInfo } from "../protocol";
+import { latestSessionPreview } from "./sessionPreview";
+import { sessionActivity, type SessionActivity } from "./sessionActivity";
+import { coalesceTailUpdates } from "./sessionStream";
+
+export interface LiveStripItem {
+  taskId: string;
+  title: string;
+  label: string;
+  detail: string;
+  tone: SessionActivity["tone"];
+  previewText: string | null;
+  startedAt: number | null;
+  toolCount: number;
+}
+
+export function buildLiveStripItems(
+  tasks: TaskInfo[],
+  updatesByTaskId: Record<string, SessionUpdate[]>,
+  excludeTaskIds: ReadonlySet<string>,
+): LiveStripItem[] {
+  const items: LiveStripItem[] = [];
+  for (const task of tasks) {
+    if (excludeTaskIds.has(task.id)) continue;
+    if (task.status !== "running") continue;
+    const updates = updatesByTaskId[task.id] ?? [];
+    const tail = coalesceTailUpdates(updates, 300);
+    const activity = sessionActivity(task, tail);
+    if (!activity) continue;
+    const preview = latestSessionPreview(updates, { active: true });
+    const toolCount = tail.filter((u) => u.kind === "tool_call").length;
+    items.push({
+      detail: activity.detail ?? "",
+      label: activity.label ?? "working",
+      previewText: preview?.text ?? null,
+      startedAt: activity.startedAt ?? null,
+      taskId: task.id,
+      title: task.title,
+      tone: activity.tone ?? "working",
+      toolCount,
+    });
+  }
+  items.sort((a, b) => {
+    const aTime = a.startedAt ?? Infinity;
+    const bTime = b.startedAt ?? Infinity;
+    if (aTime !== bTime) return aTime - bTime;
+    return a.taskId.localeCompare(b.taskId);
+  });
+  return items;
+}
+
+
