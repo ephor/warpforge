@@ -162,20 +162,19 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
 
   // Pinned grid's container mounts only when tab active — measure directly,
   // rAF loop covers the case where containerRef + width hook lag one frame.
-  // oxlint-disable-next-line react-hooks/exhaustive-deps
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (activeTab !== "pinned") return;
+    const readW = () => containerRef.current?.clientWidth ?? 0;
     let raf = 0;
     const tick = () => {
-      const w = containerRef.current?.clientWidth ?? 0;
+      const w = readW();
       if (w > 0) setPinnedWidth(w);
       window.dispatchEvent(new Event("resize"));
       if (w === 0) raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     const ro = new ResizeObserver(() => {
-      const w = containerRef.current?.clientWidth ?? 0;
+      const w = readW();
       if (w > 0) setPinnedWidth(w);
     });
     if (containerRef.current) ro.observe(containerRef.current);
@@ -183,7 +182,7 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [activeTab, width]);
+  }, [activeTab, containerRef, width]);
 
   const GRID_SCROLL_GAP = 8;
   const rowHeight =

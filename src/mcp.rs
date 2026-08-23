@@ -1189,7 +1189,11 @@ async fn handle_tool_call(
                 .map(|s| s.to_string())
                 .or_else(|| {
                     let p = project.trim();
-                    if p.is_empty() { None } else { Some(p.to_string()) }
+                    if p.is_empty() {
+                        None
+                    } else {
+                        Some(p.to_string())
+                    }
                 })
                 .ok_or_else(|| anyhow!("project is required"))?;
             let agent = args
@@ -1197,10 +1201,17 @@ async fn handle_tool_call(
                 .and_then(Value::as_str)
                 .filter(|s| !s.trim().is_empty())
                 .map(|s| s.to_string());
-            let workflow = args.get("workflow").and_then(Value::as_str).filter(|s| !s.trim().is_empty());
+            let workflow = args
+                .get("workflow")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty());
             let mut params = json!({ "project": proj, "prompt": prompt });
-            if let Some(a) = agent { params["agent"] = json!(a); }
-            if let Some(w) = workflow { params["workflow"] = json!(w); }
+            if let Some(a) = agent {
+                params["agent"] = json!(a);
+            }
+            if let Some(w) = workflow {
+                params["workflow"] = json!(w);
+            }
             let result = client.request("task.create", params).await?;
             let id = result.get("taskId").and_then(Value::as_str).unwrap_or("?");
             Ok(format!("Created task {id}"))
