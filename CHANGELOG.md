@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0
+
+### Minor Changes
+
+- [#38](https://github.com/ephor/warpforge/pull/38) [`24c0e62`](https://github.com/ephor/warpforge/commit/24c0e623790228f59005d5c3da1ec495d9022558) Thanks [@ephor](https://github.com/ephor)! - Redesigned Mission Control around four tabs — Live, Needs you, Failed and Pinned — with full-width Live rows, inline queue actions and a remembered active tab for faster triage. Restored the missing create_task MCP tool wiring.
+
 ## 0.8.0
 
 ### Minor Changes
