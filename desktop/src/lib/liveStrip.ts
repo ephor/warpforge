@@ -49,4 +49,18 @@ export function buildLiveStripItems(
   return items;
 }
 
+export function formatElapsed(startedAtMs: number, nowMs: number): string {
+  const diffMs = Math.max(0, nowMs - startedAtMs);
+  const totalSeconds = Math.floor(diffMs / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  if (totalSeconds < 3600) {
+    const m = Math.floor(totalSeconds / 60);
+    const s = totalSeconds % 60;
+    return `${m}m ${String(s).padStart(2, "0")}s`;
+  }
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  return `${h}h ${String(m).padStart(2, "0")}m`;
+}
+
 

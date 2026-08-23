@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SessionUpdate, TaskInfo } from "../protocol";
-import { buildLiveStripItems } from "./liveStrip";
+import { buildLiveStripItems, formatElapsed } from "./liveStrip";
 
 function task(overrides: Partial<TaskInfo>): TaskInfo {
   return {
@@ -149,6 +149,30 @@ describe("buildLiveStripItems", () => {
     const updates: SessionUpdate[] = [{ kind: "agent_text", text: "hello world preview" }];
     const items = buildLiveStripItems([t], { p: updates }, new Set());
     expect(items[0].previewText).toBe("hello world preview");
+  });
+});
+
+describe("formatElapsed", () => {
+  it("formats seconds under a minute", () => {
+    expect(formatElapsed(0, 42_000)).toBe("42s");
+    expect(formatElapsed(0, 0)).toBe("0s");
+    expect(formatElapsed(1000, 1000)).toBe("0s");
+  });
+
+  it("formats minutes boundary", () => {
+    expect(formatElapsed(0, 60_000)).toBe("1m 00s");
+    expect(formatElapsed(0, 5 * 60_000 + 3_000)).toBe("5m 03s");
+    expect(formatElapsed(0, 59 * 60_000 + 59_000)).toBe("59m 59s");
+  });
+
+  it("formats hours", () => {
+    expect(formatElapsed(0, 3600_000)).toBe("1h 00m");
+    expect(formatElapsed(0, (1 * 3600 + 12 * 60) * 1000)).toBe("1h 12m");
+    expect(formatElapsed(0, (2 * 3600 + 5 * 60) * 1000)).toBe("2h 05m");
+  });
+
+  it("clamps negative to 0s", () => {
+    expect(formatElapsed(10_000, 5_000)).toBe("0s");
   });
 });
 
