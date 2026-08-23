@@ -1,7 +1,7 @@
 //! Shared memory: durable cross-session facts/decisions/preferences searchable
-//! by every harness (Claude, Codex, opencode). FTS5-only in v1 — no embeddings,
-//! no vectors, no dreaming execution. The store owns its own connection to
-//! `~/.warpforge/memory.db`, isolated from the main warpforge DB, and is only
+//! by every harness (Claude, Codex, opencode). FTS5 in v1, optional local
+//! embeddings (v1.5) — no dreaming execution. The store owns its own connection
+//! to `~/.warpforge/memory.db`, isolated from the main warpforge DB, and is only
 //! touched from the daemon actor thread (same single-threaded-access rationale
 //! as `store.rs`).
 //!
@@ -9,13 +9,23 @@
 //! requires an integer rowid while `memories.id` is a TEXT uuid: the uuid is
 //! kept as an `UNINDEXED` column and rows are kept in sync with plain
 //! INSERT/DELETE statements keyed on that id.
+//!
+//! When `memory.embedding == "fastembed"`, a `memories_vec` (`vec0`) table holds
+//! cosine embeddings keyed by the memories table's implicit rowid, kept in sync
+//! on store/update/delete. Search mode `hybrid` merges FTS BM25 and vector
+//! cosine ranks via reciprocal-rank fusion; the embedding model lives in
+//! [`super::memory_embed`] and degrades to FTS-only when unavailable.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
-use super::memory_config::MemoryConfig;
+use super::memory_config::{save_embedding, MemoryConfig};
+use super::memory_embed::{
+    ensure_vec_extension, f32_to_blob, rrf_merge, vec_table_sql, EmbedEngine,
+};
 use super::memory_types::{Memory, ScopesEnabled, Stats};
 use super::task::now_secs;
 
@@ -55,6 +65,10 @@ pub struct MemoryStore {
     conn: Option<Connection>,
     config: MemoryConfig,
     disabled: Option<String>,
+    /// Embedding engine, lazily loaded. Guarded by a mutex so the model's
+    /// `&mut self` embed fits the store's `&self` methods and the struct stays
+    /// `Send`; only ever touched from the actor thread.
+    embed: Mutex<EmbedEngine>,
 }
 
 fn seed_meta(conn: &Connection) -> Result<()> {
@@ -90,6 +104,7 @@ impl MemoryStore {
 
     /// Open at an explicit path (":memory:" works — used by tests).
     pub fn open_at(path: &Path) -> Result<Self> {
+        ensure_vec_extension();
         let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.execute_batch(SCHEMA)?;
@@ -98,6 +113,7 @@ impl MemoryStore {
             conn: Some(conn),
             config: MemoryConfig::default(),
             disabled: None,
+            embed: Mutex::new(EmbedEngine::new(false)),
         })
     }
 
@@ -111,19 +127,95 @@ impl MemoryStore {
                 conn: None,
                 config,
                 disabled: Some("memory disabled".into()),
+                embed: Mutex::new(EmbedEngine::new(false)),
             };
         }
         match Self::open() {
             Ok(mut store) => {
                 store.config = config;
+                if store.config.embeddings_enabled() && store.apply_embedding_config().is_err() {
+                    store.config.embedding = "none".into();
+                    *store.embed.lock().unwrap() = EmbedEngine::new(false);
+                }
                 store
             }
             Err(e) => Self {
                 conn: None,
                 config,
                 disabled: Some(format!("memory disabled: {e}")),
+                embed: Mutex::new(EmbedEngine::new(false)),
             },
         }
+    }
+
+    /// Create the vec table and flip the engine to match `config.embedding`.
+    fn apply_embedding_config(&self) -> Result<(), MemoryError> {
+        let enabled = self.config.embeddings_enabled();
+        *self.embed.lock().unwrap() = EmbedEngine::new(enabled);
+        if enabled {
+            ensure_vec_extension();
+            self.guard()?.execute_batch(&vec_table_sql())?;
+        }
+        self.write_embedding_meta(enabled)
+    }
+
+    fn write_embedding_meta(&self, enabled: bool) -> Result<(), MemoryError> {
+        let conn = self.guard()?;
+        let (model, dims): (&str, String) = if enabled {
+            ("fastembed", super::memory_embed::EMBED_DIMS.to_string())
+        } else {
+            ("none", "0".into())
+        };
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('embedding_model', ?1) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![model],
+        )?;
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('dims', ?1) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![dims],
+        )?;
+        Ok(())
+    }
+
+    /// Change the embedding mode at runtime (Settings → Memory). `none` clears
+    /// vectors; `fastembed` creates the vec table and backfills existing
+    /// memories. Persists to config.yaml best-effort.
+    pub fn set_embedding(&mut self, mode: &str) -> Result<Stats, MemoryError> {
+        let mode = match mode {
+            "none" | "fastembed" => mode,
+            other => {
+                return Err(MemoryError::Other(anyhow::anyhow!(
+                    "invalid embedding mode '{other}' (want 'none' or 'fastembed')"
+                )))
+            }
+        };
+        self.config.embedding = mode.to_string();
+        let _ = save_embedding(mode);
+        self.apply_embedding_config()?;
+        if mode == "fastembed" {
+            self.backfill_embeddings()?;
+        }
+        self.stats()
+    }
+
+    /// Recompute vectors for every existing memory (after enabling embeddings).
+    /// No-op when the model is unavailable.
+    fn backfill_embeddings(&self) -> Result<(), MemoryError> {
+        let conn = self.guard()?;
+        conn.execute("DELETE FROM memories_vec", [])?;
+        let rows: Vec<(i64, String)> = {
+            let mut stmt = conn.prepare("SELECT rowid, content FROM memories")?;
+            let mapped = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            mapped.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for (rowid, content) in rows {
+            self.index_embedding(conn, rowid, &content)?;
+        }
+        Ok(())
     }
 
     pub fn enabled(&self) -> bool {
@@ -237,18 +329,47 @@ impl MemoryStore {
             "INSERT INTO memories_fts (id, content) VALUES (?1, ?2)",
             params![id, content],
         )?;
+        let rowid = conn.last_insert_rowid();
+        self.index_embedding(conn, rowid, content)?;
         load_by_id(conn, &id)
     }
 
-    /// Full-text search over memories, BM25-ranked. `mode` is accepted for
-    /// forward compatibility but v1 is FTS-only, so "hybrid" behaves exactly
-    /// like "fts". Every returned hit bumps `last_accessed` (feeds future decay).
+    /// Insert a vector for a stored memory. Silently no-ops when embeddings are
+    /// disabled or the model is unavailable.
+    fn index_embedding(
+        &self,
+        conn: &Connection,
+        rowid: i64,
+        content: &str,
+    ) -> Result<(), MemoryError> {
+        let vec = {
+            let mut engine = self.embed.lock().unwrap();
+            if !engine.is_enabled() {
+                return Ok(());
+            }
+            match engine.embed(&[content]) {
+                Some(embeddings) => embeddings.into_iter().next(),
+                None => return Ok(()),
+            }
+        };
+        let Some(vec) = vec else { return Ok(()) };
+        let blob = f32_to_blob(&vec);
+        conn.execute(
+            "INSERT INTO memories_vec (rowid, embedding) VALUES (?1, ?2)",
+            params![rowid, blob],
+        )?;
+        Ok(())
+    }
+
+    /// Search memories. `mode == "hybrid"` merges FTS (BM25) and vector (cosine)
+    /// ranks via RRF when embeddings are enabled, else falls back to pure FTS.
+    /// Every returned hit bumps `last_accessed` (feeds future decay).
     pub fn search(
         &self,
         query: &str,
         scope: Option<&str>,
         limit: Option<u32>,
-        _mode: Option<&str>,
+        mode: Option<&str>,
     ) -> Result<Vec<Memory>, MemoryError> {
         let conn = self.guard()?;
         let sanitized = sanitize_query(query);
@@ -257,6 +378,22 @@ impl MemoryStore {
         }
         let limit = limit.unwrap_or(10).clamp(1, 100) as i64;
         let predicate = self.scope_predicate(scope);
+        let hybrid = matches!(mode, Some("hybrid")) && self.embed.lock().unwrap().is_enabled();
+        if hybrid {
+            self.hybrid_search(conn, &sanitized, &predicate, limit)
+        } else {
+            self.fts_search(conn, &sanitized, &predicate, limit)
+        }
+    }
+
+    /// Pure FTS5 BM25 search with snippets (v1 behavior, unchanged).
+    fn fts_search(
+        &self,
+        conn: &Connection,
+        sanitized: &str,
+        predicate: &str,
+        limit: i64,
+    ) -> Result<Vec<Memory>, MemoryError> {
         let where_sql = if predicate.is_empty() {
             "memories_fts MATCH ?1".to_string()
         } else {
@@ -285,6 +422,107 @@ impl MemoryStore {
             )?;
             mem.last_accessed = now;
             results.push(mem);
+        }
+        Ok(results)
+    }
+
+    /// Hybrid = FTS BM25 ranks + vector cosine ranks fused by RRF.
+    fn hybrid_search(
+        &self,
+        conn: &Connection,
+        sanitized: &str,
+        predicate: &str,
+        limit: i64,
+    ) -> Result<Vec<Memory>, MemoryError> {
+        let recall = (limit * 3).clamp(30, 500);
+        let fts_ids = self.fts_ranked_ids(conn, sanitized, predicate, recall)?;
+        let Some(vec_ids) = self.vec_ranked_ids(conn, sanitized, predicate, recall)? else {
+            return self.fts_search(conn, sanitized, predicate, limit);
+        };
+        let merged = rrf_merge(&fts_ids, &vec_ids, limit as usize);
+        self.load_ranked(conn, &merged)
+    }
+
+    fn fts_ranked_ids(
+        &self,
+        conn: &Connection,
+        sanitized: &str,
+        predicate: &str,
+        recall: i64,
+    ) -> Result<Vec<String>, MemoryError> {
+        let where_sql = if predicate.is_empty() {
+            "memories_fts MATCH ?1".to_string()
+        } else {
+            format!("memories_fts MATCH ?1 AND {predicate}")
+        };
+        let sql = format!(
+            "SELECT m.id FROM memories m JOIN memories_fts ON memories_fts.id = m.id \
+             WHERE {where_sql} ORDER BY rank LIMIT ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![sanitized, recall], |row| row.get::<_, String>(0))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(row?);
+        }
+        Ok(ids)
+    }
+
+    /// `None` when embeddings are disabled or the model is unavailable.
+    fn vec_ranked_ids(
+        &self,
+        conn: &Connection,
+        sanitized: &str,
+        predicate: &str,
+        recall: i64,
+    ) -> Result<Option<Vec<String>>, MemoryError> {
+        let query_vec = {
+            let mut engine = self.embed.lock().unwrap();
+            if !engine.is_enabled() {
+                return Ok(None);
+            }
+            match engine.embed(&[sanitized]) {
+                Some(embeddings) => embeddings.into_iter().next(),
+                None => return Ok(None),
+            }
+        };
+        let Some(query_vec) = query_vec else {
+            return Ok(None);
+        };
+        let blob = f32_to_blob(&query_vec);
+        let join_where = if predicate.is_empty() {
+            String::new()
+        } else {
+            format!("AND {predicate}")
+        };
+        let sql = format!(
+            "WITH knn AS (\
+               SELECT rowid AS r, distance FROM memories_vec \
+               WHERE embedding MATCH ?1 AND k = ?2) \
+             SELECT m.id FROM knn JOIN memories m ON m.rowid = knn.r \
+             WHERE 1 = 1 {join_where} ORDER BY knn.distance LIMIT ?3"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![blob, recall, recall], |row| row.get::<_, String>(0))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(row?);
+        }
+        Ok(Some(ids))
+    }
+
+    fn load_ranked(&self, conn: &Connection, ids: &[String]) -> Result<Vec<Memory>, MemoryError> {
+        let mut results = Vec::new();
+        for id in ids {
+            if let Ok(mut mem) = load_by_id(conn, id) {
+                let now = now_secs() as i64;
+                conn.execute(
+                    "UPDATE memories SET last_accessed = ?1 WHERE id = ?2",
+                    params![now, id],
+                )?;
+                mem.last_accessed = now;
+                results.push(mem);
+            }
         }
         Ok(results)
     }
@@ -345,6 +583,13 @@ impl MemoryStore {
             "INSERT INTO memories_fts (id, content) VALUES (?1, ?2)",
             params![id, content],
         )?;
+        let rowid: i64 = conn.query_row(
+            "SELECT rowid FROM memories WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        conn.execute("DELETE FROM memories_vec WHERE rowid = ?1", params![rowid])?;
+        self.index_embedding(conn, rowid, content)?;
         load_by_id(conn, id)
     }
 
@@ -356,8 +601,14 @@ impl MemoryStore {
                 "memory '{id}' not found"
             )));
         }
+        let rowid: i64 = conn.query_row(
+            "SELECT rowid FROM memories WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
         conn.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
         conn.execute("DELETE FROM memories_fts WHERE id = ?1", params![id])?;
+        conn.execute("DELETE FROM memories_vec WHERE rowid = ?1", params![rowid])?;
         Ok(())
     }
 
@@ -373,10 +624,15 @@ impl MemoryStore {
             [],
             |row| row.get(0),
         )?;
+        let embedding_mode = if self.embed.lock().unwrap().is_enabled() {
+            "hybrid"
+        } else {
+            "fts"
+        };
         Ok(Stats {
             global_count,
             project_count,
-            embedding_mode: "fts".into(),
+            embedding_mode: embedding_mode.into(),
             scopes_enabled: ScopesEnabled {
                 global: self.config.global,
                 project: self.config.project,

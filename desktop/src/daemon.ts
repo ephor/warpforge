@@ -1215,6 +1215,10 @@ export class DaemonClient {
     return (await this.request("memory.stats", {})) as MemoryStats;
   }
 
+  async setMemoryEmbedding(mode: string): Promise<MemoryStats> {
+    return (await this.request("memory.setEmbedding", { mode })) as MemoryStats;
+  }
+
   async listBacklog(input: {
     project: string;
     page: number;

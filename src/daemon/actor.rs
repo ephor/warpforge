@@ -1259,6 +1259,10 @@ pub enum Command {
     MemoryStats {
         reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
     },
+    SetMemoryEmbedding {
+        mode: String,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
     Shutdown {
         reply: oneshot::Sender<()>,
     },
@@ -1701,6 +1705,19 @@ impl DaemonHandle {
     pub async fn memory_stats(&self) -> Result<serde_json::Value, super::memory::MemoryError> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::MemoryStats { reply: tx }).await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn set_memory_embedding(
+        &self,
+        mode: &str,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::SetMemoryEmbedding {
+            mode: mode.to_string(),
+            reply: tx,
+        })
+        .await;
         rx.await.map_err(|_| memory_dropped())?
     }
 
@@ -5744,6 +5761,12 @@ impl Daemon {
             }
             Command::MemoryStats { reply } => {
                 let result = self.memory.stats().and_then(|s| {
+                    serde_json::to_value(s).map_err(super::memory::MemoryError::from)
+                });
+                let _ = reply.send(result);
+            }
+            Command::SetMemoryEmbedding { mode, reply } => {
+                let result = self.memory.set_embedding(&mode).and_then(|s| {
                     serde_json::to_value(s).map_err(super::memory::MemoryError::from)
                 });
                 let _ = reply.send(result);

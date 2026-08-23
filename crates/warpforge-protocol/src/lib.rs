@@ -340,6 +340,10 @@ pub enum Method {
     MemoryDelete { id: String },
     #[serde(rename = "memory.stats")]
     MemoryStats {},
+    /// Toggle local embeddings (`none` | `fastembed`). `fastembed` downloads
+    /// all-MiniLM-L6-v2 (~80 MB) on first use; falls back to FTS when offline.
+    #[serde(rename = "memory.setEmbedding")]
+    MemorySetEmbedding { mode: String },
 
     // ── Agent registry ──
     /// Detect installed ACP-capable agents. Returns `{ detected: DetectedAgent[] }`.
