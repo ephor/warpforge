@@ -22,6 +22,7 @@ pub mod lsp;
 pub mod lsp_servers;
 pub mod memory;
 pub mod memory_config;
+pub mod memory_dream;
 pub mod memory_embed;
 pub mod memory_types;
 pub mod prompt;

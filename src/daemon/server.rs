@@ -1804,6 +1804,16 @@ async fn dispatch(
                 .map_err(rpc_err)?;
             Ok(json!({ "ok": true }))
         }
+        MemoryDream { dry_run } => {
+            let v = handle
+                .memory_dream(dry_run.unwrap_or(false))
+                .await
+                .map_err(|e| wire::RpcError {
+                    code: wire::ErrorCode::InvalidRequest,
+                    message: e.to_string(),
+                })?;
+            Ok(v)
+        }
     }
 }
 

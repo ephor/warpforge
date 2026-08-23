@@ -620,6 +620,16 @@ fn tool_defs(is_orchestrator: bool) -> Value {
             "description": "Report memory counts and which scopes are active, so you can adapt your prompts.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
+        json!({
+            "name": "memory_dream",
+            "description": "Run memory dreaming compaction pass: find duplicates, contradictions, stale facts; propose superseded_by/merge/delete. dry_run true lists without writing.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "dry_run": { "type": "boolean", "description": "When true, just list proposals without writing to compaction log." }
+                }
+            }
+        }),
     ];
 
     if is_orchestrator {
@@ -1472,6 +1482,16 @@ async fn handle_tool_call(
         }
         "memory_stats" => {
             let result = client.request("memory.stats", json!({})).await?;
+            json_text(&result)
+        }
+        "memory_dream" => {
+            let dry_run = args
+                .get("dry_run")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let result = client
+                .request("memory.dream", json!({"dry_run": dry_run}))
+                .await?;
             json_text(&result)
         }
         _ if !is_orchestrator => Err(anyhow!(
