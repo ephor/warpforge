@@ -35,6 +35,17 @@ pub struct Stats {
     pub project_count: u64,
     pub embedding_mode: String,
     pub scopes_enabled: ScopesEnabled,
+    #[serde(default)]
+    pub per_project_db_exists: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Edge {
+    pub src_id: String,
+    pub dst_id: String,
+    pub relation: String,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
