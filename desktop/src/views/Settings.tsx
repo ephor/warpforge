@@ -311,11 +311,28 @@ export default function SettingsView({ open, onOpenChange }: Props) {
           <Section title="Memory">
             <SettingRow
               title="Embedding mode"
-              description="v1 is keyword-only search (FTS). No model download."
+              description={
+                memoryStats.data?.embeddingMode === "fts"
+                  ? "v1 is keyword-only (FTS). Switch to fastembed for hybrid search (~80MB download)."
+                  : "Hybrid search (FTS + vectors). Falls back to FTS when offline."
+              }
               control={
-                <span className="text-xs tabular-nums text-muted-foreground">
-                  {memoryStats.data?.embeddingMode ?? "fts"}
-                </span>
+                <select
+                  aria-label="Embedding mode"
+                  value={
+                    memoryStats.data?.embeddingMode === "fastembed" ? "fastembed" : "none"
+                  }
+                  disabled={memoryStats.isLoading}
+                  onChange={async (e) => {
+                    const mode = e.target.value;
+                    const stats = await daemon.setMemoryEmbedding(mode);
+                    queryClient.setQueryData(["memory", "stats"], stats);
+                  }}
+                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                >
+                  <option value="none">none (FTS)</option>
+                  <option value="fastembed">fastembed</option>
+                </select>
               }
             />
             <SettingRow

@@ -704,6 +704,10 @@ async fn dispatch(
             .map(|_| json!(null))
             .map_err(memory_error),
         MemoryStats {} => handle.memory_stats().await.map_err(memory_error),
+        MemorySetEmbedding { mode } => handle
+            .set_memory_embedding(&mode)
+            .await
+            .map_err(memory_error),
         DiffResolveHunk {
             task_id,
             file,
