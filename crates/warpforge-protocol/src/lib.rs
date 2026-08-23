@@ -352,6 +352,11 @@ pub enum Method {
     },
     #[serde(rename = "memory.edges")]
     MemoryEdges { id: String },
+    #[serde(rename = "memory.dream")]
+    MemoryDream {
+        #[serde(default)]
+        dry_run: Option<bool>,
+    },
 
     // ── Agent registry ──
     /// Detect installed ACP-capable agents. Returns `{ detected: DetectedAgent[] }`.

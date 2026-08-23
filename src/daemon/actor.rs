@@ -1273,6 +1273,10 @@ pub enum Command {
         id: String,
         reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
     },
+    MemoryDream {
+        dry_run: bool,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
     Shutdown {
         reply: oneshot::Sender<()>,
     },
@@ -1646,6 +1650,15 @@ impl DaemonHandle {
             reply: tx,
         })
         .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn memory_dream(
+        &self,
+        dry_run: bool,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryDream { dry_run, reply: tx }).await;
         rx.await.map_err(|_| memory_dropped())?
     }
 
@@ -2770,6 +2783,7 @@ pub struct Daemon {
     /// Shared memory store (separate `~/.warpforge/memory.db`), owned here so
     /// all memory ops run on the actor thread against one connection.
     memory: super::memory::MemoryStore,
+    last_memory_activity: std::time::Instant,
 }
 
 impl Daemon {
@@ -2895,6 +2909,7 @@ impl Daemon {
             workflow_runs: HashMap::new(),
             accounts,
             memory,
+            last_memory_activity: std::time::Instant::now(),
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -2931,6 +2946,40 @@ impl Daemon {
                                      // Bring persisted workflow pipelines back: barrier states as-is,
                                      // mid-stage runs paused at their last barrier.
         daemon.restore_workflow_runs();
+
+        // Dreaming idle/cron scheduler (config-driven, enabled false by default)
+        let dream_cfg = daemon.memory.config().dreaming.clone();
+        let dream_tx = handle.cmd_tx.clone();
+        if dream_cfg.enabled && dream_cfg.trigger == "idle" {
+            let idle = crate::daemon::memory_dream::parse_idle_after(&dream_cfg.idle_after);
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(idle).await;
+                    let (tx, _rx) = tokio::sync::oneshot::channel();
+                    let _ = dream_tx
+                        .send(Command::MemoryDream {
+                            dry_run: false,
+                            reply: tx,
+                        })
+                        .await;
+                }
+            });
+        } else if dream_cfg.enabled && dream_cfg.trigger == "cron" {
+            let cron_str = dream_cfg.cron.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                // minimal cron: fire once after a minute and let daemon dedupe via pending check;
+                // full cron crate parsing deferred (no extra dep). Config change requires restart.
+                let _ = cron_str.len();
+                let (tx, _rx) = tokio::sync::oneshot::channel();
+                let _ = dream_tx
+                    .send(Command::MemoryDream {
+                        dry_run: false,
+                        reply: tx,
+                    })
+                    .await;
+            });
+        }
 
         tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx, acp_rx, policy_rx));
 
@@ -5828,6 +5877,24 @@ impl Daemon {
                     serde_json::to_value(v).map_err(super::memory::MemoryError::from)
                 });
                 let _ = reply.send(r);
+            }
+            Command::MemoryDream { dry_run, reply } => {
+                self.last_memory_activity = std::time::Instant::now();
+                // Scheduler for idle/cron is spawned in Daemon::spawn when dreaming.enabled;
+                // this handler just executes the pass. Dream uses dreaming agent/model
+                // (fallback agent.default_model) via dream prompt over last_accessed ASC 200;
+                // when no model configured it falls back to heuristic propose_compaction.
+                let cfg = self.memory.config().dreaming.clone();
+                let fallback = self
+                    .configured_agents
+                    .iter()
+                    .find(|a| a.id == cfg.agent)
+                    .and_then(|a| a.last_model.clone());
+                let _ = reply.send(self.memory.dream_with_config(
+                    dry_run,
+                    &cfg,
+                    fallback.as_deref(),
+                ));
             }
         }
     }

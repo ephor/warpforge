@@ -307,6 +307,52 @@ export default function SettingsView({ open, onOpenChange }: Props) {
             />
           </Section>
 
+          {/* ── Dreaming ── */}
+          <Section title="Dreaming">
+            <SettingRow
+              title="Dream now"
+              description="Run compaction: duplicates, contradictions, stale facts → pending proposals."
+              control={
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={async () => {
+                      const r: any = await (daemon as any).memoryDream?.(false);
+                      alert(r ? `Dream: ${r.inserted ?? 0} proposals` : "Dream triggered");
+                      queryClient.invalidateQueries({ queryKey: ["memory", "stats"] });
+                    }}
+                  >
+                    Dream
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={async () => {
+                      const r: any = await (daemon as any).memoryDream?.(true);
+                      alert(r ? `Dry run: ${r.inserted ?? 0} would propose` : "Dry run done");
+                    }}
+                  >
+                    Dry run
+                  </Button>
+                </div>
+              }
+            />
+            <SettingRow
+              title="Enabled"
+              description="Auto dreaming via idle/cron trigger (manual = button only)."
+              control={
+                <span className="text-xs text-muted-foreground">
+                  {(memoryStats.data as any)?.dreaming?.enabled ? "on" : "off"} ({(memoryStats.data as any)?.dreaming?.trigger ?? "manual"})
+                </span>
+              }
+            />
+          </Section>
+
           {/* ── Memory ── */}
           <Section title="Memory">
             <SettingRow

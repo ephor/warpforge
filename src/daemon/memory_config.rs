@@ -158,3 +158,17 @@ impl Default for DreamingConfig {
         }
     }
 }
+
+impl DreamingConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+    pub fn idle_duration(&self) -> std::time::Duration {
+        crate::daemon::memory_dream::parse_idle_after(&self.idle_after)
+    }
+    pub fn effective_model(&self, fallback: Option<&str>) -> Option<String> {
+        self.model
+            .clone()
+            .or_else(|| fallback.map(|s| s.to_string()))
+    }
+}
