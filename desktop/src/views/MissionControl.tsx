@@ -29,11 +29,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { withOccurrenceKeys } from "@/lib/renderKeys";
+import { attentionAction, attentionStatus } from "@/lib/attentionLabels";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { latestPendingPermission } from "@/lib/sessionPermissions";
 import { elapsed } from "@/lib/status";
 import {
-  awaitsReview,
   buildTaskGroupIndex,
   flattenTaskTree,
   isSettledTask,
@@ -87,20 +87,6 @@ const FOCUS_PANE_RAW_TAIL = 300;
 const GRID_SCROLL_EDGE = 48;
 const GRID_SCROLL_STEP = 24;
 const GRID_SCROLL_GAP = 8;
-
-function attentionStatus(item: AttentionItem): TaskBadgeStatus {
-  if (item.permission) return "permission";
-  if (item.task.workflowRun?.waiting) return "blocked";
-  return item.task.status;
-}
-
-function attentionAction(item: AttentionItem): string {
-  if (item.permission) return "Permission";
-  if (item.task.workflowRun?.waiting?.kind === "question") return "Answer";
-  if (item.task.workflowRun?.waiting?.kind === "limit") return "Choose next step";
-  if (awaitsReview(item.task)) return "Review";
-  return "Unblock";
-}
 
 function pointerClientY(event: Event): number | null {
   if ("clientY" in event && typeof event.clientY === "number") {
