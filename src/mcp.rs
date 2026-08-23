@@ -476,6 +476,32 @@ fn tool_defs(is_orchestrator: bool) -> Value {
                 "required": ["name"]
             }
         }),
+        json!({
+            "name": "create_task",
+            "description": "Create a new task on the board. Use for follow-up work discovered during implementation.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Project name. Defaults to the current project."
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Full task prompt / goal."
+                    },
+                    "agent": {
+                        "type": "string",
+                        "description": "Agent to run: claude, codex, opencode. Defaults to the current session's agent."
+                    },
+                    "workflow": {
+                        "type": "string",
+                        "description": "Optional workflow id (e.g. review-loop) to run the task through a pipeline."
+                    }
+                },
+                "required": ["prompt"]
+            }
+        }),
     ];
 
     if is_orchestrator {
@@ -1149,6 +1175,35 @@ async fn handle_tool_call(
             Ok(format!(
                 "{method} dispatched for '{pf_name}' in project '{project}'."
             ))
+        }
+        "create_task" => {
+            let prompt = args
+                .get("prompt")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'prompt' is required"))?;
+            let proj = args
+                .get("project")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    let p = project.trim();
+                    if p.is_empty() { None } else { Some(p.to_string()) }
+                })
+                .ok_or_else(|| anyhow!("project is required"))?;
+            let agent = args
+                .get("agent")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.to_string());
+            let workflow = args.get("workflow").and_then(Value::as_str).filter(|s| !s.trim().is_empty());
+            let mut params = json!({ "project": proj, "prompt": prompt });
+            if let Some(a) = agent { params["agent"] = json!(a); }
+            if let Some(w) = workflow { params["workflow"] = json!(w); }
+            let result = client.request("task.create", params).await?;
+            let id = result.get("taskId").and_then(Value::as_str).unwrap_or("?");
+            Ok(format!("Created task {id}"))
         }
         _ if !is_orchestrator => Err(anyhow!(
             "tool '{name}' is only available in an orchestrator session"
