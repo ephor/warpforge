@@ -18,8 +18,10 @@ import {
 
 import type { DaemonState } from "../daemon";
 import { buildAttentionQueue } from "../lib/attentionRail";
+import { buildFailureList } from "../lib/taskFailures";
 import { useUi } from "../store/ui";
 import { DecisionQueue } from "./mission-control/DecisionQueue";
+import { FailedSection } from "./mission-control/FailedSection";
 import { FocusGroupPane } from "./mission-control/FocusPane";
 import { OverviewMetric } from "./mission-control/OverviewMetric";
 
@@ -81,6 +83,14 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
   const attentionQueue = useMemo(
     () => buildAttentionQueue(state.snapshot.tasks, state.sessionUpdates),
     [state.sessionUpdates, state.snapshot.tasks],
+  );
+  const failures = useMemo(
+    () => buildFailureList(state.snapshot.tasks, state.sessionUpdates),
+    [state.snapshot.tasks, state.sessionUpdates],
+  );
+  const decisionItems = useMemo(
+    () => attentionQueue.filter((item) => item.task.status !== "interrupted"),
+    [attentionQueue],
   );
   const groupIndex = useMemo(
     () => buildTaskGroupIndex(state.snapshot.tasks),
@@ -192,8 +202,9 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
         {/* Full width, and alone: the per-project task list that used to sit
             beside it was the sidebar's tree redrawn flat, truncated and
             without its hierarchy — worse than the thing already on screen. */}
-        <section className="min-w-0">
-          <DecisionQueue items={attentionQueue} onOpenTask={onOpenTask} />
+        <section className="min-w-0 space-y-3">
+          <DecisionQueue items={decisionItems} onOpenTask={onOpenTask} />
+          <FailedSection failures={failures} onOpenTask={onOpenTask} />
         </section>
 
         <section aria-labelledby="pinned-work-heading" className="min-w-0">

@@ -159,6 +159,63 @@ describe("MissionControl overview", () => {
   });
 });
 
+describe("MissionControl failed section", () => {
+  it("filters interrupted out of decision queue and shows it under Failed with Retry", async () => {
+    const user = userEvent.setup();
+    const onOpenTask = vi.fn<(id: string) => void>();
+    const healthy = task({ id: "healthy", title: "Healthy task", status: "running" });
+    const interrupted = task({
+      id: "interrupted",
+      title: "Crashed work",
+      status: "interrupted",
+    });
+    render(
+      createElement(MissionControl, {
+        state: missionState([healthy, interrupted], {}),
+        onNewTask: vi.fn<(project?: string) => void>(),
+        onOpenTask,
+      }),
+    );
+
+    expect(screen.getByRole("heading", { name: "Decision queue" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Failed" })).toBeInTheDocument();
+    expect(screen.getByText("Nothing is waiting for you.")).toBeInTheDocument();
+    expect(screen.queryByText("No failures.")).not.toBeInTheDocument();
+    expect(screen.getByText("Crashed work")).toBeInTheDocument();
+    expect(screen.getByText("Retry")).toBeInTheDocument();
+    expect(screen.getByText("Interrupted")).toBeInTheDocument();
+    expect(screen.getByText("session lost on daemon restart")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Open Crashed work" }));
+    expect(onOpenTask).toHaveBeenCalledWith("interrupted");
+  });
+
+  it("shows a task whose updates end in a failed tool call under Failed", () => {
+    const failedTitle = "Run tests for the failing module";
+    render(
+      createElement(MissionControl, {
+        state: missionState([task({ id: "with-failure", title: "With failure", status: "running" })], {
+          "with-failure": [
+            {
+              kind: "tool_call",
+              status: "failed",
+              title: failedTitle,
+              tool_call_id: "t1",
+              tool_kind: "execute",
+            },
+          ],
+        }),
+        onNewTask: vi.fn<(project?: string) => void>(),
+        onOpenTask: vi.fn<(id: string) => void>(),
+      }),
+    );
+
+    expect(screen.getByRole("heading", { name: "Failed" })).toBeInTheDocument();
+    expect(screen.getByText(`tool call failed: ${failedTitle}`)).toBeInTheDocument();
+    expect(screen.getByText("With failure")).toBeInTheDocument();
+  });
+});
+
 /** Reference incremental fold, mirroring ChatTranscript.useCoalesced. */
 function incrementalCoalesce(prefix: SessionUpdate[], tail: SessionUpdate[]) {
   const merged = coalesceUpdates(prefix);
