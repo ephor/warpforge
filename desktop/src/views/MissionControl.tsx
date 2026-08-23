@@ -25,7 +25,7 @@ import { DecisionQueue } from "./mission-control/DecisionQueue";
 import { FailedSection } from "./mission-control/FailedSection";
 import { FocusGroupPane } from "./mission-control/FocusPane";
 import { LiveStrip } from "./mission-control/LiveStrip";
-import { OverviewMetric } from "./mission-control/OverviewMetric";
+const TAB_LABEL: Record<string, string> = { live: "Live", needs: "Needs you", failed: "Failed", pinned: "Pinned" };
 
 export { StreamLine } from "./mission-control/StreamLine";
 import { useGridAutoScroll } from "./mission-control/useGridAutoScroll";
@@ -49,9 +49,10 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
   const setPinnedLayout = useUi((s) => s.setPinnedLayout);
   const attentionTargetId = useUi((s) => s.attentionTargetId);
   const attentionTargetNonce = useUi((s) => s.attentionTargetNonce);
-  const { width, containerRef, mounted } = useContainerWidth();
+  const { width, containerRef } = useContainerWidth();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [boardHeight, setBoardHeight] = useState(0);
+  const [pinnedWidth, setPinnedWidth] = useState(0);
 
   const {
     beginGridInteraction,
@@ -110,6 +111,8 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
     () => live.filter((task) => task.status === "running" || task.status === "queued").length,
     [live],
   );
+  const activeTab = useUi((s) => s.missionControlTab);
+  const setActiveTab = useUi((s) => s.setMissionControlTab);
 
   const layout = useMemo<LayoutItem[]>(() => {
     return pinned.map((id) => {
@@ -157,6 +160,31 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
     [groupIndex, pinned, setPinnedTaskIds],
   );
 
+  // Pinned grid's container mounts only when tab active — measure directly,
+  // rAF loop covers the case where containerRef + width hook lag one frame.
+  useEffect(() => {
+    if (activeTab !== "pinned") return;
+    let raf = 0;
+    const tick = () => {
+      const w = containerRef.current?.clientWidth ?? 0;
+      if (w > 0) setPinnedWidth(w);
+      // also nudge the library hook
+      window.dispatchEvent(new Event("resize"));
+      // keep ticking until width settles
+      if (w === 0 || w !== width) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    const ro = new ResizeObserver(() => {
+      const w = containerRef.current?.clientWidth ?? 0;
+      if (w > 0) setPinnedWidth(w);
+    });
+    if (containerRef.current) ro.observe(containerRef.current);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
+  }, [activeTab, width]);
+
   const GRID_SCROLL_GAP = 8;
   const rowHeight =
     boardHeight > 0
@@ -187,101 +215,92 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
           </Button>
         </header>
 
-        {/* Two numbers that mean what they say. "Workstreams" went: it counted
-            root task trees under a word used nowhere else in the product, and
-            "Live work" used to headline `running` while its own caption
-            counted everything unfinished — the number contradicted its label. */}
-        <section aria-label="Workspace summary" className="grid gap-2 sm:grid-cols-2">
-          <OverviewMetric
-            label="Needs you"
-            value={attentionQueue.length}
-            detail="permissions, questions, and blocked work"
-            tone="warn"
-          />
-          <OverviewMetric
-            label="Running now"
-            value={runningCount}
-            detail={`${live.length} unfinished task${live.length === 1 ? "" : "s"}`}
-          />
-        </section>
+        <div role="tablist" className="flex gap-2 border-b border-border">
+          {(["live", "needs", "failed", "pinned"] as const).map((tab) => {
+            const count =
+              tab === "live"
+                ? runningCount
+                : tab === "needs"
+                  ? decisionItems.length
+                  : tab === "failed"
+                    ? failures.length
+                    : pinnedGroups.length;
+            const active = activeTab === tab;
+            return (
+              <button
+                key={tab}
+                role="tab"
+                aria-selected={active}
+                onClick={() => setActiveTab(tab)}
+                className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+              >
+                {TAB_LABEL[tab]} <span className={`ml-1 rounded-full px-1.5 py-0.5 text-xs ${active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>{count}</span>
+              </button>
+            );
+          })}
+        </div>
 
-        {/* Full width, and alone: the per-project task list that used to sit
-            beside it was the sidebar's tree redrawn flat, truncated and
-            without its hierarchy — worse than the thing already on screen. */}
-        <section className="min-w-0 space-y-3">
-          <DecisionQueue items={decisionItems} onOpenTask={onOpenTask} />
-          <FailedSection failures={failures} onOpenTask={onOpenTask} />
-        </section>
-
-        <LiveStrip items={liveStripItems} onOpenTask={onOpenTask} />
-
-        <section aria-labelledby="pinned-work-heading" className="min-w-0">
-          <div className="mb-2 flex items-end justify-between gap-3">
-            <div>
-              <h2 id="pinned-work-heading" className="text-sm font-semibold text-foreground">
-                Pinned work
-              </h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Live sessions you chose to keep visible.
-              </p>
-            </div>
-            {pinnedGroups.length > 0 && (
-              <span className="tnum text-xs text-muted-foreground">
-                {pinnedGroups.length} session{pinnedGroups.length === 1 ? "" : "s"}
-              </span>
+        {activeTab === "live" && (
+          <section className="min-w-0">
+            {liveStripItems.length > 0 ? (
+              <LiveStrip items={liveStripItems} onOpenTask={onOpenTask} />
+            ) : (
+              <p className="py-6 text-center text-sm text-muted-foreground">Nothing running — start a task.</p>
             )}
-          </div>
-
+          </section>
+        )}
+        {activeTab === "needs" && (
+          <section className="min-w-0">
+            <DecisionQueue items={decisionItems} onOpenTask={onOpenTask} hideHeader />
+          </section>
+        )}
+        {activeTab === "failed" && (
+          <section className="min-w-0">
+            <FailedSection failures={failures} onOpenTask={onOpenTask} hideHeader />
+          </section>
+        )}
+        {activeTab === "pinned" && (
+          <section aria-labelledby="pinned-work-heading" className="min-w-0">
           <div ref={containerRef} className="min-w-0 w-full">
-            {pinnedGroups.length > 0 ? (
-              mounted && width > 0 ? (
-                <ReactGridLayout
-                  className="layout"
-                  layout={layout}
-                  width={width}
-                  gridConfig={{
-                    cols: 4,
-                    rowHeight,
-                    margin: [8, 0],
-                    containerPadding: [0, 0],
-                  }}
-                  dragConfig={{ enabled: true }}
-                  resizeConfig={{
-                    enabled: true,
-                    handles: ["se", "sw", "ne", "nw", "n", "s", "e", "w"],
-                  }}
-                  onDragStart={beginGridInteraction}
-                  onDragStop={endGridInteraction}
-                  onResizeStart={beginResizeInteraction}
-                  onResize={handleResize}
-                  onResizeStop={revealResizedCard}
-                  onLayoutChange={handleLayoutChange}
-                >
-                  {pinnedGroups.map((tree) => (
-                    <div key={tree.task.id} className="h-full min-h-0">
-                      <FocusGroupPane
-                        tree={tree}
-                        updatesByTaskId={state.sessionUpdates}
-                        attentionTargetId={attentionTargetId}
-                        attentionTargetNonce={attentionTargetNonce}
-                        onUnpin={handleUnpin}
-                        onOpen={onOpenTask}
-                        agents={(state.snapshot.agents ?? []).filter((a) => a.enabled)}
-                      />
-                    </div>
-                  ))}
-                </ReactGridLayout>
-              ) : null
-            ) : live.length > 0 ? (
-              <div className="flex flex-col items-center gap-1 rounded-md border border-dashed border-border/70 px-4 py-8 text-center text-muted-foreground">
-                <p className="text-sm text-foreground">No pinned sessions.</p>
-                <p className="max-w-md text-xs">
-                  Pin sessions from the sidebar when you want them on the Mission Control board.
-                </p>
-              </div>
-            ) : null}
-          </div>
-        </section>
+              {pinnedGroups.length > 0 ? (
+                  <ReactGridLayout
+                    key={pinnedWidth || width}
+                    className="layout"
+                    layout={layout}
+                    width={pinnedWidth || width || 800}
+                    gridConfig={{ cols: 4, rowHeight, margin: [8, 0], containerPadding: [0, 0] }}
+                    dragConfig={{ enabled: true }}
+                    resizeConfig={{ enabled: true, handles: ["se", "sw", "ne", "nw", "n", "s", "e", "w"] }}
+                    onDragStart={beginGridInteraction}
+                    onDragStop={endGridInteraction}
+                    onResizeStart={beginResizeInteraction}
+                    onResize={handleResize}
+                    onResizeStop={revealResizedCard}
+                    onLayoutChange={handleLayoutChange}
+                  >
+                    {pinnedGroups.map((tree) => (
+                      <div key={tree.task.id} className="h-full min-h-0">
+                        <FocusGroupPane
+                          tree={tree}
+                          updatesByTaskId={state.sessionUpdates}
+                          attentionTargetId={attentionTargetId}
+                          attentionTargetNonce={attentionTargetNonce}
+                          onUnpin={handleUnpin}
+                          onOpen={onOpenTask}
+                          agents={(state.snapshot.agents ?? []).filter((a) => a.enabled)}
+                        />
+                      </div>
+                    ))}
+                  </ReactGridLayout>
+                ) : (
+                <div className="flex flex-col items-center gap-1 rounded-md border border-dashed border-border/70 px-4 py-8 text-center text-muted-foreground">
+                  <p className="text-sm text-foreground">No pinned sessions.</p>
+                  <p className="max-w-md text-xs">Pin sessions from the sidebar when you want them on the Mission Control board.</p>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         {live.length === 0 && attentionQueue.length === 0 ? (
           <div className="flex flex-col items-center gap-3 rounded-md border border-dashed border-border/70 px-4 py-10 text-center text-muted-foreground">

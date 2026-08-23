@@ -29,22 +29,14 @@ export const LiveStrip = memo(function LiveStrip({ items, nowMs, onOpenTask }: L
   const effectiveNow = nowMs ?? tick;
 
   return (
-    <section aria-labelledby="live-strip-heading" className="min-w-0">
-      <div className="mb-2 flex items-end justify-between gap-3">
-        <h2 id="live-strip-heading" className="text-sm font-semibold text-foreground">
-          Live
-        </h2>
-        <span className="tnum text-xs text-muted-foreground">
-          {items.length} session{items.length === 1 ? "" : "s"}
-        </span>
-      </div>
-      <div className="flex gap-2 overflow-x-auto pb-1">
+    <section aria-label="Live sessions" className="min-w-0">
+      <div className="flex flex-col gap-2">
         {items.map((item) => (
           <button
             key={item.taskId}
             type="button"
             onClick={() => onOpenTask?.(item.taskId)}
-            className="flex min-w-56 max-w-72 flex-col gap-1 rounded-md border border-border p-2 text-left hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="flex w-full flex-col gap-1 rounded-md border border-border p-3 text-left hover:bg-secondary/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           >
             <span className="flex w-full items-center gap-2">
               <span className={cn("truncate text-xs font-semibold", TONE_CLASS[item.tone])}>
@@ -53,14 +45,17 @@ export const LiveStrip = memo(function LiveStrip({ items, nowMs, onOpenTask }: L
               <span className="ml-auto shrink-0 tnum text-[11px] text-muted-foreground">
                 {item.startedAt !== null ? formatElapsed(item.startedAt, effectiveNow) : ""}
               </span>
+              {item.toolCount > 0 && (
+                <span className="shrink-0 text-[11px] text-muted-foreground">{item.toolCount} tools</span>
+              )}
             </span>
+            <span className="truncate text-sm font-medium text-foreground">{item.title}</span>
             {item.detail ? (
               <span className="truncate text-xs text-muted-foreground">{item.detail}</span>
             ) : null}
             {item.previewText ? (
               <span className="line-clamp-2 text-xs text-muted-foreground/90">{item.previewText}</span>
             ) : null}
-            <span className="truncate text-xs font-medium text-foreground">{item.title}</span>
           </button>
         ))}
       </div>

@@ -87,8 +87,7 @@ describe("LiveStrip", () => {
       },
     ];
     render(createElement(LiveStrip, { items, nowMs }));
-    expect(screen.getByText("Live")).toBeInTheDocument();
-    expect(screen.getByText("1 session")).toBeInTheDocument();
+
     expect(screen.getByText("working")).toBeInTheDocument();
     expect(screen.getByText("checking tool output")).toBeInTheDocument();
     expect(screen.getByText("hello preview")).toBeInTheDocument();
@@ -122,7 +121,7 @@ describe("LiveStrip", () => {
       },
     ];
     render(createElement(LiveStrip, { items, nowMs }));
-    expect(screen.getByText("2 sessions")).toBeInTheDocument();
+
     expect(screen.getByRole("button", { name: /Alpha/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Beta/ })).toBeInTheDocument();
   });
@@ -159,7 +158,6 @@ describe("LiveStrip", () => {
     const items = buildLiveStripItems(live, state.sessionUpdates, new Set());
     expect(items).toHaveLength(2);
     render(createElement(LiveStrip, { items, nowMs: 1000 }));
-    expect(screen.getByText("2 sessions")).toBeInTheDocument();
     expect(screen.getByText("Running one")).toBeInTheDocument();
     expect(screen.getByText("Running two")).toBeInTheDocument();
     expect(screen.queryByText("Waiting one")).not.toBeInTheDocument();

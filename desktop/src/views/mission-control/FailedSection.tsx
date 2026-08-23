@@ -29,26 +29,30 @@ function failureKindLabel(kind: FailureKind): string {
 export function FailedSection({
   failures,
   onOpenTask,
+  hideHeader,
 }: {
   failures: FailedItem[];
   onOpenTask: (id: string) => void;
+  hideHeader?: boolean;
 }) {
   return (
     <Card className="min-w-0 overflow-hidden rounded-md border-border/70 bg-card/35 shadow-none">
-      <div className="flex items-start gap-3 border-b border-border/60 px-3 py-3">
-        <CircleX className="mt-0.5 size-4 shrink-0 text-destructive" />
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-foreground">Failed</h2>
-            <span className="tnum rounded-full bg-destructive/10 px-1.5 py-px text-[11px] text-destructive">
-              {failures.length}
-            </span>
+      {!hideHeader && (
+        <div className="flex items-start gap-3 border-b border-border/60 px-3 py-3">
+          <CircleX className="mt-0.5 size-4 shrink-0 text-destructive" />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-foreground">Failed</h2>
+              <span className="tnum rounded-full bg-destructive/10 px-1.5 py-px text-[11px] text-destructive">
+                {failures.length}
+              </span>
+            </div>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Something went wrong — open to retry.
+            </p>
           </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Something went wrong — open to retry.
-          </p>
         </div>
-      </div>
+      )}
       {failures.length === 0 ? (
         <div className="px-3 py-8 text-center text-sm text-muted-foreground">No failures.</div>
       ) : (

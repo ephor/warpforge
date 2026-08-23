@@ -117,6 +117,7 @@ interface UiState extends SettingsState {
   projectSurfaceByProject: Record<string, ProjectSurface>;
   pinnedTaskIds: string[];
   pinnedLayout: Record<string, PinnedTileLayout>;
+  missionControlTab: "live" | "needs" | "failed" | "pinned";
   sidebarWidth: number;
   /** Sidebar shrunk to its icon rail. */
   sidebarCollapsed: boolean;
@@ -149,6 +150,7 @@ interface UiState extends SettingsState {
   togglePinnedTask: (id: string) => void;
   setPinnedTaskIds: (ids: string[]) => void;
   setPinnedLayout: (id: string, layout: PinnedTileLayout) => void;
+  setMissionControlTab: (tab: "live" | "needs" | "failed" | "pinned") => void;
   setSidebarWidth: (w: number) => void;
   toggleSidebarCollapsed: () => void;
   toggleFilesPanelCollapsed: () => void;
@@ -183,6 +185,7 @@ export const useUi = create<UiState>()(
       projectSurfaceByProject: {},
       pinnedTaskIds: [],
       pinnedLayout: {},
+      missionControlTab: "live" as const,
       sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
       sidebarCollapsed: false,
       filesPanelCollapsed: false,
@@ -263,6 +266,7 @@ export const useUi = create<UiState>()(
         set((s) => ({
           pinnedLayout: { ...s.pinnedLayout, [id]: layout },
         })),
+      setMissionControlTab: (missionControlTab) => set({ missionControlTab }),
       setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: clampSidebarWidth(sidebarWidth) }),
       toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
       toggleFilesPanelCollapsed: () =>

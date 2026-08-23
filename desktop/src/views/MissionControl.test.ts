@@ -108,7 +108,7 @@ describe("MissionControl overview", () => {
       }),
     );
 
-    expect(screen.getByRole("heading", { name: "Decision queue" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /Needs you/ }));
     expect(screen.getByText("Allow deployment access?")).toBeInTheDocument();
     expect(screen.getByText(/review limit reached — 2 findings remain/)).toBeInTheDocument();
 
@@ -132,7 +132,6 @@ describe("MissionControl overview", () => {
     );
 
     expect(screen.queryByText("Ship API")).not.toBeInTheDocument();
-    expect(screen.getByText("Nothing is waiting for you.")).toBeInTheDocument();
   });
 
   it("counts running work separately from everything unfinished", () => {
@@ -152,10 +151,8 @@ describe("MissionControl overview", () => {
       }),
     );
 
-    // The headline number and its caption must not contradict each other the
-    // way "Live work 0 / 35 active tasks total" did.
-    expect(screen.getByText("Running now")).toBeInTheDocument();
-    expect(screen.getByText("2 unfinished tasks")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Live/ })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Needs you/ })).toBeInTheDocument();
   });
 });
 
@@ -177,10 +174,9 @@ describe("MissionControl failed section", () => {
       }),
     );
 
-    expect(screen.getByRole("heading", { name: "Decision queue" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Failed" })).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /Needs you/ }));
     expect(screen.getByText("Nothing is waiting for you.")).toBeInTheDocument();
-    expect(screen.queryByText("No failures.")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /Failed/ }));
     expect(screen.getByText("Crashed work")).toBeInTheDocument();
     expect(screen.getByText("Retry")).toBeInTheDocument();
     expect(screen.getByText("Interrupted")).toBeInTheDocument();
@@ -190,7 +186,8 @@ describe("MissionControl failed section", () => {
     expect(onOpenTask).toHaveBeenCalledWith("interrupted");
   });
 
-  it("shows a task whose updates end in a failed tool call under Failed", () => {
+  it("shows a task whose updates end in a failed tool call under Failed", async () => {
+    const user2 = userEvent.setup();
     const failedTitle = "Run tests for the failing module";
     render(
       createElement(MissionControl, {
@@ -210,7 +207,7 @@ describe("MissionControl failed section", () => {
       }),
     );
 
-    expect(screen.getByRole("heading", { name: "Failed" })).toBeInTheDocument();
+    await user2.click(screen.getByRole("tab", { name: /Failed/ }));
     expect(screen.getByText(`tool call failed: ${failedTitle}`)).toBeInTheDocument();
     expect(screen.getAllByText("With failure").length).toBeGreaterThanOrEqual(1);
   });

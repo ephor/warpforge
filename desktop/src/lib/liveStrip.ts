@@ -1,4 +1,5 @@
 import type { SessionUpdate, TaskInfo } from "../protocol";
+import { latestPendingPermission } from "./sessionPermissions";
 import { latestSessionPreview } from "./sessionPreview";
 import { sessionActivity, type SessionActivity } from "./sessionActivity";
 import { coalesceTailUpdates } from "./sessionStream";
@@ -24,19 +25,24 @@ export function buildLiveStripItems(
     if (excludeTaskIds.has(task.id)) continue;
     if (task.status !== "running") continue;
     const updates = updatesByTaskId[task.id] ?? [];
+    // Don't show permission-blocked tasks in Live — they belong in Needs you
+    if (latestPendingPermission(task.id, updates)) continue;
     const tail = coalesceTailUpdates(updates, 300);
     const activity = sessionActivity(task, tail);
-    if (!activity) continue;
+    if (!activity) {
+      const isTurnEnded = tail.length > 0 && tail[tail.length - 1]?.kind === "turn_ended";
+      if (isTurnEnded) continue;
+    }
     const preview = latestSessionPreview(updates, { active: true });
     const toolCount = tail.filter((u) => u.kind === "tool_call").length;
     items.push({
-      detail: activity.detail ?? "",
-      label: activity.label ?? "working",
+      detail: activity?.detail ?? "",
+      label: activity?.label ?? "working",
       previewText: preview?.text ?? null,
-      startedAt: activity.startedAt ?? null,
+      startedAt: activity?.startedAt ?? null,
       taskId: task.id,
       title: task.title,
-      tone: activity.tone ?? "working",
+      tone: activity?.tone ?? "working",
       toolCount,
     });
   }

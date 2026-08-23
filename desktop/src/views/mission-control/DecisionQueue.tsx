@@ -14,24 +14,28 @@ import { decisionActionKinds } from "../../lib/decisionActions";
 export function DecisionQueue({
   items,
   onOpenTask,
+  hideHeader,
 }: {
   items: AttentionItem[];
   onOpenTask: (id: string) => void;
+  hideHeader?: boolean;
 }) {
   return (
     <Card className="min-w-0 overflow-hidden rounded-md border-border/70 bg-card/35 shadow-none">
-      <div className="flex items-start gap-3 border-b border-border/60 px-3 py-3">
-        <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" />
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-foreground">Decision queue</h2>
-            <span className="tnum rounded-full bg-warn/10 px-1.5 py-px text-[11px] text-warn">
-              {items.length}
-            </span>
+      {!hideHeader && (
+        <div className="flex items-start gap-3 border-b border-border/60 px-3 py-3">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warn" />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-foreground">Decision queue</h2>
+              <span className="tnum rounded-full bg-warn/10 px-1.5 py-px text-[11px] text-warn">
+                {items.length}
+              </span>
+            </div>
+            <p className="mt-0.5 text-xs text-muted-foreground">Only work blocked on human input.</p>
           </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">Only work blocked on human input.</p>
         </div>
-      </div>
+      )}
       {items.length === 0 ? (
         <div className="px-3 py-8 text-center text-sm text-muted-foreground">
           Nothing is waiting for you.
