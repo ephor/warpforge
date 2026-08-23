@@ -784,4 +784,5 @@ export interface MemoryStats {
     global: boolean;
     project: boolean;
   };
+  perProjectDbExists: boolean;
 }

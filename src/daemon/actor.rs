@@ -1263,6 +1263,16 @@ pub enum Command {
         mode: String,
         reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
     },
+    MemoryAddEdge {
+        src_id: String,
+        dst_id: String,
+        relation: String,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryEdges {
+        id: String,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
     Shutdown {
         reply: oneshot::Sender<()>,
     },
@@ -1715,6 +1725,34 @@ impl DaemonHandle {
         let (tx, rx) = oneshot::channel();
         self.send(Command::SetMemoryEmbedding {
             mode: mode.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+    pub async fn memory_add_edge(
+        &self,
+        src: &str,
+        dst: &str,
+        rel: &str,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryAddEdge {
+            src_id: src.into(),
+            dst_id: dst.into(),
+            relation: rel.into(),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+    pub async fn memory_edges(
+        &self,
+        id: &str,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryEdges {
+            id: id.into(),
             reply: tx,
         })
         .await;
@@ -5770,6 +5808,26 @@ impl Daemon {
                     serde_json::to_value(s).map_err(super::memory::MemoryError::from)
                 });
                 let _ = reply.send(result);
+            }
+            Command::MemoryAddEdge {
+                src_id,
+                dst_id,
+                relation,
+                reply,
+            } => {
+                let r = self
+                    .memory
+                    .add_edge(&src_id, &dst_id, &relation)
+                    .and_then(|e| {
+                        serde_json::to_value(e).map_err(super::memory::MemoryError::from)
+                    });
+                let _ = reply.send(r);
+            }
+            Command::MemoryEdges { id, reply } => {
+                let r = self.memory.list_edges(&id).and_then(|v| {
+                    serde_json::to_value(v).map_err(super::memory::MemoryError::from)
+                });
+                let _ = reply.send(r);
             }
         }
     }

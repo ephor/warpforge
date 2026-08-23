@@ -708,6 +708,15 @@ async fn dispatch(
             .set_memory_embedding(&mode)
             .await
             .map_err(memory_error),
+        MemoryAddEdge {
+            src_id,
+            dst_id,
+            relation,
+        } => handle
+            .memory_add_edge(&src_id, &dst_id, &relation)
+            .await
+            .map_err(memory_error),
+        MemoryEdges { id } => handle.memory_edges(&id).await.map_err(memory_error),
         DiffResolveHunk {
             task_id,
             file,

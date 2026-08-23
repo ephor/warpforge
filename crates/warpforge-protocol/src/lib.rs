@@ -344,6 +344,14 @@ pub enum Method {
     /// all-MiniLM-L6-v2 (~80 MB) on first use; falls back to FTS when offline.
     #[serde(rename = "memory.setEmbedding")]
     MemorySetEmbedding { mode: String },
+    #[serde(rename = "memory.addEdge")]
+    MemoryAddEdge {
+        src_id: String,
+        dst_id: String,
+        relation: String,
+    },
+    #[serde(rename = "memory.edges")]
+    MemoryEdges { id: String },
 
     // ── Agent registry ──
     /// Detect installed ACP-capable agents. Returns `{ detected: DetectedAgent[] }`.

@@ -59,6 +59,15 @@ CREATE TABLE IF NOT EXISTS memory_compaction_log (
     created_at     INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS memory_edges (
+    src_id TEXT NOT NULL,
+    dst_id TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (src_id, dst_id, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_edges_src ON memory_edges(src_id);
+CREATE INDEX IF NOT EXISTS idx_memory_edges_dst ON memory_edges(dst_id);
 "#;
 
 pub struct MemoryStore {
@@ -296,11 +305,29 @@ impl MemoryStore {
         project_id: Option<&str>,
         created_by: Option<&str>,
     ) -> Result<Memory, MemoryError> {
-        let conn = self.guard()?;
         let project_id = project_id
             .filter(|p| !p.trim().is_empty())
             .map(str::to_string);
         let scope = self.resolve_write_scope(scope, project_id.as_deref())?;
+        if let Some(pid) = scope.strip_prefix("project:").map(|s| s.to_string()) {
+            let should_overlay = Self::resolve_project_db(Some(&pid)).is_some()
+                || self.config.per_project.unwrap_or(false);
+            if should_overlay {
+                let path = Self::project_db_path(&pid);
+                let pconn = Self::open_project_at(&path)?;
+                return Self::store_on_conn(
+                    &pconn,
+                    &self.embed,
+                    project_id,
+                    scope,
+                    content,
+                    kind,
+                    tags,
+                    created_by,
+                );
+            }
+        }
+        let conn = self.guard()?;
         let kind = clamp_kind(kind);
         let tags = tags.unwrap_or(&[]).to_vec();
         let tags_json = serde_json::to_string(&tags)?;
@@ -371,7 +398,30 @@ impl MemoryStore {
         limit: Option<u32>,
         mode: Option<&str>,
     ) -> Result<Vec<Memory>, MemoryError> {
+        // Per-project overlay is primary for project-scoped reads
+        if let Some(pid) = scope.and_then(|s| s.strip_prefix("project:")) {
+            if let Some(path) = Self::resolve_project_db(Some(pid)) {
+                let pconn = Self::open_project_at(&path)?;
+                return self.search_on_conn(&pconn, query, scope, limit, mode);
+            }
+        }
+        // scope=project without id -> try any overlay via project DB; else global
+        if scope == Some("project") {
+            // if any project DB exists and caller wants project, search global still (no single pid)
+            // fallthrough to global
+        }
         let conn = self.guard()?;
+        self.search_on_conn(conn, query, scope, limit, mode)
+    }
+
+    fn search_on_conn(
+        &self,
+        conn: &Connection,
+        query: &str,
+        scope: Option<&str>,
+        limit: Option<u32>,
+        mode: Option<&str>,
+    ) -> Result<Vec<Memory>, MemoryError> {
         let sanitized = sanitize_query(query);
         if sanitized.is_empty() {
             return Ok(Vec::new());
@@ -534,9 +584,26 @@ impl MemoryStore {
         limit: Option<u32>,
         offset: Option<u32>,
     ) -> Result<Vec<Memory>, MemoryError> {
+        if let Some(pid) = scope.and_then(|s| s.strip_prefix("project:")) {
+            if let Some(path) = Self::resolve_project_db(Some(pid)) {
+                let pconn = Self::open_project_at(&path)?;
+                return Self::list_on_conn(&pconn, self, scope, kind, limit, offset);
+            }
+        }
         let conn = self.guard()?;
+        Self::list_on_conn(conn, self, scope, kind, limit, offset)
+    }
+
+    fn list_on_conn(
+        conn: &Connection,
+        store: &Self,
+        scope: Option<&str>,
+        kind: Option<&str>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<Memory>, MemoryError> {
         let mut conditions = Vec::new();
-        let predicate = self.scope_predicate(scope);
+        let predicate = store.scope_predicate(scope);
         if !predicate.is_empty() {
             conditions.push(predicate);
         }
@@ -637,13 +704,218 @@ impl MemoryStore {
                 global: self.config.global,
                 project: self.config.project,
             },
+            per_project_db_exists: Self::any_project_db_exists(),
         })
+    }
+
+    // ── v2: graph ──
+    pub fn add_edge(
+        &self,
+        src_id: &str,
+        dst_id: &str,
+        relation: &str,
+    ) -> Result<super::memory_types::Edge, MemoryError> {
+        let conn = self.guard()?;
+        let relation = clamp_relation(relation);
+        for id in [src_id, dst_id] {
+            if content_of(conn, id)?.is_none() {
+                return Err(MemoryError::Other(anyhow::anyhow!(
+                    "memory '{id}' not found"
+                )));
+            }
+        }
+        let now = now_secs() as i64;
+        conn.execute(
+            "INSERT OR IGNORE INTO memory_edges (src_id,dst_id,relation,created_at) VALUES (?1,?2,?3,?4)",
+            params![src_id, dst_id, relation, now],
+        )?;
+        Ok(super::memory_types::Edge {
+            src_id: src_id.into(),
+            dst_id: dst_id.into(),
+            relation,
+            created_at: now,
+        })
+    }
+    pub fn list_edges(&self, id: &str) -> Result<Vec<super::memory_types::Edge>, MemoryError> {
+        let conn = self.guard()?;
+        let mut stmt = conn.prepare("SELECT src_id,dst_id,relation,created_at FROM memory_edges WHERE src_id=?1 OR dst_id=?1")?;
+        let rows = stmt.query_map(params![id], |r| {
+            Ok(super::memory_types::Edge {
+                src_id: r.get(0)?,
+                dst_id: r.get(1)?,
+                relation: r.get(2)?,
+                created_at: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    fn any_project_db_exists() -> bool {
+        let base = dirs::home_dir()
+            .map(|h| h.join(".warpforge/projects"))
+            .unwrap_or_default();
+        if let Ok(entries) = std::fs::read_dir(&base) {
+            for e in entries.flatten() {
+                if e.path().join(".warpforge/memory.db").exists() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Per-project overlay path. Returns Some(path) if file exists.
+    /// Sanitizes: rejects empty, `..`, `/`, `\`.
+    pub fn resolve_project_db(project_id: Option<&str>) -> Option<PathBuf> {
+        let pid = project_id?;
+        if pid.is_empty() || pid.contains('/') || pid.contains('\\') || pid.contains("..") {
+            return None;
+        }
+        // Check env override and home heuristic
+        for base in [
+            std::env::var("WARP_PROJECTS_DIR").ok().map(PathBuf::from),
+            dirs::home_dir().map(|h| h.join(".warpforge/projects").join(pid)),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let p = base.join(".warpforge/memory.db");
+            // base already includes pid for home case; for env var, pid subdir
+            let candidate = if base.ends_with(pid) {
+                p
+            } else {
+                base.join(pid).join(".warpforge/memory.db")
+            };
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        // Also check pid as direct path (tests)
+        let direct = PathBuf::from(pid).join(".warpforge/memory.db");
+        if direct.exists() {
+            return Some(direct);
+        }
+        None
+    }
+
+    pub fn per_project_db_exists_for(&self, project_id: Option<&str>) -> bool {
+        Self::resolve_project_db(project_id).is_some()
+    }
+
+    fn project_db_path(pid: &str) -> PathBuf {
+        if let Ok(base) = std::env::var("WARP_PROJECTS_DIR") {
+            return PathBuf::from(base).join(pid).join(".warpforge/memory.db");
+        }
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".warpforge/projects")
+            .join(pid)
+            .join(".warpforge/memory.db")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn store_on_conn(
+        conn: &Connection,
+        embed: &Mutex<EmbedEngine>,
+        project_id: Option<String>,
+        scope: String,
+        content: &str,
+        kind: Option<&str>,
+        tags: Option<&[String]>,
+        created_by: Option<&str>,
+    ) -> Result<Memory, MemoryError> {
+        let kind = clamp_kind(kind);
+        let tags = tags.unwrap_or(&[]).to_vec();
+        let tags_json = serde_json::to_string(&tags)?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = now_secs() as i64;
+        conn.execute(
+            "INSERT INTO memories (id,project_id,scope,kind,content,created_at,updated_at,last_accessed,created_by,superseded_by,tags) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![id, project_id, scope, kind, content, now, now, now, created_by, None::<String>, tags_json],
+        )?;
+        conn.execute(
+            "INSERT INTO memories_fts (id, content) VALUES (?1, ?2)",
+            params![id, content],
+        )?;
+        let rowid = conn.last_insert_rowid();
+        // inline embedding index
+        {
+            let mut eng = embed.lock().unwrap();
+            if eng.is_enabled() {
+                if let Some(vec) = eng.embed(&[content]).and_then(|mut v| v.pop()) {
+                    let blob = f32_to_blob(&vec);
+                    conn.execute(
+                        "INSERT INTO memories_vec (rowid, embedding) VALUES (?1, ?2)",
+                        params![rowid, blob],
+                    )?;
+                }
+            }
+        }
+        load_by_id(conn, &id)
+    }
+
+    fn open_project_at(path: &Path) -> Result<Connection> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).ok();
+        }
+        ensure_vec_extension();
+        let conn = Connection::open(path)?;
+        conn.pragma_update(None, "journal_mode", "WAL").ok();
+        conn.execute_batch(SCHEMA)?;
+        seed_meta(&conn)?;
+        Ok(conn)
+    }
+
+    /// Heuristic compaction: find duplicates (same content) and stale (old + low access), log pending proposals.
+    /// Idempotent: skips if identical pending proposal already exists.
+    pub fn propose_compaction(&self) -> Result<usize, MemoryError> {
+        let conn = self.guard()?;
+        let now = now_secs() as i64;
+        let stale_cutoff = now - 30 * 24 * 3600;
+        let mut count = 0;
+        let mut stmt = conn.prepare(
+            "SELECT GROUP_CONCAT(id, ',') FROM memories GROUP BY content HAVING COUNT(*)>1",
+        )?;
+        let dup_rows: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for ids in dup_rows {
+            let exists: i64 = conn.query_row("SELECT COUNT(*) FROM memory_compaction_log WHERE proposal_type='duplicate' AND target_ids=?1 AND status='pending'", params![ids], |r| r.get(0))?;
+            if exists == 0 {
+                conn.execute("INSERT INTO memory_compaction_log (proposal_type,target_ids,reason,status,created_at) VALUES ('duplicate',?1,'duplicate content','pending',?2)", params![ids, now])?;
+                count += 1;
+            }
+        }
+        // stale: one proposal per stale id to keep granularity
+        let mut stmt2 =
+            conn.prepare("SELECT id FROM memories WHERE last_accessed < ?1 AND updated_at < ?1")?;
+        let stale_ids: Vec<String> = stmt2
+            .query_map(params![stale_cutoff], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for id in stale_ids {
+            let exists: i64 = conn.query_row("SELECT COUNT(*) FROM memory_compaction_log WHERE proposal_type='stale' AND target_ids=?1 AND status='pending'", params![id.clone()], |r| r.get(0))?;
+            if exists == 0 {
+                conn.execute("INSERT INTO memory_compaction_log (proposal_type,target_ids,reason,status,created_at) VALUES ('stale',?1,'stale 30d','pending',?2)", params![id, now])?;
+                count += 1;
+            }
+        }
+        Ok(count)
     }
 }
 
 // ── Helpers ──
 
 const KINDS: &[&str] = &["fact", "decision", "preference", "gotcha", "note"];
+const RELATIONS: &[&str] = &["related", "supports", "contradicts", "supersedes"];
+fn clamp_relation(r: &str) -> String {
+    let lower = r.trim().to_lowercase();
+    if RELATIONS.contains(&lower.as_str()) {
+        lower
+    } else {
+        "related".into()
+    }
+}
+// TODO(cross-encoder): benchmark cross-encoder reranker (e.g. MiniLM cross-encoder) on recall tasks before enabling; see spec §11.
 
 fn valid_kind(kind: &str) -> Option<&str> {
     KINDS.iter().copied().find(|k| *k == kind)

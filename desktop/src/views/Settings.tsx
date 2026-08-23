@@ -362,6 +362,15 @@ export default function SettingsView({ open, onOpenChange }: Props) {
                 </span>
               }
             />
+            <SettingRow
+              title="Per-project DB"
+              description="~/.warpforge/memory.db is global; <project>/.warpforge/memory.db overlay when file exists."
+              control={
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {memoryStats.isLoading ? "…" : memoryStats.data?.perProjectDbExists ? "exists" : "not found (global fallback)"}
+                </span>
+              }
+            />
           </Section>
 
           {/* ── Text generation ── */}

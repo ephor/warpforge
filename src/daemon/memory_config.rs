@@ -49,6 +49,8 @@ pub struct MemoryConfig {
     #[serde(default = "default_embedding")]
     pub embedding: String,
     #[serde(default)]
+    pub per_project: Option<bool>,
+    #[serde(default)]
     pub dreaming: DreamingConfig,
 }
 
@@ -59,6 +61,7 @@ impl Default for MemoryConfig {
             global: true,
             project: true,
             embedding: "none".into(),
+            per_project: None,
             dreaming: DreamingConfig::default(),
         }
     }
