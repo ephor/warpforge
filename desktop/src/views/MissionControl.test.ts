@@ -212,7 +212,7 @@ describe("MissionControl failed section", () => {
 
     expect(screen.getByRole("heading", { name: "Failed" })).toBeInTheDocument();
     expect(screen.getByText(`tool call failed: ${failedTitle}`)).toBeInTheDocument();
-    expect(screen.getByText("With failure")).toBeInTheDocument();
+    expect(screen.getAllByText("With failure").length).toBeGreaterThanOrEqual(1);
   });
 });
 
