@@ -119,6 +119,7 @@ impl MemoryStore {
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.execute_batch(SCHEMA)?;
         migrate_fts_tags(&conn)?;
+        clean_vec_orphans(&conn);
         seed_meta(&conn)?;
         Ok(Self {
             conn: Some(conn),
@@ -1050,7 +1051,7 @@ impl MemoryStore {
                 if let Some(vec) = eng.embed(&[content]).and_then(|mut v| v.pop()) {
                     let blob = f32_to_blob(&vec);
                     conn.execute(
-                        "INSERT INTO memories_vec (rowid, embedding) VALUES (?1, ?2)",
+                        "INSERT OR REPLACE INTO memories_vec (rowid, embedding) VALUES (?1, ?2)",
                         params![rowid, blob],
                     )?;
                 }
@@ -1068,6 +1069,7 @@ impl MemoryStore {
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.execute_batch(SCHEMA)?;
         migrate_fts_tags(&conn)?;
+        clean_vec_orphans(&conn);
         seed_meta(&conn)?;
         if embeddings {
             conn.execute_batch(&vec_table_sql())?;
@@ -1380,6 +1382,15 @@ fn sanitize_project_id(pid: &str) -> bool {
         && pid
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+fn clean_vec_orphans(conn: &Connection) {
+    // Remove vec rows whose memories rowid no longer exists (orphans left by
+    // pre-txn bug where vec rowid was taken from FTS). Best-effort, ignore errors if vec0 missing.
+    let _ = conn.execute(
+        "DELETE FROM memories_vec WHERE rowid NOT IN (SELECT rowid FROM memories)",
+        [],
+    );
 }
 
 /// Auto-migrate old FTS table (without `tags` column) to new schema.
