@@ -14,12 +14,13 @@
 
 <p align="center">
   <a href="#install">Install</a> ·
-  <a href="https://docs.warpforge.dev">Docs</a> ·
+  <a href="https://docs.warpforge.dev/overview/">Docs</a> ·
   <a href="https://docs.warpforge.dev/concepts/why-warpforge/">Why Warpforge?</a> ·
   <a href="https://docs.warpforge.dev/concepts/agents/">Agents</a> ·
-  <a href="https://docs.warpforge.dev/concepts/orchestration/">Orchestration &amp; workflows</a> ·
-  <a href="https://docs.warpforge.dev/guides/projects-and-runtime/">Projects &amp; runtime</a> ·
-  <a href="https://docs.warpforge.dev/getting-started/build-from-source/">Build from source</a>
+  <a href="https://docs.warpforge.dev/concepts/memory/">Memory</a> ·
+  <a href="https://docs.warpforge.dev/guides/choosing-your-mode/">Modes</a> ·
+  <a href="https://docs.warpforge.dev/reference/mcp-tools/">Agent tools</a> ·
+  <a href="https://docs.warpforge.dev/guides/projects-and-runtime/">Projects &amp; runtime</a>
 </p>
 
 <p align="center">
@@ -84,7 +85,15 @@ A regular task is one conversation with one agent. Enable **Orchestrator** and t
   <img src="docs/images/workflow-pipeline.png" alt="Workflow pipeline with implement, review, and fix stages and a reviewer verdict" width="100%">
 </p>
 
-Details in **[Orchestration and workflows](https://docs.warpforge.dev/concepts/orchestration/)**.
+Details in **[Orchestration and workflows](https://docs.warpforge.dev/concepts/orchestration/)** — and **[Choosing your mode](https://docs.warpforge.dev/guides/choosing-your-mode/)** for when each is worth its cost.
+
+## One memory, every harness
+
+Claude Code reads `CLAUDE.md`, Codex reads `AGENTS.md`, opencode reads its own — teach one, and the other two still don't know. Warpforge gives them a single local store instead, with global and per-project scopes, full-text plus optional local-embedding search, and a **dreaming** pass that reviews stored facts against the codebase and *proposes* merges and corrections for you to approve — it never rewrites memory on its own.
+
+Agents reach it through the same tool surface they use for everything else: **[31 MCP tools](https://docs.warpforge.dev/reference/mcp-tools/)** covering the runtime (read a service's logs, restart it), the board (file a task), memory, and — for orchestrators — sub-agents and pipelines.
+
+More in **[Cross-harness memory](https://docs.warpforge.dev/concepts/memory/)**.
 
 ## Projects and their runtime
 

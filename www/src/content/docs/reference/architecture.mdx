@@ -8,8 +8,10 @@ sidebar:
 
 - **Desktop:** Tauri 2, React, TypeScript, Vite, Tailwind CSS, CodeMirror, xterm.js
 - **Core and daemon:** Rust, Tokio, SQLite, local WebSocket protocol, daemon bundled as a sidecar in packaged builds
-- **Agents:** ACP over stdio, persisted sessions, capability negotiation, permission flow, orchestrator MCP tools
+- **Agents:** ACP over stdio, persisted sessions, capability negotiation, permission flow, [MCP tool bridge](/reference/mcp-tools/)
 - **Runtime:** process-group service management, log capture, port isolation, readiness detection, Kubernetes port-forwards, interactive PTYs
+- **[Memory](/concepts/memory/):** separate SQLite store with FTS5, optional local embeddings and vector search with rank fusion, per-project overlays, proposal-based compaction
+- **[Backlog](/guides/tasks-and-backlog/):** one normalized work-item table; GitHub via the `gh` session, Linear via a key held in the OS keychain
 - **Git workflow:** optional worktrees, file browser/editor, structured diffs, hunk resolution, commit/update/push, pull requests via `gh`
 - **Release:** Developer ID signing, Apple notarization, signed updater artifacts, checksummed assets
 

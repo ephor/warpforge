@@ -10,13 +10,18 @@ Warpforge supports two complementary ways to coordinate agents.
 
 ## The orchestrator agent
 
-A regular Warpforge task is one conversation with one coding agent. Enable **Orchestrator** and that agent becomes a lead with three Warpforge tools:
+A regular Warpforge task is one conversation with one coding agent. Enable **Orchestrator** and that agent becomes a lead with tools for delegating:
 
 - `spawn_agent` — dispatch a bounded task to Claude Code, Codex, OpenCode, or any configured harness, and return immediately;
 - `message_agent` — send a follow-up into an existing sub-agent's session, in context;
-- `read_inbox` — drain finished results and decide what happens next.
+- `read_inbox` — drain finished results and decide what happens next;
+- `list_agents`, `stop_agent`, `cleanup_agents` — see, stop, and clear up its own children.
+
+The distinctive part: **sub-agents don't have to be the same harness as the lead.** A Claude Code orchestrator can put a Codex sub-agent on one piece and an opencode sub-agent on another, in the same task, and reconcile what comes back.
 
 Orchestration stays inside a real conversation you can keep steering while child agents work. Sub-agents appear as normal Warpforge tasks linked to their parent, so you can see which harness is running, what it changed, and where human attention is needed instead of sending work into a black box.
+
+See [Agent tools](/reference/mcp-tools/#orchestrator-only--delegation) for the full surface, and [Choosing your mode](/guides/choosing-your-mode/) for when delegation is worth its overhead.
 
 ## Workflow pipelines
 
@@ -25,6 +30,12 @@ For repeatable work, choose one of the built-in **Plan + implement + review loop
 Workflows pause at safe boundaries, survive a daemon restart, and stop for structured human input when an agent asks a question or the review limit is reached. A completed pipeline never commits automatically; it lands in **Needs review** with its chats, timeline, and diff available for inspection.
 
 Workflow definitions are versioned YAML files in `.warpforge/workflows/`. Built-ins can be copied into a project and customized there, so the process travels with the code instead of living in one person's UI settings.
+
+### Pipelines under an orchestrator
+
+An orchestrator can dispatch a whole pipeline instead of a single sub-agent (`spawn_workflow`), and then drive it: `pause_workflow` holds it at the next stage boundary, `resume_workflow` continues with optional extra context, `answer_workflow` answers a stage's question, and `decide_workflow` settles what happens when the review rounds run out with findings still open.
+
+That combination is how a large task usually gets done well — one lead, mostly single sub-agents, and a full review pipeline on the one piece that warrants it.
 
 <Aside type="note">
   Design rationale and the deterministic pipeline invariants live in [ADR 0001 — Workflow pipelines](https://github.com/ephor/warpforge/blob/main/docs/adr/0001-workflow-pipelines.md) in the repository.

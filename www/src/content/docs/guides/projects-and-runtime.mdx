@@ -8,7 +8,11 @@ sidebar:
 
 **Register a project once.** In **Projects → Add Project**, pick a folder. Warpforge keeps a local registry and reads or creates `.warpforge/workspace.yaml` — optionally prefilled from a `package.json` `dev` script or a Docker Compose file, or generated interactively by an agent in the bootstrap wizard. Existing `.warpforge.yaml`, `.wf.yaml`, and `.workspace.yaml` files remain supported. Removing a project only unregisters it; the directory and its config stay untouched.
 
-**Bring the real runtime online.** Services start in dependency order with captured logs, interpolated environment variables, and readiness detection. Kubernetes port-forwards run alongside local processes and are watched and retried with backoff when they drop. Each project also has interactive terminals inside the app, so a quick `git log` or one-off script does not need another window.
+**A project opens into tabs**, the same way a task does: **Backlog**, **Files**, **Runtime**, and **Terminal**. Files browses the project's own checkout without starting a task — pick anything in the tree and it opens in a syntax-highlighted preview, with several files open at once across a tab strip. Each project remembers the tab you left it on, and its name, path, and port range stay pinned above them all.
+
+**Bring the real runtime online.** Services start in dependency order with captured logs, interpolated environment variables, and readiness detection. Kubernetes port-forwards run alongside local processes and are watched and retried with backoff when they drop. Runtime shows services and port-forwards in one place with their live logs and the `http://localhost:…` address of anything that is up; start, restart, and stop appear on a row when you point at it, and starting or stopping everything at once is a single click in the section heading. Each project also has interactive terminals inside the app, so a quick `git log` or one-off script does not need another window.
+
+**Search without leaving the task.** Press <kbd>⌘⇧F</kbd> for Find in Files: every matching line grouped by file, with a live peek at the surrounding code, and <kbd>Enter</kbd> opens the file at that line with the cursor already there. The quick-open palette (double <kbd>⇧</kbd> or <kbd>⌘P</kbd>) finds text too. Searches stay on files that belong to the project — build output and dependencies don't bury the results.
 
 **Work survives the window.** A local Rust daemon owns projects, services, sessions, and task state behind a WebSocket API; the Tauri app is a thin client. Close or restart it and long-running work continues. Task history and agent configuration persist in `~/.warpforge/warpforge.db`, the project registry in `~/.warpforge/projects.json`.
 
@@ -20,4 +24,8 @@ Every registered project gets a predictable 100-port range beginning at `4000`. 
 
 For services with a configured port, Warpforge selects an available value in the project's range, sets `PORT`, and expands references such as `${app.port}` in environment variables. The resolved URLs become part of the live context handed to new agent sessions. You can switch projects and come back without stopping unrelated services, rewriting configuration, or chasing `address already in use`.
 
-See the [configuration reference](/reference/configuration/) for the full `.warpforge/workspace.yaml` schema.
+### Agents see the runtime too
+
+The same services, logs, and controls are available to agents as [tools](/reference/mcp-tools/#runtime--see-and-drive-the-running-app) — `list_runtime` to discover what's up and on which port, `read_service_logs` to watch a restart, `service_restart` to bring something back. An agent that can read the failure it caused fixes it before handing you a diff.
+
+See the [configuration reference](/reference/configuration/) for the full `.warpforge/workspace.yaml` schema, and [Tasks and backlog](/guides/tasks-and-backlog/) for where the work comes from.
