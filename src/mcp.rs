@@ -630,6 +630,30 @@ fn tool_defs(is_orchestrator: bool) -> Value {
                 }
             }
         }),
+        json!({
+            "name": "memory_addEdge",
+            "description": "Add a directed edge between two memories.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "src_id": { "type": "string", "description": "Source memory id." },
+                    "dst_id": { "type": "string", "description": "Destination memory id." },
+                    "relation": { "type": "string", "description": "Relation label." }
+                },
+                "required": ["src_id", "dst_id", "relation"]
+            }
+        }),
+        json!({
+            "name": "memory_edges",
+            "description": "List edges for a memory.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Memory id." }
+                },
+                "required": ["id"]
+            }
+        }),
     ];
 
     if is_orchestrator {
@@ -1492,6 +1516,39 @@ async fn handle_tool_call(
             let result = client
                 .request("memory.dream", json!({"dry_run": dry_run}))
                 .await?;
+            json_text(&result)
+        }
+        "memory_addEdge" => {
+            let src_id = args
+                .get("src_id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'src_id' is required"))?;
+            let dst_id = args
+                .get("dst_id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'dst_id' is required"))?;
+            let relation = args
+                .get("relation")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'relation' is required"))?;
+            let result = client
+                .request(
+                    "memory.addEdge",
+                    json!({ "src_id": src_id, "dst_id": dst_id, "relation": relation }),
+                )
+                .await?;
+            json_text(&result)
+        }
+        "memory_edges" => {
+            let id = args
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| anyhow!("'id' is required"))?;
+            let result = client.request("memory.edges", json!({ "id": id })).await?;
             json_text(&result)
         }
         _ if !is_orchestrator => Err(anyhow!(
