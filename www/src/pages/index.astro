@@ -5,6 +5,7 @@ import Icon from "@cloudflare/nimbus-docs/components/Icon.astro";
 import NimbusHead from "@cloudflare/nimbus-docs/components/NimbusHead.astro";
 import { config } from "virtual:nimbus/config";
 import ForgeDemo from "@/components/landing/ForgeDemo.astro";
+import ClaimPanels from "@/components/landing/ClaimPanels.astro";
 
 const harnesses = [
   { name: "Claude Code", logo: "/logos/claude-ai-icon.svg" },
@@ -15,31 +16,6 @@ const harnesses = [
   { name: "Junie", logo: "/logos/junie.svg" },
   { name: "Cursor", logo: "/logos/cursor_dark.svg" },
   { name: "Pi", logo: "/logos/pi_dark.svg" },
-];
-
-/** Panels: each states a claim, then shows the surface that backs it. */
-const panels = [
-  {
-    kicker: "Memory",
-    title: "They stop forgetting what you told the other one.",
-    body: "Claude Code reads CLAUDE.md. Codex reads AGENTS.md. Warpforge gives them one store instead — decisions, gotchas, preferences — shared across every harness, on your disk. A dreaming pass checks it against the code and proposes cleanups; it never rewrites what your agents believe on its own.",
-    href: "/concepts/memory/",
-    linkText: "How memory works",
-  },
-  {
-    kicker: "Runtime",
-    title: "The agent can read the log it just broke.",
-    body: "Services start in dependency order on ports that never collide, and the agent gets them as tools: list what's running, grep a service log, restart it, watch it come back. It fixes its own mistake before the diff reaches you.",
-    href: "/reference/mcp-tools/",
-    linkText: "All 31 tools",
-  },
-  {
-    kicker: "Review",
-    title: "An IDE's git, not a commit box.",
-    body: "A real branch tree with native context menus. Rebase onto a branch without checking it out. Hunk-level accept and reject, inline edits, amend that prefills. Every operation runs in the task's own worktree — the diff you reviewed is the diff you committed.",
-    href: "/guides/git-in-warpforge/",
-    linkText: "Git in Warpforge",
-  },
 ];
 
 const specs = [
@@ -133,27 +109,7 @@ const specs = [
           </div>
         </section>
 
-        <!-- Claim panels -->
-        {
-          panels.map((p, i) => (
-            <section class="panel">
-              <div class="shell panel-in">
-                <span class="idx" aria-hidden="true">
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-                <div class="panel-copy">
-                  <span class="kicker">{p.kicker}</span>
-                  <h2>{p.title}</h2>
-                  <p>{p.body}</p>
-                  <a href={p.href} class="arrow-link">
-                    {p.linkText}
-                    <Icon name="ph:arrow-right" size={14} />
-                  </a>
-                </div>
-              </div>
-            </section>
-          ))
-        }
+        <ClaimPanels />
 
         <!-- Spec sheet -->
         <section class="specs">
@@ -205,19 +161,29 @@ const specs = [
 </html>
 
 <style>
-  /* Fixed dark, matching the desktop app's own palette. This page does not
-     render the docs chrome, so it does not follow the docs theme toggle. */
+  /* The desktop app's own tokens, as the HSL triplets in
+     `desktop/src/globals.css` — same values, so the page and the product read
+     as one thing. Fixed dark: this page does not render the docs chrome and so
+     does not follow the docs theme toggle. */
   .wf {
-    --bg: #121311;
-    --panel: #171816;
-    --line: #26271f;
-    --line-2: #333630;
-    --fg: #ede9e3;
-    --mut: #a7a199;
-    --faint: #6f6a62;
-    --accent: #eaa07b;
-    --accent-2: #e3804f;
-    --ink: #2a1509;
+    --background: 120 3% 8%;
+    --foreground: 36 23% 91%;
+    --card: 120 3% 6%;
+    --muted-foreground: 34 7% 62%;
+    --border: 72 5% 20%;
+    --primary: 20 73% 70%;
+    --primary-foreground: 20 40% 10%;
+
+    --bg: hsl(var(--background));
+    --panel: hsl(var(--card));
+    --line: hsl(var(--border) / 0.55);
+    --line-2: hsl(var(--border));
+    --fg: hsl(var(--foreground));
+    --mut: hsl(var(--muted-foreground));
+    --faint: hsl(var(--muted-foreground) / 0.7);
+    --accent: hsl(var(--primary));
+    --accent-2: hsl(20 73% 62%);
+    --ink: hsl(var(--primary-foreground));
 
     background: var(--bg);
     color: var(--fg);
@@ -244,7 +210,7 @@ const specs = [
     top: 0;
     z-index: 30;
     border-bottom: 1px solid var(--line);
-    background: color-mix(in oklch, var(--bg) 86%, transparent);
+    background: hsl(var(--background) / 0.86);
     backdrop-filter: blur(10px);
   }
   .nav-in {
@@ -365,7 +331,7 @@ const specs = [
     height: 0.35rem;
     border-radius: 999px;
     background: var(--accent);
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent) 60%, transparent);
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0.6);
     animation: pulse 2.4s ease-out infinite;
   }
   @keyframes pulse {
@@ -457,64 +423,6 @@ const specs = [
     height: 1.125rem;
     object-fit: contain;
     opacity: 0.9;
-  }
-
-  /* ---- claim panels ---- */
-  .panel {
-    border-bottom: 1px solid var(--line);
-  }
-  .panel-in {
-    display: grid;
-    gap: 1rem;
-    padding-block: 4rem;
-  }
-  @media (min-width: 720px) {
-    .panel-in {
-      grid-template-columns: 4rem 1fr;
-      gap: 0;
-    }
-  }
-  .idx {
-    font-family: "JetBrains Mono Variable", ui-monospace, monospace;
-    font-size: 0.75rem;
-    color: var(--line-2);
-    padding-top: 0.35rem;
-  }
-  .panel-copy {
-    max-width: 40rem;
-  }
-  .kicker {
-    display: inline-block;
-    margin-bottom: 0.5rem;
-    font-size: 0.6875rem;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--accent);
-  }
-  .panel h2 {
-    margin: 0 0 0.7rem;
-    font-size: clamp(1.35rem, 2.7vw, 1.75rem);
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    line-height: 1.25;
-  }
-  .panel p {
-    margin: 0 0 1rem;
-    font-size: 0.9688rem;
-    line-height: 1.65;
-    color: var(--mut);
-  }
-  .arrow-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    color: var(--accent);
-    text-decoration: none;
-  }
-  .arrow-link:hover {
-    color: var(--accent-2);
   }
 
   /* ---- spec sheet ---- */
