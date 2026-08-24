@@ -84,6 +84,8 @@ describe("LiveStrip", () => {
         previewText: "hello preview",
         startedAt: 5_000,
         toolCount: 1,
+        project: "warpforge",
+        agent: "claude",
       },
     ];
     render(createElement(LiveStrip, { items, nowMs }));
@@ -108,6 +110,8 @@ describe("LiveStrip", () => {
         previewText: null,
         startedAt: null,
         toolCount: 0,
+        project: "warpforge",
+        agent: "claude",
       },
       {
         taskId: "b",
@@ -118,6 +122,8 @@ describe("LiveStrip", () => {
         previewText: "some text",
         startedAt: 15_000,
         toolCount: 2,
+        project: "warpforge",
+        agent: "claude",
       },
     ];
     render(createElement(LiveStrip, { items, nowMs }));
@@ -139,6 +145,8 @@ describe("LiveStrip", () => {
         previewText: null,
         startedAt: null,
         toolCount: 0,
+        project: "warpforge",
+        agent: "claude",
       },
     ];
     render(createElement(LiveStrip, { items, nowMs: 0, onOpenTask }));
@@ -175,6 +183,8 @@ describe("LiveStrip", () => {
         previewText: null,
         startedAt: 0,
         toolCount: 0,
+        project: "warpforge",
+        agent: "claude",
       },
     ];
     const { unmount } = render(createElement(LiveStrip, { items, nowMs: 5000 }));

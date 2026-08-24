@@ -5,6 +5,9 @@ export const MAX_SESSION_UPDATES = 2000;
 const TOOL_CONTENT_HEAD = 2048;
 const TOOL_CONTENT_TAIL = 2048;
 const TOOL_CONTENT_TRUNCATE_MARKER = "\n\n… truncated …\n\n";
+const AGENT_TEXT_MAX = 20_000;
+const AGENT_TEXT_KEEP_HEAD = 12_000;
+const AGENT_TEXT_KEEP_TAIL = 6_000;
 
 function isTerminalToolStatus(status: ToolCallStatus): boolean {
   return status === "completed" || status === "failed";
@@ -22,6 +25,11 @@ export function truncateToolContent(update: SessionUpdate): SessionUpdate {
       TOOL_CONTENT_TRUNCATE_MARKER +
       update.content.slice(-TOOL_CONTENT_TAIL),
   };
+}
+
+function truncateAgentText(text: string): string {
+  if (text.length <= AGENT_TEXT_MAX) return text;
+  return text.slice(0, AGENT_TEXT_KEEP_HEAD) + TOOL_CONTENT_TRUNCATE_MARKER + text.slice(-AGENT_TEXT_KEEP_TAIL);
 }
 
 export function capSessionUpdates(updates: SessionUpdate[]): SessionUpdate[] {
@@ -170,7 +178,7 @@ export function appendCoalesced(
     (update.kind === "agent_text" || update.kind === "agent_thought") &&
     previous?.kind === update.kind
   ) {
-    output[output.length - 1] = { ...previous, text: previous.text + update.text };
+    output[output.length - 1] = { ...previous, text: truncateAgentText(previous.text + update.text) };
   } else if (update.kind === "tool_call") {
     const index = toolIndexes.get(update.tool_call_id);
     const existing = index !== undefined ? output[index] : undefined;
@@ -228,7 +236,7 @@ export function appendCoalescedUpdate(
     (update.kind === "agent_text" || update.kind === "agent_thought") &&
     last?.kind === update.kind
   ) {
-    const merged = { ...last, text: last.text + update.text };
+    const merged = { ...last, text: truncateAgentText(last.text + update.text) };
     const output = existing.slice(0, -1);
     output.push(merged);
     return output;

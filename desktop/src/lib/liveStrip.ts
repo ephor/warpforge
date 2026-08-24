@@ -13,6 +13,8 @@ export interface LiveStripItem {
   previewText: string | null;
   startedAt: number | null;
   toolCount: number;
+  project: string;
+  agent: string;
 }
 
 export function buildLiveStripItems(
@@ -33,7 +35,7 @@ export function buildLiveStripItems(
       const isTurnEnded = tail.length > 0 && tail[tail.length - 1]?.kind === "turn_ended";
       if (isTurnEnded) continue;
     }
-    const preview = latestSessionPreview(updates, { active: true });
+    const preview = latestSessionPreview(tail, { active: true });
     const toolCount = tail.filter((u) => u.kind === "tool_call").length;
     items.push({
       detail: activity?.detail ?? "",
@@ -44,6 +46,8 @@ export function buildLiveStripItems(
       title: task.title,
       tone: activity?.tone ?? "working",
       toolCount,
+      project: task.project,
+      agent: task.agent,
     });
   }
   items.sort((a, b) => {
