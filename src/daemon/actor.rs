@@ -2783,7 +2783,7 @@ pub struct Daemon {
     /// Shared memory store (separate `~/.warpforge/memory.db`), owned here so
     /// all memory ops run on the actor thread against one connection.
     memory: super::memory::MemoryStore,
-    last_memory_activity: std::time::Instant,
+    last_memory_activity: Arc<Mutex<std::time::Instant>>,
 }
 
 impl Daemon {
@@ -2909,7 +2909,7 @@ impl Daemon {
             workflow_runs: HashMap::new(),
             accounts,
             memory,
-            last_memory_activity: std::time::Instant::now(),
+            last_memory_activity: Arc::new(Mutex::new(std::time::Instant::now())),
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -2952,9 +2952,14 @@ impl Daemon {
         let dream_tx = handle.cmd_tx.clone();
         if dream_cfg.enabled && dream_cfg.trigger == "idle" {
             let idle = crate::daemon::memory_dream::parse_idle_after(&dream_cfg.idle_after);
+            let last_activity = daemon.last_memory_activity.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(idle).await;
+                    let been_idle = last_activity.lock().unwrap().elapsed() >= idle;
+                    if !been_idle {
+                        continue;
+                    }
                     let (tx, _rx) = tokio::sync::oneshot::channel();
                     let _ = dream_tx
                         .send(Command::MemoryDream {
@@ -2967,17 +2972,21 @@ impl Daemon {
         } else if dream_cfg.enabled && dream_cfg.trigger == "cron" {
             let cron_str = dream_cfg.cron.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                // minimal cron: fire once after a minute and let daemon dedupe via pending check;
-                // full cron crate parsing deferred (no extra dep). Config change requires restart.
-                let _ = cron_str.len();
-                let (tx, _rx) = tokio::sync::oneshot::channel();
-                let _ = dream_tx
-                    .send(Command::MemoryDream {
-                        dry_run: false,
-                        reply: tx,
-                    })
-                    .await;
+                // Full cron parsing is deferred (no extra dep): treat the configured
+                // cron (default "0 3 * * *") as a daily-3am stub approximated by a
+                // periodic loop. Keeps looping forever; the daemon dedupes via the
+                // pending-compaction check. Config change requires restart.
+                let _ = cron_str;
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    let (tx, _rx) = tokio::sync::oneshot::channel();
+                    let _ = dream_tx
+                        .send(Command::MemoryDream {
+                            dry_run: false,
+                            reply: tx,
+                        })
+                        .await;
+                }
             });
         }
 
@@ -5879,7 +5888,7 @@ impl Daemon {
                 let _ = reply.send(r);
             }
             Command::MemoryDream { dry_run, reply } => {
-                self.last_memory_activity = std::time::Instant::now();
+                *self.last_memory_activity.lock().unwrap() = std::time::Instant::now();
                 // Scheduler for idle/cron is spawned in Daemon::spawn when dreaming.enabled;
                 // this handler just executes the pass. Dream uses dreaming agent/model
                 // (fallback agent.default_model) via dream prompt over last_accessed ASC 200;

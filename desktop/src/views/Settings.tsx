@@ -320,7 +320,7 @@ export default function SettingsView({ open, onOpenChange }: Props) {
                     variant="outline"
                     className="h-7 text-xs"
                     onClick={async () => {
-                      const r: any = await (daemon as any).memoryDream?.(false);
+                      const r: any = await daemon.memoryDream(false);
                       alert(r ? `Dream: ${r.inserted ?? 0} proposals` : "Dream triggered");
                       queryClient.invalidateQueries({ queryKey: ["memory", "stats"] });
                     }}
@@ -333,7 +333,7 @@ export default function SettingsView({ open, onOpenChange }: Props) {
                     variant="outline"
                     className="h-7 text-xs"
                     onClick={async () => {
-                      const r: any = await (daemon as any).memoryDream?.(true);
+                      const r: any = await daemon.memoryDream(true);
                       alert(r ? `Dry run: ${r.inserted ?? 0} would propose` : "Dry run done");
                     }}
                   >
@@ -366,7 +366,7 @@ export default function SettingsView({ open, onOpenChange }: Props) {
                 <select
                   aria-label="Embedding mode"
                   value={
-                    memoryStats.data?.embeddingMode === "fastembed" ? "fastembed" : "none"
+                    memoryStats.data?.embeddingMode === "hybrid" ? "fastembed" : "none"
                   }
                   disabled={memoryStats.isLoading}
                   onChange={async (e) => {

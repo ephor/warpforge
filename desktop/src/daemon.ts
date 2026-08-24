@@ -1219,6 +1219,10 @@ export class DaemonClient {
     return (await this.request("memory.setEmbedding", { mode })) as MemoryStats;
   }
 
+  async memoryDream(dryRun: boolean): Promise<unknown> {
+    return this.request("memory.dream", { dry_run: dryRun });
+  }
+
   async listBacklog(input: {
     project: string;
     page: number;
