@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.1
+
+### Patch Changes
+
+- [`2899b89`](https://github.com/ephor/warpforge/commit/2899b895ef4b8a3193b983a70518244e72c8eee1) Thanks [@ephor](https://github.com/ephor)! - Fix memory for agents: saving no longer fails after deleting a memory, and search now finds notes by tags and partial terms instead of returning empty results. Existing databases migrate automatically.
+
 ## 0.10.0
 
 ### Minor Changes
