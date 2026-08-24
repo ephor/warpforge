@@ -29,15 +29,28 @@ The composer also takes `@` mentions ranked by relevance as you type, and slash 
 
 ## Reading code, not just diffs
 
-The editor inside a task is a real editor, not a diff viewer bolted to a file list.
+The editor inside a task is a real editor, not a diff viewer bolted to a file list. With a language server running it does what your IDE does:
 
-- **Go to definition** — <kbd>⌘B</kbd>, or <kbd>⌘</kbd>-click a symbol. Resolves across the project and opens the file at the line.
-- **Live diagnostics** — with a language server installed, errors and warnings appear inline as you read. Warpforge knows about servers for TypeScript, Rust, Go, Python, HTML/CSS/JSON, and YAML, and shows you the one-line install command for any that's missing.
-- **Syntax highlighting** across the languages you'd expect, with several files open at once on a tab strip.
+| | |
+| --- | --- |
+| **Go to definition** | <kbd>⌘B</kbd> or <kbd>⌘</kbd>-click — jumps across files, not just within the one you're in |
+| **Find references** | Everywhere a symbol is used |
+| **Rename symbol** | Across the project, not a find-and-replace |
+| **Hover docs** | Signatures and documentation without leaving the line |
+| **Completions** | As you type, from the language server |
+| **Diagnostics** | Errors and warnings inline, live |
+| **Format** | On demand |
+
+**Missing a language server is one click, not a research project.** Open a `.ts`, `.py`, or `.rs` file without its server installed and the editor shows an **Install** banner rather than silently degrading to plain highlighting. **Settings → Language servers** lists every supported language with its status — installed, available, or needing an update.
+
+Alongside that:
+
+- **Several files open at once** on a tab strip, with syntax highlighting across the usual languages — and HTML files render as a preview.
 - **Find in Files** (<kbd>⌘⇧F</kbd>) — every match grouped by file with a live peek at the surrounding code; <kbd>Enter</kbd> opens it at that line, cursor already placed.
-- **Quick open** (<kbd>⌘P</kbd>, or double-tap <kbd>⇧</kbd>) — files by name, and matching source lines underneath them.
+- **Quick open** (<kbd>⌘P</kbd>, or double-tap <kbd>⇧</kbd>) — files by name, with matching source lines underneath them.
+- **A real file tree** with native right-click: New File, New Folder, Rename, Delete. Deletes ask first.
 
-Searches stay inside the project: build output and dependencies don't bury what you're looking for.
+Searches stay inside the project — build output and dependencies don't bury what you're looking for — and everything resolves against the **task's own worktree**, so what you edit is what the diff shows.
 
 ## Reviewing the change
 
@@ -65,9 +78,31 @@ Four kinds of prose Warpforge drafts for you. In every case you're the editor, n
 
 **Enhance** is the one worth calling out: a backlog item you typed in five seconds ("fix the flaky login test, probably the timeout") becomes a properly scoped prompt before an agent ever sees it. Bad prompts are the most common cause of bad agent output, and this is the cheapest place to fix them.
 
+## Small things that add up
+
+None of these is a headline feature. Together they're most of what makes a task pleasant to sit in.
+
+**The chat stays where you put it.** It follows the newest message while an agent replies, and stops following only when *you* actually scroll up — clicking a file link or expanding a work update doesn't count. Scroll back to the bottom and it starts following again on its own.
+
+**Notifications you can answer without switching apps.** When an agent needs approval while Warpforge is in the background, the macOS notification carries **Approve**, **Reject**, and **Review** buttons that do exactly that. They stay quiet while Warpforge is the window you're looking at.
+
+**Fork a conversation into another harness.** Take a conversation up to any point and continue it with a different agent — it carries the context, the files touched, the worktree, *and your uncommitted work*. Useful when one model is stuck and you want another to pick up mid-thread rather than start over.
+
+**Model picking that survives long lists.** The composer's model picker has a pinned search box — type to narrow hundreds of models, <kbd>Esc</kbd> to close. Short lists stay simple lists. Add a provider or model in the agent itself and Warpforge picks it up on restart, or immediately via the refresh button next to that agent in Settings, which also shows how many models it currently knows about.
+
+**Tool calls read like sentences.** An agent's tool call shows as *"Warpforge · List runtime"*, not `mcp__warpforge__list_runtime` — in the transcript, in permission prompts, and in notifications. A sub-agent dispatch names who's being spawned and on what, without expanding anything.
+
+**Archive or delete a task without opening it**, from the overflow menu on its sidebar row.
+
+<Aside type="tip" title="And the reason none of it stalls">
+  Approving a tool call, sending a message, reading a diff, or pushing a branch all run **alongside** everything else. A slow push costs you the push — not your other tasks' replies and approvals.
+</Aside>
+
 ## Git, in the task
 
-The branch work lives beside the review instead of in a terminal:
+Warpforge's git surface is closer to an IDE's than to a commit box: an IDE-style branch tree with local and remote branches, native right-click menus, rebase-onto without checking out first, and amend that prefills the message you're rewriting. It's covered on its own page — see **[Git in Warpforge](/guides/git-in-warpforge/)**.
+
+The shortcuts:
 
 | Action | Shortcut |
 | --- | --- |
@@ -75,8 +110,6 @@ The branch work lives beside the review instead of in a terminal:
 | Push… | <kbd>⇧⌘K</kbd> |
 | Sync with remote | <kbd>⌘T</kbd> |
 | New branch… | <kbd>⌥⌘N</kbd> |
-
-Push uses `--force-with-lease`. Opening a pull request goes through the [GitHub CLI](https://cli.github.com/) with the drafted title and body, and a task running in [its own worktree](/guides/tasks-and-backlog/#isolated-worktrees) merges back into its base branch when you're done with it.
 
 ## Keyboard shortcuts
 
@@ -112,6 +145,7 @@ Replace <kbd>⌘</kbd> with <kbd>Ctrl</kbd> throughout — for example <kbd>Ctrl
 
 ## See also
 
+- [Git in Warpforge](/guides/git-in-warpforge/) — the branch tree, context menus, and commit surface
 - [Tasks and backlog](/guides/tasks-and-backlog/) — where a task comes from and how it ends
 - [Choosing your mode](/guides/choosing-your-mode/) — single agent, orchestrator, or pipeline
 - [Agent tools (MCP)](/reference/mcp-tools/) — what the agent can reach for on its own side

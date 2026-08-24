@@ -1,0 +1,74 @@
+---
+title: Git in Warpforge
+description: An IDE-grade branch tree, native context menus, and git operations that run where the diff is.
+sidebar:
+  order: 5
+  label: Git in Warpforge
+---
+
+Most agent tools give you a commit box. Warpforge gives you the git surface you'd expect from an IDE — because when several agents are working in parallel branches, "commit and push" is the least of what you need.
+
+## The branch tree
+
+Local and remote branches in one tree, the way a JetBrains or VS Code branch switcher works. Branch names are **action triggers, not implicit checkouts** — clicking one opens its actions rather than silently changing your working copy.
+
+Actions open in a submenu beside the branch row instead of pushing the list around, so you never lose your place in a long branch list.
+
+### What you can do to a branch
+
+| Action | Notes |
+| --- | --- |
+| **Checkout** | Local branches, and remote branches as a new local one |
+| **New Branch…** | From the current branch, checked out after creation |
+| **New Branch from…** | From any specific branch in the tree |
+| **Rebase onto** | Rebases the *selected* branch onto a target **without checking it out first** — the same `Rebase '<branch>' onto '<target>'` behaviour a JetBrains IDE gives you, and your working tree is restored afterwards |
+| **Merge** | Including merging a remote ref into the current branch |
+| **Pull** | With rebase or with merge — your choice, on the menu |
+| **Rename** | |
+| **Delete** | Force-deletes, so an unmerged local branch doesn't fail with *"not fully merged"*. The dialog already warns it's irreversible |
+
+Creating a branch whose name already exists on a remote **highlights the collision** and requires an explicit *Override existing branch* before it will proceed — no accidental clobbering.
+
+<Aside type="note">
+  Remote-tracking branches show correctly even when git emits the bare remote name (`origin`) alongside `origin/main` — that namespace marker is filtered out rather than hiding your remote branches.
+</Aside>
+
+## Native context menus
+
+The git surfaces and the file tree use **real OS context menus**, not HTML popovers. Right-click a branch, a changed file, or a file in the tree and you get the menu the platform draws, with the behaviour you already have muscle memory for.
+
+In Project Files that includes real filesystem actions — **New File**, **New Folder**, **Rename**, **Delete** — all daemon-backed, with the tree refreshing after each and deletes requiring explicit confirmation.
+
+## Committing
+
+- **The message is drafted from the diff** in Conventional Commits form — see [Text you don't have to write](/guides/working-in-a-task/#text-you-dont-have-to-write).
+- **Amend prefills what you're rewriting.** Tick amend and the box fills with the commit's existing message, ready to edit or leave alone — the common case being "I just forgot a file." Anything you'd already typed is kept.
+- **Stage by file or by hunk**, with tri-state checkboxes across the tree.
+- **Rollback** discards selected changes, with confirmation.
+
+### When a commit fails
+
+A rejected pre-commit hook arrives as a **notification with the reason**, not as a wall of text wedged under the commit box — and long output comes with a **Copy** button for the full log.
+
+If an agent turns down a request (drafting a commit message, say), the message includes *the reason the agent gave*, which is usually enough to tell a wrong model from a real problem.
+
+## Push and pull requests
+
+Push uses `--force-with-lease` — the safe force, which refuses if someone else pushed since you last fetched.
+
+**Open pull request** goes through the [GitHub CLI](https://cli.github.com/) with a title and body drafted from the branch's outgoing commits and their combined diff. It needs `gh` installed and authenticated; commit and push don't.
+
+## Everything runs where the diff is
+
+A task can run in [its own worktree](/guides/tasks-and-backlog/#isolated-worktrees). When it does, **every** git operation — commit, update, switch, branch, rebase, merge, rollback — and every file operation runs against **that worktree**, not the project root.
+
+That sounds like an implementation detail. It isn't: it's the difference between "the diff I reviewed is the diff I committed" and a class of bug where changes land in a checkout you weren't looking at.
+
+<Aside type="tip" title="And none of it blocks">
+  Committing, pushing, merging, switching branches, saving a file, and opening a pull request all run alongside the rest of the app. Until recently each of them held everything else — agent replies, approvals, your other tasks — while it waited on git.
+</Aside>
+
+## See also
+
+- [Working in a task](/guides/working-in-a-task/) — review, editing, and the rest of the in-task surface
+- [Tasks and backlog](/guides/tasks-and-backlog/) — worktrees and the task lifecycle
