@@ -1817,6 +1817,26 @@ async fn dispatch(
                 })?;
             Ok(v)
         }
+        MemoryListCompaction {} => {
+            let v = handle
+                .memory_list_compaction()
+                .await
+                .map_err(|e| wire::RpcError {
+                    code: wire::ErrorCode::Internal,
+                    message: e.to_string(),
+                })?;
+            Ok(json!({"proposals": v}))
+        }
+        MemoryResolveCompaction { id, approve } => {
+            let status = handle
+                .memory_resolve_compaction(id, approve.unwrap_or(true))
+                .await
+                .map_err(|e| wire::RpcError {
+                    code: wire::ErrorCode::InvalidRequest,
+                    message: e.to_string(),
+                })?;
+            Ok(json!({"id": id, "status": status}))
+        }
     }
 }
 

@@ -359,6 +359,14 @@ pub enum Method {
         #[serde(default)]
         project_id: Option<String>,
     },
+    #[serde(rename = "memory.listCompaction")]
+    MemoryListCompaction {},
+    #[serde(rename = "memory.resolveCompaction")]
+    MemoryResolveCompaction {
+        id: i64,
+        #[serde(default)]
+        approve: Option<bool>,
+    },
 
     // ── Agent registry ──
     /// Detect installed ACP-capable agents. Returns `{ detected: DetectedAgent[] }`.
