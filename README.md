@@ -14,13 +14,13 @@
 
 <p align="center">
   <a href="#install">Install</a> ·
-  <a href="https://docs.warpforge.dev/overview/">Docs</a> ·
-  <a href="https://docs.warpforge.dev/concepts/why-warpforge/">Why Warpforge?</a> ·
-  <a href="https://docs.warpforge.dev/concepts/agents/">Agents</a> ·
-  <a href="https://docs.warpforge.dev/concepts/memory/">Memory</a> ·
-  <a href="https://docs.warpforge.dev/guides/choosing-your-mode/">Modes</a> ·
-  <a href="https://docs.warpforge.dev/reference/mcp-tools/">Agent tools</a> ·
-  <a href="https://docs.warpforge.dev/guides/projects-and-runtime/">Projects &amp; runtime</a>
+  <a href="https://warpforge.app/overview/">Docs</a> ·
+  <a href="https://warpforge.app/concepts/why-warpforge/">Why Warpforge?</a> ·
+  <a href="https://warpforge.app/concepts/agents/">Agents</a> ·
+  <a href="https://warpforge.app/concepts/memory/">Memory</a> ·
+  <a href="https://warpforge.app/guides/choosing-your-mode/">Modes</a> ·
+  <a href="https://warpforge.app/reference/mcp-tools/">Agent tools</a> ·
+  <a href="https://warpforge.app/guides/projects-and-runtime/">Projects &amp; runtime</a>
 </p>
 
 <p align="center">
@@ -55,7 +55,7 @@ The build is signed with a Developer ID certificate and notarized by Apple, so i
 > [!NOTE]
 > macOS on Apple Silicon is the validated desktop target. Windows and Linux packaging exists as an opt-in release preview, but those platforms have not been tested on real machines and are not claimed as publicly supported.
 
-Two features shell out to CLIs the app doesn't bundle: **Node.js/`npm`** for one-click agent install/update, and the **[GitHub CLI](https://cli.github.com/)** (`gh`, authenticated via `gh auth login`) for **Open pull request** — commit and push don't need it. See **[Install → Requirements](https://docs.warpforge.dev/getting-started/install/#requirements-beyond-the-app-itself)** for details.
+Two features shell out to CLIs the app doesn't bundle: **Node.js/`npm`** for one-click agent install/update, and the **[GitHub CLI](https://cli.github.com/)** (`gh`, authenticated via `gh auth login`) for **Open pull request** — commit and push don't need it. See **[Install → Requirements](https://warpforge.app/getting-started/install/#requirements-beyond-the-app-itself)** for details.
 
 ### Reuse your existing agent login
 
@@ -65,7 +65,7 @@ Warpforge adds no model account or API-key layer. It looks for supported agent b
 
 AI-assisted development becomes a coordination problem long before it becomes a model problem: agents wait on each other, services collide on the same ports, logs hide in terminal tabs, and finished work scatters across chats, worktrees, and diffs. Warpforge turns that sprawl into one visible workflow — Mission Control for every session, a runtime that travels with the task, human review at the moments that matter, and an orchestrator for when a task outgrows one agent.
 
-Read the full pitch in **[Why Warpforge?](https://docs.warpforge.dev/concepts/why-warpforge/)**
+Read the full pitch in **[Why Warpforge?](https://warpforge.app/concepts/why-warpforge/)**
 
 <p align="center">
   <img src="docs/images/new-task.png" alt="New task composer in orchestrator mode, choosing the lead agent and previewing the delegated split" width="100%">
@@ -75,7 +75,7 @@ Read the full pitch in **[Why Warpforge?](https://docs.warpforge.dev/concepts/wh
 
 Warpforge detects Claude Code, Codex, OpenCode, Qwen Code, Goose, Junie, Cursor, and Pi as globally installed binaries and speaks [ACP](https://agentclientprotocol.com/) to them over stdio — no separate Warpforge account, no new API key, your existing agent login just works. Any other ACP-compatible agent can be added with a custom command.
 
-See **[Bring your own agents](https://docs.warpforge.dev/concepts/agents/)** for the full list and setup details.
+See **[Bring your own agents](https://warpforge.app/concepts/agents/)** for the full list and setup details.
 
 ## Orchestration and workflows
 
@@ -85,21 +85,21 @@ A regular task is one conversation with one agent. Enable **Orchestrator** and t
   <img src="docs/images/workflow-pipeline.png" alt="Workflow pipeline with implement, review, and fix stages and a reviewer verdict" width="100%">
 </p>
 
-Details in **[Orchestration and workflows](https://docs.warpforge.dev/concepts/orchestration/)** — and **[Choosing your mode](https://docs.warpforge.dev/guides/choosing-your-mode/)** for when each is worth its cost.
+Details in **[Orchestration and workflows](https://warpforge.app/concepts/orchestration/)** — and **[Choosing your mode](https://warpforge.app/guides/choosing-your-mode/)** for when each is worth its cost.
 
 ## One memory, every harness
 
 Claude Code reads `CLAUDE.md`, Codex reads `AGENTS.md`, opencode reads its own — teach one, and the other two still don't know. Warpforge gives them a single local store instead, with global and per-project scopes, full-text plus optional local-embedding search, and a **dreaming** pass that reviews stored facts against the codebase and *proposes* merges and corrections for you to approve — it never rewrites memory on its own.
 
-Agents reach it through the same tool surface they use for everything else: **[31 MCP tools](https://docs.warpforge.dev/reference/mcp-tools/)** covering the runtime (read a service's logs, restart it), the board (file a task), memory, and — for orchestrators — sub-agents and pipelines.
+Agents reach it through the same tool surface they use for everything else: **[31 MCP tools](https://warpforge.app/reference/mcp-tools/)** covering the runtime (read a service's logs, restart it), the board (file a task), memory, and — for orchestrators — sub-agents and pipelines.
 
-More in **[Cross-harness memory](https://docs.warpforge.dev/concepts/memory/)**.
+More in **[Cross-harness memory](https://warpforge.app/concepts/memory/)**.
 
 ## Projects and their runtime
 
 Register a project once and Warpforge reads or creates `.warpforge/workspace.yaml`, brings its services online in dependency order with captured logs and readiness detection, and gives every project a predictable 100-port range starting at `4000` — no more `address already in use`. A local Rust daemon owns all state behind a WebSocket API, so work survives closing the window. Review changed files as unified or split diffs, accept or reject hunks, commit, push, and open a pull request from the same workspace.
 
-Full guide: **[Projects and their runtime](https://docs.warpforge.dev/guides/projects-and-runtime/)** · config schema: **[Configuration reference](https://docs.warpforge.dev/reference/configuration/)**
+Full guide: **[Projects and their runtime](https://warpforge.app/guides/projects-and-runtime/)** · config schema: **[Configuration reference](https://warpforge.app/reference/configuration/)**
 
 ## Build from source
 
@@ -112,7 +112,7 @@ bun install
 bun run tauri dev
 ```
 
-Prerequisites, running the checks, and building a local bundle: **[Build from source](https://docs.warpforge.dev/getting-started/build-from-source/)**.
+Prerequisites, running the checks, and building a local bundle: **[Build from source](https://warpforge.app/getting-started/build-from-source/)**.
 
 ## CLI
 
@@ -126,11 +126,11 @@ warpforge init [path]       # create workspace config (--add also registers it)
 warpforge bootstrap [path]  # generate a config interactively with an agent
 ```
 
-`install.sh` installs this as `wf` from published archives (macOS Apple Silicon only for now); it does not install the desktop app. Full command reference: **[CLI reference](https://docs.warpforge.dev/reference/cli/)**.
+`install.sh` installs this as `wf` from published archives (macOS Apple Silicon only for now); it does not install the desktop app. Full command reference: **[CLI reference](https://warpforge.app/reference/cli/)**.
 
 ## Current scope
 
-Warpforge is young software, shipped and built in the open: macOS Apple Silicon is validated, Windows and Linux remain unvalidated previews, and runtime state is local to one machine. See **[Architecture and current scope](https://docs.warpforge.dev/reference/architecture/)** for the full picture.
+Warpforge is young software, shipped and built in the open: macOS Apple Silicon is validated, Windows and Linux remain unvalidated previews, and runtime state is local to one machine. See **[Architecture and current scope](https://warpforge.app/reference/architecture/)** for the full picture.
 
 Bug reports, design feedback, and focused pull requests are welcome. If you use Warpforge on a real multi-agent workflow, sharing what felt smooth — and what still sent you back to terminal juggling — is especially useful. Release notes live in [CHANGELOG.md](CHANGELOG.md).
 

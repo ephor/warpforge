@@ -4,9 +4,9 @@ import nimbus, { defineConfig as defineNimbusConfig } from "@cloudflare/nimbus-d
 import { tableScroll } from "@cloudflare/nimbus-docs/markdown";
 
 const nimbusConfig = defineNimbusConfig({
-  // TODO: swap in the real docs domain once it's deployed (drives canonical
-  // URLs, OG images, robots.txt, sitemap, and the links in /llms.txt).
-  site: "https://docs.warpforge.dev",
+  // Drives canonical URLs, OG images, robots.txt, sitemap, and the links in
+  // /llms.txt. The landing page is `/`; the docs live under it.
+  site: "https://warpforge.app",
   title: "Warpforge",
   description:
     "Run parallel coding agents without losing the workspace — docs for the Warpforge agentic development environment.",
