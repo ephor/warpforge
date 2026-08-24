@@ -1278,6 +1278,14 @@ pub enum Command {
         project_id: Option<String>,
         reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
     },
+    MemoryListCompaction {
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryResolveCompaction {
+        id: i64,
+        approve: bool,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
     Shutdown {
         reply: oneshot::Sender<()>,
     },
@@ -1761,6 +1769,27 @@ impl DaemonHandle {
             src_id: src.into(),
             dst_id: dst.into(),
             relation: rel.into(),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+    pub async fn memory_list_compaction(
+        &self,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryListCompaction { reply: tx }).await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+    pub async fn memory_resolve_compaction(
+        &self,
+        id: i64,
+        approve: bool,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryResolveCompaction {
+            id,
+            approve,
             reply: tx,
         })
         .await;
@@ -5896,6 +5925,18 @@ impl Daemon {
                 });
                 let _ = reply.send(r);
             }
+            Command::MemoryListCompaction { reply } => {
+                let r = self.memory.list_compaction_log().and_then(|v| {
+                    serde_json::to_value(v).map_err(super::memory::MemoryError::from)
+                });
+                let _ = reply.send(r);
+            }
+            Command::MemoryResolveCompaction { id, approve, reply } => {
+                let r = self.memory.resolve_compaction(id, approve).and_then(|s| {
+                    serde_json::to_value(s).map_err(super::memory::MemoryError::from)
+                });
+                let _ = reply.send(r);
+            }
             Command::MemoryDream {
                 dry_run,
                 project_id,
@@ -5929,6 +5970,14 @@ impl Daemon {
                             let mut task =
                                 Task::new(&pid, &prompt, &cfg.agent, vec!["dreaming".into()]);
                             task.title = title;
+                            // Dreaming is already done — proposals are in DB. Don't spawn agent;
+                            // mark Waiting so board shows review-needed, not spinner/“warming up”.
+                            task.status = crate::daemon::task::TaskStatus::Waiting;
+                            // Rich prompt so conversation isn't blank
+                            task.prompt = format!(
+                                "Dreaming finished for '{}' — {} proposal(s).\n\n{}\n\n→ Review in Memory → Compaction (approve/reject). No agent session needed.",
+                                pid, inserted, v
+                            );
                             let tid = task.id.clone();
                             self.tasks.insert(tid.clone(), task.clone());
                             self.persist(&task);

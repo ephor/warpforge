@@ -631,6 +631,23 @@ fn tool_defs(is_orchestrator: bool) -> Value {
             }
         }),
         json!({
+            "name": "memory_list_compaction",
+            "description": "List pending compaction proposals (id, type, target_ids, reason, status).",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "memory_resolve_compaction",
+            "description": "Resolve a compaction proposal: approve (applied) or reject. Use after verifying against code.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer", "description": "Proposal id from memory_list_compaction." },
+                    "approve": { "type": "boolean", "description": "True=applied, false=rejected. Default true." }
+                },
+                "required": ["id"]
+            }
+        }),
+        json!({
             "name": "memory_addEdge",
             "description": "Add a directed edge between two memories.",
             "inputSchema": {
@@ -1516,6 +1533,24 @@ async fn handle_tool_call(
             let result = client
                 .request("memory.dream", json!({"dry_run": dry_run}))
                 .await?;
+            json_text(&result)
+        }
+        "memory_resolve_compaction" => {
+            let id = args
+                .get("id")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow!("'id' is required"))? as i64;
+            let approve = args.get("approve").and_then(Value::as_bool).unwrap_or(true);
+            let result = client
+                .request(
+                    "memory.resolveCompaction",
+                    json!({"id": id, "approve": approve}),
+                )
+                .await?;
+            json_text(&result)
+        }
+        "memory_list_compaction" => {
+            let result = client.request("memory.listCompaction", json!({})).await?;
             json_text(&result)
         }
         "memory_addEdge" => {

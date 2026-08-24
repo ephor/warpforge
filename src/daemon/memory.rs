@@ -433,7 +433,7 @@ impl MemoryStore {
         let Some(vec) = vec else { return Ok(()) };
         let blob = f32_to_blob(&vec);
         conn.execute(
-            "INSERT INTO memories_vec (rowid, embedding) VALUES (?1, ?2)",
+            "INSERT OR REPLACE INTO memories_vec (rowid, embedding) VALUES (?1, ?2)",
             params![rowid, blob],
         )?;
         Ok(())
@@ -1037,6 +1037,42 @@ impl MemoryStore {
         .unwrap_or(0)
     }
 
+    pub fn resolve_compaction(&self, id: i64, approve: bool) -> Result<String, MemoryError> {
+        let conn = self.guard()?;
+        let status = if approve { "applied" } else { "rejected" };
+        let changed = conn.execute(
+            "UPDATE memory_compaction_log SET status=?1 WHERE id=?2 AND status='pending'",
+            params![status, id],
+        )?;
+        if changed == 0 {
+            return Err(MemoryError::Other(anyhow::anyhow!(
+                "not found or not pending"
+            )));
+        }
+        Ok(status.to_string())
+    }
+
+    pub fn resolve_compaction_for_targets(
+        &self,
+        target_ids: &str,
+        approve: bool,
+    ) -> Result<usize, MemoryError> {
+        let conn = self.guard()?;
+        let status = if approve { "approved" } else { "rejected" };
+        let mut count = 0;
+        for tid in target_ids
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            count += conn.execute(
+                "UPDATE memory_compaction_log SET status=?1 WHERE target_ids LIKE ?2 AND status='pending'",
+                params![status, format!("%{}%", tid)],
+            )?;
+        }
+        Ok(count)
+    }
+
     pub fn list_compaction_log(&self) -> Result<Vec<serde_json::Value>, MemoryError> {
         let conn = self.guard()?;
         let mut stmt = conn.prepare(
@@ -1222,7 +1258,7 @@ impl MemoryStore {
         let stale_cutoff = now - 30 * 24 * 3600;
         let mut count = 0;
         let mut stmt = conn.prepare(
-            "SELECT (SELECT GROUP_CONCAT(id, ',') FROM (SELECT id FROM memories m2 WHERE m2.content = m.content ORDER BY id)) FROM memories m GROUP BY content HAVING COUNT(*)>1",
+            "SELECT (SELECT GROUP_CONCAT(id, ',') FROM (SELECT id FROM memories m2 WHERE lower(trim(m2.content)) = lower(trim(m.content)) ORDER BY id)) FROM memories m GROUP BY lower(trim(content)) HAVING COUNT(*)>1",
         )?;
         let dup_rows: Vec<String> = stmt
             .query_map([], |r| r.get::<_, String>(0))?
