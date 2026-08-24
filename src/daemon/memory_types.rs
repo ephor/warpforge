@@ -37,6 +37,8 @@ pub struct Stats {
     pub scopes_enabled: ScopesEnabled,
     #[serde(default)]
     pub per_project_db_exists: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding_unavailable: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

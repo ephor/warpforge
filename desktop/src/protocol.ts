@@ -785,4 +785,5 @@ export interface MemoryStats {
     project: boolean;
   };
   perProjectDbExists: boolean;
+  embeddingUnavailable?: string | null;
 }
