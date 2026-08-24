@@ -1020,7 +1020,7 @@ fn build_external_page(
 ///
 /// `yaml_project_path` is the project's checkout directory when the configured
 /// backlog backend is YAML files. Backlog item rows then land in
-/// `…/.workforge/backlog/*.yaml` (project-local) instead of the SQLite
+/// `…/.warpforge/backlog/*.yaml` (project-local) instead of the SQLite
 /// `backlog_items` table; tracker links always live in SQLite because they are
 /// daemon-owned. Passing `None` persists to SQLite.
 pub fn adopt_imported(
