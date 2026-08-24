@@ -1,0 +1,191 @@
+---
+/**
+ * A working miniature of Warpforge, built in DOM rather than shown as a
+ * screenshot — a dark IDE shrunk to page width is unreadable, and a still
+ * image cannot show the one thing worth showing: several harnesses working
+ * one task and the result landing as a reviewable diff.
+ *
+ * The whole sequence is driven by `data-step` on the root; every transition
+ * is a CSS rule keyed off it, so the script only advances an integer. With
+ * JS off — or reduced motion on — the markup renders at its final state,
+ * which is a complete, honest picture rather than an empty shell.
+ */
+import "./forge-demo.css";
+
+const files = [
+  { path: "api/src/middleware/rate-limit.ts", add: 48, del: 0, kind: "ADDED" },
+  { path: "api/src/server.ts", add: 6, del: 1, kind: "MODIFIED" },
+  { path: "api/test/rate-limit.test.ts", add: 31, del: 0, kind: "ADDED" },
+];
+---
+
+<div class="wf-demo" data-forge-demo data-step="5" aria-label="Warpforge running a task across several coding agents">
+  <!-- Window chrome -->
+  <div class="bar">
+    <span class="crumb">warpforge</span>
+    <span class="sep">/</span>
+    <span class="crumb crumb-live">Add rate limiting to the API</span>
+    <div class="bar-right">
+      <span class="agent-chip"><i class="dot dot-lead"></i>Claude Code · lead</span>
+    </div>
+  </div>
+
+  <div class="body">
+    <!-- Left: the run -->
+    <section class="pane pane-run" aria-label="Agents">
+      <header class="pane-head">
+        <span>Agents</span>
+        <span class="count" data-count>3</span>
+      </header>
+
+      <div class="row row-lead">
+        <i class="dot dot-lead"></i>
+        <div class="row-main">
+          <span class="row-name">lead</span>
+          <span class="row-sub">Claude Code</span>
+        </div>
+        <span class="badge badge-run" data-lead-badge>orchestrating</span>
+      </div>
+
+      <div class="row row-child" data-child="1">
+        <i class="dot dot-codex"></i>
+        <div class="row-main">
+          <span class="row-name">implement middleware</span>
+          <span class="row-sub">Codex</span>
+        </div>
+        <span class="badge" data-child-badge>done</span>
+      </div>
+
+      <div class="row row-child" data-child="2">
+        <i class="dot dot-oc"></i>
+        <div class="row-main">
+          <span class="row-name">add tests</span>
+          <span class="row-sub">opencode</span>
+        </div>
+        <span class="badge" data-child-badge>done</span>
+      </div>
+
+      <div class="run-note">
+        <span class="note-k">one task</span>
+        <span class="note-v">three harnesses</span>
+      </div>
+    </section>
+
+    <!-- Middle: conversation -->
+    <section class="pane pane-chat" aria-label="Conversation">
+      <header class="pane-head"><span>Conversation</span></header>
+
+      <div class="msg msg-user">Add rate limiting to the API. Tests too.</div>
+
+      <div class="ev" data-ev="1">
+        <span class="ev-k">spawn_agent</span>
+        <span class="ev-v">codex · implement middleware</span>
+      </div>
+      <div class="ev" data-ev="2">
+        <span class="ev-k">spawn_agent</span>
+        <span class="ev-v">opencode · add tests</span>
+      </div>
+      <div class="ev" data-ev="3">
+        <span class="ev-k">read_inbox</span>
+        <span class="ev-v">2 results</span>
+      </div>
+
+      <div class="msg msg-agent" data-ev="4">
+        Both landed. Token bucket in <code>rate-limit.ts</code>, wired in <code>server.ts</code>, 6
+        tests green.
+      </div>
+
+      <div class="composer">
+        <span class="composer-ph">Steer this session…</span>
+        <span class="composer-send" aria-hidden="true">↵</span>
+      </div>
+    </section>
+
+    <!-- Right: review -->
+    <section class="pane pane-diff" aria-label="Changes">
+      <header class="pane-head">
+        <span>Changes</span>
+        <span class="count">3 files</span>
+      </header>
+
+      {
+        files.map((f, i) => (
+          <div class="file" data-file={i + 1}>
+            <span class={`kind kind-${f.kind.toLowerCase()}`}>{f.kind}</span>
+            <span class="file-path">{f.path}</span>
+            <span class="stat">
+              <b>+{f.add}</b>
+              {f.del > 0 && <s>−{f.del}</s>}
+            </span>
+          </div>
+        ))
+      }
+
+      <div class="hunk" data-file="1">
+        <div class="ln ln-add">+ const bucket = new TokenBucket(limit, windowMs);</div>
+        <div class="ln ln-add">+ if (!bucket.take(key)) return tooMany(res);</div>
+        <div class="ln ln-ctx">&nbsp;&nbsp;return next();</div>
+      </div>
+
+      <div class="commit" data-commit>
+        <span class="commit-label">Commit message</span>
+        <span class="commit-msg"
+          >feat(api): add token-bucket rate limiting<span class="caret" aria-hidden="true"></span></span
+        >
+        <span class="commit-hint">drafted from the diff</span>
+      </div>
+    </section>
+  </div>
+
+  <!-- Controls -->
+  <div class="foot">
+    <button type="button" class="replay" data-replay>
+      <span aria-hidden="true">↻</span> Replay
+    </button>
+    <span class="foot-note">A scripted run. The app is the real thing.</span>
+  </div>
+</div>
+
+
+<script>
+  const STEP_MS = [900, 700, 900, 900, 800, 3600];
+
+  function run(demo: HTMLElement) {
+    let timer: number | undefined;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const advance = (step: number) => {
+      demo.dataset.step = String(step);
+      if (step >= STEP_MS.length - 1) return;
+      timer = window.setTimeout(() => advance(step + 1), STEP_MS[step]);
+    };
+
+    const start = () => {
+      window.clearTimeout(timer);
+      if (reduced) {
+        demo.dataset.step = "5";
+        return;
+      }
+      advance(0);
+    };
+
+    demo.querySelector("[data-replay]")?.addEventListener("click", start);
+
+    // Only play once it is actually on screen — an animation that finished
+    // above the fold is an animation nobody saw.
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            start();
+            io.disconnect();
+          }
+        }
+      },
+      { threshold: 0.35 },
+    );
+    io.observe(demo);
+  }
+
+  document.querySelectorAll<HTMLElement>("[data-forge-demo]").forEach(run);
+</script>
