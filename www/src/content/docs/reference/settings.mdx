@@ -1,0 +1,113 @@
+---
+title: Settings
+description: Every setting Warpforge exposes — themes, fonts, agents and accounts, language servers, trackers, memory, dreaming, and generated text.
+sidebar:
+  order: 5
+  label: Settings
+---
+
+Everything Warpforge lets you change, in the order the Settings panel presents it.
+
+## Appearance
+
+### Themes
+
+Eight themes, four dark and four light. A theme is a set of hue-saturation-lightness values written to the document root, so switching is instant and applies to every surface — editor, terminal, diffs, panels.
+
+| Dark | Light |
+| --- | --- |
+| **Forge** — the default: warm near-black with a peach accent | **Paper** |
+| **Old Money** | **Ivory** |
+| **Forest** | **Moss** |
+| **Midnight** | **Sky** |
+
+Syntax highlighting follows the theme's mode rather than its exact palette: dark themes use the One Dark highlight set, light themes their own.
+
+### Font sizes
+
+Two independent scales:
+
+- **UI font size** — chrome, labels, chat prose.
+- **Mono font size** — code, diffs, the editor, the terminal.
+
+Everything is sized in relative units, so these are true zoom controls rather than a handful of preset sizes. **Reset font sizes** puts both back. From the keyboard: <kbd>⌘+</kbd>, <kbd>⌘-</kbd>, <kbd>⌘0</kbd>.
+
+## Agents
+
+Which coding agents are enabled, whether each is installed, what version, and whether a newer one exists — with one-click install or update. See [Bring your own agents](/concepts/agents/) for the supported list.
+
+Each agent row also has a **refresh** button for its model list, showing how many models Warpforge currently knows about. Add a provider or model in the agent's own config and it appears after a restart, or immediately via that button.
+
+## Accounts
+
+Several logins for the same agent — personal and work, or two seats — for **Claude Code** and **Codex**. Import the login you're currently signed in as under a name, then switch which one new sessions use.
+
+Covered in full under [Several logins for one agent](/concepts/agents/#several-logins-for-one-agent).
+
+## Language servers
+
+Warpforge knows how to install and run eight language servers. Each row shows its status — installed, available, or update available — with a one-click install.
+
+| Language | Server | Install |
+| --- | --- | --- |
+| TypeScript / JavaScript | `typescript-language-server` | `npm install -g typescript-language-server` |
+| Rust | `rust-analyzer` | `brew install rust-analyzer` |
+| Go | `gopls` | `brew install gopls` |
+| Python | `pyright-langserver` | `npm install -g pyright` |
+| JSON | `vscode-json-language-server` | `npm install -g vscode-langservers-extracted` |
+| CSS | `vscode-css-language-server` | `npm install -g vscode-langservers-extracted` |
+| HTML | `vscode-html-language-server` | `npm install -g vscode-langservers-extracted` |
+| YAML | `yaml-language-server` | `npm install -g yaml-language-server` |
+
+A server powers go-to-definition, find references, rename, hover docs, completions, and diagnostics — see [Reading code](/guides/working-in-a-task/#reading-code-not-just-diffs). Open a file whose server is missing and the editor offers to install it rather than quietly falling back to plain highlighting.
+
+<Aside type="note" title="Highlighting is broader than the server list">
+  Syntax highlighting also covers Markdown, MDX, and JSX/TSX variants, which have no language server here. You get colour everywhere; the intelligence follows the table above.
+</Aside>
+
+## Issue trackers
+
+Connect **GitHub** (through the `gh` CLI session you already have) or **Linear** (a personal API key, kept in your OS keychain). A Linear key is account-wide, so each project picks the team it reads from.
+
+See [Connect a tracker](/guides/tasks-and-backlog/#connect-a-tracker).
+
+## Backlog storage
+
+Where backlog items live. The daemon owns them either way:
+
+| Format | Where items live |
+| --- | --- |
+| **SQLite** | Inside Warpforge's own data, like the rest of its state |
+| **YAML** | One file per item under `.workforge/backlog/` in the project, so items can be committed and travel with the repo |
+
+One file per item keeps writes small and makes the directory readable — and diffable — in the project itself.
+
+## Memory
+
+Settings for the [shared memory store](/concepts/memory/):
+
+- **Embedding mode** — off (full-text only) or local embeddings, which turns search hybrid.
+- **Memories** — counts per scope, so you can see what's actually accumulated.
+- **Active scopes** — which of global and project are on. Read-only here; edit `~/.warpforge/config.yaml`.
+- **Per-project DB** — whether a project overlay database exists. Auto-created, not something you make by hand.
+
+## Dreaming
+
+The [compaction pass](/concepts/memory/#dreaming) that reviews memories against the codebase and proposes cleanups.
+
+- **Enabled**, the **trigger** (manual, idle, or cron), and the agent and model it runs on are read from `~/.warpforge/config.yaml` under `memory.dreaming` — Settings shows them read-only.
+- **Dream project** — which project the pass runs against.
+- **Dream now** — run it on demand.
+
+Pending proposals show their count here; nothing is applied without your approval.
+
+## Text generation
+
+Which agent writes the prose Warpforge drafts for you — [task titles, commit messages, PR descriptions](/guides/working-in-a-task/#text-you-dont-have-to-write):
+
+- **Auto-name tasks** — on by default. Turn it off to name tasks yourself.
+- **Agent for git text** and **Model** — which harness and model do the drafting. Worth pointing at something small and fast; this work doesn't need your best model.
+
+## Fun
+
+There's an easter egg in here. Go find it.
