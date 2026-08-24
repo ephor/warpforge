@@ -148,7 +148,7 @@ export function MergeDiff({
   return (
     <div className="flex flex-col">
       {editable && (
-        <div className="flex items-center gap-3 border-b px-3 py-1 text-xs text-muted-foreground">
+        <div className="flex h-9 shrink-0 items-center gap-3 border-b px-3 text-xs text-muted-foreground">
           <span className="font-mono">{doc.path}</span>
           <span
             className={cn(

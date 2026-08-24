@@ -14,66 +14,45 @@ describe("task-detail UI state", () => {
     localStorage.clear();
     useUi.setState({
       openTaskId: null,
+      projectSurfaceByProject: { warpforge: "runtime" },
       repositoryOperation: null,
       rightPanel: "changes",
-      runtimeOpenByProject: { warpforge: true },
       showChat: true,
       showDiff: true,
     });
   });
 
-  it("resets contextual tools without changing project Runtime visibility", () => {
+  it("resets contextual tools without disturbing project-scoped layout", () => {
     useUi.getState().openTask("next-task");
 
     expect(useUi.getState().openTaskId).toBe("next-task");
     expect(useUi.getState().rightPanel).toBeNull();
-    expect(useUi.getState().runtimeOpenByProject).toEqual({ warpforge: true });
+    expect(useUi.getState().projectSurfaceByProject).toEqual({ warpforge: "runtime" });
     expect(useUi.getState().showChat).toBe(true);
     expect(useUi.getState().showDiff).toBe(true);
   });
 
-  it("tracks Runtime visibility independently by project", () => {
-    useUi.getState().setRuntimeOpen("warpforge", false);
-    useUi.getState().setRuntimeOpen("other-project", true);
+  it("tracks and persists the project page surface per project", async () => {
+    useUi.setState({ projectSurfaceByProject: {} });
+    useUi.getState().setProjectSurface("alpha", "runtime");
+    useUi.getState().setProjectSurface("beta", "backlog");
 
-    expect(useUi.getState().runtimeOpenByProject).toEqual({
-      "other-project": true,
-      warpforge: false,
+    expect(useUi.getState().projectSurfaceByProject).toEqual({
+      alpha: "runtime",
+      beta: "backlog",
     });
-
-    useUi.getState().toggleRuntime("warpforge");
-    expect(useUi.getState().runtimeOpenByProject.warpforge).toBe(true);
-    expect(useUi.getState().runtimeOpenByProject["other-project"]).toBe(true);
-  });
-
-  it("clears only the removed project's persisted Runtime visibility", () => {
-    useUi.setState({ runtimeOpenByProject: { alpha: true, beta: false } });
-
-    useUi.getState().clearRuntimeOpen("alpha");
-
-    expect(useUi.getState().runtimeOpenByProject).toEqual({ beta: false });
-  });
-
-  it("persists and hydrates project Runtime visibility", async () => {
-    useUi.getState().setRuntimeOpen("other-project", true);
 
     const persistedValue = localStorage.getItem("wf-ui");
-    const persisted = JSON.parse(persistedValue ?? "{}") as {
-      state?: { runtimeOpenByProject?: Record<string, boolean> };
-    };
-    expect(persisted.state?.runtimeOpenByProject).toEqual({
-      "other-project": true,
-      warpforge: true,
-    });
-
-    useUi.setState({ runtimeOpenByProject: {} });
+    useUi.setState({ projectSurfaceByProject: {} });
     if (persistedValue) localStorage.setItem("wf-ui", persistedValue);
     await useUi.persist.rehydrate();
-
-    expect(useUi.getState().runtimeOpenByProject).toEqual({
-      "other-project": true,
-      warpforge: true,
+    expect(useUi.getState().projectSurfaceByProject).toEqual({
+      alpha: "runtime",
+      beta: "backlog",
     });
+
+    useUi.getState().clearProjectSurface("alpha");
+    expect(useUi.getState().projectSurfaceByProject).toEqual({ beta: "backlog" });
   });
 
   it("tracks transient repository activity for the task footer", () => {
@@ -216,7 +195,9 @@ describe("task workspace surface state", () => {
     await expect(useUi.persist.rehydrate()).resolves.not.toThrow();
 
     // No stored value for the new key — falls back to a valid, defined surface.
-    expect(["files", "diff", "runtime", "pipeline"]).toContain(useUi.getState().activeSurface);
+    expect(["files", "diff", "runtime", "terminal", "pipeline"]).toContain(
+      useUi.getState().activeSurface,
+    );
   });
 
   it("moves a persisted view off the removed Board screen", async () => {

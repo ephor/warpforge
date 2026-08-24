@@ -7,7 +7,7 @@ resolver = "2"
 
 [package]
 name = "warpforge"
-version = "0.6.3"
+version = "0.10.1"
 edition = "2021"
 
 [[bin]]
@@ -33,11 +33,18 @@ bytes = "1"
 clap = { version = "4", features = ["derive"] }
 tokio-tungstenite = "0.24"
 rusqlite = { version = "0.32", features = ["bundled"] }
+sqlite-vec = "0.1.9"
+# Optional local embeddings (memory v1.5). `ort-load-dynamic` keeps the build
+# offline-capable (no ONNX Runtime binary download at build time); the
+# all-MiniLM-L6-v2 model (~80 MB) is fetched lazily at runtime and falls back
+# to FTS-only when unavailable.
+fastembed = { version = "5", default-features = false, features = ["hf-hub-native-tls", "ort-load-dynamic"] }
 warpforge-protocol = { path = "crates/warpforge-protocol" }
 base64 = "0.22"
 sha2 = "0.10"
 async-trait = "0.1"
 rfd = "0.15"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [dev-dependencies]
 tempfile = "3"

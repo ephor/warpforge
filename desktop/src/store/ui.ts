@@ -1,8 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import type { EditHunk } from "../protocol";
 import { DEFAULT_THEME } from "@/lib/themes";
+
+import type { EditHunk } from "../protocol";
 
 /**
  * Client-side UI state (view, panel toggles, prefs) — persisted to localStorage.
@@ -15,12 +16,16 @@ export type RightPanel = "changes" | "files" | "subtasks" | null;
 export type RepositoryOperation = { taskId: string; kind: "pull" | "push" };
 
 /** Center-pane workspace surface. Exactly one is active per task at a time. */
-export type TaskSurface = "files" | "diff" | "runtime" | "pipeline";
+export type TaskSurface = "files" | "diff" | "runtime" | "terminal" | "pipeline";
 export const DEFAULT_TASK_SURFACE: TaskSurface = "diff";
+
+/** Project-page surface. Git and Pull Requests join this union later. */
+export type ProjectSurface = "backlog" | "files" | "runtime" | "terminal";
+export const DEFAULT_PROJECT_SURFACE: ProjectSurface = "backlog";
 
 /** Transient intent to open a task already showing a specific file/diff. */
 export type TaskOpenNav =
-  | { surface: "files"; path: string }
+  | { surface: "files"; path: string; line?: number; column?: number }
   | { surface: "diff"; path: string; hunks?: EditHunk[] };
 
 export interface PinnedTileLayout {
@@ -77,6 +82,12 @@ export interface SettingsState {
    */
   newTaskWorktree: boolean;
   setNewTaskWorktree: (v: boolean) => void;
+  /**
+   * Whether the New Work Item dialog opens expanded (tall prompt) or compact.
+   * Persisted so the choice survives across creates instead of resetting.
+   */
+  newWorkItemExpanded: boolean;
+  setNewWorkItemExpanded: (v: boolean) => void;
 }
 
 interface UiState extends SettingsState {
@@ -96,14 +107,26 @@ interface UiState extends SettingsState {
   showDiff: boolean;
   diffView: DiffView;
   rightPanel: RightPanel;
-  /** Which of Files/Diff/Runtime/Plan is active in the workspace pane. Task-scoped, like `rightPanel`. */
+  /** Which workspace surface is active in the centre pane. Task-scoped, like `rightPanel`. */
   activeSurface: TaskSurface;
-  runtimeOpenByProject: Record<string, boolean>;
+  /**
+   * Which surface the project page shows, per project. Persisted like the
+   * other project-scoped layout state: reopening a project should land where
+   * you left it rather than snapping back to Backlog.
+   */
+  projectSurfaceByProject: Record<string, ProjectSurface>;
   pinnedTaskIds: string[];
   pinnedLayout: Record<string, PinnedTileLayout>;
+  missionControlTab: "live" | "needs" | "failed" | "pinned";
   sidebarWidth: number;
   /** Sidebar shrunk to its icon rail. */
   sidebarCollapsed: boolean;
+  /** File-tree panel inside the Files surface collapsed to a thin rail. */
+  filesPanelCollapsed: boolean;
+  /** Service/port-forward sidebar inside the Runtime surface collapsed. */
+  runtimeSidebarCollapsed: boolean;
+  /** Changes rail inside the Diff surface collapsed. */
+  diffPanelCollapsed: boolean;
   // Editor: language-server (LSP) features — persisted, user-toggled.
   lspEnabled: boolean;
 
@@ -122,14 +145,17 @@ interface UiState extends SettingsState {
   setDiffView: (v: DiffView) => void;
   setRightPanel: (panel: RightPanel) => void;
   setActiveSurface: (surface: TaskSurface) => void;
-  toggleRuntime: (project: string) => void;
-  setRuntimeOpen: (project: string, open: boolean) => void;
-  clearRuntimeOpen: (project: string) => void;
+  setProjectSurface: (project: string, surface: ProjectSurface) => void;
+  clearProjectSurface: (project: string) => void;
   togglePinnedTask: (id: string) => void;
   setPinnedTaskIds: (ids: string[]) => void;
   setPinnedLayout: (id: string, layout: PinnedTileLayout) => void;
+  setMissionControlTab: (tab: "live" | "needs" | "failed" | "pinned") => void;
   setSidebarWidth: (w: number) => void;
   toggleSidebarCollapsed: () => void;
+  toggleFilesPanelCollapsed: () => void;
+  toggleRuntimeSidebarCollapsed: () => void;
+  toggleDiffPanelCollapsed: () => void;
   toggleLsp: () => void;
 }
 
@@ -156,11 +182,15 @@ export const useUi = create<UiState>()(
       diffView: "split",
       rightPanel: null,
       activeSurface: DEFAULT_TASK_SURFACE,
-      runtimeOpenByProject: {},
+      projectSurfaceByProject: {},
       pinnedTaskIds: [],
       pinnedLayout: {},
+      missionControlTab: "live" as const,
       sidebarWidth: SIDEBAR_WIDTH_DEFAULT,
       sidebarCollapsed: false,
+      filesPanelCollapsed: false,
+      runtimeSidebarCollapsed: false,
+      diffPanelCollapsed: false,
       fontSize: DEFAULT_FONT_SIZE,
       monoFontSize: DEFAULT_MONO_FONT_SIZE,
       theme: DEFAULT_THEME,
@@ -168,6 +198,7 @@ export const useUi = create<UiState>()(
       textGenModel: null,
       autoNameTasks: true,
       newTaskWorktree: false,
+      newWorkItemExpanded: false,
       theoMod: false,
       lspEnabled: true,
 
@@ -175,7 +206,7 @@ export const useUi = create<UiState>()(
       openProject: (selectedProjectId) =>
         set({ openTaskId: null, openTaskNav: null, view: "projects", selectedProjectId }),
       // Contextual task tools must not leak from one task into the next.
-      // Project-scoped Runtime visibility and other layout preferences remain persisted.
+      // Project-scoped layout preferences remain persisted.
       openTask: (openTaskId) =>
         set({
           openTaskId,
@@ -200,25 +231,15 @@ export const useUi = create<UiState>()(
       setDiffView: (diffView) => set({ diffView }),
       setRightPanel: (rightPanel) => set({ rightPanel }),
       setActiveSurface: (activeSurface) => set({ activeSurface }),
-      toggleRuntime: (project) =>
+      setProjectSurface: (project, surface) =>
         set((s) => ({
-          runtimeOpenByProject: {
-            ...s.runtimeOpenByProject,
-            [project]: !s.runtimeOpenByProject[project],
-          },
+          projectSurfaceByProject: { ...s.projectSurfaceByProject, [project]: surface },
         })),
-      setRuntimeOpen: (project, open) =>
-        set((s) => ({
-          runtimeOpenByProject: {
-            ...s.runtimeOpenByProject,
-            [project]: open,
-          },
-        })),
-      clearRuntimeOpen: (project) =>
+      clearProjectSurface: (project) =>
         set((s) => {
-          const runtimeOpenByProject = { ...s.runtimeOpenByProject };
-          delete runtimeOpenByProject[project];
-          return { runtimeOpenByProject };
+          const projectSurfaceByProject = { ...s.projectSurfaceByProject };
+          delete projectSurfaceByProject[project];
+          return { projectSurfaceByProject };
         }),
       setPinnedTaskIds: (pinnedTaskIds) => set({ pinnedTaskIds }),
       togglePinnedTask: (id) =>
@@ -245,8 +266,14 @@ export const useUi = create<UiState>()(
         set((s) => ({
           pinnedLayout: { ...s.pinnedLayout, [id]: layout },
         })),
+      setMissionControlTab: (missionControlTab) => set({ missionControlTab }),
       setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: clampSidebarWidth(sidebarWidth) }),
       toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      toggleFilesPanelCollapsed: () =>
+        set((s) => ({ filesPanelCollapsed: !s.filesPanelCollapsed })),
+      toggleRuntimeSidebarCollapsed: () =>
+        set((s) => ({ runtimeSidebarCollapsed: !s.runtimeSidebarCollapsed })),
+      toggleDiffPanelCollapsed: () => set((s) => ({ diffPanelCollapsed: !s.diffPanelCollapsed })),
 
       // ── Font size settings ──
       setFontSize: (fontSize) => set({ fontSize: clampFontSize(fontSize) }),
@@ -265,6 +292,7 @@ export const useUi = create<UiState>()(
       setTextGenModel: (textGenModel) => set({ textGenModel }),
       setAutoNameTasks: (autoNameTasks) => set({ autoNameTasks }),
       setNewTaskWorktree: (newTaskWorktree) => set({ newTaskWorktree }),
+      setNewWorkItemExpanded: (newWorkItemExpanded) => set({ newWorkItemExpanded }),
       setTheoMod: (theoMod) => set({ theoMod }),
       toggleLsp: () => set((s) => ({ lspEnabled: !s.lspEnabled })),
     }),

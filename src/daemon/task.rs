@@ -85,6 +85,8 @@ pub struct Task {
     /// and restart reuse the same account even after the active one changed.
     /// `None` = whatever account is active at spawn time.
     pub account_id: Option<String>,
+    /// Id of the backlog item this task was started from, if any.
+    pub backlog_item_id: Option<String>,
 }
 
 impl Task {
@@ -114,6 +116,7 @@ impl Task {
             snoozed_until: None,
             snoozed_at: None,
             account_id: None,
+            backlog_item_id: None,
         }
     }
 

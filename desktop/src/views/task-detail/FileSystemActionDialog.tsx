@@ -41,20 +41,23 @@ export function FileSystemActionDialog({
       : action.kind === "create-folder"
         ? "New Folder"
         : "New File";
-  const label = isDelete
-    ? basePath
-    : action.kind === "rename"
-      ? basePath
-      : "Enter a name.";
+  const label = isDelete ? basePath : action.kind === "rename" ? basePath : "Enter a name.";
 
   const submit = async () => {
     if (!isDelete && !name.trim()) return;
     setBusy(true);
     try {
       const trimmed = name.trim();
-      const parent = isDelete || action.kind === "rename" ? basePath.split("/").slice(0, -1).join("/") : basePath;
+      const parent =
+        isDelete || action.kind === "rename"
+          ? basePath.split("/").slice(0, -1).join("/")
+          : basePath;
       const nextPath = isDelete ? basePath : `${parent ? `${parent}/` : ""}${trimmed}`;
-      const method = isDelete ? "file.delete" : action.kind === "rename" ? "file.rename" : "file.create";
+      const method = isDelete
+        ? "file.delete"
+        : action.kind === "rename"
+          ? "file.rename"
+          : "file.create";
       const params = isDelete
         ? { task_id: taskId, path: basePath }
         : action.kind === "rename"
@@ -92,7 +95,9 @@ export function FileSystemActionDialog({
           />
         )}
         <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
           <Button
             variant={isDelete ? "destructive" : "default"}
             disabled={busy || (!isDelete && !name.trim())}

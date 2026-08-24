@@ -140,6 +140,7 @@ pub fn task_info(t: &Task) -> wire::TaskInfo {
         settled_at: t.settled_at,
         snoozed_until: t.snoozed_until,
         snoozed_at: t.snoozed_at,
+        backlog_item_id: t.backlog_item_id.clone(),
     }
 }
 

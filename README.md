@@ -34,6 +34,14 @@ It does not replace Claude Code, Codex, or OpenCode; those tools still do the co
 
 ### macOS Apple Silicon
 
+**Homebrew:**
+
+```bash
+brew install --cask ephor/tap/warpforge
+```
+
+**Or manually:**
+
 1. Open the [latest Warpforge release](https://github.com/ephor/warpforge/releases/latest).
 2. Download `Warpforge_<version>_aarch64.dmg`.
 3. Open the DMG and drag **Warpforge** into **Applications**.
@@ -41,7 +49,7 @@ It does not replace Claude Code, Codex, or OpenCode; those tools still do the co
 
 The build is signed with a Developer ID certificate and notarized by Apple, so it opens without Gatekeeper workarounds. It needs macOS 11 or newer on an Apple Silicon Mac and ships its own daemon — no Rust toolchain or source checkout required.
 
-**Updates are built in and signed.** Warpforge checks the release feed shortly after its daemon comes up, and on demand from the app. Downloading and installing are always explicit actions — nothing installs in the background. An update carries both the desktop UI and its matching daemon, verifies an exact version and protocol handshake, and is refused with a clear list of blockers while agent tasks or runtime transitions are still active rather than interrupting work.
+**Updates are built in and signed.** The in-app updater is the primary update channel for both install methods — Homebrew performs the initial install, and Warpforge keeps itself current afterwards (`auto_updates` is declared in the cask, so `brew upgrade` never fights the built-in updater). Warpforge checks the release feed shortly after its daemon comes up, and on demand from the app. Downloading and installing are always explicit actions — nothing installs in the background. An update carries both the desktop UI and its matching daemon, verifies an exact version and protocol handshake, and is refused with a clear list of blockers while agent tasks or runtime transitions are still active rather than interrupting work.
 
 > [!NOTE]
 > macOS on Apple Silicon is the validated desktop target. Windows and Linux packaging exists as an opt-in release preview, but those platforms have not been tested on real machines and are not claimed as publicly supported.

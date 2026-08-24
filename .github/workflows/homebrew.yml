@@ -1,0 +1,73 @@
+name: Homebrew tap
+
+# Fires when a draft release is published on GitHub and syncs the
+# ephor/homebrew-tap cask to the published version: bumps `version` and the
+# DMG `sha256` (taken from the release SHA256SUMS) straight on the tap's
+# default branch. Manual dispatch re-syncs an already-published tag.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published vX.Y.Z tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew-tap
+  cancel-in-progress: false
+
+jobs:
+  cask:
+    name: Sync ephor/homebrew-tap cask
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ inputs.version || github.event.release.tag_name }}
+    steps:
+      # GITHUB_TOKEN cannot push to another repository, so pushes to the tap
+      # are authorized by this fine-grained personal access token (repo
+      # ephor/homebrew-tap, Contents: read/write).
+      - name: Require the token that authorizes pushes to the tap
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
+        run: test -n "$TOKEN" || { echo "Missing HOMEBREW_GITHUB_API_TOKEN secret" >&2; exit 1; }
+
+      - name: Download checksums from the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$VERSION" --repo ephor/warpforge \
+            --pattern 'SHA256SUMS' --dir .
+          cat SHA256SUMS
+
+      - name: Extract the macOS arm64 DMG checksum
+        id: sha
+        run: |
+          sha="$(awk -v pat="Warpforge_${VERSION#v}_aarch64.dmg" '$2 == pat {print $1}' SHA256SUMS)"
+          test -n "$sha" || { echo "No Warpforge_${VERSION#v}_aarch64.dmg entry in SHA256SUMS" >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Bump the cask and push
+        env:
+          SHA: ${{ steps.sha.outputs.sha }}
+          TOKEN: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
+        run: |
+          git clone -q "https://x-access-token:${TOKEN}@github.com/ephor/homebrew-tap" tap
+          cd tap
+          sed -i \
+            -e "s/^  version .*/  version \"${VERSION#v}\"/" \
+            -e "s/^  sha256 .*/  sha256 \"${SHA}\"/" \
+            Casks/warpforge.rb
+          if git diff --exit-code --quiet; then
+            echo "Cask is already at ${VERSION}"
+            exit 0
+          fi
+          git config user.name "warpforge-ci"
+          git config user.email "ci@warpforge.local"
+          git commit -am "warpforge ${VERSION#v}"
+          git push -q

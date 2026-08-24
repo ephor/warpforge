@@ -168,6 +168,12 @@ pub enum Method {
         #[serde(default)]
         limit: Option<u32>,
     },
+    /// List the project's declared services and port-forwards with their live
+    /// status and allocated ports. Read-only; used by the MCP bridge so an agent
+    /// can discover what runtime is up before reading logs or restarting a
+    /// service.
+    #[serde(rename = "runtime.list")]
+    RuntimeList { project: String },
 
     // ── Tasks (agent sessions on the board) ──
     #[serde(rename = "task.create")]
@@ -216,6 +222,12 @@ pub enum Method {
         /// exclusive with the orchestrator-chat mode.
         #[serde(default)]
         workflow: Option<String>,
+        /// Id of the backlog item this task is started from, if any.
+        #[serde(default)]
+        backlog_item_id: Option<String>,
+        /// When false, create without starting session. Defaults to true.
+        #[serde(default = "default_true")]
+        start: bool,
     },
     #[serde(rename = "task.cancel")]
     TaskCancel { task_id: String },
@@ -285,6 +297,77 @@ pub enum Method {
         project: Option<String>,
     },
 
+    // ── Shared memory ──
+    /// Persist a durable fact into shared memory. `scope` defaults to the
+    /// current project when `project_id` is supplied, else `global`.
+    #[serde(rename = "memory.store")]
+    MemoryStore {
+        content: String,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        tags: Option<Vec<String>>,
+        #[serde(default)]
+        project_id: Option<String>,
+    },
+    /// Full-text search over stored memories (FTS5, BM25-ranked).
+    #[serde(rename = "memory.search")]
+    MemorySearch {
+        query: String,
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        limit: Option<u32>,
+        #[serde(default)]
+        mode: Option<String>,
+    },
+    #[serde(rename = "memory.list")]
+    MemoryList {
+        #[serde(default)]
+        scope: Option<String>,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        limit: Option<u32>,
+        #[serde(default)]
+        offset: Option<u32>,
+    },
+    #[serde(rename = "memory.update")]
+    MemoryUpdate { id: String, content: String },
+    #[serde(rename = "memory.delete")]
+    MemoryDelete { id: String },
+    #[serde(rename = "memory.stats")]
+    MemoryStats {},
+    /// Toggle local embeddings (`none` | `fastembed`). `fastembed` downloads
+    /// all-MiniLM-L6-v2 (~80 MB) on first use; falls back to FTS when offline.
+    #[serde(rename = "memory.setEmbedding")]
+    MemorySetEmbedding { mode: String },
+    #[serde(rename = "memory.addEdge")]
+    MemoryAddEdge {
+        src_id: String,
+        dst_id: String,
+        relation: String,
+    },
+    #[serde(rename = "memory.edges")]
+    MemoryEdges { id: String },
+    #[serde(rename = "memory.dream")]
+    MemoryDream {
+        #[serde(default)]
+        dry_run: Option<bool>,
+        #[serde(default)]
+        project_id: Option<String>,
+    },
+    #[serde(rename = "memory.listCompaction")]
+    MemoryListCompaction {},
+    #[serde(rename = "memory.resolveCompaction")]
+    MemoryResolveCompaction {
+        id: i64,
+        #[serde(default)]
+        approve: Option<bool>,
+    },
+
     // ── Agent registry ──
     /// Detect installed ACP-capable agents. Returns `{ detected: DetectedAgent[] }`.
     #[serde(rename = "agents.detect")]
@@ -296,6 +379,12 @@ pub enum Method {
     /// install/update command and returns `{ ok, output }` when it finishes.
     #[serde(rename = "agents.install")]
     AgentsInstall { id: String },
+    /// Re-read an agent's model/selector list from the harness, replacing the
+    /// cached one. Use after adding a provider or model outside Warpforge.
+    /// Resolves once the probe finishes; the refreshed list arrives as
+    /// `agents.updated`.
+    #[serde(rename = "agents.probe")]
+    AgentsProbe { id: String },
 
     // ── Agent accounts (several logins per agent, one active) ──
     /// All registered accounts. Returns `{ accounts: AccountInfo[] }`.
@@ -355,7 +444,15 @@ pub enum Method {
     /// Full old (HEAD) + new (working-tree) contents of one file — powers the
     /// editable side-by-side (CodeMirror merge) review.
     #[serde(rename = "file.contents")]
-    FileContents { task_id: String, path: String },
+    FileContents {
+        #[serde(default)]
+        task_id: String,
+        path: String,
+        /// Read from the project's own checkout when no task owns the file
+        /// (the project page's read-only Files surface).
+        #[serde(default)]
+        project: Option<String>,
+    },
     /// List files in the task's project working tree.
     #[serde(rename = "file.list")]
     FileList {
@@ -476,6 +573,10 @@ pub enum Method {
     /// Describe the commits and files that would be sent by `git.push`.
     #[serde(rename = "git.pushInfo")]
     GitPushInfo { task_id: String },
+    /// Full message of the task repo's latest commit, for pre-filling an amend.
+    /// Returns `{ message }`, empty when the repo has no commits yet.
+    #[serde(rename = "git.lastCommitMessage")]
+    GitLastCommitMessage { task_id: String },
     /// Push the current branch. With `force`, uses `--force-with-lease`.
     #[serde(rename = "git.push")]
     GitPush {
@@ -502,6 +603,18 @@ pub enum Method {
         task_id: String,
         agent_id: String,
         kind: TextGenKind,
+        #[serde(default)]
+        model: Option<String>,
+    },
+    /// Polish a task prompt (title/description written by the user) using the
+    /// configured text-generation agent one-shot. Returns `{ text }`. Unlike
+    /// `text.generate` it does not need a task — the backlog creates locally and
+    /// this runs before a task exists.
+    #[serde(rename = "text.enhance")]
+    TextEnhance {
+        project: String,
+        agent_id: String,
+        prompt: String,
         #[serde(default)]
         model: Option<String>,
     },
@@ -640,6 +753,203 @@ pub enum Method {
     /// server. Returns `{ ok, command, output }`.
     #[serde(rename = "lsp.install")]
     LanguageServersInstall { id: String },
+
+    // ── Issue trackers (GitHub / Linear sync) ──
+    /// Current tracker connection state. Returns `{ linear: { connected,
+    /// email?, organization? } | null, github: { connected, login? } | null }`.
+    #[serde(rename = "tracker.status")]
+    TrackerStatus {},
+    /// Connect a Linear workspace using a personal API key. The key is stored
+    /// encrypted (keychain on macOS). Returns the status object.
+    #[serde(rename = "tracker.connectLinear")]
+    TrackerConnectLinear { api_key: String },
+    /// Disconnect Linear, deleting the stored key.
+    #[serde(rename = "tracker.disconnectLinear")]
+    TrackerDisconnectLinear {},
+    /// Connect GitHub, verifying the user's `gh` CLI session. Returns the status
+    /// object.
+    #[serde(rename = "tracker.connectGithub")]
+    TrackerConnectGithub {},
+    /// Disconnect GitHub (removes stored links; `gh` login itself is untouched).
+    #[serde(rename = "tracker.disconnectGithub")]
+    TrackerDisconnectGithub {},
+    /// Every persisted backlog↔tracker link, so a client can hydrate its
+    /// locally-stored backlog with remote ids/urls/status on connect.
+    /// Returns `{ links: [TrackerLinkInfo] }`.
+    #[serde(rename = "tracker.links")]
+    TrackerLinks {},
+    /// List every team the connected Linear key can see, so a project can be
+    /// pointed at one. Returns `{ teams: [LinearTeam] }`.
+    #[serde(rename = "tracker.linearTeams")]
+    TrackerLinearTeams {},
+    /// Read one image embedded in an issue body. The WebView has no tracker
+    /// session of its own, so the daemon fetches the bytes with the
+    /// credentials it already holds. Returns `TrackerAttachment`.
+    #[serde(rename = "tracker.attachment")]
+    TrackerAttachment {
+        /// Absolute https URL, as it appeared in the issue body.
+        url: String,
+    },
+    /// Which tracker slice a project reads. Returns `TrackerProjectSettings`.
+    #[serde(rename = "tracker.projectSettings")]
+    TrackerProjectSettings {
+        /// Project key, e.g. "warpforge".
+        project: String,
+    },
+    /// Point a project at a Linear team (or `null` to stop importing Linear
+    /// into it). Changing this drops the rows the previous team imported.
+    /// Returns the updated `TrackerProjectSettings`.
+    #[serde(rename = "tracker.setProjectLinearTeam")]
+    TrackerSetProjectLinearTeam {
+        project: String,
+        team_id: Option<String>,
+        team_name: Option<String>,
+    },
+    /// Which sources this project can actually read and write. `local` is
+    /// always true; Linear needs both a connected key and a mapped team;
+    /// GitHub needs a `gh` session whose repo resolves from the project dir.
+    /// Returns `ProjectSources`.
+    #[serde(rename = "tracker.projectSources")]
+    TrackerProjectSources {
+        /// Project key, e.g. "warpforge".
+        project: String,
+    },
+    /// Create an issue in an external tracker for a backlog item. Returns
+    /// `{ itemId, externalId, url, status }`.
+    #[serde(rename = "workItem.createExternal")]
+    WorkItemCreateExternal {
+        /// Client-generated backlog item id (uuid). The daemon keys its
+        /// `tracker_links` row on this.
+        item_id: String,
+        /// Provider: "github" or "linear".
+        provider: String,
+        project: String,
+        title: String,
+        #[serde(default)]
+        body: String,
+        #[serde(default)]
+        priority: WorkItemPriority,
+        #[serde(default)]
+        status: Option<String>,
+    },
+    /// Pull the latest status of external-tracker issues linked to backlog
+    /// items. `ids` empty = all. Returns `{ items: [{ id, url, status }] }`.
+    #[serde(rename = "workItem.syncExternal")]
+    WorkItemSyncExternal {
+        #[serde(default)]
+        ids: Vec<String>,
+    },
+    /// Import open issues that exist in a tracker but have no backlog item yet.
+    /// The daemon mints the item id and persists the link, so a client can
+    /// insert the returned rows straight into its board.
+    /// Returns `{ items: [ImportedWorkItem] }`.
+    #[serde(rename = "workItem.importExternal")]
+    WorkItemImportExternal {
+        project: String,
+        /// Provider: "github" or "linear". Omitted = every connected tracker.
+        #[serde(default)]
+        provider: Option<String>,
+    },
+    /// Read one server-paginated page from a connected external tracker.
+    /// Sorting and filtering happen at the daemon boundary so the desktop does
+    /// not import an entire repository into localStorage just to render a page.
+    #[serde(rename = "workItem.list")]
+    WorkItemList {
+        project: String,
+        provider: String,
+        #[serde(default = "default_page")]
+        page: u32,
+        #[serde(default = "default_page_size")]
+        page_size: u32,
+        #[serde(default)]
+        sort_by: String,
+        #[serde(default)]
+        sort_desc: bool,
+        #[serde(default)]
+        search: String,
+        #[serde(default)]
+        status: Option<String>,
+    },
+    /// Read the daemon-owned backlog storage configuration.
+    #[serde(rename = "backlog.getSettings")]
+    BacklogGetSettings {},
+    /// Select YAML-file or SQLite backlog persistence.
+    #[serde(rename = "backlog.setStorage")]
+    BacklogSetStorage { mode: BacklogStorageMode },
+    /// Read one project-scoped backlog page from the configured backend.
+    #[serde(rename = "backlog.list")]
+    BacklogList {
+        project: String,
+        #[serde(default = "default_page")]
+        page: u32,
+        #[serde(default = "default_page_size")]
+        page_size: u32,
+        #[serde(default)]
+        sort_by: String,
+        #[serde(default)]
+        sort_desc: bool,
+        #[serde(default)]
+        search: String,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        source: Option<String>,
+        #[serde(default)]
+        priority: Option<String>,
+        #[serde(default)]
+        assignee: Option<String>,
+    },
+    /// Create a local backlog item in configured storage.
+    #[serde(rename = "backlog.create")]
+    BacklogCreate {
+        project: String,
+        title: String,
+        #[serde(default)]
+        body: String,
+        #[serde(default)]
+        status: String,
+        #[serde(default)]
+        priority: String,
+        #[serde(default)]
+        source: String,
+        #[serde(default)]
+        assignee: Option<String>,
+    },
+    /// Edit a backlog item's own fields. Every field is optional: absent means
+    /// "leave alone", so one call can change just a priority. Returns the item.
+    #[serde(rename = "backlog.update")]
+    BacklogUpdate {
+        item_id: String,
+        project: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        body: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        priority: Option<String>,
+        #[serde(default)]
+        assignee: Option<String>,
+    },
+    #[serde(rename = "backlog.attachExternal")]
+    BacklogAttachExternal {
+        item_id: String,
+        project: String,
+        provider: String,
+        external_id: String,
+        url: String,
+        #[serde(default)]
+        remote_status: Option<String>,
+    },
+    /// Delete a backlog item and its tracker link (rollback for a failed
+    /// external create). Returns `{ ok }`.
+    #[serde(rename = "backlog.delete")]
+    BacklogDelete { item_id: String, project: String },
+    /// Link a daemon task to a backlog item (created when a backlog item starts
+    /// its first task). Returns `{ ok }`.
+    #[serde(rename = "workItem.linkTask")]
+    WorkItemLinkTask { item_id: String, task_id: String },
 }
 
 /// One supported editor language and its language-server install state, sent
@@ -708,6 +1018,263 @@ pub struct BootstrapAnswers {
     pub dev_commands: String,
     #[serde(default)]
     pub notes: String,
+}
+
+// ── Issue trackers (GitHub / Linear sync) ───────────────────────────────────
+
+/// Mirror of the desktop backlog's normalized statuses; these are the values
+/// warpforge uses internally and maps onto each tracker's native states.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkItemPriority {
+    Urgent,
+    High,
+    Medium,
+    Low,
+    #[default]
+    None,
+}
+
+/// A single external-tracker link for a backlog item, as seen by clients.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerLinkInfo {
+    /// The warpforge backlog item id (client-generated UUID).
+    pub item_id: String,
+    /// Provider: "github" or "linear".
+    pub provider: String,
+    /// Provider-native identifier (GHL-123, #456).
+    pub external_id: String,
+    pub url: String,
+    /// Normalized status last observed remotely.
+    #[serde(default)]
+    pub status: String,
+    /// Provider-native status label, if richer than the normalized one
+    /// (GitHub project columns, Linear state names).
+    #[serde(default)]
+    pub remote_status: Option<String>,
+    /// When the remote was last observed, unix seconds. 0 = never synced.
+    #[serde(default)]
+    pub last_synced_at: u64,
+    /// Id of the daemon task this backlog item became, if any.
+    #[serde(default)]
+    pub task_id: Option<String>,
+}
+
+/// Linear connection state (subset of what `tracker.status` returns).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerLinearStatus {
+    pub connected: bool,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub organization: Option<String>,
+}
+
+/// GitHub connection state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerGithubStatus {
+    pub connected: bool,
+    #[serde(default)]
+    pub login: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerStatus {
+    #[serde(default)]
+    pub linear: Option<TrackerLinearStatus>,
+    #[serde(default)]
+    pub github: Option<TrackerGithubStatus>,
+}
+
+/// One image from an issue body, already fetched. Inlined as base64 rather
+/// than handed over as a URL: the renderer has no tracker session, and a
+/// signed storage link expires in minutes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerAttachment {
+    /// The image's MIME type, e.g. `image/png`.
+    pub content_type: String,
+    pub data_base64: String,
+}
+
+/// A Linear team the connected API key can see, so the desktop can point a
+/// project at one instead of making anyone paste an id.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LinearTeam {
+    pub id: String,
+    pub key: String,
+    pub name: String,
+}
+
+/// Which external-tracker slice a project reads. Currently just the Linear
+/// team mapping; GitHub rides on the `gh` CLI session and needs none.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerProjectSettings {
+    pub project: String,
+    /// Linear team id this project imports from, or `None` before any choice.
+    #[serde(default)]
+    pub linear_team_id: Option<String>,
+    #[serde(default)]
+    pub linear_team_name: Option<String>,
+}
+
+/// Per-project tracker availability. This is what the UI should key its
+/// source filters and pickers on: the global connection state says nothing
+/// about whether *this* project has a repo or a Linear team behind it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSources {
+    pub project: String,
+    /// Local items are always available.
+    pub local: bool,
+    /// Linear is usable only with a team mapped for this project.
+    pub linear: bool,
+    /// GitHub is usable only when the project dir resolves to a repo the
+    /// connected `gh` session can see.
+    pub github: bool,
+}
+
+/// Result of creating an external issue for a backlog item.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateExternalResult {
+    pub item_id: String,
+    pub provider: String,
+    pub external_id: String,
+    pub url: String,
+    pub status: String,
+}
+
+/// One synced external item.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncedExternalItem {
+    pub id: String,
+    pub url: String,
+    pub status: String,
+    #[serde(default)]
+    pub remote_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncExternalResult {
+    pub items: Vec<SyncedExternalItem>,
+}
+
+/// An issue that existed in a tracker before warpforge knew about it. The
+/// daemon has already minted `item_id` and persisted the link, so the client
+/// only has to add the row to its board.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedWorkItem {
+    pub item_id: String,
+    #[serde(default)]
+    pub number: u64,
+    pub provider: String,
+    pub project: String,
+    pub external_id: String,
+    pub url: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    /// Normalized status.
+    pub status: String,
+    /// Provider-native status label.
+    #[serde(default)]
+    pub remote_status: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    /// Remote's last-updated time, unix seconds.
+    #[serde(default)]
+    pub updated_at: u64,
+}
+
+/// One listing answers both questions, so the result carries both: issues that
+/// became new backlog items, and already-tracked ones whose status moved.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportExternalResult {
+    pub items: Vec<ImportedWorkItem>,
+    #[serde(default)]
+    pub synced: Vec<SyncedExternalItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalWorkItemPage {
+    pub items: Vec<ImportedWorkItem>,
+    pub page: u32,
+    pub page_size: u32,
+    /// Exact when provider exposes a count; otherwise omitted and clients use
+    /// `hasNextPage` for forward pagination.
+    #[serde(default)]
+    pub total: Option<u64>,
+    pub has_next_page: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BacklogStorageMode {
+    #[default]
+    Sqlite,
+    Yaml,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BacklogSettings {
+    pub mode: BacklogStorageMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BacklogItem {
+    pub id: String,
+    pub number: u64,
+    pub project: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    pub status: String,
+    pub priority: String,
+    pub source: String,
+    #[serde(default)]
+    pub external_id: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub remote_status: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    #[serde(default)]
+    pub task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BacklogPage {
+    pub items: Vec<BacklogItem>,
+    pub page: u32,
+    pub page_size: u32,
+    pub total: u64,
+    pub has_next_page: bool,
+}
+
+fn default_page() -> u32 {
+    0
+}
+
+fn default_page_size() -> u32 {
+    20
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1016,6 +1583,10 @@ pub struct TaskInfo {
     /// Unix seconds when the current snooze was set. `None` = not snoozed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snoozed_at: Option<u64>,
+    /// Id of the backlog item this task was started from, if any. Lets clients
+    /// keep the board's backlog item and its agent task linked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backlog_item_id: Option<String>,
 }
 
 /// A task's lifecycle. Deliberately **not** an axis for derived facts: whether
@@ -1353,6 +1924,8 @@ pub enum TextGenKind {
     PrDescription,
     /// A short (≤60 chars) imperative title derived from a task's first prompt.
     TaskTitle,
+    /// A polished, well-structured rewrite of a user-written task prompt.
+    EnhancePrompt,
 }
 
 /// Preview returned by `git.pushInfo`.
@@ -1873,6 +2446,25 @@ mod tests {
     }
 
     #[test]
+    fn agents_probe_roundtrip() {
+        let json: serde_json::Value =
+            serde_json::from_str(r#"{"id":4,"method":"agents.probe","params":{"id":"opencode"}}"#)
+                .unwrap();
+        let req: Request = serde_json::from_value(json).unwrap();
+        assert!(matches!(req.method, Method::AgentsProbe { id } if id == "opencode"));
+    }
+
+    #[test]
+    fn git_last_commit_message_roundtrip() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{"id":5,"method":"git.lastCommitMessage","params":{"task_id":"t1"}}"#,
+        )
+        .unwrap();
+        let req: Request = serde_json::from_value(json).unwrap();
+        assert!(matches!(req.method, Method::GitLastCommitMessage { task_id } if task_id == "t1"));
+    }
+
+    #[test]
     fn orchestrator_list_agents_wire_shape() {
         let req = Request {
             id: 9,
@@ -1917,6 +2509,7 @@ mod tests {
                 default_model: Some("opus".into()),
                 config_overrides: Default::default(),
                 workflow: None,
+                backlog_item_id: None,
             },
         };
         let json = serde_json::to_value(&req).unwrap();

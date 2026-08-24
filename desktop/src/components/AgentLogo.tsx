@@ -6,17 +6,17 @@ import { cn } from "@/lib/utils";
 import claudeLogo from "../assets/app-logos/claude-ai-icon.svg?no-inline";
 import codexDark from "../assets/app-logos/codex_dark.svg?no-inline";
 import codexLight from "../assets/app-logos/codex_light.svg?no-inline";
-import opencodeDark from "../assets/app-logos/openCode_dark.svg?no-inline";
-import opencodeLight from "../assets/app-logos/openCode_light.svg?no-inline";
-import qwenDark from "../assets/app-logos/qwen_dark.svg?no-inline";
-import qwenLight from "../assets/app-logos/qwen_light.svg?no-inline";
 import cursorDark from "../assets/app-logos/cursor_dark.svg?no-inline";
 import cursorLight from "../assets/app-logos/cursor_light.svg?no-inline";
-import piDark from "../assets/app-logos/pi_dark.svg?no-inline";
-import piLight from "../assets/app-logos/pi_light.svg?no-inline";
 import gooseDark from "../assets/app-logos/goose_dark.png";
 import gooseLight from "../assets/app-logos/goose_light.png";
 import junieLogo from "../assets/app-logos/junie.svg?no-inline";
+import opencodeDark from "../assets/app-logos/openCode_dark.svg?no-inline";
+import opencodeLight from "../assets/app-logos/openCode_light.svg?no-inline";
+import piDark from "../assets/app-logos/pi_dark.svg?no-inline";
+import piLight from "../assets/app-logos/pi_light.svg?no-inline";
+import qwenDark from "../assets/app-logos/qwen_dark.svg?no-inline";
+import qwenLight from "../assets/app-logos/qwen_light.svg?no-inline";
 
 /**
  * Per-agent logo assets, as {dark, light} pairs. These SVGs ship with baked-in
@@ -73,7 +73,7 @@ export function AgentLogo({
   const asset = AGENT_ICONS[agentId];
   const [failedSvg, setFailedSvg] = useState<string | null>(null);
 
-  const src = asset ? (mode === "light" ? asset.light ?? asset.dark : asset.dark) : undefined;
+  const src = asset ? (mode === "light" ? (asset.light ?? asset.dark) : asset.dark) : undefined;
 
   if (src && failedSvg !== src) {
     return (

@@ -308,9 +308,7 @@ function RowActions({
               {pinned ? "Unpin from Mission Control" : "Pin to Mission Control"}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={() => void daemon.archiveTask(task.id)}
-            >
+            <DropdownMenuItem onSelect={() => void daemon.archiveTask(task.id)}>
               <Archive className="size-3.5 opacity-70" />
               Archive task
             </DropdownMenuItem>

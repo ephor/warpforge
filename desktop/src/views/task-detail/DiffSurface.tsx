@@ -1,6 +1,8 @@
+import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import type { RefObject } from "react";
 
 import { cn } from "@/lib/utils";
+import { useUi } from "@/store/ui";
 
 import { ChangesRail } from "../../components/ChangesRail";
 import type { EditHunk, FileDiff, HunkResolution, TaskDiff } from "../../protocol";
@@ -51,6 +53,8 @@ export function DiffSurface({
   onRefresh: () => void;
   diffWorkspaceRef: RefObject<DiffWorkspaceHandle | null>;
 }) {
+  const collapsed = useUi((s) => s.diffPanelCollapsed);
+  const toggleCollapsed = useUi((s) => s.toggleDiffPanelCollapsed);
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-9 items-center gap-2 border-b bg-background/25 px-3">
@@ -75,6 +79,19 @@ export function DiffSurface({
               </button>
             ))}
           </div>
+          <button
+            type="button"
+            aria-label={collapsed ? "Expand changes panel" : "Collapse changes panel"}
+            title={collapsed ? "Expand changes panel" : "Collapse changes panel"}
+            onClick={toggleCollapsed}
+            className="shrink-0 rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+          >
+            {collapsed ? (
+              <PanelRightOpen className="size-4" />
+            ) : (
+              <PanelRightClose className="size-4" />
+            )}
+          </button>
         </div>
       </div>
       <div className="flex min-h-0 min-w-0 flex-1">
@@ -92,23 +109,25 @@ export function DiffSurface({
             taskId={taskId}
           />
         </div>
-        <div className="w-72 shrink-0 border-l border-border/70">
-          {diff ? (
-            <ChangesRail
-              project={project}
-              files={diff.files}
-              selected={selected}
-              taskId={taskId}
-              commitExpanded={commitExpanded}
-              onCommitExpandedChange={onCommitExpandedChange}
-              onCommitted={onCommitted}
-              onRefresh={onRefresh}
-              onSelect={onSelect}
-            />
-          ) : (
-            <p className="p-3 text-sm text-muted-foreground">Loading changes…</p>
-          )}
-        </div>
+        {!collapsed && (
+          <div className="w-64 shrink-0 border-l border-border/70">
+            {diff ? (
+              <ChangesRail
+                project={project}
+                files={diff.files}
+                selected={selected}
+                taskId={taskId}
+                commitExpanded={commitExpanded}
+                onCommitExpandedChange={onCommitExpandedChange}
+                onCommitted={onCommitted}
+                onRefresh={onRefresh}
+                onSelect={onSelect}
+              />
+            ) : (
+              <p className="p-3 text-sm text-muted-foreground">Loading changes…</p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

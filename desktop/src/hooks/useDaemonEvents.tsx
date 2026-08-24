@@ -42,9 +42,20 @@ function workflowToastTitle(kind: "question" | "limit"): string {
 }
 
 /** True when the window is minimized or hidden behind other apps — the case a
- *  native macOS notification should take over from the in-house toast. */
-function appBackgrounded(): boolean {
-  return typeof document !== "undefined" && (document.hidden || !document.hasFocus());
+ *  native macOS notification should take over from the in-house toast.
+ *
+ *  Reads the AppKit window state rather than `document.hidden`, which only flips
+ *  on minimize and stays false when the app merely loses focus to another app
+ *  (tauri-apps/tauri#9524), and `document.hasFocus()`, which the webview reports
+ *  unreliably. A frontmost window returns false here, so no banner is raised
+ *  while the user is looking at the app. */
+async function appBackgrounded(): Promise<boolean> {
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    return !(await getCurrentWindow().isFocused());
+  } catch {
+    return true;
+  }
 }
 
 /** Raise a native macOS notification with Approve/Reject/Review buttons, but
@@ -58,12 +69,15 @@ async function fireNativeNotification(opts: {
   title: string;
 }) {
   if (!("__TAURI_INTERNALS__" in window)) return;
-  if (!appBackgrounded()) return;
+  if (!(await appBackgrounded())) return;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("notify_attention", opts);
-  } catch {
+    // The Rust command takes a single `payload` argument; Tauri matches invoke
+    // args by parameter name, so the fields must be nested rather than flat.
+    await invoke("notify_attention", { payload: opts });
+  } catch (error) {
     // Native notifications are best-effort; the in-house toast already covers this.
+    console.warn("native notification failed", error);
   }
 }
 

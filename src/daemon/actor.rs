@@ -276,9 +276,45 @@ spawn_agent (or spawn_workflow for review-worthy changes), tell the user what \
 you dispatched, and continue the conversation. The user can keep messaging you \
 while sub-agents and pipelines run.";
 
-/// The warpforge MCP bridge config handed to an orchestrator session so the
-/// agent can call spawn_agent / read_inbox back into this daemon.
-fn orchestrator_mcp_servers(task_id: &str, project: &str) -> Vec<serde_json::Value> {
+/// System preamble prepended to a plain task session's first prompt. The task's
+/// dev services run under the warpforge daemon, so their stdout and status are
+/// invisible to the agent's own shell — these MCP tools are how the agent sees
+/// the runtime it is supposed to be working against.
+const RUNTIME_MCP_SYSTEM: &str = "\
+You have these warpforge MCP tools for observing and controlling the project's \
+dev runtime (services and port-forwards are managed by the warpforge daemon, so \
+their stdout and lifecycle are NOT visible to your shell):\n\
+- list_runtime(): list the project's running services and port-forwards with \
+their status and allocated ports. Call it first to see what is up and which \
+ports to hit.\n\
+- read_service_logs(service, filter?, after?, limit?): read a window of a \
+service's stdout/stderr. Use it to diagnose crashes or check request output. \
+Pass a case-insensitive `filter` substring to find specific lines (errors, \
+request ids); paginate old history with `after` (offset into the buffer) and \
+`limit` (page size, default 100). read_portforward_logs(name) does the same \
+for a port-forward.\n\
+- service_start(service) / service_stop(service) / service_restart(service): \
+start, stop, or restart a service. These dispatch asynchronously and return \
+immediately — follow up with read_service_logs to watch the outcome.\n\
+- portforward_start(name) / portforward_stop(name): start or stop a \
+port-forward.";
+
+/// Shared-memory preamble prepended to every session's first prompt when memory
+/// is enabled. This is the primary channel that teaches harnesses to use
+/// memory_* instead of per-harness CLAUDE.md/AGENTS.md silos. The tool
+/// descriptions are the always-visible secondary channel; the AGENTS.md /
+/// CLAUDE.md snippet fallback is deferred (no file writes in v1).
+const MEMORY_SYSTEM: &str = "\
+You run inside Warpforge. For durable cross-session knowledge use memory_store / \
+memory_search / memory_list (shared across Claude, Codex, opencode). Prefer this \
+over writing CLAUDE.md/AGENTS.md. Check memory_stats for active scopes.";
+
+/// The warpforge MCP bridge config handed to every ACP session so the agent
+/// can call back into this daemon (read service logs, restart a service,
+/// and — for orchestrator-chat sessions — spawn_agent / read_inbox). The
+/// `WF_MODE` env lets the bridge expose the orchestrator-only tools only to
+/// sessions that are actually orchestrators.
+fn mcp_servers(task_id: &str, project: &str, is_orchestrator: bool) -> Vec<serde_json::Value> {
     let exe = std::env::current_exe()
         .ok()
         .and_then(|p| p.to_str().map(String::from))
@@ -288,8 +324,9 @@ fn orchestrator_mcp_servers(task_id: &str, project: &str) -> Vec<serde_json::Val
         "command": exe,
         "args": ["__mcp-orchestrator"],
         "env": [
-            { "name": "WF_ORCH_TASK", "value": task_id },
-            { "name": "WF_ORCH_PROJECT", "value": project },
+            { "name": "WF_TASK", "value": task_id },
+            { "name": "WF_PROJECT", "value": project },
+            { "name": "WF_MODE", "value": if is_orchestrator { "orchestrator" } else { "single" } },
         ],
     })]
 }
@@ -472,6 +509,15 @@ a single imperative line, at most 60 characters, plain text, no quotes, no trail
 period, no markdown. Reply with ONLY the title — no code fences, no preamble, no \
 closing remarks.";
 
+const ENHANCE_PROMPT_INSTRUCTION: &str = "\
+Below is a task description written by a user. Rewrite it into a clear, well-structured \
+task: a strong imperative title on the first line, then a blank line, then a concise \
+Markdown body that states the goal, acceptance criteria (as bullet points where \
+helpful), and any constraints worth keeping. Keep the user's intent and technical \
+details unchanged — only clarify, organise, and improve the phrasing. Do not invent \
+requirements that are not implied by the text. Reply with ONLY the rewritten task — \
+no code fences, no preamble, no closing remarks.";
+
 /// Build the one-shot prompt for `text.generate` from the repo's git state.
 /// When `message` is set (required for `TaskTitle`), it is used verbatim as the
 /// input to describe instead of running git.
@@ -548,6 +594,15 @@ async fn build_textgen_prompt(
                 "{TASK_TITLE_INSTRUCTION}\n\n----- task prompt -----\n{prompt}"
             ))
         }
+        wire::TextGenKind::EnhancePrompt => {
+            let prompt = message.unwrap_or("");
+            if prompt.trim().is_empty() {
+                return Err("no prompt to enhance".to_string());
+            }
+            Ok(format!(
+                "{ENHANCE_PROMPT_INSTRUCTION}\n\n----- task prompt -----\n{prompt}"
+            ))
+        }
     }
 }
 
@@ -591,12 +646,13 @@ pub enum Command {
     /// sessions alive. Used when the desktop UI closes.
     StopRuntime,
     /// A window of a service's retained log lines (events only carry the tail).
+    /// The reply is (lines, capture-timestamps[ms], nextSeq cursor).
     ServiceLogs {
         project: String,
         service: String,
         after: u64,
         limit: Option<u32>,
-        reply: oneshot::Sender<Vec<String>>,
+        reply: oneshot::Sender<(Vec<String>, Vec<u64>, u64)>,
     },
     /// A window of a port-forward's retained log lines.
     PortForwardLogs {
@@ -604,7 +660,7 @@ pub enum Command {
         name: String,
         after: u64,
         limit: Option<u32>,
-        reply: oneshot::Sender<Vec<String>>,
+        reply: oneshot::Sender<(Vec<String>, Vec<u64>, u64)>,
     },
     /// Start every declared port-forward for a project (port-forwards only).
     StartAllPortForwards {
@@ -700,6 +756,10 @@ pub enum Command {
         /// Non-model config overrides (reasoning effort, mode, etc.) keyed by
         /// config-option id; applied via `session/setConfigOption` after model.
         config_overrides: std::collections::HashMap<String, String>,
+        /// Id of the backlog item this task was started from, if any.
+        backlog_item_id: Option<String>,
+        /// When false, create the task but do not start its agent session.
+        start: bool,
         reply: oneshot::Sender<String>,
     },
     /// Create a workflow-pipeline parent task and start its first stage.
@@ -822,6 +882,7 @@ pub enum Command {
     GetFileContents {
         task_id: String,
         path: String,
+        project: Option<String>,
         reply: oneshot::Sender<Option<wire::FileDoc>>,
     },
     /// List files in a task's project working tree.
@@ -875,6 +936,11 @@ pub enum Command {
         files: Option<Vec<String>>,
         amend: bool,
         reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Read the task repo's latest commit message (for pre-filling an amend).
+    GitLastCommitMessage {
+        task_id: String,
+        reply: oneshot::Sender<Result<String, String>>,
     },
     /// Fetch + rebase the task's repo onto its upstream (autostash, rollback).
     GitUpdate {
@@ -952,6 +1018,91 @@ pub enum Command {
         model: Option<String>,
         reply: oneshot::Sender<Result<String, String>>,
     },
+    EnhanceText {
+        project: String,
+        agent_id: String,
+        prompt: String,
+        model: Option<String>,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
+    TrackerPersistLink {
+        link: super::store::TrackerLink,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    TrackerLinks {
+        reply: oneshot::Sender<Result<Vec<wire::TrackerLinkInfo>, String>>,
+    },
+    TrackerProjectSettings {
+        project: String,
+        reply: oneshot::Sender<Result<wire::TrackerProjectSettings, String>>,
+    },
+    TrackerSetProjectLinearTeam {
+        project: String,
+        team_id: Option<String>,
+        team_name: Option<String>,
+        reply: oneshot::Sender<Result<wire::TrackerProjectSettings, String>>,
+    },
+    TrackerSyncInputs {
+        ids: Vec<String>,
+        /// Links, each github project's repo dir, each linear project's team id.
+        #[allow(clippy::type_complexity)]
+        reply: oneshot::Sender<(
+            Vec<super::store::TrackerLink>,
+            std::collections::HashMap<String, String>,
+            std::collections::HashMap<String, String>,
+        )>,
+    },
+    TrackerPersistSynced {
+        links: Vec<super::store::TrackerLink>,
+        reply: oneshot::Sender<()>,
+    },
+    TrackerAdoptImported {
+        project: String,
+        fetched: Vec<(String, Vec<super::tracker::RemoteIssue>)>,
+        #[allow(clippy::type_complexity)]
+        reply: oneshot::Sender<
+            Result<(Vec<wire::ImportedWorkItem>, Vec<wire::SyncedExternalItem>), String>,
+        >,
+    },
+    BacklogGetSettings {
+        reply: oneshot::Sender<Result<wire::BacklogSettings, String>>,
+    },
+    BacklogSetStorage {
+        mode: wire::BacklogStorageMode,
+        reply: oneshot::Sender<Result<wire::BacklogSettings, String>>,
+    },
+    BacklogList {
+        project: String,
+        query: super::backlog::Query,
+        reply: oneshot::Sender<Result<wire::BacklogPage, String>>,
+    },
+    BacklogCreate {
+        item: super::backlog::NewItem,
+        reply: oneshot::Sender<Result<wire::BacklogItem, String>>,
+    },
+    BacklogUpdate {
+        patch: super::backlog::ItemPatch,
+        reply: oneshot::Sender<Result<wire::BacklogItem, String>>,
+    },
+    BacklogAttachExternal {
+        item_id: String,
+        project: String,
+        provider: String,
+        external_id: String,
+        url: String,
+        remote_status: Option<String>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    BacklogDelete {
+        item_id: String,
+        project: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    WorkItemLinkTask {
+        item_id: String,
+        task_id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     /// Send a follow-up prompt into a task's running agent session.
     SessionPrompt {
         task_id: String,
@@ -965,11 +1116,13 @@ pub enum Command {
         request_id: String,
         outcome: String,
     },
-    /// Change a session selector (model/mode/…) the agent exposes.
+    /// Change a session selector (model/mode/…) the agent exposes. The reply
+    /// carries the agent's verdict so the UI can undo a rejected pick.
     SessionSetConfigOption {
         task_id: String,
         config_id: String,
         value: String,
+        reply: oneshot::Sender<Result<(), String>>,
     },
     /// Detect installed ACP-capable agents (runs which/where, returns list).
     DetectAgents {
@@ -1005,9 +1158,11 @@ pub enum Command {
         reply: oneshot::Sender<Result<Vec<wire::AccountInfo>, String>>,
     },
     /// Trigger an ACP probe for one agent's model selectors. The probe runs in
-    /// a background task and reports back via [`Command::AgentProbed`].
+    /// a background task and reports back via [`Command::AgentProbed`]. `reply`
+    /// is set only for a user-requested refresh, which waits for the verdict.
     ProbeAgent {
         id: String,
+        reply: Option<oneshot::Sender<Result<(), String>>>,
     },
     /// A probe finished — persist the discovered models and re-emit agents.
     AgentProbed {
@@ -1066,6 +1221,70 @@ pub enum Command {
     /// Release one editor's reference to a language server.
     LspStop {
         server_id: String,
+    },
+    /// Persist a durable fact into shared memory.
+    MemoryStore {
+        content: String,
+        scope: Option<String>,
+        kind: Option<String>,
+        tags: Option<Vec<String>>,
+        project_id: Option<String>,
+        created_by: Option<String>,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    /// Full-text search over shared memories.
+    MemorySearch {
+        query: String,
+        scope: Option<String>,
+        limit: Option<u32>,
+        mode: Option<String>,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryList {
+        scope: Option<String>,
+        kind: Option<String>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryUpdate {
+        id: String,
+        content: String,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryDelete {
+        id: String,
+        reply: oneshot::Sender<Result<(), super::memory::MemoryError>>,
+    },
+    MemoryStats {
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    SetMemoryEmbedding {
+        mode: String,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryAddEdge {
+        src_id: String,
+        dst_id: String,
+        relation: String,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryEdges {
+        id: String,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryDream {
+        dry_run: bool,
+        project_id: Option<String>,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryListCompaction {
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
+    },
+    MemoryResolveCompaction {
+        id: i64,
+        approve: bool,
+        reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
     },
     Shutdown {
         reply: oneshot::Sender<()>,
@@ -1235,6 +1454,12 @@ fn plural(count: usize) -> &'static str {
     }
 }
 
+/// Collapse a dropped memory reply channel into a "disabled" error, matching
+/// what a never-opened store reports.
+fn memory_dropped() -> super::memory::MemoryError {
+    super::memory::MemoryError::Disabled("memory disabled".into())
+}
+
 /// Collapse a failed oneshot into an error `GitOpResult` instead of panicking.
 fn op_result_or_dropped(
     received: Result<wire::GitOpResult, oneshot::error::RecvError>,
@@ -1295,6 +1520,7 @@ impl DaemonHandle {
         attachments: Vec<wire::PromptAttachment>,
         default_model: Option<String>,
         config_overrides: std::collections::HashMap<String, String>,
+        backlog_item_id: Option<String>,
     ) -> String {
         let (tx, rx) = oneshot::channel();
         self.send(Command::CreateTask {
@@ -1308,6 +1534,43 @@ impl DaemonHandle {
             attachments,
             default_model,
             config_overrides,
+            backlog_item_id,
+            start: true,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_default()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn queue_task(
+        &self,
+        project: &str,
+        prompt: &str,
+        agent: &str,
+        tags: Vec<String>,
+        include_runtime_context: bool,
+        worktree: bool,
+        parent_task_id: Option<String>,
+        attachments: Vec<wire::PromptAttachment>,
+        default_model: Option<String>,
+        config_overrides: std::collections::HashMap<String, String>,
+        backlog_item_id: Option<String>,
+    ) -> String {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::CreateTask {
+            project: project.to_string(),
+            prompt: prompt.to_string(),
+            agent: agent.to_string(),
+            tags,
+            include_runtime_context,
+            worktree,
+            parent_task_id,
+            attachments,
+            default_model,
+            config_overrides,
+            backlog_item_id,
+            start: false,
             reply: tx,
         })
         .await;
@@ -1376,11 +1639,186 @@ impl DaemonHandle {
         rx.await.unwrap_or_default()
     }
 
-    pub async fn file_contents(&self, task_id: &str, path: &str) -> Option<wire::FileDoc> {
+    pub async fn memory_store(
+        &self,
+        content: &str,
+        scope: Option<&str>,
+        kind: Option<&str>,
+        tags: Option<&[String]>,
+        project_id: Option<&str>,
+        created_by: Option<&str>,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryStore {
+            content: content.to_string(),
+            scope: scope.map(str::to_string),
+            kind: kind.map(str::to_string),
+            tags: tags.map(|t| t.to_vec()),
+            project_id: project_id.map(str::to_string),
+            created_by: created_by.map(str::to_string),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn memory_dream(
+        &self,
+        dry_run: bool,
+        _project_id: Option<&str>,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryDream {
+            dry_run,
+            project_id: _project_id.map(|s| s.to_string()),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn memory_search(
+        &self,
+        query: &str,
+        scope: Option<&str>,
+        limit: Option<u32>,
+        mode: Option<&str>,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemorySearch {
+            query: query.to_string(),
+            scope: scope.map(str::to_string),
+            limit,
+            mode: mode.map(str::to_string),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn memory_list(
+        &self,
+        scope: Option<&str>,
+        kind: Option<&str>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryList {
+            scope: scope.map(str::to_string),
+            kind: kind.map(str::to_string),
+            limit,
+            offset,
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn memory_update(
+        &self,
+        id: &str,
+        content: &str,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryUpdate {
+            id: id.to_string(),
+            content: content.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn memory_delete(&self, id: &str) -> Result<(), super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryDelete {
+            id: id.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn memory_stats(&self) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryStats { reply: tx }).await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn set_memory_embedding(
+        &self,
+        mode: &str,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::SetMemoryEmbedding {
+            mode: mode.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+    pub async fn memory_add_edge(
+        &self,
+        src: &str,
+        dst: &str,
+        rel: &str,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryAddEdge {
+            src_id: src.into(),
+            dst_id: dst.into(),
+            relation: rel.into(),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+    pub async fn memory_list_compaction(
+        &self,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryListCompaction { reply: tx }).await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+    pub async fn memory_resolve_compaction(
+        &self,
+        id: i64,
+        approve: bool,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryResolveCompaction {
+            id,
+            approve,
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+    pub async fn memory_edges(
+        &self,
+        id: &str,
+    ) -> Result<serde_json::Value, super::memory::MemoryError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::MemoryEdges {
+            id: id.into(),
+            reply: tx,
+        })
+        .await;
+        rx.await.map_err(|_| memory_dropped())?
+    }
+
+    pub async fn file_contents(
+        &self,
+        task_id: &str,
+        path: &str,
+        project: Option<String>,
+    ) -> Option<wire::FileDoc> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::GetFileContents {
             task_id: task_id.to_string(),
             path: path.to_string(),
+            project,
             reply: tx,
         })
         .await;
@@ -1419,6 +1857,16 @@ impl DaemonHandle {
         })
         .await;
         rx.await.unwrap_or_default()
+    }
+
+    pub async fn git_last_commit_message(&self, task_id: &str) -> Result<String, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::GitLastCommitMessage {
+            task_id: task_id.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| Err("daemon stopped".into()))
     }
 
     pub async fn git_commit(
@@ -1632,6 +2080,222 @@ impl DaemonHandle {
             .unwrap_or_else(|_| Err("daemon dropped the text-generation request".into()))
     }
 
+    /// Polish a user-written task prompt (title/description) one-shot. Unlike
+    /// `generate_text` this runs before a task exists, so it takes a project
+    /// name and the raw prompt instead of a `task_id`.
+    pub async fn enhance_text(
+        &self,
+        project: &str,
+        agent_id: &str,
+        prompt: &str,
+        model: Option<String>,
+    ) -> Result<String, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::EnhanceText {
+            project: project.to_string(),
+            agent_id: agent_id.to_string(),
+            prompt: prompt.to_string(),
+            model,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the text-enhance request".into()))
+    }
+
+    pub async fn tracker_persist_link(
+        &self,
+        link: super::store::TrackerLink,
+    ) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerPersistLink { link, reply: tx })
+            .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the tracker-link write".into()))
+    }
+
+    pub async fn tracker_links(&self) -> Result<Vec<wire::TrackerLinkInfo>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerLinks { reply: tx }).await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the tracker-links request".into()))
+    }
+
+    /// The links a sync should refresh, plus the git dir of every project they
+    /// belong to. Store read only — the caller does the network itself so the
+    /// actor loop never waits on a tracker.
+    #[allow(clippy::type_complexity)]
+    pub async fn tracker_sync_inputs(
+        &self,
+        ids: Vec<String>,
+    ) -> (
+        Vec<super::store::TrackerLink>,
+        std::collections::HashMap<String, String>,
+        std::collections::HashMap<String, String>,
+    ) {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerSyncInputs { ids, reply: tx })
+            .await;
+        rx.await.unwrap_or_default()
+    }
+
+    pub async fn tracker_project_settings(
+        &self,
+        project: &str,
+    ) -> Result<wire::TrackerProjectSettings, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerProjectSettings {
+            project: project.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped tracker settings request".into()))
+    }
+
+    pub async fn tracker_set_project_linear_team(
+        &self,
+        project: String,
+        team_id: Option<String>,
+        team_name: Option<String>,
+    ) -> Result<wire::TrackerProjectSettings, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerSetProjectLinearTeam {
+            project,
+            team_id,
+            team_name,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped tracker settings request".into()))
+    }
+
+    pub async fn tracker_persist_synced(&self, links: Vec<super::store::TrackerLink>) {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerPersistSynced { links, reply: tx })
+            .await;
+        let _ = rx.await;
+    }
+
+    pub async fn tracker_adopt_imported(
+        &self,
+        project: &str,
+        fetched: Vec<(String, Vec<super::tracker::RemoteIssue>)>,
+    ) -> Result<(Vec<wire::ImportedWorkItem>, Vec<wire::SyncedExternalItem>), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerAdoptImported {
+            project: project.to_string(),
+            fetched,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the external-import request".into()))
+    }
+
+    pub async fn backlog_get_settings(&self) -> Result<wire::BacklogSettings, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogGetSettings { reply: tx }).await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog settings request".into()))
+    }
+
+    pub async fn backlog_set_storage(
+        &self,
+        mode: wire::BacklogStorageMode,
+    ) -> Result<wire::BacklogSettings, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogSetStorage { mode, reply: tx })
+            .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog storage request".into()))
+    }
+
+    pub async fn backlog_list(
+        &self,
+        project: String,
+        query: super::backlog::Query,
+    ) -> Result<wire::BacklogPage, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogList {
+            project,
+            query,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog list request".into()))
+    }
+
+    pub async fn backlog_create(
+        &self,
+        item: super::backlog::NewItem,
+    ) -> Result<wire::BacklogItem, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogCreate { item, reply: tx }).await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog create request".into()))
+    }
+
+    pub async fn backlog_update(
+        &self,
+        patch: super::backlog::ItemPatch,
+    ) -> Result<wire::BacklogItem, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogUpdate { patch, reply: tx }).await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog update request".into()))
+    }
+
+    pub async fn backlog_attach_external(
+        &self,
+        item_id: String,
+        project: String,
+        provider: String,
+        external_id: String,
+        url: String,
+        remote_status: Option<String>,
+    ) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogAttachExternal {
+            item_id,
+            project,
+            provider,
+            external_id,
+            url,
+            remote_status,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog external attach request".into()))
+    }
+
+    pub async fn backlog_delete(&self, item_id: String, project: String) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::BacklogDelete {
+            item_id,
+            project,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped backlog delete request".into()))
+    }
+
+    pub async fn work_item_link_task(&self, item_id: &str, task_id: &str) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::WorkItemLinkTask {
+            item_id: item_id.to_string(),
+            task_id: task_id.to_string(),
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the item-link request".into()))
+    }
+
     /// A window of a service's retained log lines (for backfill; live tail
     /// arrives via `ServiceLog` events).
     pub async fn service_logs(
@@ -1640,7 +2304,7 @@ impl DaemonHandle {
         service: &str,
         after: u64,
         limit: Option<u32>,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, Vec<u64>, u64) {
         let (tx, rx) = oneshot::channel();
         self.send(Command::ServiceLogs {
             project: project.to_string(),
@@ -1661,7 +2325,7 @@ impl DaemonHandle {
         name: &str,
         after: u64,
         limit: Option<u32>,
-    ) -> Vec<String> {
+    ) -> (Vec<String>, Vec<u64>, u64) {
         let (tx, rx) = oneshot::channel();
         self.send(Command::PortForwardLogs {
             project: project.to_string(),
@@ -1844,13 +2508,34 @@ impl DaemonHandle {
         rx.await.unwrap_or_else(|_| Err("daemon stopped".into()))
     }
 
-    pub async fn session_set_config_option(&self, task_id: &str, config_id: &str, value: &str) {
+    /// Re-read an agent's selectors from the harness. Resolves when the probe
+    /// finishes so the caller can report a failure instead of silently keeping
+    /// the old list.
+    pub async fn probe_agent(&self, id: &str) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::ProbeAgent {
+            id: id.into(),
+            reply: Some(tx),
+        })
+        .await;
+        rx.await.unwrap_or_else(|_| Err("daemon stopped".into()))
+    }
+
+    pub async fn session_set_config_option(
+        &self,
+        task_id: &str,
+        config_id: &str,
+        value: &str,
+    ) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
         self.send(Command::SessionSetConfigOption {
             task_id: task_id.into(),
             config_id: config_id.into(),
             value: value.into(),
+            reply: tx,
         })
         .await;
+        rx.await.unwrap_or_else(|_| Err("daemon stopped".into()))
     }
 
     pub async fn session_permission(&self, task_id: &str, request_id: &str, outcome: &str) {
@@ -2131,6 +2816,10 @@ pub struct Daemon {
     workflow_runs: HashMap<String, WorkflowRun>,
     /// Registered agent accounts, mirroring the `agent_accounts` table.
     accounts: Vec<super::store::StoredAccount>,
+    /// Shared memory store (separate `~/.warpforge/memory.db`), owned here so
+    /// all memory ops run on the actor thread against one connection.
+    memory: super::memory::MemoryStore,
+    last_memory_activity: Arc<Mutex<std::time::Instant>>,
 }
 
 impl Daemon {
@@ -2178,9 +2867,13 @@ impl Daemon {
         // without waiting on live detection; version/install state is layered on
         // later by `agents.detect`.
         let configured_agents = super::agents::reconcile_agents_config(&configured_agents);
+        // Re-probe every enabled agent, cached list or not: the user may have
+        // added a provider inside the harness (a new OpenCode provider, say)
+        // since we last looked, and a cached list would hide it forever. The
+        // cache still serves the UI instantly; the probe refreshes it behind it.
         let probe_candidates: Vec<String> = configured_agents
             .iter()
-            .filter(|a| a.enabled && a.models.is_empty())
+            .filter(|a| a.enabled)
             .map(|a| a.id.clone())
             .collect();
 
@@ -2207,6 +2900,11 @@ impl Daemon {
             .as_ref()
             .and_then(|s| s.load_accounts().ok())
             .unwrap_or_default();
+
+        // Open (or disable) the shared-memory store. `load` never fails: an
+        // unopenable memory.db yields a disabled store whose tools report
+        // "memory disabled" rather than crashing the daemon.
+        let memory = super::memory::MemoryStore::load();
 
         // Everything above read from the store directly — it is startup, the
         // actor is not running yet. From here the connection belongs to the
@@ -2246,6 +2944,8 @@ impl Daemon {
             pending_resume: HashMap::new(),
             workflow_runs: HashMap::new(),
             accounts,
+            memory,
+            last_memory_activity: Arc::new(Mutex::new(std::time::Instant::now())),
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -2283,16 +2983,61 @@ impl Daemon {
                                      // mid-stage runs paused at their last barrier.
         daemon.restore_workflow_runs();
 
+        // Dreaming idle/cron scheduler (config-driven, enabled false by default)
+        let dream_cfg = daemon.memory.config().dreaming.clone();
+        let dream_tx = handle.cmd_tx.clone();
+        if dream_cfg.enabled && dream_cfg.trigger == "idle" {
+            let idle = crate::daemon::memory_dream::parse_idle_after(&dream_cfg.idle_after);
+            let last_activity = daemon.last_memory_activity.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(idle).await;
+                    let been_idle = last_activity.lock().unwrap().elapsed() >= idle;
+                    if !been_idle {
+                        continue;
+                    }
+                    let (tx, _rx) = tokio::sync::oneshot::channel();
+                    let _ = dream_tx
+                        .send(Command::MemoryDream {
+                            dry_run: false,
+                            project_id: None,
+                            reply: tx,
+                        })
+                        .await;
+                }
+            });
+        } else if dream_cfg.enabled && dream_cfg.trigger == "cron" {
+            let cron_str = dream_cfg.cron.clone();
+            tokio::spawn(async move {
+                // Full cron parsing is deferred (no extra dep): treat the configured
+                // cron (default "0 3 * * *") as a daily-3am stub approximated by a
+                // periodic loop. Keeps looping forever; the daemon dedupes via the
+                // pending-compaction check. Config change requires restart.
+                let _ = cron_str;
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    let (tx, _rx) = tokio::sync::oneshot::channel();
+                    let _ = dream_tx
+                        .send(Command::MemoryDream {
+                            dry_run: false,
+                            project_id: None,
+                            reply: tx,
+                        })
+                        .await;
+                }
+            });
+        }
+
         tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx, acp_rx, policy_rx));
 
-        // Kick off background ACP probes for agents whose cached model list is
-        // stale (enabled + empty `models`). Probes update the cache via
+        // Kick off background ACP probes so every enabled agent's model list is
+        // whatever the harness reports right now. Probes update the cache via
         // `Command::AgentProbed`; cheap to issue even before `run` is ready.
         let probe_tx = handle.cmd_tx.clone();
         if !probe_candidates.is_empty() {
             tokio::spawn(async move {
                 for id in probe_candidates {
-                    let _ = probe_tx.send(Command::ProbeAgent { id }).await;
+                    let _ = probe_tx.send(Command::ProbeAgent { id, reply: None }).await;
                 }
             });
         }
@@ -2372,6 +3117,7 @@ impl Daemon {
             if let Some(declared) = service_map.get_mut(&service.name) {
                 declared.status = wireconv::service_status(&service.status);
                 declared.allocated_port = service.allocated_port;
+                declared.log_seq = self.services.newest_seq(&project.name, &service.name);
                 if matches!(
                     service.status,
                     ServiceStatus::Starting | ServiceStatus::Running
@@ -2429,7 +3175,7 @@ impl Daemon {
                         local_port: pf.local_port,
                         remote_port: pf.remote_port,
                         status: wireconv::pf_status(&pf.status),
-                        log_seq: 0,
+                        log_seq: self.portforwards.newest_seq(&project.name, &pf.name),
                     },
                 );
             }
@@ -2907,22 +3653,9 @@ impl Daemon {
                 limit,
                 reply,
             } => {
-                let lines = self
-                    .services
-                    .get(&project, &service)
-                    .map(|s| {
-                        let start = (after as usize).min(s.logs.len());
-                        let mut window: Vec<String> = s.logs[start..].to_vec();
-                        if let Some(n) = limit {
-                            let n = n as usize;
-                            if window.len() > n {
-                                window = window.split_off(window.len() - n);
-                            }
-                        }
-                        window
-                    })
-                    .unwrap_or_default();
-                let _ = reply.send(lines);
+                let (lines, at, next_seq) =
+                    self.services.log_window(&project, &service, after, limit);
+                let _ = reply.send((lines, at, next_seq));
             }
             Command::StartAllPortForwards { project } => {
                 self.start_portforwards(&project).await;
@@ -2953,24 +3686,9 @@ impl Daemon {
                 limit,
                 reply,
             } => {
-                let key = format!("{project}/{name}");
-                let lines = self
-                    .portforwards
-                    .forwards
-                    .get(&key)
-                    .map(|pf| {
-                        let start = (after as usize).min(pf.logs.len());
-                        let mut window: Vec<String> = pf.logs[start..].to_vec();
-                        if let Some(n) = limit {
-                            let n = n as usize;
-                            if window.len() > n {
-                                window = window.split_off(window.len() - n);
-                            }
-                        }
-                        window
-                    })
-                    .unwrap_or_default();
-                let _ = reply.send(lines);
+                let (lines, at, next_seq) =
+                    self.portforwards.log_window(&project, &name, after, limit);
+                let _ = reply.send((lines, at, next_seq));
             }
             Command::SpawnAgent {
                 project,
@@ -3026,6 +3744,8 @@ impl Daemon {
                 attachments,
                 default_model,
                 config_overrides,
+                backlog_item_id,
+                start,
                 reply,
             } => {
                 // Conversation branches tag the source task they were forked
@@ -3036,6 +3756,7 @@ impl Daemon {
                     .map(str::to_string);
                 let mut task = Task::new(&project, &prompt, &agent, tags);
                 task.parent_task_id = parent_task_id;
+                task.backlog_item_id = backlog_item_id;
                 // Resolve the model the session should start with: an explicit
                 // UI pick wins; otherwise fall back to the user's last choice
                 // for this agent (so orchestrator-spawned sub-agents inherit it
@@ -3069,37 +3790,39 @@ impl Daemon {
                 self.emit(Event::TaskCreated(task));
                 let _ = reply.send(id.clone());
 
-                let start = PendingSessionStart {
-                    project: project.clone(),
-                    agent: agent.clone(),
-                    prompt: prompt.clone(),
-                    include_runtime_context,
-                    attachments,
-                    default_model: resolved_model,
-                    config_overrides,
-                };
-                // A worktree checkout is git work, so it runs off the loop and
-                // the session starts when it lands. The task is on the board
-                // before then, which is also why a new task no longer delays
-                // every other task's messages (ADR 0002).
-                match use_worktree
-                    .then(|| self.worktree_request(&id, &project, branched_from.as_deref()))
-                    .flatten()
-                {
-                    Some(request) => {
-                        self.pending_session_starts.insert(id.clone(), start);
-                        let cmd_tx = self.cmd_tx.clone();
-                        tokio::spawn(async move {
-                            let created = request.run().await;
-                            let _ = cmd_tx
-                                .send(Command::WorktreeReady {
-                                    task_id: id,
-                                    created,
-                                })
-                                .await;
-                        });
+                if start {
+                    let start = PendingSessionStart {
+                        project: project.clone(),
+                        agent: agent.clone(),
+                        prompt: prompt.clone(),
+                        include_runtime_context,
+                        attachments,
+                        default_model: resolved_model,
+                        config_overrides,
+                    };
+                    // A worktree checkout is git work, so it runs off the loop
+                    // and the session starts when it lands. The task is on the
+                    // board before then, which is also why a new task no longer
+                    // delays every other task's messages (ADR 0002).
+                    match use_worktree
+                        .then(|| self.worktree_request(&id, &project, branched_from.as_deref()))
+                        .flatten()
+                    {
+                        Some(request) => {
+                            self.pending_session_starts.insert(id.clone(), start);
+                            let cmd_tx = self.cmd_tx.clone();
+                            tokio::spawn(async move {
+                                let created = request.run().await;
+                                let _ = cmd_tx
+                                    .send(Command::WorktreeReady {
+                                        task_id: id,
+                                        created,
+                                    })
+                                    .await;
+                            });
+                        }
+                        None => self.start_pending_session(&id, start),
                     }
-                    None => self.start_pending_session(&id, start),
                 }
             }
             Command::WorktreeReady { task_id, created } => {
@@ -3287,12 +4010,16 @@ impl Daemon {
             Command::GetFileContents {
                 task_id,
                 path,
+                project,
                 reply,
             } => {
+                // Same fallback as `ListFiles`: no task means read the
+                // project's own checkout, so a tree and its preview agree.
                 let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|_| self.task_repo_path(&task_id));
+                    .and_then(|_| self.task_repo_path(&task_id))
+                    .or_else(|| project.as_deref().and_then(|name| self.project_path(name)));
                 tokio::spawn(async move {
                     let doc = match repo {
                         Some(p) => super::diff::file_doc(&p, &path).await.ok(),
@@ -3339,7 +4066,7 @@ impl Daemon {
                     Some(p) => {
                         tokio::task::spawn_blocking(move || {
                             let matches =
-                                super::diff::search_files(&p, &query, limit).unwrap_or_default();
+                                super::search::search_files(&p, &query, limit).unwrap_or_default();
                             let _ = reply.send(matches);
                         });
                     }
@@ -3481,6 +4208,19 @@ impl Daemon {
                             })
                             .await;
                     }
+                    let _ = reply.send(result);
+                });
+            }
+            Command::GitLastCommitMessage { task_id, reply } => {
+                // Read-only, but still shells out — resolve here, run off the loop.
+                let repo = self.task_repo_path(&task_id);
+                tokio::spawn(async move {
+                    let result = match repo {
+                        Some(p) => super::diff::last_commit_message(&p)
+                            .await
+                            .map_err(|e| e.to_string()),
+                        None => Err(format!("no repo for task {task_id}")),
+                    };
                     let _ = reply.send(result);
                 });
             }
@@ -3904,6 +4644,520 @@ impl Daemon {
                         let _ = reply.send(Err(format!("no task {task_id}")));
                     }
                 }
+            }
+            Command::EnhanceText {
+                project,
+                agent_id,
+                prompt,
+                model,
+                reply,
+            } => {
+                let resolved = self.project_path(&project).map(|repo| {
+                    let command = self.resolve_agent_command(&project, &agent_id);
+                    let env =
+                        self.resolve_agent_env(&agent_id, super::accounts::SpawnAccount::Active);
+                    (repo, command, env)
+                });
+                match resolved {
+                    Some((repo, command, env)) => {
+                        let prompt = prompt.clone();
+                        tokio::spawn(async move {
+                            let result = match build_textgen_prompt(
+                                &repo,
+                                wire::TextGenKind::EnhancePrompt,
+                                Some(&prompt),
+                            )
+                            .await
+                            {
+                                Ok(prompt) => {
+                                    super::acp::generate_text(command, repo, prompt, model, env)
+                                        .await
+                                }
+                                Err(e) => Err(e),
+                            };
+                            let _ = reply.send(result);
+                        });
+                    }
+                    None => {
+                        let _ = reply.send(Err(format!("no project {project}")));
+                    }
+                }
+            }
+            Command::TrackerPersistLink { link, reply } => {
+                let result = match &self.store {
+                    Some(store) => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        store
+                            .upsert_tracker_link(&link)
+                            .map_err(|e| format!("failed to persist link: {e:#}"))
+                    }
+                    None => Err("daemon has no persistent store (demo mode?)".into()),
+                };
+                let _ = reply.send(result);
+            }
+            Command::TrackerLinks { reply } => {
+                let result = match &self.store {
+                    Some(store) => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        super::tracker::list_links(&store)
+                            .map_err(|e: anyhow::Error| format!("{e:#}"))
+                    }
+                    None => Ok(Vec::new()),
+                };
+                let _ = reply.send(result);
+            }
+            Command::TrackerProjectSettings { project, reply } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| "daemon has no persistent store".to_string())
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        store
+                            .tracker_project_settings(&project)
+                            .map_err(|e| format!("{e:#}"))
+                    });
+                let _ = reply.send(result);
+            }
+            Command::TrackerSetProjectLinearTeam {
+                project,
+                team_id,
+                team_name,
+                reply,
+            } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| "daemon has no persistent store".to_string())
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        // Pointing a project somewhere else (or nowhere) makes the
+                        // rows the old team put here meaningless, so they go with
+                        // the mapping. Only rows an import minted are eligible —
+                        // see `Store::delete_imported_linear_items`.
+                        let previous = store
+                            .tracker_project_settings(&project)
+                            .map_err(|e| format!("{e:#}"))?
+                            .linear_team_id;
+                        if previous.as_deref() != team_id.as_deref() {
+                            match store.delete_imported_linear_items(&project) {
+                                Ok(0) => {}
+                                Ok(n) => eprintln!(
+                                    "[tracker] dropped {n} imported Linear rows from \
+                                     '{project}' after its team mapping changed"
+                                ),
+                                Err(e) => {
+                                    return Err(format!("clearing old Linear rows failed: {e:#}"))
+                                }
+                            }
+                        }
+                        store
+                            .set_tracker_project_linear_team(
+                                &project,
+                                team_id.as_deref(),
+                                team_name.as_deref(),
+                            )
+                            .map_err(|e| format!("{e:#}"))
+                    });
+                let _ = reply.send(result);
+            }
+            Command::TrackerSyncInputs { ids, reply } => {
+                let links: Vec<super::store::TrackerLink> = match &self.store {
+                    Some(store) if ids.is_empty() => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        store.load_all_tracker_links().unwrap_or_default()
+                    }
+                    Some(store) => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        ids.iter()
+                            .filter_map(|id| store.load_tracker_link(id).ok().flatten())
+                            .collect()
+                    }
+                    None => Vec::new(),
+                };
+                let mut repo_dirs = std::collections::HashMap::new();
+                let mut linear_teams = std::collections::HashMap::new();
+                for link in &links {
+                    if link.provider == "github" && !repo_dirs.contains_key(&link.project) {
+                        if let Some(path) = self.project_path(&link.project) {
+                            repo_dirs.insert(link.project.clone(), path);
+                        }
+                    }
+                    if link.provider == "linear" && !linear_teams.contains_key(&link.project) {
+                        if let Some(team) = self
+                            .store
+                            .as_ref()
+                            .and_then(|store| {
+                                let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                                store.tracker_project_settings(&link.project).ok()
+                            })
+                            .and_then(|settings| settings.linear_team_id)
+                        {
+                            linear_teams.insert(link.project.clone(), team);
+                        }
+                    }
+                }
+                let _ = reply.send((links, repo_dirs, linear_teams));
+            }
+            Command::TrackerPersistSynced { links, reply } => {
+                if let Some(store) = &self.store {
+                    let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                    for link in &links {
+                        if let Err(e) = store.upsert_tracker_link(link) {
+                            eprintln!("[tracker] failed to persist sync for {}: {e}", link.item_id);
+                        }
+                        if store.backlog_storage_mode().ok() == Some(wire::BacklogStorageMode::Yaml)
+                        {
+                            if let Some(path) = self.project_path(&link.project) {
+                                let result = super::backlog::update(
+                                    &path,
+                                    &link.project,
+                                    &link.item_id,
+                                    |item| {
+                                        item.status = link.status.clone();
+                                        item.remote_status = link.remote_status.clone();
+                                        item.url = Some(link.url.clone());
+                                        item.updated_at = super::task::now_secs();
+                                    },
+                                );
+                                if let Err(e) = result {
+                                    eprintln!(
+                                        "[backlog] failed to update YAML remote status for {}: {e}",
+                                        link.item_id
+                                    );
+                                }
+                            }
+                        }
+                        if store.backlog_storage_mode().ok()
+                            == Some(wire::BacklogStorageMode::Sqlite)
+                        {
+                            if let Err(e) = store.update_backlog_remote(
+                                &link.item_id,
+                                &link.status,
+                                link.remote_status.as_deref(),
+                                &link.url,
+                            ) {
+                                eprintln!(
+                                    "[backlog] failed to persist remote status for {}: {e}",
+                                    link.item_id
+                                );
+                            }
+                        }
+                    }
+                }
+                let _ = reply.send(());
+            }
+            Command::TrackerAdoptImported {
+                project,
+                fetched,
+                reply,
+            } => {
+                let result = match &self.store {
+                    Some(store) => {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        // YAML mode keeps backlog item rows project-local in
+                        // `…/.workforge/backlog/`; SQLite mode keeps them in the
+                        // `backlog_items` table. `adopt_imported` is told which
+                        // so it never writes a shadow row to the other backend.
+                        let yaml_path = if store.backlog_storage_mode().ok()
+                            == Some(wire::BacklogStorageMode::Yaml)
+                        {
+                            self.project_path(&project)
+                        } else {
+                            None
+                        };
+                        super::tracker::adopt_imported(
+                            &store,
+                            &project,
+                            yaml_path.as_deref(),
+                            fetched,
+                        )
+                        .map_err(|e: anyhow::Error| format!("{e:#}"))
+                    }
+                    None => Ok((Vec::new(), Vec::new())),
+                };
+                let _ = reply.send(result);
+            }
+            Command::BacklogGetSettings { reply } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        store.backlog_storage_mode()
+                    })
+                    .map(|mode| wire::BacklogSettings { mode })
+                    .map_err(|e| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogSetStorage { mode, reply } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        let from = store.backlog_storage_mode()?;
+                        if from != mode {
+                            // Switching backends must not silently hide rows in
+                            // the one being left. Refuse until those rows are
+                            // gone (or moved), surfaced as a clear error.
+                            match (from, mode) {
+                                (wire::BacklogStorageMode::Sqlite, wire::BacklogStorageMode::Yaml) => {
+                                    let count = store.count_backlog_items()?;
+                                    if count > 0 {
+                                        anyhow::bail!(
+                                            "Cannot switch backlog to YAML while {count} backlog item(s) still live in SQLite. Delete or move them first."
+                                        );
+                                    }
+                                }
+                                (wire::BacklogStorageMode::Yaml, wire::BacklogStorageMode::Sqlite) => {
+                                    for project in &self.projects {
+                                        let Some(path) = self.project_path(&project.name) else {
+                                            continue;
+                                        };
+                                        if !super::backlog::list(&path, &project.name)?.is_empty() {
+                                            anyhow::bail!(
+                                                "Cannot switch backlog to SQLite while project '{}' has YAML backlog files. Delete or move them first.",
+                                                project.name
+                                            );
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        store.set_backlog_storage_mode(mode)
+                    })
+                    .map(|_| wire::BacklogSettings { mode })
+                    .map_err(|e| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogList {
+                project,
+                query,
+                reply,
+            } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
+                            let path = self
+                                .project_path(&project)
+                                .ok_or_else(|| anyhow::anyhow!("unknown project '{project}'"))?;
+                            let items = super::backlog::list(&path, &project)?;
+                            Ok(super::backlog::page(items, &query))
+                        } else {
+                            store.list_backlog(&project, &query)
+                        }
+                    })
+                    .map_err(|e| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogCreate { item: new, reply } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        let project = new.project;
+                        let now = super::task::now_secs();
+                        let (number, yaml_path) =
+                            if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
+                                let path = self.project_path(&project).ok_or_else(|| {
+                                    anyhow::anyhow!("unknown project '{project}'")
+                                })?;
+                                let items = super::backlog::list(&path, &project)?;
+                                (super::backlog::next_number(&items), Some(path))
+                            } else {
+                                (store.next_backlog_number(&project)?, None)
+                            };
+                        let item = wire::BacklogItem {
+                            id: format!("b_{}", uuid::Uuid::new_v4().simple()),
+                            number,
+                            project,
+                            title: new.title,
+                            body: new.body,
+                            status: if new.status.is_empty() {
+                                "todo".into()
+                            } else {
+                                new.status
+                            },
+                            priority: if new.priority.is_empty() {
+                                "none".into()
+                            } else {
+                                new.priority
+                            },
+                            source: if new.source.is_empty() {
+                                "local".into()
+                            } else {
+                                new.source
+                            },
+                            external_id: None,
+                            url: None,
+                            remote_status: None,
+                            assignee: new.assignee,
+                            created_at: now,
+                            updated_at: now,
+                            task_id: None,
+                        };
+                        if let Some(path) = yaml_path {
+                            super::backlog::write(&path, &item)?;
+                        } else {
+                            store.upsert_backlog_item(&item)?;
+                        }
+                        Ok(item)
+                    })
+                    .map_err(|e: anyhow::Error| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogUpdate { patch, reply } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        let yaml = store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml;
+                        let path = if yaml {
+                            Some(self.project_path(&patch.project).ok_or_else(|| {
+                                anyhow::anyhow!("unknown project '{}'", patch.project)
+                            })?)
+                        } else {
+                            None
+                        };
+                        let mut item = match &path {
+                            Some(path) => super::backlog::list(path, &patch.project)?
+                                .into_iter()
+                                .find(|item| item.id == patch.item_id),
+                            None => store.get_backlog_item(&patch.item_id)?,
+                        }
+                        .ok_or_else(|| anyhow::anyhow!("backlog item not found"))?;
+                        patch.apply(&mut item);
+                        item.updated_at = super::task::now_secs();
+                        match &path {
+                            Some(path) => super::backlog::write(path, &item)?,
+                            None => store.upsert_backlog_item(&item)?,
+                        }
+                        Ok(item)
+                    })
+                    .map_err(|e: anyhow::Error| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogAttachExternal {
+                item_id,
+                project,
+                provider,
+                external_id,
+                url,
+                remote_status,
+                reply,
+            } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
+                            let path = self
+                                .project_path(&project)
+                                .ok_or_else(|| anyhow::anyhow!("unknown project"))?;
+                            let mut item = super::backlog::list(&path, &project)?
+                                .into_iter()
+                                .find(|item| item.id == item_id)
+                                .ok_or_else(|| anyhow::anyhow!("backlog item not found"))?;
+                            item.source = provider;
+                            item.external_id = Some(external_id);
+                            item.url = Some(url);
+                            item.remote_status = remote_status;
+                            super::backlog::write(&path, &item)
+                        } else {
+                            store.patch_backlog_external(
+                                &item_id,
+                                &external_id,
+                                &url,
+                                &provider,
+                                remote_status.as_deref(),
+                            )
+                        }
+                    })
+                    .map_err(|e| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::BacklogDelete {
+                item_id,
+                project,
+                reply,
+            } => {
+                // Compensating cleanup for a failed external create: drop the
+                // local item in whichever backend holds it AND its tracker link,
+                // so a remote-create failure never leaves an item that claims to
+                // live in a tracker it never reached.
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
+                            let path = self
+                                .project_path(&project)
+                                .ok_or_else(|| anyhow::anyhow!("unknown project"))?;
+                            super::backlog::remove(&path, &project, &item_id)?;
+                        } else {
+                            store.delete_backlog_item(&item_id)?;
+                        }
+                        store.delete_tracker_link(&item_id)?;
+                        Ok(())
+                    })
+                    .map_err(|e: anyhow::Error| format!("{e:#}"));
+                let _ = reply.send(result);
+            }
+            Command::WorkItemLinkTask {
+                item_id,
+                task_id,
+                reply,
+            } => {
+                let result = self
+                    .store
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("daemon has no persistent store (demo mode?)"))
+                    .and_then(|store| {
+                        let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                        let project = self
+                            .tasks
+                            .get(&task_id)
+                            .map(|t| t.project.clone())
+                            .unwrap_or_default();
+                        super::tracker::link_task(&store, &item_id, &task_id, "local", &project)
+                            .and_then(|_| {
+                                if store.backlog_storage_mode()? == wire::BacklogStorageMode::Sqlite
+                                {
+                                    store.link_backlog_task(&item_id, &task_id)?;
+                                }
+                                Ok(())
+                            })
+                            .and_then(|_| {
+                                if store.backlog_storage_mode()? == wire::BacklogStorageMode::Yaml {
+                                    let path = self.project_path(&project).ok_or_else(|| {
+                                        anyhow::anyhow!("unknown project '{project}'")
+                                    })?;
+                                    super::backlog::update(&path, &project, &item_id, |item| {
+                                        item.task_id = Some(task_id.clone());
+                                        item.status = "in_progress".into();
+                                        item.updated_at = super::task::now_secs();
+                                    })?;
+                                }
+                                Ok(())
+                            })
+                    });
+                let _ = reply.send(result.map_err(|e: anyhow::Error| format!("{e:#}")));
             }
             Command::CancelTask { id, reply } => {
                 let result = if self.workflow_is_active(&id) {
@@ -4371,9 +5625,21 @@ impl Daemon {
                 task_id,
                 config_id,
                 value,
+                reply,
             } => {
-                if let Some(handle) = self.sessions.get(&task_id) {
-                    handle.set_config_option(config_id, value);
+                match self.sessions.get(&task_id).cloned() {
+                    Some(handle) => {
+                        // The agent round-trip can take seconds; don't hold the
+                        // actor loop hostage waiting for it.
+                        tokio::spawn(async move {
+                            let _ = reply.send(handle.set_config_option(config_id, value).await);
+                        });
+                    }
+                    None => {
+                        let _ = reply.send(Err(
+                            "this task has no running agent session to configure".into(),
+                        ));
+                    }
                 }
             }
             Command::DetectAgents { reply } => {
@@ -4398,7 +5664,10 @@ impl Daemon {
                     .map(|a| a.id.clone())
                     .collect();
                 for id in probe_ids {
-                    let _ = self.cmd_tx.send(Command::ProbeAgent { id }).await;
+                    let _ = self
+                        .cmd_tx
+                        .send(Command::ProbeAgent { id, reply: None })
+                        .await;
                 }
             }
             Command::ListAccounts { reply } => {
@@ -4440,26 +5709,26 @@ impl Daemon {
                 let result = self.set_active_account(&agent_id, &account_id).await;
                 let _ = reply.send(result);
             }
-            Command::ProbeAgent { id } => {
-                if let Some(agent) = self.configured_agents.iter().find(|a| a.id == id) {
-                    if !agent.enabled || agent.models.is_empty() {
-                        let acp_command = agent.acp_command.clone();
-                        let agent_id = agent.id.clone();
-                        let last_model = agent.last_model.clone();
-                        let cmd_tx = self.cmd_tx.clone();
-                        let cwd = std::env::current_dir()
-                            .unwrap_or_else(|_| std::path::PathBuf::from("."));
-                        tokio::spawn(async move {
-                            let res = super::agent_probe::probe_models(&acp_command, &cwd).await;
-                            let models = match res {
-                                Ok(m) => m,
-                                Err(e) => {
-                                    eprintln!(
-                                        "[daemon] ACP probe failed for agent '{agent_id}': {e}"
-                                    );
-                                    Vec::new()
-                                }
-                            };
+            Command::ProbeAgent { id, reply } => {
+                let agent = self
+                    .configured_agents
+                    .iter()
+                    .find(|a| a.id == id && a.enabled);
+                let Some(agent) = agent else {
+                    if let Some(reply) = reply {
+                        let _ = reply.send(Err(format!("no enabled agent '{id}'")));
+                    }
+                    return;
+                };
+                let acp_command = agent.acp_command.clone();
+                let agent_id = agent.id.clone();
+                let last_model = agent.last_model.clone();
+                let cmd_tx = self.cmd_tx.clone();
+                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                tokio::spawn(async move {
+                    let res = super::agent_probe::probe_models(&acp_command, &cwd).await;
+                    let outcome = match res {
+                        Ok(models) => {
                             let _ = cmd_tx
                                 .send(Command::AgentProbed {
                                     id: agent_id,
@@ -4467,15 +5736,30 @@ impl Daemon {
                                     last_model,
                                 })
                                 .await;
-                        });
+                            Ok(())
+                        }
+                        Err(e) => {
+                            eprintln!("[daemon] ACP probe failed for agent '{agent_id}': {e}");
+                            Err(format!("could not read models from {agent_id}: {e}"))
+                        }
+                    };
+                    if let Some(reply) = reply {
+                        let _ = reply.send(outcome);
                     }
-                }
+                });
             }
             Command::AgentProbed {
                 id,
                 models,
                 last_model,
             } => {
+                // A probe that came back with nothing means the agent answered
+                // without advertising selectors — treat it as "no news" rather
+                // than truth, or one flaky probe would wipe a working list and
+                // leave the picker empty until the next restart.
+                if models.is_empty() {
+                    return;
+                }
                 if let Some(agent) = self.configured_agents.iter_mut().find(|a| a.id == id) {
                     agent.models = models.clone();
                     agent.last_model = last_model.clone();
@@ -4545,6 +5829,163 @@ impl Daemon {
                     self.persist(&updated);
                     self.emit(Event::TaskUpdated(updated));
                 }
+            }
+            Command::MemoryStore {
+                content,
+                scope,
+                kind,
+                tags,
+                project_id,
+                created_by,
+                reply,
+            } => {
+                let result = self
+                    .memory
+                    .store(
+                        &content,
+                        scope.as_deref(),
+                        kind.as_deref(),
+                        tags.as_deref(),
+                        project_id.as_deref(),
+                        created_by.as_deref(),
+                    )
+                    .and_then(|m| {
+                        serde_json::to_value(m).map_err(super::memory::MemoryError::from)
+                    });
+                let _ = reply.send(result);
+            }
+            Command::MemorySearch {
+                query,
+                scope,
+                limit,
+                mode,
+                reply,
+            } => {
+                let result = self
+                    .memory
+                    .search(&query, scope.as_deref(), limit, mode.as_deref())
+                    .and_then(|v| {
+                        serde_json::to_value(v).map_err(super::memory::MemoryError::from)
+                    });
+                let _ = reply.send(result);
+            }
+            Command::MemoryList {
+                scope,
+                kind,
+                limit,
+                offset,
+                reply,
+            } => {
+                let result = self
+                    .memory
+                    .list(scope.as_deref(), kind.as_deref(), limit, offset)
+                    .and_then(|v| {
+                        serde_json::to_value(v).map_err(super::memory::MemoryError::from)
+                    });
+                let _ = reply.send(result);
+            }
+            Command::MemoryUpdate { id, content, reply } => {
+                let result = self.memory.update(&id, &content).and_then(|m| {
+                    serde_json::to_value(m).map_err(super::memory::MemoryError::from)
+                });
+                let _ = reply.send(result);
+            }
+            Command::MemoryDelete { id, reply } => {
+                let _ = reply.send(self.memory.delete(&id));
+            }
+            Command::MemoryStats { reply } => {
+                let result = self.memory.stats().and_then(|s| {
+                    serde_json::to_value(s).map_err(super::memory::MemoryError::from)
+                });
+                let _ = reply.send(result);
+            }
+            Command::SetMemoryEmbedding { mode, reply } => {
+                let result = self.memory.set_embedding(&mode).and_then(|s| {
+                    serde_json::to_value(s).map_err(super::memory::MemoryError::from)
+                });
+                let _ = reply.send(result);
+            }
+            Command::MemoryAddEdge {
+                src_id,
+                dst_id,
+                relation,
+                reply,
+            } => {
+                let r = self
+                    .memory
+                    .add_edge(&src_id, &dst_id, &relation)
+                    .and_then(|e| {
+                        serde_json::to_value(e).map_err(super::memory::MemoryError::from)
+                    });
+                let _ = reply.send(r);
+            }
+            Command::MemoryEdges { id, reply } => {
+                let r = self.memory.list_edges(&id).and_then(|v| {
+                    serde_json::to_value(v).map_err(super::memory::MemoryError::from)
+                });
+                let _ = reply.send(r);
+            }
+            Command::MemoryListCompaction { reply } => {
+                let r = self.memory.list_compaction_log().and_then(|v| {
+                    serde_json::to_value(v).map_err(super::memory::MemoryError::from)
+                });
+                let _ = reply.send(r);
+            }
+            Command::MemoryResolveCompaction { id, approve, reply } => {
+                let r = self.memory.resolve_compaction(id, approve).and_then(|s| {
+                    serde_json::to_value(s).map_err(super::memory::MemoryError::from)
+                });
+                let _ = reply.send(r);
+            }
+            Command::MemoryDream {
+                dry_run,
+                project_id,
+                reply,
+            } => {
+                *self.last_memory_activity.lock().unwrap() = std::time::Instant::now();
+                // Scheduler for idle/cron is spawned in Daemon::spawn when dreaming.enabled;
+                // this handler just executes the pass. Dream uses dreaming agent/model
+                // (fallback agent.default_model) via dream prompt over last_accessed ASC 200;
+                // when no model configured it falls back to heuristic propose_compaction.
+                let cfg = self.memory.config().dreaming.clone();
+                let fallback = self
+                    .configured_agents
+                    .iter()
+                    .find(|a| a.id == cfg.agent)
+                    .and_then(|a| a.last_model.clone());
+                let res = self
+                    .memory
+                    .dream_with_config(dry_run, &cfg, fallback.as_deref());
+                if !dry_run {
+                    if let Ok(v) = &res {
+                        let inserted = v.get("inserted").and_then(|n| n.as_u64()).unwrap_or(0);
+                        if inserted > 0 {
+                            let pid = project_id.clone().unwrap_or_else(|| "global".to_string());
+                            let title =
+                                format!("Dreaming: {} \u{2014} {} proposals", pid, inserted);
+                            let prompt = format!(
+                                "Dreaming compaction proposals for project '{}': {}\nPending review in memory_compaction_log.",
+                                pid, v
+                            );
+                            let mut task =
+                                Task::new(&pid, &prompt, &cfg.agent, vec!["dreaming".into()]);
+                            task.title = title;
+                            // Dreaming is already done — proposals are in DB. Don't spawn agent;
+                            // mark Waiting so board shows review-needed, not spinner/“warming up”.
+                            task.status = crate::daemon::task::TaskStatus::Waiting;
+                            // Rich prompt so conversation isn't blank
+                            task.prompt = format!(
+                                "Dreaming finished for '{}' — {} proposal(s).\n\n{}\n\n→ Review in Memory → Compaction (approve/reject). No agent session needed.",
+                                pid, inserted, v
+                            );
+                            let tid = task.id.clone();
+                            self.tasks.insert(tid.clone(), task.clone());
+                            self.persist(&task);
+                            self.emit(Event::TaskCreated(task));
+                        }
+                    }
+                }
+                let _ = reply.send(res);
             }
         }
     }
@@ -5262,14 +6703,21 @@ impl Daemon {
                 }
             }
         }
-        // An orchestrator-chat session gets the warpforge MCP bridge (spawn_agent
-        // / read_inbox tools) and an orchestrator system preamble; a plain task
-        // gets neither.
+        // Every session gets the warpforge MCP bridge (read service logs,
+        // restart a service, …). An orchestrator-chat session additionally gets
+        // the orchestrator system preamble and, via WF_MODE=orchestrator, the
+        // spawn_agent / read_inbox tools. A plain task gets the core tools only.
         let is_orchestrator = self
             .tasks
             .get(task_id)
             .is_some_and(|t| t.tags.iter().any(|x| x == "orchestrator-chat"));
-        let (mcp_servers, base_prompt) = if is_orchestrator {
+        let mcp_servers = mcp_servers(task_id, project, is_orchestrator);
+        let memory_prefix = if self.memory.enabled() {
+            format!("{MEMORY_SYSTEM}\n\n")
+        } else {
+            String::new()
+        };
+        let base_prompt = if is_orchestrator {
             let agents = self.available_agent_ids();
             let roster = if agents.is_empty() {
                 String::new()
@@ -5288,12 +6736,9 @@ impl Daemon {
                     workflows.join(", ")
                 )
             };
-            (
-                orchestrator_mcp_servers(task_id, project),
-                format!("{ORCHESTRATOR_SYSTEM}{roster}{workflow_roster}\n\n{prompt}"),
-            )
+            format!("{memory_prefix}{ORCHESTRATOR_SYSTEM}{roster}{workflow_roster}\n\n{RUNTIME_MCP_SYSTEM}\n\n{prompt}")
         } else {
-            (Vec::new(), prompt.to_string())
+            format!("{memory_prefix}{RUNTIME_MCP_SYSTEM}\n\n{prompt}")
         };
         let full_prompt = match include_runtime_context
             .then(|| self.runtime_context(project))
@@ -7539,6 +8984,7 @@ mod project_removal_tests {
                 Vec::new(),
                 None,
                 HashMap::new(),
+                None,
             )
             .await;
         let deleted_task = handle
@@ -7553,6 +8999,7 @@ mod project_removal_tests {
                 Vec::new(),
                 None,
                 HashMap::new(),
+                None,
             )
             .await;
 
@@ -7971,6 +9418,7 @@ mod worktree_start_tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await
     }
@@ -8040,6 +9488,7 @@ mod worktree_start_tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await;
         std::fs::write(dir.path().join("README.md"), "edited\n").unwrap();
@@ -8057,6 +9506,7 @@ mod worktree_start_tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await;
 
@@ -8145,6 +9595,7 @@ mod transcript_projection_tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await;
 
@@ -8171,6 +9622,7 @@ mod transcript_projection_tests {
                 Vec::new(),
                 None,
                 Default::default(),
+                None,
             )
             .await;
         let (tx, rx) = oneshot::channel();

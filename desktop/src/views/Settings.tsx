@@ -1,14 +1,17 @@
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, X } from "lucide-react";
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import AccountsPanel from "@/components/AccountsPanel";
 import AgentSetupPanel from "@/components/AgentSetupPanel";
 import LanguageServersPanel from "@/components/LanguageServersPanel";
+import TrackersPanel from "@/components/TrackersPanel";
 import { Button } from "@/components/ui/button";
 import { daemon } from "@/daemon";
 import { configRole } from "@/lib/configRole";
 import { THEMES } from "@/lib/themes";
 import { useUi } from "@/store/ui";
+import { toast } from "sonner";
 
 // ── Helpers ──
 
@@ -99,6 +102,19 @@ interface Props {
 }
 
 export default function SettingsView({ open, onOpenChange }: Props) {
+  const queryClient = useQueryClient();
+  const backlogSettings = useQuery({
+    queryKey: ["backlog", "settings"],
+    queryFn: () => daemon.backlogSettings(),
+  });
+  const memoryStats = useQuery({
+    queryKey: ["memory", "stats"],
+    queryFn: () => daemon.memoryStats(),
+  });
+  const backlogStorage = useMutation({
+    mutationFn: (mode: "sqlite" | "yaml") => daemon.setBacklogStorage(mode),
+    onSuccess: (settings) => queryClient.setQueryData(["backlog", "settings"], settings),
+  });
   const fontSize = useUi((s) => s.fontSize);
   const monoFontSize = useUi((s) => s.monoFontSize);
   const setFontSize = useUi((s) => s.setFontSize);
@@ -115,6 +131,9 @@ export default function SettingsView({ open, onOpenChange }: Props) {
   const theoMod = useUi((s) => s.theoMod);
   const setTheoMod = useUi((s) => s.setTheoMod);
   const state = useSyncExternalStore(daemon.subscribe, daemon.getState);
+  const [dreamProject, setDreamProject] = useState<string>("");
+  const effectiveDreamProject =
+    dreamProject || state.snapshot.projects[0]?.name || "";
   const enabledAgents = (state.snapshot.agents ?? []).filter((a) => a.enabled);
   // The daemon caches an agent's config options after probing it over ACP; the
   // model list is empty until that probe has happened at least once.
@@ -177,8 +196,7 @@ export default function SettingsView({ open, onOpenChange }: Props) {
             <div className="grid grid-cols-4 gap-2 p-4">
               {THEMES.map((t) => {
                 const active = t.id === theme;
-                const swatch = (key: keyof typeof t.colors) =>
-                  hsl(t.colors[key]);
+                const swatch = (key: keyof typeof t.colors) => hsl(t.colors[key]);
                 return (
                   <button
                     key={t.id}
@@ -263,6 +281,187 @@ export default function SettingsView({ open, onOpenChange }: Props) {
             <div className="p-4">
               <LanguageServersPanel />
             </div>
+          </Section>
+
+          {/* ── Issue trackers ── */}
+          <Section title="Issue trackers">
+            <div className="p-4">
+              <TrackersPanel />
+            </div>
+          </Section>
+
+          <Section title="Backlog storage">
+            <SettingRow
+              title="Storage format"
+              description="Backlog is owned by daemon. YAML lives in .workforge/backlog; SQLite stays in Warpforge data."
+              control={
+                <select
+                  aria-label="Backlog storage format"
+                  value={backlogSettings.data?.mode ?? "sqlite"}
+                  disabled={backlogSettings.isLoading || backlogStorage.isPending}
+                  onChange={(event) =>
+                    backlogStorage.mutate(event.target.value as "sqlite" | "yaml")
+                  }
+                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                >
+                  <option value="sqlite">SQLite</option>
+                  <option value="yaml">YAML files</option>
+                </select>
+              }
+            />
+          </Section>
+
+          {/* ── Dreaming ── */}
+          <Section title="Dreaming">
+            <SettingRow
+              title="Dream now"
+              description="Run compaction: duplicates, contradictions, stale facts → pending proposals."
+              control={
+                <div className="flex items-center gap-2"><select aria-label="Dream project" value={dreamProject} onChange={(e)=>setDreamProject(e.target.value)} className="h-7 rounded-md border bg-background px-2 text-xs"><option value="">global</option>{(state.snapshot.projects ?? []).map((p:any)=><option key={p.name} value={p.name}>{p.name}</option>)}</select><div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={async () => {
+                      const pid = effectiveDreamProject || state.snapshot.projects[0]?.name || "global";
+                      const agent = (state.snapshot.agents ?? []).find(a=>a.enabled)?.id || "opencode";
+                      toast.info("Dreaming…", { description: "Running LLM+heuristic sweep" });
+                      const res: any = await (daemon as any).request("memory.dream", { dry_run: false, project_id: pid });
+                      const inserted = res?.inserted ?? 0;
+                      const pending = res?.pending ?? 0;
+                      const prompt = `Dreaming just ran for '${pid}' (same background path as cron): ${JSON.stringify(res).slice(0,3000)}\n\nYour job: verify each proposal against the codebase (grep/read files). Summarize what was actually stale/duplicate/contradiction vs false positive. Write a short human summary. Proposals stay pending in memory_compaction_log — don't apply without user approval.`;
+                      const r: any = await (daemon as any).request("task.create", { project: pid, prompt, agent, tags: ["dreaming"], worktree: false });
+                      const tid = r?.taskId || r?.id;
+                      toast.success(`Dreaming done — ${inserted} new, ${pending} pending — task ${tid ?? pid}`, { description: "Agent verifies against code" });
+                    }}
+                  >
+                    Dream
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={async () => {
+                      const pid = effectiveDreamProject || state.snapshot.projects[0]?.name || "global";
+                      const res: any = await (daemon as any).request("memory.dream", { dry_run: true, project_id: pid });
+                      toast.info(`Dry run: ${res?.inserted ?? 0} would propose`, { description: JSON.stringify(res?.proposals ?? res).slice(0,200) });
+                    }}
+                  >
+                    Dry run
+                  </Button>
+                </div></div>
+              }
+            />
+            <SettingRow
+              title="Enabled"
+              description="Auto dreaming via idle/cron trigger (manual = button only). Configured in ~/.warpforge/config.yaml → memory.dreaming (enabled/trigger) — restart daemon to apply."
+              control={
+                <span
+                  className="text-xs text-muted-foreground"
+                  title="Read-only: edit ~/.warpforge/config.yaml memory.dreaming"
+                >
+                  {(memoryStats.data as any)?.dreaming?.enabled ? "on" : "off"} ({(memoryStats.data as any)?.dreaming?.trigger ?? "manual"})
+                </span>
+              }
+            />
+          </Section>
+
+          {/* ── Memory ── */}
+          <Section title="Memory">
+            <SettingRow
+              title="Embedding mode"
+              description={
+                memoryStats.isLoading
+                  ? "Loading embedding mode…"
+                  : memoryStats.data?.embeddingMode === "hybrid"
+                    ? "Embedding: hybrid (FTS + vector, ~80 MB model). Falls back to FTS when offline."
+                    : memoryStats.data?.embeddingUnavailable
+                      ? `Embedding: fts (keyword) — last fastembed attempt failed: ${memoryStats.data.embeddingUnavailable}. On macOS: brew install onnxruntime, then re-select fastembed (no restart needed; if still fails, restart warpforge so ORT_DYLIB_PATH picks up /opt/homebrew/lib/libonnxruntime.dylib) to download ~80 MB model.`
+                      : "Embedding: fts (keyword-only). Selecting fastembed will download ~80 MB model (all-MiniLM-L6-v2) on first use and enable hybrid search (FTS+vector). Requires ONNX Runtime — on macOS: brew install onnxruntime (daemon auto-detects /opt/homebrew/lib/libonnxruntime.dylib; if brew was just installed, simply re-select fastembed — no restart needed). Falls back to FTS if unavailable/offline."
+              }
+              control={
+                <select
+                  aria-label="Embedding mode"
+                  value={
+                    memoryStats.data?.embeddingMode === "hybrid" ? "fastembed" : "none"
+                  }
+                  disabled={memoryStats.isLoading}
+                  onChange={async (e) => {
+                    const mode = e.target.value;
+                    if (mode === "fastembed") {
+                      const ok = window.confirm(
+                        "Switch to fastembed? On first use Warpforge will download ~80 MB model (all-MiniLM-L6-v2) and needs ONNX Runtime (brew install onnxruntime on macOS — auto-detected at /opt/homebrew/lib/libonnxruntime.dylib; if just installed, just re-select, no restart needed). If the runtime is missing it will stay on FTS. Continue?",
+                      );
+                      if (!ok) {
+                        e.target.value = "none";
+                        return;
+                      }
+                    }
+                    try {
+                      const stats = (await daemon.setMemoryEmbedding(mode)) as typeof memoryStats.data;
+                      queryClient.setQueryData(["memory", "stats"], stats);
+                      if (mode === "fastembed" && stats?.embeddingMode !== "hybrid") {
+                        alert(
+                          stats?.embeddingUnavailable
+                            ? `fastembed not available: ${stats.embeddingUnavailable}. Staying on FTS. On macOS: brew install onnxruntime, then re-select fastembed (no restart needed). If still fails, restart warpforge so ORT_DYLIB_PATH picks up /opt/homebrew/lib/libonnxruntime.dylib.`
+                            : "fastembed selected but still on FTS — will download ~80 MB model on next search. If offline, stays FTS.",
+                        );
+                      }
+                    } catch (err: any) {
+                      alert(err?.message ?? String(err));
+                    }
+                  }}
+                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                >
+                  <option value="none">none (FTS)</option>
+                  <option value="fastembed">fastembed (~80 MB)</option>
+                </select>
+              }
+            />
+            <SettingRow
+              title="Memories"
+              description="Durable cross-session knowledge shared across harnesses."
+              control={
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {memoryStats.isLoading
+                    ? "…"
+                    : `${memoryStats.data?.globalCount ?? 0} global · ${
+                        memoryStats.data?.projectCount ?? 0
+                      } project`}
+                </span>
+              }
+            />
+            <SettingRow
+              title="Active scopes"
+              description="Which scopes agents can store and search. Read-only — edit ~/.warpforge/config.yaml → memory.global / memory.project, then restart daemon."
+              control={
+                <span
+                  className="flex items-center gap-2 text-xs tabular-nums"
+                  title="Read-only: edit config.yaml"
+                >
+                  <span className={`rounded-full border px-2 py-0.5 ${memoryStats.data?.scopesEnabled.global ? "border-foreground/30 bg-foreground/10 text-foreground" : "border-border text-muted-foreground/50"}`}>
+                    global
+                  </span>
+                  <span className={`rounded-full border px-2 py-0.5 ${memoryStats.data?.scopesEnabled.project ? "border-foreground/30 bg-foreground/10 text-foreground" : "border-border text-muted-foreground/50"}`}>
+                    project
+                  </span>
+                </span>
+              }
+            />
+            <SettingRow
+              title="Per-project DB"
+              description="~/.warpforge/memory.db is global; per-project overlay auto-creates on first project-scoped write (or when memory.per_project: true). You don't create it manually."
+              control={
+                <span
+                  className="text-xs tabular-nums text-muted-foreground"
+                  title="Auto-created overlay, not manual"
+                >
+                  {memoryStats.isLoading ? "…" : memoryStats.data?.perProjectDbExists ? "exists" : "not found — using global"}
+                </span>
+              }
+            />
           </Section>
 
           {/* ── Text generation ── */}

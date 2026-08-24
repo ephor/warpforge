@@ -3,8 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { PromptSubmission } from "../protocol";
 import { FILE_REF_MIME } from "../lib/composerMentions";
+import type { PromptSubmission } from "../protocol";
 import type { ComposerHandle } from "./Composer";
 import { Composer } from "./Composer";
 

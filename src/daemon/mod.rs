@@ -14,16 +14,25 @@ pub mod acp_server;
 pub mod actor;
 pub mod agent_probe;
 pub mod agents;
+pub mod attachment;
+pub mod backlog;
 pub mod claude_auth;
 pub mod diff;
 pub mod lsp;
 pub mod lsp_servers;
+pub mod memory;
+pub mod memory_config;
+pub mod memory_dream;
+pub mod memory_embed;
+pub mod memory_types;
 pub mod prompt;
 pub mod runtime;
+pub mod search;
 pub mod server;
 pub mod sessions;
 pub mod store;
 pub mod task;
+pub mod tracker;
 pub mod wire;
 pub mod workflow;
 pub mod worktree;
@@ -68,6 +77,7 @@ mod tests {
                 vec![],
                 None,
                 std::collections::HashMap::new(),
+                None,
             )
             .await;
 
@@ -115,6 +125,8 @@ mod tests {
                 attachments: Vec::new(),
                 default_model: None,
                 config_overrides: std::collections::HashMap::new(),
+                backlog_item_id: None,
+                start: true,
                 reply: task_tx,
             })
             .await;
@@ -214,6 +226,7 @@ mod tests {
                 vec![],
                 None,
                 std::collections::HashMap::new(),
+                None,
             )
             .await;
 
@@ -332,6 +345,7 @@ mod tests {
                 vec![],
                 None,
                 std::collections::HashMap::new(),
+                None,
             )
             .await;
 
@@ -386,6 +400,7 @@ mod tests {
                 vec![],
                 None,
                 std::collections::HashMap::new(),
+                None,
             )
             .await;
         let mut events = daemon.subscribe();
@@ -449,6 +464,7 @@ mod tests {
                 ],
                 None,
                 std::collections::HashMap::new(),
+                None,
             )
             .await;
         let mut initial = false;
@@ -530,6 +546,7 @@ mod tests {
                 }],
                 None,
                 std::collections::HashMap::new(),
+                None,
             )
             .await;
         let mut fallback = false;
@@ -568,6 +585,7 @@ mod tests {
                 }],
                 None,
                 std::collections::HashMap::new(),
+                None,
             )
             .await;
         let mut blocked = false;
@@ -608,6 +626,7 @@ mod tests {
                 vec![],
                 None,
                 std::collections::HashMap::new(),
+                None,
             )
             .await;
 
@@ -998,6 +1017,7 @@ mod tests {
                 vec![],
                 None,
                 std::collections::HashMap::new(),
+                None,
             )
             .await;
 
@@ -1083,6 +1103,7 @@ mod tests {
                 vec![],
                 None,
                 std::collections::HashMap::new(),
+                None,
             )
             .await;
 

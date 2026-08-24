@@ -7,7 +7,6 @@ import { Check, Code, Eye, Loader2, Save, Wand2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useThemeMode } from "@/hooks/useTheme";
-import { daemon } from "../daemon";
 import {
   codemirrorLanguageForPath,
   lspDocumentLanguageForPath,
@@ -17,6 +16,7 @@ import { cmChromeForMode } from "@/lib/codemirrorTheme";
 import { acquireLspClient, releaseLspClient } from "@/lib/lspClients";
 import { cn } from "@/lib/utils";
 
+import { daemon } from "../daemon";
 import type { FileDoc, FileRange, SymbolMatch } from "../protocol";
 import { useUi } from "../store/ui";
 import { Markdown } from "./Markdown";
@@ -24,6 +24,7 @@ import { Markdown } from "./Markdown";
 type SaveStatus = "clean" | "unsaved" | "saved";
 
 const isMarkdownPath = (path: string) => /\.(md|markdown|mdx)$/i.test(path);
+const isHtmlPath = (path: string) => /\.html?$/i.test(path);
 const LSP_LABELS: Record<string, string> = {
   typescript: "TypeScript/JavaScript",
   rust: "Rust",
@@ -111,10 +112,11 @@ export function CodeEditor({
     y: number;
   } | null>(null);
   const markdown = isMarkdownPath(doc.path);
+  const htmlDoc = isHtmlPath(doc.path);
   const svgImage = isSvgPath(doc.path);
   const binaryImage = isBinaryImagePath(doc.path);
   const themeMode = useThemeMode();
-  const showPreview = (markdown || svgImage) && preview;
+  const showPreview = (markdown || htmlDoc || svgImage) && preview;
   const previewText = text;
   const isReadOnly = binaryImage || svgImage;
 
@@ -288,7 +290,16 @@ export function CodeEditor({
               { key: "Mod-s", run: flushSave },
               ...(onGotoDefinition ? [{ key: "Mod-b", run: runGoto, preventDefault: true }] : []),
               ...(onAskFile
-                ? [{ key: "Mod-l", run: () => { askSelectionRef.current(); return true; }, preventDefault: true }]
+                ? [
+                    {
+                      key: "Mod-l",
+                      run: () => {
+                        askSelectionRef.current();
+                        return true;
+                      },
+                      preventDefault: true,
+                    },
+                  ]
                 : []),
             ]),
             ...(onGotoDefinition
@@ -394,9 +405,7 @@ export function CodeEditor({
       setLspMissing(null);
       const uri = `file://${acquired.rootPath}/${doc.path}`;
       view.dispatch({
-        effects: lspCompartment.current.reconfigure(
-          acquired.client.plugin(uri, documentLanguage),
-        ),
+        effects: lspCompartment.current.reconfigure(acquired.client.plugin(uri, documentLanguage)),
       });
       detach = () => {
         viewRef.current?.dispatch({ effects: lspCompartment.current.reconfigure([]) });
@@ -439,16 +448,22 @@ export function CodeEditor({
     const column = Math.min(Math.max(gotoLocation.column - 1, 0), line.length);
     view.dispatch({
       selection: { anchor: line.from + column },
-      scrollIntoView: true,
+      // Centered, not merely "in view": a plain scrollIntoView stops as soon as
+      // the line touches an edge, leaving the jump target glued to the bottom
+      // with no context under it.
+      effects: EditorView.scrollIntoView(line.from + column, { y: "center" }),
       userEvent: "select.goto",
     });
+    // Without focus the caret sits at the target invisibly and the first
+    // keystroke goes nowhere — a jump from search should land ready to type.
+    view.focus();
     gotoLocationKey.current = key;
     onGotoLocationHandled?.();
   }, [editorReady, gotoLocation, onGotoLocationHandled]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-3 border-b px-3 text-xs text-muted-foreground">
+      <div className="flex h-9 shrink-0 items-center gap-3 border-b px-3 text-xs text-muted-foreground">
         <span className="min-w-0 flex-1 truncate font-mono">{doc.path}</span>
         <span
           className={cn(
@@ -465,7 +480,7 @@ export function CodeEditor({
             </>
           ) : null}
         </span>
-        {(markdown || svgImage) && (
+        {(markdown || htmlDoc || svgImage) && (
           <button
             type="button"
             onClick={() => setPreview((p) => !p)}
@@ -482,12 +497,13 @@ export function CodeEditor({
             )}
           </button>
         )}
-        {!isReadOnly && (
+        {/* A view that cannot write (a project file outside any task) gets no
+            save control at all, rather than a permanently dead one. */}
+        {!isReadOnly && editable && (
           <button
             type="button"
             onClick={flushSave}
-            disabled={!editable}
-            className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground disabled:opacity-50"
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground"
           >
             <Save className="size-3" />
             save
@@ -599,7 +615,14 @@ export function CodeEditor({
             )}
             {showPreview && (
               <div className="h-full overflow-auto px-4 py-3">
-                {svgImage ? (
+                {htmlDoc ? (
+                  <iframe
+                    title={doc.path}
+                    srcDoc={previewText}
+                    sandbox=""
+                    className="h-full w-full border-0 bg-white"
+                  />
+                ) : svgImage ? (
                   <div className="flex h-full items-center justify-center">
                     {doc.newDataBase64 ? (
                       <img

@@ -89,8 +89,17 @@ pub enum AcpUpdate {
 
 pub enum AcpCommand {
     Prompt(PreparedPrompt),
-    AnswerPermission { request_id: String, outcome: String },
-    SetConfigOption { config_id: String, value: String },
+    AnswerPermission {
+        request_id: String,
+        outcome: String,
+    },
+    SetConfigOption {
+        config_id: String,
+        value: String,
+        /// Carries the agent's verdict back to the caller so a rejected or
+        /// timed-out selector change surfaces instead of vanishing.
+        reply: oneshot::Sender<Result<(), String>>,
+    },
     Cancel,
 }
 
@@ -119,10 +128,24 @@ impl AcpHandle {
             outcome,
         });
     }
-    pub fn set_config_option(&self, config_id: String, value: String) {
-        let _ = self
+    /// Change a selector and wait for the agent to confirm. `Err` means the
+    /// agent rejected it, went away, or never answered — the caller is expected
+    /// to tell the user rather than leave a stale selection on screen.
+    pub async fn set_config_option(&self, config_id: String, value: String) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        if self
             .cmd_tx
-            .send(AcpCommand::SetConfigOption { config_id, value });
+            .send(AcpCommand::SetConfigOption {
+                config_id,
+                value,
+                reply: tx,
+            })
+            .is_err()
+        {
+            return Err("agent session is no longer running".into());
+        }
+        rx.await
+            .unwrap_or_else(|_| Err("agent session is no longer running".into()))
     }
     pub fn cancel(&self) {
         self.process.stop_intentionally();
@@ -1200,7 +1223,11 @@ pub fn spawn_acp_session(
                             );
                         }
                     }
-                    AcpCommand::SetConfigOption { config_id, value } => {
+                    AcpCommand::SetConfigOption {
+                        config_id,
+                        value,
+                        reply,
+                    } => {
                         let out_tx = out_tx.clone();
                         let pending = Arc::clone(&pending);
                         let next_id = Arc::clone(&next_id);
@@ -1208,26 +1235,50 @@ pub fn spawn_acp_session(
                         let task_id = task_id.clone();
                         let session_id = session_id.clone();
                         tokio::spawn(async move {
-                            let res = rpc(
-                                &out_tx,
-                                &pending,
-                                &next_id,
-                                "session/set_config_option",
-                                json!({
-                                    "sessionId": session_id, "configId": config_id, "value": value
-                                }),
+                            let res = tokio::time::timeout(
+                                RPC_TIMEOUT,
+                                rpc(
+                                    &out_tx,
+                                    &pending,
+                                    &next_id,
+                                    "session/set_config_option",
+                                    json!({
+                                        "sessionId": session_id, "configId": config_id, "value": value
+                                    }),
+                                ),
                             )
                             .await;
-                            // The reply carries the full updated configOptions.
-                            if let Some(result) = res.as_ref().and_then(|v| v.get("result")) {
-                                let opts = parse_config_options(result.get("configOptions"));
-                                if !opts.is_empty() {
-                                    let _ = updates.send((
-                                        task_id,
-                                        AcpUpdate::ConfigOptions { options: opts },
-                                    ));
+                            let verdict = match res {
+                                Ok(Some(resp)) if resp.get("error").is_none() => {
+                                    // The reply carries the full updated configOptions.
+                                    if let Some(result) = resp.get("result") {
+                                        let opts =
+                                            parse_config_options(result.get("configOptions"));
+                                        if !opts.is_empty() {
+                                            let _ = updates.send((
+                                                task_id,
+                                                AcpUpdate::ConfigOptions { options: opts },
+                                            ));
+                                        }
+                                    }
+                                    Ok(())
                                 }
+                                Ok(Some(resp)) => Err(format!(
+                                    "agent rejected '{config_id}'.{}",
+                                    acp_error_detail(&resp)
+                                )),
+                                Ok(None) => Err(format!(
+                                    "agent connection closed while setting '{config_id}'"
+                                )),
+                                Err(_) => Err(format!(
+                                    "agent did not answer within {}s while setting '{config_id}'",
+                                    RPC_TIMEOUT.as_secs()
+                                )),
+                            };
+                            if let Err(ref message) = verdict {
+                                eprintln!("[daemon] set_config_option: {message}");
                             }
+                            let _ = reply.send(verdict);
                         });
                     }
                     AcpCommand::Cancel => {
@@ -1299,7 +1350,12 @@ fn send_prompt(
             }
         };
         if response.get("error").is_some() {
-            reporter.report("The agent rejected the ACP session/prompt request.".into());
+            // Carry the agent's own words — without them this is the one failure
+            // in the session that tells the user nothing at all.
+            reporter.report(format!(
+                "The agent rejected the ACP session/prompt request.{}",
+                acp_error_detail(&response)
+            ));
             let _ = kill_tx.send(());
             return;
         }
@@ -1576,6 +1632,12 @@ fn tool_title(update: &Value, id: &str, kind: &str) -> String {
         .map(str::trim)
         .filter(|title| !title.is_empty() && *title != id)
     {
+        // MCP tools arrive titled `mcp__<server>__<tool>`. Render a human label
+        // (and surface the spawned agent for spawn_agent) so the UI, toasts and
+        // permission prompts don't show the raw underscore name.
+        if let Some(pretty) = pretty_mcp_tool_title(title, update) {
+            return pretty;
+        }
         return title.to_string();
     }
 
@@ -1619,6 +1681,85 @@ fn tool_title(update: &Value, id: &str, kind: &str) -> String {
         _ => "Use tool",
     }
     .to_string()
+}
+
+/// Turn an MCP tool title into a human label; for `spawn_agent` also surface
+/// which agent + task is being dispatched so the orchestrator's spawn is visible
+/// without expanding the tool. Handles both naming conventions agents emit:
+/// opencode's `warpforge_list_runtime` and Claude's `mcp__warpforge__list_runtime`.
+/// Returns `None` when the title is not an MCP-shaped tool name.
+fn pretty_mcp_tool_title(title: &str, update: &Value) -> Option<String> {
+    // opencode convention: `<server>_<tool>`, e.g. `warpforge_list_runtime`.
+    if let Some((server, tool)) = title.split_once('_') {
+        if server == "warpforge" {
+            return Some(render_mcp_tool(server, tool, update));
+        }
+    }
+    // Claude convention: `mcp__<server>__<tool>`.
+    let mut parts = title.splitn(3, "__");
+    if parts.next()? != "mcp" {
+        return None;
+    }
+    let server = parts.next()?;
+    let tool = parts.next()?;
+    Some(render_mcp_tool(server, tool, update))
+}
+
+fn render_mcp_tool(server: &str, tool: &str, update: &Value) -> String {
+    if tool == "spawn_agent" {
+        let raw = update.get("rawInput");
+        let agent = raw.and_then(|i| input_value(i, &["agent", "name"]));
+        let task = raw.and_then(|i| input_value(i, &["task", "description"]));
+        return match (agent, task) {
+            (Some(a), Some(t)) => format!("Spawn agent {a}: {t}"),
+            (Some(a), None) => format!("Spawn agent {a}"),
+            (None, Some(t)) => format!("Spawn agent: {t}"),
+            (None, None) => "Spawn agent".to_string(),
+        };
+    }
+    if server.is_empty() || tool.is_empty() {
+        return format!("{server} {tool}").trim().to_string();
+    }
+    // Just the tool, in normal words — no underscores, no server namespace.
+    title_case(&snake_to_words(tool))
+}
+
+/// Render an MCP tool label from a bare title string (no rawInput). Handles
+/// `mcp__<server>__<tool>` and `<server>_<tool>`. Falls back to the original.
+pub fn pretty_mcp_tool_label(title: &str) -> String {
+    let tool = if let Some(rest) = title.strip_prefix("mcp__") {
+        let mut parts = rest.splitn(2, "__");
+        let Some(t) = parts.nth(1) else {
+            return title.to_string();
+        };
+        t
+    } else if let Some((s, t)) = title.split_once('_') {
+        if s != "warpforge" {
+            return title.to_string();
+        }
+        t
+    } else {
+        return title.to_string();
+    };
+    if tool.is_empty() {
+        return title.to_string();
+    }
+    title_case(&snake_to_words(tool))
+}
+
+fn snake_to_words(s: &str) -> String {
+    s.split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn title_case(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 fn input_value(input: &Value, keys: &[&str]) -> Option<String> {
@@ -2009,8 +2150,10 @@ fn parse_permission(params: &Value) -> (String, Vec<String>, HashMap<String, Str
         .get("toolCall")
         .and_then(|t| t.get("title"))
         .and_then(|t| t.as_str())
-        .unwrap_or("Permission request")
-        .to_string();
+        .unwrap_or("Permission request");
+    // Prettify an MCP tool title (mcp__server__tool or warpforge_tool) for the
+    // permission line too; pretty_mcp_tool_label leaves non-MCP titles as-is.
+    let title = pretty_mcp_tool_label(title);
 
     let mut map: HashMap<String, String> = HashMap::new();
     if let Some(opts) = params.get("options").and_then(|o| o.as_array()) {
@@ -2042,6 +2185,45 @@ fn parse_permission(params: &Value) -> (String, Vec<String>, HashMap<String, Str
 mod tests {
     use super::*;
     use crate::daemon::prompt::{PreparedPrompt, PromptContent};
+
+    #[test]
+    fn mcp_tool_titles_render_as_human_labels() {
+        // Claude convention.
+        assert_eq!(
+            pretty_mcp_tool_label("mcp__warpforge__list_runtime"),
+            "List runtime"
+        );
+        // opencode convention (server_tool, no mcp__ prefix).
+        assert_eq!(
+            pretty_mcp_tool_label("warpforge_read_service_logs"),
+            "Read service logs"
+        );
+        // Not MCP-shaped — leave untouched.
+        assert_eq!(pretty_mcp_tool_label("Read file"), "Read file");
+    }
+
+    #[test]
+    fn spawn_agent_title_surfaces_the_agent_and_task() {
+        // opencode convention.
+        let update = json!({
+            "title": "warpforge_spawn_agent",
+            "rawInput": { "agent": "codex", "task": "Refactor the auth module" }
+        });
+        assert_eq!(
+            tool_title(&update, "call-1", "other"),
+            "Spawn agent codex: Refactor the auth module"
+        );
+    }
+
+    #[test]
+    fn permission_title_prettifies_mcp_names() {
+        let (title, options, _map) = parse_permission(&json!({
+            "toolCall": { "title": "mcp__warpforge__service_start" },
+            "options": []
+        }));
+        assert_eq!(title, "Service start");
+        assert!(options.is_empty());
+    }
 
     fn test_process_guard() -> Arc<ProcessGuard> {
         let (kill_tx, _kill_rx) = mpsc::unbounded_channel();

@@ -18,13 +18,10 @@ import {
   showContextMenu,
   useNativeContextMenu,
 } from "../../hooks/useNativeContextMenu";
-import type { ProjectFile } from "../../protocol";
 import { FILE_REF_MIME } from "../../lib/composerMentions";
+import type { ProjectFile } from "../../protocol";
+import { FileSystemActionDialog, type FileSystemAction } from "./FileSystemActionDialog";
 import { projectFileParentFolders } from "./projectFileTree";
-import {
-  FileSystemActionDialog,
-  type FileSystemAction,
-} from "./FileSystemActionDialog";
 
 export interface ProjectTreeNode {
   name: string;
@@ -175,13 +172,16 @@ export function ProjectFilesPanel({
   const targetRef = useRef<{ path?: string; fKey?: string }>({});
   const [fileAction, setFileAction] = useState<FileSystemAction | null>(null);
 
-  const openExternalPath = useCallback(async (path: string, reveal: boolean) => {
-    if (!("__TAURI_INTERNALS__" in window) || !rootPath) return;
-    const absolute = `${rootPath.replace(/\/+$/, "")}/${path}`;
-    const { openPath, revealItemInDir } = await import("@tauri-apps/plugin-opener");
-    if (reveal) await revealItemInDir(absolute);
-    else await openPath(absolute);
-  }, [rootPath]);
+  const openExternalPath = useCallback(
+    async (path: string, reveal: boolean) => {
+      if (!("__TAURI_INTERNALS__" in window) || !rootPath) return;
+      const absolute = `${rootPath.replace(/\/+$/, "")}/${path}`;
+      const { openPath, revealItemInDir } = await import("@tauri-apps/plugin-opener");
+      if (reveal) await revealItemInDir(absolute);
+      else await openPath(absolute);
+    },
+    [rootPath],
+  );
 
   const menuHandlers = useMemo(
     () =>
@@ -200,31 +200,55 @@ export function ProjectFilesPanel({
             if (t.path) void navigator.clipboard.writeText(t.path);
           },
         ],
-        ["reveal", () => {
-          const t = targetRef.current;
-          if (t.path) void openExternalPath(t.path, true);
-        }],
-        ["terminal", () => {
-          const t = targetRef.current;
-          if (t.path) void openExternalPath(t.path, false);
-        }],
+        [
+          "reveal",
+          () => {
+            const t = targetRef.current;
+            if (t.path) void openExternalPath(t.path, true);
+          },
+        ],
+        [
+          "terminal",
+          () => {
+            const t = targetRef.current;
+            if (t.path) void openExternalPath(t.path, false);
+          },
+        ],
         ["refresh", () => onRefresh?.()],
-        ["new-file", () => {
-          const t = targetRef.current;
-          setFileAction({ kind: "create-file", parent: t.fKey ?? t.path?.split("/").slice(0, -1).join("/") ?? "" });
-        }],
-        ["new-folder", () => {
-          const t = targetRef.current;
-          setFileAction({ kind: "create-folder", parent: t.fKey ?? t.path?.split("/").slice(0, -1).join("/") ?? "" });
-        }],
-        ["rename", () => {
-          const t = targetRef.current;
-          if (t.path) setFileAction({ kind: "rename", path: t.path });
-        }],
-        ["delete", () => {
-          const t = targetRef.current;
-          if (t.path || t.fKey) setFileAction({ kind: "delete", path: t.path ?? t.fKey! });
-        }],
+        [
+          "new-file",
+          () => {
+            const t = targetRef.current;
+            setFileAction({
+              kind: "create-file",
+              parent: t.fKey ?? t.path?.split("/").slice(0, -1).join("/") ?? "",
+            });
+          },
+        ],
+        [
+          "new-folder",
+          () => {
+            const t = targetRef.current;
+            setFileAction({
+              kind: "create-folder",
+              parent: t.fKey ?? t.path?.split("/").slice(0, -1).join("/") ?? "",
+            });
+          },
+        ],
+        [
+          "rename",
+          () => {
+            const t = targetRef.current;
+            if (t.path) setFileAction({ kind: "rename", path: t.path });
+          },
+        ],
+        [
+          "delete",
+          () => {
+            const t = targetRef.current;
+            if (t.path || t.fKey) setFileAction({ kind: "delete", path: t.path ?? t.fKey! });
+          },
+        ],
         [
           "expand",
           () => {
@@ -248,17 +272,25 @@ export function ProjectFilesPanel({
     e.preventDefault();
     e.stopPropagation();
     targetRef.current = { path, fKey };
+    // `file.create/rename/delete` are addressed by task, so a tree opened
+    // without one (the project page's read-only Files surface) must not offer
+    // them — they would go out with an empty task id and fail.
+    const edits: ContextMenuItemOrSeparator[] = taskId
+      ? [
+          { type: "separator" },
+          { type: "item", id: "new-file", label: "New File…" },
+          { type: "item", id: "new-folder", label: "New Folder…" },
+          { type: "item", id: "rename", label: "Rename…" },
+          { type: "item", id: "delete", label: "Delete…" },
+        ]
+      : [];
     const items: ContextMenuItemOrSeparator[] = path
       ? [
           { type: "item", id: "open", label: "Open" },
           { type: "item", id: "copy", label: "Copy Path" },
           { type: "item", id: "reveal", label: "Reveal in Finder" },
           { type: "item", id: "terminal", label: "Open in Default App" },
-          { type: "separator" },
-          { type: "item", id: "new-file", label: "New File…" },
-          { type: "item", id: "new-folder", label: "New Folder…" },
-          { type: "item", id: "rename", label: "Rename…" },
-          { type: "item", id: "delete", label: "Delete…" },
+          ...edits,
           { type: "separator" },
           { type: "item", id: "refresh", label: "Refresh" },
         ]
@@ -272,11 +304,7 @@ export function ProjectFilesPanel({
             { type: "item", id: "copy", label: "Copy Path" },
             { type: "item", id: "reveal", label: "Reveal in Finder" },
             { type: "item", id: "terminal", label: "Open in Default App" },
-            { type: "separator" },
-            { type: "item", id: "new-file", label: "New File…" },
-            { type: "item", id: "new-folder", label: "New Folder…" },
-            { type: "item", id: "rename", label: "Rename…" },
-            { type: "item", id: "delete", label: "Delete…" },
+            ...edits,
             { type: "separator" },
             { type: "item", id: "refresh", label: "Refresh" },
           ]
@@ -318,7 +346,7 @@ export function ProjectFilesPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-11 items-center border-b px-3 text-sm font-semibold">Files</div>
+      <div className="flex h-9 items-center border-b px-3 text-sm font-semibold">Files</div>
       {error && <p className="border-b px-3 py-2 text-xs text-destructive">{error}</p>}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto py-1.5">
         {rows.length === 0 && !error ? (

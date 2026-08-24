@@ -17,4 +17,6 @@ stale and then misleads.
 | --- | --- |
 | [0001](0001-workflow-pipelines.md) | Workflow pipelines: deterministic engine, project-configured |
 | [0002](0002-daemon-concurrency.md) | Daemon concurrency: non-blocking mailboxes, sharded per task |
+| [0002](0002-issue-tracker-integration.md) | Backlog ↔ issue trackers: one table, daemon-owned links |
 | [0003](0003-workflow-agent-loss.md) | Losing a stage's agent pauses a pipeline, it does not fail it |
+| [0004](0004-project-page-surfaces.md) | The project page is surfaces, and the backlog is a list |

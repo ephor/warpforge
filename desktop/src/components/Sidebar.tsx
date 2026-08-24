@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, memo } from "react";
 
 import { SidebarTaskRow } from "@/components/SidebarTaskRow";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { UpdateBanner } from "@/components/UpdateBanner";
 import UpdateControl from "@/components/UpdateControl";
 import { buildAttentionQueue } from "@/lib/attentionRail";
 import { buildTaskGroupIndex, isTaskGroupPinned, setTaskGroupPinned } from "@/lib/taskGroups";
@@ -626,20 +627,23 @@ function Sidebar({
           </div>
         </div>
 
-        <footer className="flex shrink-0 items-center gap-1 border-t border-border px-2 py-2">
-          <button
-            type="button"
-            onClick={onOpenSettings}
-            className="flex h-8 flex-1 items-center gap-2.5 rounded-md px-2.5 text-left text-[13px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <Settings className="size-4 shrink-0 text-muted-foreground/60" />
-            Settings
-          </button>
-          {/* Update lives beside Settings, not buried inside it — the "new
-              version" dot needs to stay visible the way it did in the topbar,
-              just relocated rather than lost. */}
-          <span aria-hidden className="h-5 w-px shrink-0 bg-border" />
-          <UpdateControl daemonConnected={connection === "connected"} />
+        <footer className="flex shrink-0 flex-col gap-1.5 border-t border-border px-2 py-2">
+          <UpdateBanner />
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="flex h-8 flex-1 items-center gap-2.5 rounded-md px-2.5 text-left text-[13px] text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <Settings className="size-4 shrink-0 text-muted-foreground/60" />
+              Settings
+            </button>
+            {/* Update lives beside Settings, not buried inside it — the "new
+                version" dot needs to stay visible the way it did in the topbar,
+                just relocated rather than lost. */}
+            <span aria-hidden className="h-5 w-px shrink-0 bg-border" />
+            <UpdateControl daemonConnected={connection === "connected"} />
+          </div>
         </footer>
       </aside>
     </TooltipProvider>

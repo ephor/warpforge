@@ -67,7 +67,7 @@ export default function AppHeader({ view, openTask, onAddProject, onCloseTask }:
         aria-label="Breadcrumb"
         className="flex min-w-0 flex-1 items-center gap-2 text-muted-foreground"
       >
-        <span className="text-xs">Warpforge</span>
+        <span className="text-xs">{openTask ? openTask.project : "Warpforge"}</span>
         <span aria-hidden className="text-xs text-muted-foreground/60">
           /
         </span>
