@@ -1,0 +1,117 @@
+---
+title: Working in a task
+description: Getting context to the agent, reading the code it wrote, and turning it into a commit — without leaving the task.
+sidebar:
+  order: 4
+  label: Working in a task
+---
+
+Most of the friction in agent-assisted work isn't the model. It's the shuttling: copying a file path into the prompt, pasting a diff into a chat, switching to an editor to see what a function does, writing the commit message afterwards.
+
+A Warpforge task is built so none of that leaves the window.
+
+## Getting context into the chat
+
+You rarely want to *describe* what you mean. Point at it instead.
+
+| To send… | Do this |
+| --- | --- |
+| **A file** | Type `@` and search by name — or drag a row from the file tree straight into the composer |
+| **A changed file's diff** | **Send to chat** on the file's header in the diff view |
+| **A specific piece of code** | Select the lines in the editor and press <kbd>⌘L</kbd> (<kbd>Ctrl L</kbd>) — the highlighted range goes over with its file and line numbers |
+| **A screenshot or image** | Paste or drop it into the composer, on agents whose harness accepts images |
+
+<Aside type="tip" title="Why line ranges matter">
+  "The validation in `auth.ts`" makes an agent go looking, and it might read the wrong function. A selection sent with its line numbers is unambiguous — and costs the agent no search.
+</Aside>
+
+The composer also takes `@` mentions ranked by relevance as you type, and slash commands where the harness provides them.
+
+## Reading code, not just diffs
+
+The editor inside a task is a real editor, not a diff viewer bolted to a file list.
+
+- **Go to definition** — <kbd>⌘B</kbd>, or <kbd>⌘</kbd>-click a symbol. Resolves across the project and opens the file at the line.
+- **Live diagnostics** — with a language server installed, errors and warnings appear inline as you read. Warpforge knows about servers for TypeScript, Rust, Go, Python, HTML/CSS/JSON, and YAML, and shows you the one-line install command for any that's missing.
+- **Syntax highlighting** across the languages you'd expect, with several files open at once on a tab strip.
+- **Find in Files** (<kbd>⌘⇧F</kbd>) — every match grouped by file with a live peek at the surrounding code; <kbd>Enter</kbd> opens it at that line, cursor already placed.
+- **Quick open** (<kbd>⌘P</kbd>, or double-tap <kbd>⇧</kbd>) — files by name, and matching source lines underneath them.
+
+Searches stay inside the project: build output and dependencies don't bury what you're looking for.
+
+## Reviewing the change
+
+The diff view gives you the whole spectrum between "accept everything" and "do it yourself":
+
+<Steps>
+
+1. **Read** it unified or split.
+2. **Accept or reject individual hunks** — you don't have to take a change wholesale to take the good half of it.
+3. **Edit inline** where it's faster to fix than to explain. <kbd>⌘S</kbd> saves; <kbd>↩</kbd> reverts a hunk.
+4. **Or send the file back to chat** with *Send to chat* and let the agent fix it, now that it can see exactly what you're looking at.
+
+</Steps>
+
+## Text you don't have to write
+
+Four kinds of prose Warpforge drafts for you. In every case you're the editor, not the author — nothing is submitted on your behalf.
+
+| What | Written from |
+| --- | --- |
+| **Task title** | The task's first prompt — a short imperative line, so tasks are legible on the board without you naming them |
+| **Commit message** | The **actual diff**, in Conventional Commits form — not from the prompt, so it describes what changed rather than what was asked for |
+| **PR title and body** | The branch's outgoing commits and their combined diff |
+| **Enhanced task prompt** | A rough note you wrote — **Enhance** rewrites it into a structured, well-specified task |
+
+**Enhance** is the one worth calling out: a backlog item you typed in five seconds ("fix the flaky login test, probably the timeout") becomes a properly scoped prompt before an agent ever sees it. Bad prompts are the most common cause of bad agent output, and this is the cheapest place to fix them.
+
+## Git, in the task
+
+The branch work lives beside the review instead of in a terminal:
+
+| Action | Shortcut |
+| --- | --- |
+| Commit… | <kbd>⌘K</kbd> |
+| Push… | <kbd>⇧⌘K</kbd> |
+| Sync with remote | <kbd>⌘T</kbd> |
+| New branch… | <kbd>⌥⌘N</kbd> |
+
+Push uses `--force-with-lease`. Opening a pull request goes through the [GitHub CLI](https://cli.github.com/) with the drafted title and body, and a task running in [its own worktree](/guides/tasks-and-backlog/#isolated-worktrees) merges back into its base branch when you're done with it.
+
+## Keyboard shortcuts
+
+<Tabs syncKey="os">
+<TabItem label="macOS">
+
+| Shortcut | Action |
+| --- | --- |
+| <kbd>⌘N</kbd> | New task |
+| <kbd>⌘P</kbd> / <kbd>⇧⇧</kbd> | Quick open (files and text) |
+| <kbd>⌘⇧F</kbd> | Find in Files |
+| <kbd>⌘B</kbd> / <kbd>⌘</kbd>-click | Go to definition |
+| <kbd>⌘L</kbd> | Send selection to chat |
+| <kbd>⌘S</kbd> | Save edits |
+| <kbd>⌘K</kbd> | Commit… |
+| <kbd>⇧⌘K</kbd> | Push… |
+| <kbd>⌘T</kbd> | Sync with remote |
+| <kbd>⌥⌘N</kbd> | New branch… |
+| <kbd>⌘+</kbd> / <kbd>⌘-</kbd> / <kbd>⌘0</kbd> | Text size up / down / reset |
+| <kbd>Esc</kbd> | Close the palette or panel you're in |
+
+</TabItem>
+<TabItem label="Windows / Linux">
+
+Replace <kbd>⌘</kbd> with <kbd>Ctrl</kbd> throughout — for example <kbd>Ctrl ⇧ F</kbd> for Find in Files and <kbd>Ctrl L</kbd> to send a selection to chat.
+
+<Aside type="caution">
+  Windows and Linux packaging is an unvalidated preview — see [Install](/getting-started/install/).
+</Aside>
+
+</TabItem>
+</Tabs>
+
+## See also
+
+- [Tasks and backlog](/guides/tasks-and-backlog/) — where a task comes from and how it ends
+- [Choosing your mode](/guides/choosing-your-mode/) — single agent, orchestrator, or pipeline
+- [Agent tools (MCP)](/reference/mcp-tools/) — what the agent can reach for on its own side
