@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.0
+
+### Minor Changes
+
+- [#40](https://github.com/ephor/warpforge/pull/40) [`f7c27a3`](https://github.com/ephor/warpforge/commit/f7c27a359c92188f4530c3890f4d79a41f90d521) Thanks [@ephor](https://github.com/ephor)! - Cross-harness memory for agents: one durable `~/.warpforge/memory.db` (global + per-project overlay) shared across Claude, Codex, opencode. FTS5 with optional vector hybrid (fastembed MiniLM-L6-v2 + vec0, RRF fusion, cosine). 8 MCP tools (`memory_store/search/list/update/delete`, `memory_edges/addEdge`, `memory_dream`, `memory_list/resolve_compaction`) so any harness can read/write the same store. Dreaming pass finds stale/duplicate/contradiction proposals (heuristic + code-aware LLM prompt), writes to `memory_compaction_log` for human approve/reject — manual Dream button in Settings or idle/cron background. Settings now shows per-scope stats and pending compaction count.
+
+### Patch Changes
+
+- [#39](https://github.com/ephor/warpforge/pull/39) [`d8fa4fe`](https://github.com/ephor/warpforge/commit/d8fa4fe3fcc51be2bc397803ff7c3c359bc26bca) Thanks [@ephor](https://github.com/ephor)! - Cap unbounded agent text merging and gate Live strip work behind its tab to reduce memory pressure and GC churn in Mission Control.
+
 ## 0.9.0
 
 ### Minor Changes
