@@ -51,7 +51,7 @@ fn extract_array(s: &str) -> Option<&str> {
 }
 
 pub fn dream_prompt(rows: &[(String, String, i64)]) -> String {
-    let mut p = String::from("find duplicates, contradictions, stale facts; propose superseded_by/merge/delete. Return JSON array of {proposal_type in [duplicate,contradiction,stale,merge,superseded_by,delete], target_ids: comma-separated ids, reason}. Decay heuristic: older last_accessed = staler. Memories:\n");
+    let mut p = String::from("find duplicates, contradictions, stale facts; propose superseded_by/merge/delete. Return JSON array of {proposal_type in [duplicate,contradiction,stale,merge,superseded_by,delete], target_ids: comma-separated ids, reason}. Decay heuristic: older last_accessed = staler — propose stale/delete for low last_accessed even without duplicates. Code-aware note: if content references code/files, consider it potentially stale when old; use file.search to verify if needed. Memories:\n");
     for (id, content, la) in rows {
         p.push_str(&format!("- {id} (last_accessed={la}): {content}\n"));
     }

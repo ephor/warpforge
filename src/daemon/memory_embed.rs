@@ -19,13 +19,15 @@ pub const EMBED_DIMS: usize = 384;
 /// opened; the `Once` makes repeated calls a no-op.
 pub fn ensure_vec_extension() {
     static ONCE: Once = Once::new();
-    ONCE.call_once(|| unsafe {
-        #[allow(clippy::missing_transmute_annotations)]
-        {
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
-                sqlite_vec::sqlite3_vec_init as *const (),
-            )));
-        }
+    ONCE.call_once(|| {
+        let _ = std::panic::catch_unwind(|| unsafe {
+            #[allow(clippy::missing_transmute_annotations)]
+            {
+                rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                    sqlite_vec::sqlite3_vec_init as *const (),
+                )));
+            }
+        });
     });
 }
 
@@ -74,24 +76,46 @@ impl EmbedEngine {
 
     /// Embed `texts`, loading the model on first use. Returns `None` when
     /// embeddings are disabled or the model is unavailable (offline/missing).
+    /// ONNX Runtime dylib missing (ort-load-dynamic) panics on load — caught
+    /// and recorded as unavailable instead of propagating to tokio worker.
     pub fn embed(&mut self, texts: &[&str]) -> Option<Vec<Vec<f32>>> {
         if !self.enabled {
             return None;
         }
         if self.model.is_none() && self.unavailable.is_none() {
-            match TextEmbedding::try_new(
-                TextInitOptions::new(EmbeddingModel::AllMiniLML6V2)
-                    .with_show_download_progress(false),
-            ) {
-                Ok(model) => self.model = Some(model),
-                Err(e) => {
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                TextEmbedding::try_new(
+                    TextInitOptions::new(EmbeddingModel::AllMiniLML6V2)
+                        .with_show_download_progress(false),
+                )
+            }));
+            match res {
+                Ok(Ok(model)) => self.model = Some(model),
+                Ok(Err(e)) => {
                     self.unavailable = Some(e.to_string());
+                    return None;
+                }
+                Err(_) => {
+                    self.unavailable =
+                        Some("ONNX Runtime unavailable (libonnxruntime missing)".into());
                     return None;
                 }
             }
         }
         let model = self.model.as_mut()?;
-        model.embed(texts, None).ok()
+        let res =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| model.embed(texts, None)));
+        match res {
+            Ok(Ok(v)) => Some(v),
+            Ok(Err(e)) => {
+                self.unavailable = Some(e.to_string());
+                None
+            }
+            Err(_) => {
+                self.unavailable = Some("ONNX embed panic — falling back to FTS".into());
+                None
+            }
+        }
     }
 }
 

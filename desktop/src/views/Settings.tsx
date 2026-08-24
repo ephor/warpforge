@@ -358,9 +358,11 @@ export default function SettingsView({ open, onOpenChange }: Props) {
             <SettingRow
               title="Embedding mode"
               description={
-                memoryStats.data?.embeddingMode === "fts"
-                  ? "v1 is keyword-only (FTS). Switch to fastembed for hybrid search (~80MB download)."
-                  : "Hybrid search (FTS + vectors). Falls back to FTS when offline."
+                memoryStats.isLoading
+                  ? "Loading embedding mode…"
+                  : memoryStats.data?.embeddingMode === "hybrid"
+                    ? "Embedding: hybrid (FTS+vector, ~80MB). Falls back to FTS when offline."
+                    : "Embedding: fts (keyword). Switch to fastembed for hybrid search (~80MB download)."
               }
               control={
                 <select
