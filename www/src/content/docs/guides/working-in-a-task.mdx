@@ -45,12 +45,27 @@ The editor inside a task is a real editor, not a diff viewer bolted to a file li
 
 Alongside that:
 
-- **Several files open at once** on a tab strip, with syntax highlighting across the usual languages — and HTML files render as a preview.
+- **Several files open at once** on a tab strip, with syntax highlighting across the usual languages.
 - **Find in Files** (<kbd>⌘⇧F</kbd>) — every match grouped by file with a live peek at the surrounding code; <kbd>Enter</kbd> opens it at that line, cursor already placed.
 - **Quick open** (<kbd>⌘P</kbd>, or double-tap <kbd>⇧</kbd>) — files by name, with matching source lines underneath them.
 - **A real file tree** with native right-click: New File, New Folder, Rename, Delete. Deletes ask first.
 
 Searches stay inside the project — build output and dependencies don't bury what you're looking for — and everything resolves against the **task's own worktree**, so what you edit is what the diff shows.
+
+### Previewing what you're looking at
+
+Not every file is best read as text, so the editor renders it instead. A **preview** toggle appears in the file's header wherever there's something to render:
+
+| File | What you get |
+| --- | --- |
+| **Markdown** — `.md`, `.markdown`, `.mdx` | Rendered document, or the source. Toggle between them. |
+| **HTML** — `.html`, `.htm` | The page, rendered — handy when an agent is building a prototype and you want to look at it rather than read it. |
+| **SVG** | The image, or its markup. Read-only either way. |
+| **Images** — `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.ico`, `.bmp` | Shown directly, no toggle needed. |
+
+<Aside type="note" title="HTML previews are fully sandboxed">
+  The preview renders in a sandboxed frame with scripts disabled, so an HTML file can't run code in the app. Markup and CSS show exactly as written; anything script-driven won't do its thing here — run it as a [dev service](/guides/projects-and-runtime/) and open the real URL for that.
+</Aside>
 
 ## Reviewing the change
 
