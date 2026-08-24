@@ -50,7 +50,7 @@ const specs = [
               class="ghost-link"
               target="_blank"
               rel="noopener"
-              aria-label="GitHub"><Icon name="ph:github-logo" size={17} /></a
+              aria-label="GitHub"><Icon name="ph:github-logo" size={16} /></a
             >
             <a href="https://github.com/ephor/warpforge/releases/latest" class="btn btn-sm">Download</a>
           </div>
@@ -74,10 +74,10 @@ const specs = [
             </p>
             <div class="cta">
               <a href="https://github.com/ephor/warpforge/releases/latest" class="btn btn-lg">
-                <Icon name="ph:apple-logo" size={17} />Download for macOS
+                <Icon name="ph:apple-logo" size={16} />Download for macOS
               </a>
               <a href="/overview/" class="btn btn-lg btn-ghost">
-                Read the docs<Icon name="ph:arrow-right" size={15} />
+                Read the docs<Icon name="ph:arrow-right" size={16} />
               </a>
             </div>
             <p class="micro">Apple Silicon · Signed &amp; notarized · Homebrew: <code>brew install --cask ephor/tap/warpforge</code></p>
@@ -134,7 +134,7 @@ const specs = [
             <p>Free, open source, and it never leaves your machine.</p>
             <div class="cta cta-center">
               <a href="https://github.com/ephor/warpforge/releases/latest" class="btn btn-lg">
-                <Icon name="ph:apple-logo" size={17} />Download for macOS
+                <Icon name="ph:apple-logo" size={16} />Download for macOS
               </a>
               <a href="https://github.com/ephor/warpforge" class="btn btn-lg btn-ghost" target="_blank" rel="noopener">
                 <Icon name="ph:github-logo" size={16} />Source
@@ -173,6 +173,9 @@ const specs = [
     --border: 72 5% 20%;
     --primary: 20 73% 70%;
     --primary-foreground: 20 40% 10%;
+    --secondary: 75 5% 15%;
+    --ring: 20 73% 70%;
+    --radius: 0.375rem;
 
     --bg: hsl(var(--background));
     --panel: hsl(var(--card));
@@ -182,8 +185,6 @@ const specs = [
     --mut: hsl(var(--muted-foreground));
     --faint: hsl(var(--muted-foreground) / 0.7);
     --accent: hsl(var(--primary));
-    --accent-2: hsl(20 73% 62%);
-    --ink: hsl(var(--primary-foreground));
 
     background: var(--bg);
     color: var(--fg);
@@ -270,44 +271,59 @@ const specs = [
     color: var(--fg);
   }
 
-  /* ---- buttons ---- */
+  /* ---- buttons, per lib/buttonVariants.ts ----
+     The app's buttons only transition colour: no lift, no scale. Hover on the
+     primary variant is the same hue at 90%, not a second, darker one. Sizes
+     and the focus ring are its `default` / `lg` / `sm` variants. */
   .btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.45rem;
-    padding: 0.45rem 0.9rem;
-    border-radius: 0.5rem;
-    background: var(--accent);
-    color: var(--ink);
-    font-size: 0.8125rem;
-    font-weight: 600;
+    gap: 0.375rem;
+    height: 2rem;
+    padding-inline: 0.75rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    font-size: 0.875rem;
+    font-weight: 500;
     text-decoration: none;
     white-space: nowrap;
-    transition: background 0.15s ease, transform 0.15s ease;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
   }
   .btn:hover {
-    background: var(--accent-2);
-    transform: translateY(-1px);
+    background: hsl(var(--primary) / 0.9);
+  }
+  .btn:focus-visible,
+  .ghost-link:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 1px var(--bg),
+      0 0 0 3px hsl(var(--ring));
+  }
+  .btn svg {
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
   }
   .btn-sm {
-    padding: 0.3rem 0.7rem;
+    height: 1.75rem;
+    padding-inline: 0.5rem;
     font-size: 0.75rem;
   }
   .btn-lg {
-    padding: 0.65rem 1.2rem;
-    font-size: 0.9375rem;
-    border-radius: 0.625rem;
+    height: 2.5rem;
+    padding-inline: 1.5rem;
   }
   .btn-ghost {
     background: transparent;
     color: var(--mut);
-    border: 1px solid var(--line-2);
+    border-color: hsl(var(--border));
   }
   .btn-ghost:hover {
-    background: transparent;
+    background: hsl(var(--secondary));
     color: var(--fg);
-    border-color: var(--faint);
   }
 
   /* ---- hero ---- */
