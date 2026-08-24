@@ -1,492 +1,465 @@
+/**
+ * Styles for the landing page's Warpforge miniature.
+ *
+ * Globally scoped but namespaced under `.wf-demo`, so it can live outside the
+ * component and keep both files inside the repo's per-file size limit.
+ *
+ * The tokens below are the desktop app's own, copied from
+ * `desktop/src/globals.css` as HSL triplets — including its depth model, where
+ * `--card` is *darker* than `--background` (chrome above darker work islands).
+ * Keeping the triplets in the same `H S% L%` form makes them diffable against
+ * the app when its theme moves.
+ */
+
 .wf-demo {
-    --d-bg: #141514;
-    --d-panel: #1a1b19;
-    --d-line: #2b2d28;
-    --d-fg: #ede9e3;
-    --d-mut: #9a948c;
-    --d-faint: #6a655e;
-    --d-accent: #eaa07b;
-    --d-add: #7fb98a;
-    --d-del: #d98a84;
-    --d-codex: #8fb8d8;
-    --d-oc: #b9a0d8;
+  --background: 120 3% 8%;
+  --foreground: 36 23% 91%;
+  --card: 120 3% 6%;
+  --secondary: 75 5% 15%;
+  --muted: 90 3% 11%;
+  --muted-foreground: 34 7% 62%;
+  --accent: 72 5% 20%;
+  --primary: 20 73% 70%;
+  --border: 72 5% 20%;
+  --ok: 137 47% 67%;
+  --warn: 39 72% 67%;
+  --destructive: 352 73% 74%;
+  --radius: 0.375rem;
 
-    position: relative;
-    border: 1px solid var(--d-line);
-    border-radius: 0.875rem;
-    background: var(--d-bg);
-    overflow: hidden;
-    box-shadow: 0 40px 80px -32px rgba(0, 0, 0, 0.7);
-    font-size: 0.8125rem;
-    color: var(--d-fg);
-    /* The hero centres its own text; a UI does not inherit that. */
-    text-align: left;
-  }
+  --codex: 205 42% 70%;
+  --oc: 268 38% 74%;
 
-  /* ---- chrome ---- */
+  position: relative;
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) + 2px);
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  overflow: hidden;
+  box-shadow: 0 40px 80px -32px rgb(0 0 0 / 0.7);
+  font-size: 0.8125rem;
+  /* The hero centres its own text; a UI does not inherit that. */
+  text-align: left;
+}
+
+.wf-demo b,
+.wf-demo s {
+  font-weight: inherit;
+  text-decoration: none;
+}
+
+/* ---- window bar ---- */
 .wf-demo .bar {
-    display: flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid var(--d-line);
-    background: #171816;
-    font-family: var(--nb-font-mono, ui-monospace, monospace);
-    font-size: 0.6875rem;
-    color: var(--d-faint);
-  }
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid hsl(var(--border));
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.6875rem;
+  color: hsl(var(--muted-foreground) / 0.75);
+}
 .wf-demo .crumb-live {
-    color: var(--d-mut);
-  }
+  color: hsl(var(--muted-foreground));
+}
 .wf-demo .bar-right {
-    margin-left: auto;
-  }
-.wf-demo .agent-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    color: var(--d-mut);
-  }
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-left: auto;
+  color: hsl(var(--muted-foreground));
+}
 
 .wf-demo .dot {
-    width: 0.4rem;
-    height: 0.4rem;
-    border-radius: 999px;
-    flex-shrink: 0;
-    background: var(--d-faint);
-  }
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: hsl(var(--muted-foreground));
+}
 .wf-demo .dot-lead {
-    background: var(--d-accent);
-  }
+  background: hsl(var(--primary));
+}
 .wf-demo .dot-codex {
-    background: var(--d-codex);
-  }
+  background: hsl(var(--codex));
+}
 .wf-demo .dot-oc {
-    background: var(--d-oc);
-  }
+  background: hsl(var(--oc));
+}
 
-  /* ---- layout ---- */
+/* ---- layout ---- */
 .wf-demo .body {
-    display: grid;
-    grid-template-columns: 1fr;
-  }
-  @media (min-width: 760px) {
-  .wf-demo .body {
-      grid-template-columns: 0.85fr 1.15fr 1.1fr;
-    }
-  }
+  display: grid;
+  grid-template-columns: 1fr;
+}
 .wf-demo .pane {
-    padding: 0.75rem;
-    border-top: 1px solid var(--d-line);
-    min-width: 0;
-  }
-  @media (min-width: 760px) {
-  .wf-demo .pane {
-      border-top: 0;
-      border-left: 1px solid var(--d-line);
-      min-height: 19rem;
-    }
-  .wf-demo .pane-run {
-      border-left: 0;
-    }
-  }
+  padding: 0.75rem;
+  border-top: 1px solid hsl(var(--border));
+  min-width: 0;
+}
 .wf-demo .pane-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.625rem;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--d-faint);
-  }
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.625rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground) / 0.8);
+}
 .wf-demo .count {
-    font-family: var(--nb-font-mono, ui-monospace, monospace);
-    font-weight: 400;
-    text-transform: none;
-    letter-spacing: 0;
-  }
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
 
-  /* ---- agents ---- */
+@media (min-width: 760px) {
+  .wf-demo .body {
+    grid-template-columns: 0.85fr 1.15fr 1.1fr;
+  }
+  .wf-demo .pane {
+    border-top: 0;
+    border-left: 1px solid hsl(var(--border));
+    min-height: 19rem;
+  }
+  .wf-demo .pane-run {
+    border-left: 0;
+  }
+}
+
+/* ---- agent rows ---- */
 .wf-demo .row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem;
-    border-radius: 0.5rem;
-    border: 1px solid transparent;
-    margin-bottom: 0.375rem;
-  }
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  margin-bottom: 0.375rem;
+}
 .wf-demo .row-lead {
-    border-color: color-mix(in oklch, var(--d-accent) 26%, transparent);
-    background: color-mix(in oklch, var(--d-accent) 7%, transparent);
-  }
+  border-color: hsl(var(--primary) / 0.4);
+  background: hsl(var(--primary) / 0.1);
+}
 .wf-demo .row-child {
-    background: var(--d-panel);
-    border-color: var(--d-line);
-    opacity: 0;
-    transform: translateY(4px);
-    transition: opacity 0.35s ease, transform 0.35s ease;
-  }
+  background: hsl(var(--card));
+  border-color: hsl(var(--border));
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 0.35s ease,
+    transform 0.35s ease;
+}
 .wf-demo .row-main {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    flex: 1;
-  }
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
 .wf-demo .row-name {
-    font-weight: 550;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .wf-demo .row-sub {
-    font-family: var(--nb-font-mono, ui-monospace, monospace);
-    font-size: 0.625rem;
-    color: var(--d-faint);
-  }
-.wf-demo .badge {
-    font-size: 0.625rem;
-    padding: 0.1rem 0.4rem;
-    border-radius: 0.3rem;
-    background: color-mix(in oklch, var(--d-add) 16%, transparent);
-    color: var(--d-add);
-    white-space: nowrap;
-  }
-.wf-demo .badge-run {
-    background: color-mix(in oklch, var(--d-accent) 16%, transparent);
-    color: var(--d-accent);
-  }
-.wf-demo .run-note {
-    display: flex;
-    gap: 0.375rem;
-    margin-top: 0.75rem;
-    padding-top: 0.625rem;
-    border-top: 1px dashed var(--d-line);
-    font-size: 0.6875rem;
-  }
-.wf-demo .note-k {
-    color: var(--d-faint);
-  }
-.wf-demo .note-v {
-    color: var(--d-fg);
-    font-weight: 600;
-  }
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.625rem;
+  color: hsl(var(--muted-foreground) / 0.8);
+}
 
-  /* ---- conversation ---- */
+/* ---- status pills, per StatusBadge.tsx ---- */
+.wf-demo .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--secondary) / 0.4);
+  color: hsl(var(--muted-foreground));
+  font-size: 0.625rem;
+  white-space: nowrap;
+}
+.wf-demo .badge b {
+  display: none;
+}
+.wf-demo .g {
+  flex-shrink: 0;
+  display: none;
+}
+.wf-demo .g-dot {
+  position: relative;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 999px;
+  background: currentColor;
+}
+/* `running` pulses, the way animate-ping does in the app. */
+.wf-demo .g-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.6;
+  animation: wf-ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+.wf-demo .g-check {
+  width: 0.6rem;
+  height: 0.6rem;
+  fill: none;
+  stroke: hsl(var(--ok));
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+@keyframes wf-ping {
+  75%,
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+/* Tone follows the app: ok while running, a neutral pill with a green check
+   once done — done is not a green pill, it is a finished one. */
+.wf-demo .badge-ok {
+  border-color: hsl(var(--ok) / 0.35);
+  background: hsl(var(--ok) / 0.1);
+  color: hsl(var(--ok));
+}
+.wf-demo .badge-done {
+  border-color: hsl(var(--ok) / 0.5);
+  background: hsl(var(--ok) / 0.1);
+  color: hsl(var(--muted-foreground));
+}
+
+.wf-demo .run-note {
+  display: flex;
+  gap: 0.375rem;
+  margin: 0.75rem 0 0;
+  padding-top: 0.625rem;
+  border-top: 1px dashed hsl(var(--border));
+  font-size: 0.6875rem;
+  color: hsl(var(--muted-foreground) / 0.8);
+}
+.wf-demo .run-note b {
+  color: hsl(var(--foreground));
+  font-weight: 600;
+}
+
+/* ---- conversation ---- */
 .wf-demo .msg {
-    padding: 0.5rem 0.625rem;
-    border-radius: 0.5rem;
-    line-height: 1.5;
-    margin-bottom: 0.5rem;
-  }
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--radius);
+  line-height: 1.5;
+  margin-bottom: 0.5rem;
+}
 .wf-demo .msg-user {
-    background: var(--d-panel);
-    border: 1px solid var(--d-line);
-  }
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+}
 .wf-demo .msg-agent {
-    background: color-mix(in oklch, var(--d-accent) 6%, transparent);
-    border: 1px solid color-mix(in oklch, var(--d-accent) 20%, transparent);
-    color: var(--d-mut);
-  }
+  background: hsl(var(--primary) / 0.07);
+  border: 1px solid hsl(var(--primary) / 0.25);
+  color: hsl(var(--muted-foreground));
+}
 .wf-demo .msg code {
-    font-family: var(--nb-font-mono, ui-monospace, monospace);
-    font-size: 0.9em;
-    color: var(--d-fg);
-  }
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.9em;
+  color: hsl(var(--foreground));
+}
 .wf-demo .ev {
-    display: flex;
-    gap: 0.5rem;
-    align-items: baseline;
-    padding: 0.3rem 0.625rem;
-    margin-bottom: 0.3rem;
-    border-left: 2px solid var(--d-line);
-    font-family: var(--nb-font-mono, ui-monospace, monospace);
-    font-size: 0.6875rem;
-  }
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.3rem 0.625rem;
+  margin-bottom: 0.3rem;
+  border-left: 2px solid hsl(var(--border));
+  font-size: 0.6875rem;
+  min-width: 0;
+}
 .wf-demo .ev-k {
-    color: var(--d-accent);
-  }
+  color: hsl(var(--primary));
+  white-space: nowrap;
+}
 .wf-demo .ev-v {
-    color: var(--d-faint);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.625rem;
+  color: hsl(var(--muted-foreground) / 0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .wf-demo .ev,
 .wf-demo .msg-agent {
-    opacity: 0;
-    transform: translateY(4px);
-    transition: opacity 0.3s ease, transform 0.3s ease;
-  }
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
 .wf-demo .composer {
-    display: flex;
-    align-items: center;
-    margin-top: 0.625rem;
-    padding: 0.5rem 0.625rem;
-    border: 1px solid var(--d-line);
-    border-radius: 0.5rem;
-    background: var(--d-panel);
-    color: var(--d-faint);
-    font-size: 0.75rem;
-  }
+  display: flex;
+  align-items: center;
+  margin-top: 0.625rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+  color: hsl(var(--muted-foreground) / 0.7);
+  font-size: 0.75rem;
+}
 .wf-demo .composer-send {
-    margin-left: auto;
-    color: var(--d-accent);
-  }
+  margin-left: auto;
+  color: hsl(var(--primary));
+}
 
-  /* ---- diff ---- */
+/* ---- changes, per FileDiffView.tsx ---- */
 .wf-demo .file {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.3rem 0;
-    font-family: var(--nb-font-mono, ui-monospace, monospace);
-    font-size: 0.6875rem;
-    opacity: 0;
-    transform: translateY(4px);
-    transition: opacity 0.3s ease, transform 0.3s ease;
-  }
-.wf-demo .kind {
-    font-size: 0.5625rem;
-    padding: 0.05rem 0.25rem;
-    border-radius: 0.2rem;
-    flex-shrink: 0;
-  }
-.wf-demo .kind-added {
-    background: color-mix(in oklch, var(--d-add) 18%, transparent);
-    color: var(--d-add);
-  }
-.wf-demo .kind-modified {
-    background: color-mix(in oklch, var(--d-codex) 18%, transparent);
-    color: var(--d-codex);
-  }
-.wf-demo .file-path {
-    color: var(--d-mut);
-    flex: 1;
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    direction: rtl;
-    text-align: left;
-  }
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0;
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.6875rem;
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
+.wf-demo .fstatus {
+  flex-shrink: 0;
+  text-transform: uppercase;
+  font-size: 0.5625rem;
+  letter-spacing: 0.03em;
+}
+.wf-demo .fstatus-added {
+  color: hsl(var(--ok));
+}
+.wf-demo .fstatus-modified {
+  color: hsl(var(--warn));
+}
+.wf-demo .fstatus-deleted {
+  color: hsl(var(--destructive));
+}
+.wf-demo .fpath {
+  flex: 1;
+  min-width: 0;
+  color: hsl(var(--muted-foreground));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
 .wf-demo .stat b {
-    color: var(--d-add);
-    font-weight: 500;
-  }
+  color: hsl(var(--ok));
+}
 .wf-demo .stat s {
-    color: var(--d-del);
-    text-decoration: none;
-    margin-left: 0.25rem;
-  }
+  color: hsl(var(--destructive));
+  margin-left: 0.25rem;
+}
 .wf-demo .hunk {
-    margin-top: 0.5rem;
-    padding: 0.4rem 0;
-    border-top: 1px solid var(--d-line);
-    font-family: var(--nb-font-mono, ui-monospace, monospace);
-    font-size: 0.625rem;
-    line-height: 1.7;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-  }
+  margin-top: 0.5rem;
+  padding: 0.3rem 0;
+  border-top: 1px solid hsl(var(--border));
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.625rem;
+  line-height: 1.75;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
 .wf-demo .ln {
-    padding-inline: 0.3rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+  padding-inline: 0.3rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: hsl(var(--muted-foreground) / 0.85);
+}
+.wf-demo .ln-hd {
+  color: hsl(var(--muted-foreground) / 0.55);
+}
 .wf-demo .ln-add {
-    background: color-mix(in oklch, var(--d-add) 12%, transparent);
-    color: var(--d-add);
-  }
-.wf-demo .ln-ctx {
-    color: var(--d-faint);
-  }
+  background: hsl(var(--ok) / 0.1);
+  color: hsl(var(--ok));
+}
 .wf-demo .commit {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    margin-top: 0.625rem;
-    padding: 0.5rem 0.625rem;
-    border: 1px solid var(--d-line);
-    border-radius: 0.5rem;
-    background: var(--d-panel);
-    opacity: 0;
-    transition: opacity 0.3s ease;
-  }
-.wf-demo .commit-label {
-    font-size: 0.5625rem;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--d-faint);
-  }
-.wf-demo .commit-msg {
-    font-family: var(--nb-font-mono, ui-monospace, monospace);
-    font-size: 0.6875rem;
-    color: var(--d-fg);
-  }
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: 0.625rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.wf-demo .commit-label,
 .wf-demo .commit-hint {
-    font-size: 0.625rem;
-    color: var(--d-faint);
-  }
+  font-size: 0.5625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground) / 0.7);
+}
+.wf-demo .commit-hint {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.625rem;
+}
+.wf-demo .commit-msg {
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.6875rem;
+  color: hsl(var(--foreground));
+}
 .wf-demo .caret {
-    display: none;
-    width: 0.4em;
-    height: 1em;
-    margin-left: 1px;
-    background: var(--d-accent);
-    vertical-align: text-bottom;
-    animation: blink 1s step-end infinite;
-  }
-  @keyframes blink {
+  display: none;
+  width: 0.4em;
+  height: 1em;
+  margin-left: 1px;
+  background: hsl(var(--primary));
+  vertical-align: text-bottom;
+  animation: wf-blink 1s step-end infinite;
+}
+@keyframes wf-blink {
   50% {
-      opacity: 0;
-    }
+    opacity: 0;
   }
+}
 
-  /* ---- foot ---- */
+/* ---- foot ---- */
 .wf-demo .foot {
-    display: flex;
-    align-items: center;
-    gap: 0.625rem;
-    padding: 0.5rem 0.75rem;
-    border-top: 1px solid var(--d-line);
-    background: #171816;
-  }
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid hsl(var(--border));
+}
 .wf-demo .replay {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-    padding: 0.2rem 0.5rem;
-    border: 1px solid var(--d-line);
-    border-radius: 0.35rem;
-    background: transparent;
-    color: var(--d-mut);
-    font: inherit;
-    font-size: 0.6875rem;
-    cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease;
-  }
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font: inherit;
+  font-size: 0.6875rem;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
 .wf-demo .replay:hover {
-    color: var(--d-fg);
-    border-color: var(--d-faint);
-  }
+  color: hsl(var(--foreground));
+  background: hsl(var(--accent));
+}
 .wf-demo .foot-note {
-    font-size: 0.625rem;
-    color: var(--d-faint);
-  }
-
-  /* ============================================================
-   * The timeline. Everything above renders at its final state;
-   * these rules hide what has not happened yet at each step.
-   * ============================================================ */
-.wf-demo[data-step="0"] .row-child,
-.wf-demo[data-step="0"] .ev,
-.wf-demo[data-step="0"] .msg-agent,
-.wf-demo[data-step="0"] .file,
-.wf-demo[data-step="0"] .hunk,
-.wf-demo[data-step="0"] .commit,
-.wf-demo[data-step="1"] .row-child,
-.wf-demo[data-step="1"] .ev,
-.wf-demo[data-step="1"] .msg-agent,
-.wf-demo[data-step="1"] .file,
-.wf-demo[data-step="1"] .hunk,
-.wf-demo[data-step="1"] .commit {
-    opacity: 0;
-  }
-
-.wf-demo[data-step="1"] .ev[data-ev="1"],
-.wf-demo[data-step="2"] .ev[data-ev="1"],
-.wf-demo[data-step="2"] .ev[data-ev="2"],
-.wf-demo[data-step="2"] .row-child,
-.wf-demo[data-step="3"] .ev[data-ev="1"],
-.wf-demo[data-step="3"] .ev[data-ev="2"],
-.wf-demo[data-step="3"] .ev[data-ev="3"],
-.wf-demo[data-step="3"] .row-child,
-.wf-demo[data-step="3"] .msg-agent,
-.wf-demo[data-step="4"] .ev,
-.wf-demo[data-step="4"] .row-child,
-.wf-demo[data-step="4"] .msg-agent,
-.wf-demo[data-step="4"] .file,
-.wf-demo[data-step="4"] .hunk,
-.wf-demo[data-step="5"] .ev,
-.wf-demo[data-step="5"] .row-child,
-.wf-demo[data-step="5"] .msg-agent,
-.wf-demo[data-step="5"] .file,
-.wf-demo[data-step="5"] .hunk,
-.wf-demo[data-step="5"] .commit {
-    opacity: 1;
-    transform: none;
-  }
-
-  /* Children arrive one after the other, not as a pair. */
-.wf-demo[data-step="2"] .row-child[data-child="2"] {
-    opacity: 0;
-  }
-.wf-demo[data-step="2"] .row-child[data-child="1"],
-.wf-demo[data-step="3"] .row-child,
-.wf-demo[data-step="4"] .row-child,
-.wf-demo[data-step="5"] .row-child {
-    opacity: 1;
-    transform: none;
-  }
-
-  /* Sub-agents are still working until their results land. */
-.wf-demo[data-step="2"] [data-child-badge],
-.wf-demo[data-step="3"] [data-child-badge] {
-    background: color-mix(in oklch, var(--d-accent) 16%, transparent);
-    color: var(--d-accent);
-    font-size: 0;
-  }
-.wf-demo[data-step="2"] [data-child-badge]::before,
-.wf-demo[data-step="3"] [data-child-badge]::before {
-    content: "running";
-    font-size: 0.625rem;
-  }
-
-  /* The lead is only orchestrating while the run is live. */
-.wf-demo[data-step="0"] [data-lead-badge],
-.wf-demo[data-step="4"] [data-lead-badge],
-.wf-demo[data-step="5"] [data-lead-badge] {
-    font-size: 0;
-    background: color-mix(in oklch, var(--d-add) 16%, transparent);
-    color: var(--d-add);
-  }
-.wf-demo[data-step="0"] [data-lead-badge]::before {
-    content: "idle";
-    font-size: 0.625rem;
-  }
-.wf-demo[data-step="4"] [data-lead-badge]::before,
-.wf-demo[data-step="5"] [data-lead-badge]::before {
-    content: "done";
-    font-size: 0.625rem;
-  }
-
-  /* The commit message types itself on the last beat. */
-.wf-demo[data-step="5"] .commit-msg {
-    animation: type 1.1s steps(38, end);
-    display: inline-block;
-    overflow: hidden;
-    white-space: nowrap;
-    vertical-align: bottom;
-  }
-.wf-demo[data-step="5"] .caret {
-    display: inline-block;
-  }
-  @keyframes type {
-    from {
-      max-width: 0;
-    }
-    to {
-      max-width: 26rem;
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-  .wf-demo * {
-      transition: none !important;
-      animation: none !important;
-    }
-  }
+  font-size: 0.625rem;
+  color: hsl(var(--muted-foreground) / 0.7);
+}

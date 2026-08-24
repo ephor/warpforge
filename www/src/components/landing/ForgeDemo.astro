@@ -5,88 +5,106 @@
  * image cannot show the one thing worth showing: several harnesses working
  * one task and the result landing as a reviewable diff.
  *
- * The whole sequence is driven by `data-step` on the root; every transition
- * is a CSS rule keyed off it, so the script only advances an integer. With
- * JS off — or reduced motion on — the markup renders at its final state,
- * which is a complete, honest picture rather than an empty shell.
+ * Styling mirrors the desktop app rather than approximating it. The tokens in
+ * `forge-demo.css` are the HSL triplets from `desktop/src/globals.css`; the
+ * status pills follow `StatusBadge.tsx` (a running dot pulses, done is a
+ * neutral pill carrying a green check); diff status colours follow
+ * `FileDiffView.tsx`, where added is ok and modified is warn.
+ *
+ * The sequence is driven by `data-step` on the root; every transition is a CSS
+ * rule keyed off it, so the script only advances an integer. The markup
+ * renders at its final state, so no-JS and reduced-motion visitors get the
+ * whole picture rather than an empty shell.
  */
 import "./forge-demo.css";
+import "./forge-demo-timeline.css";
 
 const files = [
-  { path: "api/src/middleware/rate-limit.ts", add: 48, del: 0, kind: "ADDED" },
-  { path: "api/src/server.ts", add: 6, del: 1, kind: "MODIFIED" },
-  { path: "api/test/rate-limit.test.ts", add: 31, del: 0, kind: "ADDED" },
+  { path: "api/src/middleware/rate-limit.ts", add: 48, del: 0, status: "added" },
+  { path: "api/src/server.ts", add: 6, del: 1, status: "modified" },
+  { path: "api/test/rate-limit.test.ts", add: 31, del: 0, status: "added" },
+];
+
+const children = [
+  { n: 1, name: "implement middleware", agent: "Codex", dot: "codex" },
+  { n: 2, name: "add tests", agent: "opencode", dot: "oc" },
 ];
 ---
 
-<div class="wf-demo" data-forge-demo data-step="5" aria-label="Warpforge running a task across several coding agents">
-  <!-- Window chrome -->
+<div
+  class="wf-demo"
+  data-forge-demo
+  data-step="5"
+  aria-label="Warpforge running one task across several coding agents"
+>
   <div class="bar">
     <span class="crumb">warpforge</span>
     <span class="sep">/</span>
     <span class="crumb crumb-live">Add rate limiting to the API</span>
-    <div class="bar-right">
-      <span class="agent-chip"><i class="dot dot-lead"></i>Claude Code · lead</span>
-    </div>
+    <span class="bar-right"><i class="dot dot-lead"></i>Claude Code</span>
   </div>
 
   <div class="body">
-    <!-- Left: the run -->
+    <!-- Agents -->
     <section class="pane pane-run" aria-label="Agents">
-      <header class="pane-head">
-        <span>Agents</span>
-        <span class="count" data-count>3</span>
-      </header>
+      <header class="pane-head"><span>Agents</span><span class="count">3</span></header>
 
       <div class="row row-lead">
         <i class="dot dot-lead"></i>
-        <div class="row-main">
+        <span class="row-main">
           <span class="row-name">lead</span>
           <span class="row-sub">Claude Code</span>
-        </div>
-        <span class="badge badge-run" data-lead-badge>orchestrating</span>
+        </span>
+        <span class="badge" data-lead-badge>
+          <i class="g g-dot"></i>
+          <svg class="g g-check" viewBox="0 0 12 12" aria-hidden="true"
+            ><path d="M2 6.4 4.7 9 10 3.2"></path></svg
+          >
+          <b data-when="idle">queued</b>
+          <b data-when="run">orchestrating</b>
+          <b data-when="done">done</b>
+        </span>
       </div>
 
-      <div class="row row-child" data-child="1">
-        <i class="dot dot-codex"></i>
-        <div class="row-main">
-          <span class="row-name">implement middleware</span>
-          <span class="row-sub">Codex</span>
-        </div>
-        <span class="badge" data-child-badge>done</span>
-      </div>
+      {
+        children.map((c) => (
+          <div class="row row-child" data-child={c.n}>
+            <i class={`dot dot-${c.dot}`} />
+            <span class="row-main">
+              <span class="row-name">{c.name}</span>
+              <span class="row-sub">{c.agent}</span>
+            </span>
+            <span class="badge" data-child-badge>
+              <i class="g g-dot" />
+              <svg class="g g-check" viewBox="0 0 12 12" aria-hidden="true">
+                <path d="M2 6.4 4.7 9 10 3.2" />
+              </svg>
+              <b data-when="run">running</b>
+              <b data-when="done">done</b>
+            </span>
+          </div>
+        ))
+      }
 
-      <div class="row row-child" data-child="2">
-        <i class="dot dot-oc"></i>
-        <div class="row-main">
-          <span class="row-name">add tests</span>
-          <span class="row-sub">opencode</span>
-        </div>
-        <span class="badge" data-child-badge>done</span>
-      </div>
-
-      <div class="run-note">
-        <span class="note-k">one task</span>
-        <span class="note-v">three harnesses</span>
-      </div>
+      <p class="run-note"><span>one task</span><b>three harnesses</b></p>
     </section>
 
-    <!-- Middle: conversation -->
+    <!-- Conversation -->
     <section class="pane pane-chat" aria-label="Conversation">
       <header class="pane-head"><span>Conversation</span></header>
 
       <div class="msg msg-user">Add rate limiting to the API. Tests too.</div>
 
       <div class="ev" data-ev="1">
-        <span class="ev-k">spawn_agent</span>
-        <span class="ev-v">codex · implement middleware</span>
+        <span class="ev-k">Warpforge · Spawn agent</span>
+        <span class="ev-v">codex — implement middleware</span>
       </div>
       <div class="ev" data-ev="2">
-        <span class="ev-k">spawn_agent</span>
-        <span class="ev-v">opencode · add tests</span>
+        <span class="ev-k">Warpforge · Spawn agent</span>
+        <span class="ev-v">opencode — add tests</span>
       </div>
       <div class="ev" data-ev="3">
-        <span class="ev-k">read_inbox</span>
+        <span class="ev-k">Warpforge · Read inbox</span>
         <span class="ev-v">2 results</span>
       </div>
 
@@ -96,23 +114,20 @@ const files = [
       </div>
 
       <div class="composer">
-        <span class="composer-ph">Steer this session…</span>
+        <span>Steer this session…</span>
         <span class="composer-send" aria-hidden="true">↵</span>
       </div>
     </section>
 
-    <!-- Right: review -->
+    <!-- Changes -->
     <section class="pane pane-diff" aria-label="Changes">
-      <header class="pane-head">
-        <span>Changes</span>
-        <span class="count">3 files</span>
-      </header>
+      <header class="pane-head"><span>Changes</span><span class="count">3 files</span></header>
 
       {
         files.map((f, i) => (
           <div class="file" data-file={i + 1}>
-            <span class={`kind kind-${f.kind.toLowerCase()}`}>{f.kind}</span>
-            <span class="file-path">{f.path}</span>
+            <span class={`fstatus fstatus-${f.status}`}>{f.status}</span>
+            <span class="fpath">{f.path}</span>
             <span class="stat">
               <b>+{f.add}</b>
               {f.del > 0 && <s>−{f.del}</s>}
@@ -121,31 +136,30 @@ const files = [
         ))
       }
 
-      <div class="hunk" data-file="1">
+      <div class="hunk">
+        <div class="ln ln-hd">@@ -18,6 +18,9 @@</div>
         <div class="ln ln-add">+ const bucket = new TokenBucket(limit, windowMs);</div>
         <div class="ln ln-add">+ if (!bucket.take(key)) return tooMany(res);</div>
-        <div class="ln ln-ctx">&nbsp;&nbsp;return next();</div>
+        <div class="ln">&nbsp;&nbsp;return next();</div>
       </div>
 
-      <div class="commit" data-commit>
+      <div class="commit">
         <span class="commit-label">Commit message</span>
         <span class="commit-msg"
-          >feat(api): add token-bucket rate limiting<span class="caret" aria-hidden="true"></span></span
+          >feat(api): add token-bucket rate limiting<i class="caret" aria-hidden="true"></i></span
         >
         <span class="commit-hint">drafted from the diff</span>
       </div>
     </section>
   </div>
 
-  <!-- Controls -->
   <div class="foot">
-    <button type="button" class="replay" data-replay>
-      <span aria-hidden="true">↻</span> Replay
-    </button>
+    <button type="button" class="replay" data-replay
+      ><span aria-hidden="true">↻</span> Replay</button
+    >
     <span class="foot-note">A scripted run. The app is the real thing.</span>
   </div>
 </div>
-
 
 <script>
   const STEP_MS = [900, 700, 900, 900, 800, 3600];
@@ -171,8 +185,8 @@ const files = [
 
     demo.querySelector("[data-replay]")?.addEventListener("click", start);
 
-    // Only play once it is actually on screen — an animation that finished
-    // above the fold is an animation nobody saw.
+    // Only play once it is on screen — an animation that finished above the
+    // fold is an animation nobody saw.
     const io = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
