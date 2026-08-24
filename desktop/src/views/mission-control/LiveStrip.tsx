@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from "react";
 
+import { AgentAvatar } from "@/components/AgentAvatar";
 import { cn } from "@/lib/utils";
 import { formatElapsed, type LiveStripItem } from "@/lib/liveStrip";
 
@@ -50,6 +51,12 @@ export const LiveStrip = memo(function LiveStrip({ items, nowMs, onOpenTask }: L
               )}
             </span>
             <span className="truncate text-sm font-medium text-foreground">{item.title}</span>
+            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground/80">
+              <span className="truncate uppercase tracking-wide">{item.project}</span>
+              <span className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
+              <AgentAvatar agentId={item.agent} />
+              <span className="truncate">{item.agent}</span>
+            </div>
             {item.detail ? (
               <span className="truncate text-xs text-muted-foreground">{item.detail}</span>
             ) : null}
@@ -79,7 +86,9 @@ function liveStripEqual(previous: LiveStripProps, next: LiveStripProps): boolean
       a.tone !== b.tone ||
       a.previewText !== b.previewText ||
       a.startedAt !== b.startedAt ||
-      a.toolCount !== b.toolCount
+      a.toolCount !== b.toolCount ||
+      a.project !== b.project ||
+      a.agent !== b.agent
     ) {
       return false;
     }

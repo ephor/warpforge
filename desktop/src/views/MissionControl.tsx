@@ -26,6 +26,7 @@ import { FailedSection } from "./mission-control/FailedSection";
 import { FocusGroupPane } from "./mission-control/FocusPane";
 import { LiveStrip } from "./mission-control/LiveStrip";
 const TAB_LABEL: Record<string, string> = { live: "Live", needs: "Needs you", failed: "Failed", pinned: "Pinned" };
+const EMPTY_PINNED_SET: ReadonlySet<string> = new Set();
 
 export { StreamLine } from "./mission-control/StreamLine";
 import { useGridAutoScroll } from "./mission-control/useGridAutoScroll";
@@ -49,6 +50,8 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
   const setPinnedLayout = useUi((s) => s.setPinnedLayout);
   const attentionTargetId = useUi((s) => s.attentionTargetId);
   const attentionTargetNonce = useUi((s) => s.attentionTargetNonce);
+  const activeTab = useUi((s) => s.missionControlTab);
+  const setActiveTab = useUi((s) => s.setMissionControlTab);
   const { width, containerRef } = useContainerWidth();
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const [boardHeight, setBoardHeight] = useState(0);
@@ -83,10 +86,10 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
     () => state.snapshot.tasks.filter((task) => !isSettledTask(task)),
     [state.snapshot.tasks],
   );
-  const liveStripItems = useMemo(
-    () => buildLiveStripItems(live, state.sessionUpdates, new Set()),
-    [live, state.sessionUpdates],
-  );
+  const liveStripItems = useMemo(() => {
+    if (activeTab !== "live") return [];
+    return buildLiveStripItems(live, state.sessionUpdates, EMPTY_PINNED_SET);
+  }, [activeTab, live, state.sessionUpdates]);
   const attentionQueue = useMemo(
     () => buildAttentionQueue(state.snapshot.tasks, state.sessionUpdates),
     [state.sessionUpdates, state.snapshot.tasks],
@@ -111,8 +114,6 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
     () => live.filter((task) => task.status === "running" || task.status === "queued").length,
     [live],
   );
-  const activeTab = useUi((s) => s.missionControlTab);
-  const setActiveTab = useUi((s) => s.setMissionControlTab);
 
   const layout = useMemo<LayoutItem[]>(() => {
     return pinned.map((id) => {
