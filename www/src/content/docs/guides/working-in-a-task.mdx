@@ -59,12 +59,12 @@ Not every file is best read as text, so the editor renders it instead. A **previ
 | File | What you get |
 | --- | --- |
 | **Markdown** — `.md`, `.markdown`, `.mdx` | Rendered document, or the source. Toggle between them. |
-| **HTML** — `.html`, `.htm` | The page, rendered — handy when an agent is building a prototype and you want to look at it rather than read it. |
+| **HTML** — `.html`, `.htm` | The page, rendered and running — handy when an agent is building a prototype and you want to click it rather than read it. |
 | **SVG** | The image, or its markup. Read-only either way. |
 | **Images** — `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.ico`, `.bmp` | Shown directly, no toggle needed. |
 
-<Aside type="note" title="HTML previews are fully sandboxed">
-  The preview renders in a sandboxed frame with scripts disabled, so an HTML file can't run code in the app. Markup and CSS show exactly as written; anything script-driven won't do its thing here — run it as a [dev service](/guides/projects-and-runtime/) and open the real URL for that.
+<Aside type="note" title="HTML previews are sandboxed">
+  Scripts run, so an interactive prototype behaves like one. Everything else is denied: the frame keeps its own opaque origin and can't reach Warpforge's data, submit forms, open popups, or navigate the app. A page that needs a server behind it still wants a real [dev service](/guides/projects-and-runtime/).
 </Aside>
 
 ## Reviewing the change

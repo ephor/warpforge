@@ -616,10 +616,18 @@ export function CodeEditor({
             {showPreview && (
               <div className="h-full overflow-auto px-4 py-3">
                 {htmlDoc ? (
+                  /* `allow-scripts` so an HTML prototype actually runs — a
+                     script-driven page previewed without it looks broken
+                     rather than unfinished. It stays safe because the frame
+                     keeps its opaque origin: never add `allow-same-origin`
+                     alongside it, since the pair lets the framed file reach
+                     this app's DOM and storage and voids the sandbox. Every
+                     other capability (forms, popups, top navigation) stays
+                     denied. */
                   <iframe
                     title={doc.path}
                     srcDoc={previewText}
-                    sandbox=""
+                    sandbox="allow-scripts"
                     className="h-full w-full border-0 bg-white"
                   />
                 ) : svgImage ? (
