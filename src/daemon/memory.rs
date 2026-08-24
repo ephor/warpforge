@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS memories (
     tags           TEXT NOT NULL
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
-    id UNINDEXED, content, tokenize='porter');
+    id UNINDEXED, content, tags, tokenize='porter');
 CREATE TABLE IF NOT EXISTS memory_compaction_log (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     proposal_type  TEXT,
@@ -382,34 +382,50 @@ impl MemoryStore {
         let kind = clamp_kind(kind);
         let tags = tags.unwrap_or(&[]).to_vec();
         let tags_json = serde_json::to_string(&tags)?;
+        let tags_fts = tags.join(" ");
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_secs() as i64;
-        conn.execute(
-            "INSERT INTO memories \
-             (id, project_id, scope, kind, content, created_at, updated_at, \
-              last_accessed, created_by, superseded_by, tags) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-            params![
-                id,
-                project_id,
-                scope,
-                kind,
-                content,
-                now,
-                now,
-                now,
-                created_by,
-                None::<String>,
-                tags_json
-            ],
-        )?;
-        conn.execute(
-            "INSERT INTO memories_fts (id, content) VALUES (?1, ?2)",
-            params![id, content],
-        )?;
-        let rowid = conn.last_insert_rowid();
-        self.index_embedding(conn, rowid, content)?;
-        load_by_id(conn, &id)
+        // Transaction ensures vec UNIQUE failure doesn't leave orphan memories row (bug #1)
+        // and we capture rowid BEFORE FTS insert (last_insert_rowid would otherwise point to FTS).
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let res: Result<Memory, MemoryError> = (|| {
+            conn.execute(
+                "INSERT INTO memories \
+                 (id, project_id, scope, kind, content, created_at, updated_at, \
+                  last_accessed, created_by, superseded_by, tags) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                params![
+                    id,
+                    project_id,
+                    scope,
+                    kind,
+                    content,
+                    now,
+                    now,
+                    now,
+                    created_by,
+                    None::<String>,
+                    tags_json
+                ],
+            )?;
+            let rowid = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO memories_fts (id, content, tags) VALUES (?1, ?2, ?3)",
+                params![id, content, tags_fts],
+            )?;
+            self.index_embedding(conn, rowid, content)?;
+            load_by_id(conn, &id)
+        })();
+        match res {
+            Ok(m) => {
+                conn.execute_batch("COMMIT")?;
+                Ok(m)
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
     }
 
     /// Insert a vector for a stored memory. Silently no-ops when embeddings are
@@ -525,6 +541,26 @@ impl MemoryStore {
 
     /// Pure FTS5 BM25 search with snippets (v1 behavior, unchanged).
     fn fts_search(
+        &self,
+        conn: &Connection,
+        sanitized: &str,
+        predicate: &str,
+        limit: i64,
+    ) -> Result<Vec<Memory>, MemoryError> {
+        let results = self.fts_search_inner(conn, sanitized, predicate, limit)?;
+        if !results.is_empty() || !sanitized.contains(' ') {
+            return Ok(results);
+        }
+        // Ranked-OR fallback: strict AND returned 0 → retry with OR so partial matches surface (bug #2)
+        let or_query = sanitized
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let or_results = self.fts_search_inner(conn, &or_query, predicate, limit)?;
+        Ok(or_results)
+    }
+
+    fn fts_search_inner(
         &self,
         conn: &Connection,
         sanitized: &str,
@@ -771,9 +807,18 @@ impl MemoryStore {
             params![content, now, id],
         )?;
         conn.execute("DELETE FROM memories_fts WHERE id = ?1", params![id])?;
+        // preserve tags in FTS on content update
+        let tags_json: String = conn.query_row(
+            "SELECT tags FROM memories WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )?;
+        let tags_fts: String = serde_json::from_str::<Vec<String>>(&tags_json)
+            .unwrap_or_default()
+            .join(" ");
         conn.execute(
-            "INSERT INTO memories_fts (id, content) VALUES (?1, ?2)",
-            params![id, content],
+            "INSERT INTO memories_fts (id, content, tags) VALUES (?1, ?2, ?3)",
+            params![id, content, tags_fts],
         )?;
         let rowid: i64 = conn.query_row(
             "SELECT rowid FROM memories WHERE id = ?1",
@@ -985,17 +1030,18 @@ impl MemoryStore {
         let kind = clamp_kind(kind);
         let tags = tags.unwrap_or(&[]).to_vec();
         let tags_json = serde_json::to_string(&tags)?;
+        let tags_fts = tags.join(" ");
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_secs() as i64;
         conn.execute(
             "INSERT INTO memories (id,project_id,scope,kind,content,created_at,updated_at,last_accessed,created_by,superseded_by,tags) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![id, project_id, scope, kind, content, now, now, now, created_by, None::<String>, tags_json],
         )?;
-        conn.execute(
-            "INSERT INTO memories_fts (id, content) VALUES (?1, ?2)",
-            params![id, content],
-        )?;
         let rowid = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO memories_fts (id, content, tags) VALUES (?1, ?2, ?3)",
+            params![id, content, tags_fts],
+        )?;
         // inline embedding index
         {
             let mut eng = embed.lock().unwrap();
