@@ -356,6 +356,8 @@ pub enum Method {
     MemoryDream {
         #[serde(default)]
         dry_run: Option<bool>,
+        #[serde(default)]
+        project_id: Option<String>,
     },
 
     // ── Agent registry ──

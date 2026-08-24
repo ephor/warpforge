@@ -1275,6 +1275,7 @@ pub enum Command {
     },
     MemoryDream {
         dry_run: bool,
+        project_id: Option<String>,
         reply: oneshot::Sender<Result<serde_json::Value, super::memory::MemoryError>>,
     },
     Shutdown {
@@ -1656,9 +1657,15 @@ impl DaemonHandle {
     pub async fn memory_dream(
         &self,
         dry_run: bool,
+        _project_id: Option<&str>,
     ) -> Result<serde_json::Value, super::memory::MemoryError> {
         let (tx, rx) = oneshot::channel();
-        self.send(Command::MemoryDream { dry_run, reply: tx }).await;
+        self.send(Command::MemoryDream {
+            dry_run,
+            project_id: _project_id.map(|s| s.to_string()),
+            reply: tx,
+        })
+        .await;
         rx.await.map_err(|_| memory_dropped())?
     }
 
@@ -2964,6 +2971,7 @@ impl Daemon {
                     let _ = dream_tx
                         .send(Command::MemoryDream {
                             dry_run: false,
+                            project_id: None,
                             reply: tx,
                         })
                         .await;
@@ -2983,6 +2991,7 @@ impl Daemon {
                     let _ = dream_tx
                         .send(Command::MemoryDream {
                             dry_run: false,
+                            project_id: None,
                             reply: tx,
                         })
                         .await;
@@ -5887,7 +5896,11 @@ impl Daemon {
                 });
                 let _ = reply.send(r);
             }
-            Command::MemoryDream { dry_run, reply } => {
+            Command::MemoryDream {
+                dry_run,
+                project_id,
+                reply,
+            } => {
                 *self.last_memory_activity.lock().unwrap() = std::time::Instant::now();
                 // Scheduler for idle/cron is spawned in Daemon::spawn when dreaming.enabled;
                 // this handler just executes the pass. Dream uses dreaming agent/model
@@ -5899,11 +5912,31 @@ impl Daemon {
                     .iter()
                     .find(|a| a.id == cfg.agent)
                     .and_then(|a| a.last_model.clone());
-                let _ = reply.send(self.memory.dream_with_config(
-                    dry_run,
-                    &cfg,
-                    fallback.as_deref(),
-                ));
+                let res = self
+                    .memory
+                    .dream_with_config(dry_run, &cfg, fallback.as_deref());
+                if !dry_run {
+                    if let Ok(v) = &res {
+                        let inserted = v.get("inserted").and_then(|n| n.as_u64()).unwrap_or(0);
+                        if inserted > 0 {
+                            let pid = project_id.clone().unwrap_or_else(|| "global".to_string());
+                            let title =
+                                format!("Dreaming: {} \u{2014} {} proposals", pid, inserted);
+                            let prompt = format!(
+                                "Dreaming compaction proposals for project '{}': {}\nPending review in memory_compaction_log.",
+                                pid, v
+                            );
+                            let mut task =
+                                Task::new(&pid, &prompt, &cfg.agent, vec!["dreaming".into()]);
+                            task.title = title;
+                            let tid = task.id.clone();
+                            self.tasks.insert(tid.clone(), task.clone());
+                            self.persist(&task);
+                            self.emit(Event::TaskCreated(task));
+                        }
+                    }
+                }
+                let _ = reply.send(res);
             }
         }
     }

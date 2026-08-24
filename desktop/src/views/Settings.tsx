@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, X } from "lucide-react";
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 import AccountsPanel from "@/components/AccountsPanel";
 import AgentSetupPanel from "@/components/AgentSetupPanel";
@@ -130,6 +130,9 @@ export default function SettingsView({ open, onOpenChange }: Props) {
   const theoMod = useUi((s) => s.theoMod);
   const setTheoMod = useUi((s) => s.setTheoMod);
   const state = useSyncExternalStore(daemon.subscribe, daemon.getState);
+  const [dreamProject, setDreamProject] = useState<string>("");
+  const effectiveDreamProject =
+    dreamProject || state.snapshot.projects[0]?.name || "";
   const enabledAgents = (state.snapshot.agents ?? []).filter((a) => a.enabled);
   // The daemon caches an agent's config options after probing it over ACP; the
   // model list is empty until that probe has happened at least once.
@@ -313,14 +316,14 @@ export default function SettingsView({ open, onOpenChange }: Props) {
               title="Dream now"
               description="Run compaction: duplicates, contradictions, stale facts → pending proposals."
               control={
-                <div className="flex gap-2">
+                <div className="flex items-center gap-2"><select aria-label="Dream project" value={dreamProject} onChange={(e)=>setDreamProject(e.target.value)} className="h-7 rounded-md border bg-background px-2 text-xs"><option value="">{(state.snapshot.projects[0]?.name ?? "default")}</option>{(state.snapshot.projects ?? []).map((p:any)=><option key={p.name} value={p.name}>{p.name}</option>)}</select><div className="flex gap-2">
                   <Button
                     type="button"
                     size="sm"
                     variant="outline"
                     className="h-7 text-xs"
                     onClick={async () => {
-                      const r: any = await daemon.memoryDream(false);
+                      const r: any = await daemon.memoryDream(false, effectiveDreamProject);
                       alert(r ? `Dream: ${r.inserted ?? 0} proposals` : "Dream triggered");
                       queryClient.invalidateQueries({ queryKey: ["memory", "stats"] });
                     }}
@@ -333,13 +336,13 @@ export default function SettingsView({ open, onOpenChange }: Props) {
                     variant="outline"
                     className="h-7 text-xs"
                     onClick={async () => {
-                      const r: any = await daemon.memoryDream(true);
+                      const r: any = await daemon.memoryDream(true, effectiveDreamProject);
                       alert(r ? `Dry run: ${r.inserted ?? 0} would propose` : "Dry run done");
                     }}
                   >
                     Dry run
                   </Button>
-                </div>
+                </div></div>
               }
             />
             <SettingRow
