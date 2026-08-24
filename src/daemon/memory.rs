@@ -118,6 +118,7 @@ impl MemoryStore {
         let conn = Connection::open(path).with_context(|| format!("opening {}", path.display()))?;
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.execute_batch(SCHEMA)?;
+        migrate_fts_tags(&conn)?;
         seed_meta(&conn)?;
         Ok(Self {
             conn: Some(conn),
@@ -1066,6 +1067,7 @@ impl MemoryStore {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.execute_batch(SCHEMA)?;
+        migrate_fts_tags(&conn)?;
         seed_meta(&conn)?;
         if embeddings {
             conn.execute_batch(&vec_table_sql())?;
@@ -1378,6 +1380,42 @@ fn sanitize_project_id(pid: &str) -> bool {
         && pid
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Auto-migrate old FTS table (without `tags` column) to new schema.
+/// No user action needed: detects legacy `memories_fts`, rebuilds with `tags` and backfills from `memories.tags`.
+fn migrate_fts_tags(conn: &Connection) -> Result<()> {
+    let sql: Option<String> = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='memories_fts'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(create_sql) = sql else { return Ok(()) };
+    if create_sql.contains("tags") {
+        return Ok(());
+    }
+    // Legacy FTS without tags: rebuild
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS memories_fts;
+         CREATE VIRTUAL TABLE memories_fts USING fts5(id UNINDEXED, content, tags, tokenize='porter');",
+    )?;
+    // Backfill from memories (tags JSON -> space-joined)
+    let mut stmt = conn.prepare("SELECT id, content, tags FROM memories")?;
+    let rows: Vec<(String, String, String)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, content, tags_json) in rows {
+        let tags_fts = serde_json::from_str::<Vec<String>>(&tags_json)
+            .unwrap_or_default()
+            .join(" ");
+        conn.execute(
+            "INSERT INTO memories_fts (id, content, tags) VALUES (?1, ?2, ?3)",
+            params![id, content, tags_fts],
+        )?;
+    }
+    Ok(())
 }
 
 /// Collect `<root>/<pid>/.warpforge/memory.db` for every existing project DB.
