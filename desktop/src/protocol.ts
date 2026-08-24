@@ -779,7 +779,7 @@ export interface BacklogPage {
 export interface MemoryStats {
   globalCount: number;
   projectCount: number;
-  embeddingMode: string;
+  embeddingMode: "hybrid" | "fts";
   scopesEnabled: {
     global: boolean;
     project: boolean;

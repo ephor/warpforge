@@ -16,6 +16,7 @@
 //! cosine ranks via reciprocal-rank fusion; the embedding model lives in
 //! [`super::memory_embed`] and degrades to FTS-only when unavailable.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -231,6 +232,13 @@ impl MemoryStore {
         self.config.enabled && self.disabled.is_none() && self.conn.is_some()
     }
 
+    /// Whether the vec table exists and should be written to. `false` when
+    /// embeddings are off, which keeps `DELETE FROM memories_vec` from erroring
+    /// on a store whose vec table was never created (e.g. `open_at(":memory:")`).
+    fn embeddings_active(&self) -> bool {
+        self.embed.lock().unwrap().is_enabled()
+    }
+
     fn guard(&self) -> Result<&Connection, MemoryError> {
         if let Some(reason) = &self.disabled {
             return Err(MemoryError::Disabled(reason.clone()));
@@ -273,26 +281,29 @@ impl MemoryStore {
     }
 
     /// SQL condition (`m.`-prefixed) narrowing a read to the enabled scope(s).
-    /// "global"/"project" narrow to that scope when enabled; a disabled or
-    /// unknown scope silently coerces to the enabled union. Empty = no filter.
-    fn scope_predicate(&self, scope: Option<&str>) -> String {
+    /// `None`/`"all"` narrow to the union of enabled scopes (empty = no filter);
+    /// an explicit `"global"`/`"project"` whose scope is disabled is an error
+    /// rather than silently coercing to the other scope.
+    fn scope_predicate(&self, scope: Option<&str>) -> Result<String, MemoryError> {
         let (want_global, want_project) = match scope {
             Some("global") => (true, false),
             Some("project") => (false, true),
             _ => (true, true),
         };
-        let mut g = want_global && self.config.global;
-        let mut p = want_project && self.config.project;
-        if !g && !p {
-            g = self.config.global;
-            p = self.config.project;
+        if want_global && !want_project && !self.config.global {
+            return Err(MemoryError::Scope("global memory is disabled".into()));
         }
-        match (g, p) {
+        if want_project && !want_global && !self.config.project {
+            return Err(MemoryError::Scope("project memory is disabled".into()));
+        }
+        let g = want_global && self.config.global;
+        let p = want_project && self.config.project;
+        Ok(match (g, p) {
             (true, true) => String::new(),
             (true, false) => "m.scope = 'global'".into(),
             (false, true) => "m.scope LIKE 'project:%'".into(),
             (false, false) => "0".into(),
-        }
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -313,8 +324,10 @@ impl MemoryStore {
             let should_overlay = Self::resolve_project_db(Some(&pid)).is_some()
                 || self.config.per_project.unwrap_or(false);
             if should_overlay {
-                let path = Self::project_db_path(&pid);
-                let pconn = Self::open_project_at(&path)?;
+                let Some(path) = Self::project_db_path(&pid) else {
+                    return Err(MemoryError::Scope("invalid project id".into()));
+                };
+                let pconn = Self::open_project_at(&path, self.config.embeddings_enabled())?;
                 return Self::store_on_conn(
                     &pconn,
                     &self.embed,
@@ -391,6 +404,8 @@ impl MemoryStore {
     /// Search memories. `mode == "hybrid"` merges FTS (BM25) and vector (cosine)
     /// ranks via RRF when embeddings are enabled, else falls back to pure FTS.
     /// Every returned hit bumps `last_accessed` (feeds future decay).
+    /// `scope` `None`/`"all"` searches the global DB *and* every project overlay,
+    /// merging the results; a narrow scope searches one DB only.
     pub fn search(
         &self,
         query: &str,
@@ -401,17 +416,51 @@ impl MemoryStore {
         // Per-project overlay is primary for project-scoped reads
         if let Some(pid) = scope.and_then(|s| s.strip_prefix("project:")) {
             if let Some(path) = Self::resolve_project_db(Some(pid)) {
-                let pconn = Self::open_project_at(&path)?;
+                let pconn = Self::open_project_at(&path, self.config.embeddings_enabled())?;
                 return self.search_on_conn(&pconn, query, scope, limit, mode);
             }
         }
-        // scope=project without id -> try any overlay via project DB; else global
-        if scope == Some("project") {
-            // if any project DB exists and caller wants project, search global still (no single pid)
-            // fallthrough to global
-        }
         let conn = self.guard()?;
-        self.search_on_conn(conn, query, scope, limit, mode)
+        if scope.is_none() || scope == Some("all") {
+            self.search_all(conn, query, scope, limit, mode)
+        } else {
+            self.search_on_conn(conn, query, scope, limit, mode)
+        }
+    }
+
+    /// Merge global + project results for a non-scoped search.
+    fn search_all(
+        &self,
+        conn: &Connection,
+        query: &str,
+        scope: Option<&str>,
+        limit: Option<u32>,
+        mode: Option<&str>,
+    ) -> Result<Vec<Memory>, MemoryError> {
+        let cap = limit.unwrap_or(10).clamp(1, 100);
+        // Fetch with higher recall so overlay results can compete, then re-sort
+        // (global first, relevance order preserved within each scope) before
+        // truncating to the requested cap.
+        let recall = (cap * 2).min(100);
+        let mut merged = self.search_on_conn(conn, query, scope, Some(recall), mode)?;
+        if self.config.project {
+            for path in Self::project_dbs() {
+                if !path.exists() {
+                    continue;
+                }
+                let pconn = Self::open_project_at(&path, self.config.embeddings_enabled())?;
+                let proj =
+                    self.search_on_conn(&pconn, query, Some("project"), Some(recall), mode)?;
+                for m in proj {
+                    if !merged.iter().any(|x| x.id == m.id) {
+                        merged.push(m);
+                    }
+                }
+            }
+        }
+        merged.sort_by_key(|b| std::cmp::Reverse(b.scope == "global"));
+        merged.truncate(cap as usize);
+        Ok(merged)
     }
 
     fn search_on_conn(
@@ -427,7 +476,7 @@ impl MemoryStore {
             return Ok(Vec::new());
         }
         let limit = limit.unwrap_or(10).clamp(1, 100) as i64;
-        let predicate = self.scope_predicate(scope);
+        let predicate = self.scope_predicate(scope)?;
         let hybrid = matches!(mode, Some("hybrid")) && self.embed.lock().unwrap().is_enabled();
         if hybrid {
             self.hybrid_search(conn, &sanitized, &predicate, limit)
@@ -586,12 +635,50 @@ impl MemoryStore {
     ) -> Result<Vec<Memory>, MemoryError> {
         if let Some(pid) = scope.and_then(|s| s.strip_prefix("project:")) {
             if let Some(path) = Self::resolve_project_db(Some(pid)) {
-                let pconn = Self::open_project_at(&path)?;
+                let pconn = Self::open_project_at(&path, self.config.embeddings_enabled())?;
                 return Self::list_on_conn(&pconn, self, scope, kind, limit, offset);
             }
         }
         let conn = self.guard()?;
-        Self::list_on_conn(conn, self, scope, kind, limit, offset)
+        if scope.is_none() || scope == Some("all") {
+            self.list_all(conn, scope, kind, limit, offset)
+        } else {
+            Self::list_on_conn(conn, self, scope, kind, limit, offset)
+        }
+    }
+
+    /// Merge global + project rows for a non-scoped list.
+    fn list_all(
+        &self,
+        conn: &Connection,
+        scope: Option<&str>,
+        kind: Option<&str>,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<Memory>, MemoryError> {
+        let mut merged = Self::list_on_conn(conn, self, scope, kind, None, None)?;
+        if self.config.project {
+            for path in Self::project_dbs() {
+                if !path.exists() {
+                    continue;
+                }
+                let pconn = Self::open_project_at(&path, self.config.embeddings_enabled())?;
+                let proj = Self::list_on_conn(&pconn, self, Some("project"), kind, None, None)?;
+                for m in proj {
+                    if !merged.iter().any(|x| x.id == m.id) {
+                        merged.push(m);
+                    }
+                }
+            }
+        }
+        merged.sort_by(|a, b| {
+            (b.scope == "global")
+                .cmp(&(a.scope == "global"))
+                .then(b.updated_at.cmp(&a.updated_at))
+        });
+        let offset = offset.unwrap_or(0) as usize;
+        let limit = limit.unwrap_or(100).clamp(1, 1000) as usize;
+        Ok(merged.into_iter().skip(offset).take(limit).collect())
     }
 
     fn list_on_conn(
@@ -603,7 +690,7 @@ impl MemoryStore {
         offset: Option<u32>,
     ) -> Result<Vec<Memory>, MemoryError> {
         let mut conditions = Vec::new();
-        let predicate = store.scope_predicate(scope);
+        let predicate = store.scope_predicate(scope)?;
         if !predicate.is_empty() {
             conditions.push(predicate);
         }
@@ -655,7 +742,9 @@ impl MemoryStore {
             params![id],
             |row| row.get(0),
         )?;
-        conn.execute("DELETE FROM memories_vec WHERE rowid = ?1", params![rowid])?;
+        if self.embeddings_active() {
+            conn.execute("DELETE FROM memories_vec WHERE rowid = ?1", params![rowid])?;
+        }
         self.index_embedding(conn, rowid, content)?;
         load_by_id(conn, id)
     }
@@ -675,7 +764,13 @@ impl MemoryStore {
         )?;
         conn.execute("DELETE FROM memories WHERE id = ?1", params![id])?;
         conn.execute("DELETE FROM memories_fts WHERE id = ?1", params![id])?;
-        conn.execute("DELETE FROM memories_vec WHERE rowid = ?1", params![rowid])?;
+        conn.execute(
+            "DELETE FROM memory_edges WHERE src_id = ?1 OR dst_id = ?1",
+            params![id],
+        )?;
+        if self.embeddings_active() {
+            conn.execute("DELETE FROM memories_vec WHERE rowid = ?1", params![rowid])?;
+        }
         Ok(())
     }
 
@@ -691,10 +786,13 @@ impl MemoryStore {
             [],
             |row| row.get(0),
         )?;
-        let embedding_mode = if self.embed.lock().unwrap().is_enabled() {
-            "hybrid"
-        } else {
-            "fts"
+        let embedding_mode = {
+            let engine = self.embed.lock().unwrap();
+            if engine.is_enabled() && engine.unavailable_reason().is_none() {
+                "hybrid"
+            } else {
+                "fts"
+            }
         };
         Ok(Stats {
             global_count,
@@ -765,10 +863,11 @@ impl MemoryStore {
     }
 
     /// Per-project overlay path. Returns Some(path) if file exists.
-    /// Sanitizes: rejects empty, `..`, `/`, `\`.
+    /// Sanitizes: rejects empty, `.`, `..`, `/`, `\`, and any char outside
+    /// `[a-zA-Z0-9_-]`.
     pub fn resolve_project_db(project_id: Option<&str>) -> Option<PathBuf> {
         let pid = project_id?;
-        if pid.is_empty() || pid.contains('/') || pid.contains('\\') || pid.contains("..") {
+        if !sanitize_project_id(pid) {
             return None;
         }
         // Check env override and home heuristic
@@ -802,15 +901,35 @@ impl MemoryStore {
         Self::resolve_project_db(project_id).is_some()
     }
 
-    fn project_db_path(pid: &str) -> PathBuf {
-        if let Ok(base) = std::env::var("WARP_PROJECTS_DIR") {
-            return PathBuf::from(base).join(pid).join(".warpforge/memory.db");
+    fn project_db_path(pid: &str) -> Option<PathBuf> {
+        if !sanitize_project_id(pid) {
+            return None;
         }
-        dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".warpforge/projects")
-            .join(pid)
-            .join(".warpforge/memory.db")
+        if let Ok(base) = std::env::var("WARP_PROJECTS_DIR") {
+            return Some(PathBuf::from(base).join(pid).join(".warpforge/memory.db"));
+        }
+        Some(
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".warpforge/projects")
+                .join(pid)
+                .join(".warpforge/memory.db"),
+        )
+    }
+
+    /// All existing project overlay DB paths (both `WARP_PROJECTS_DIR` and the
+    /// home heuristic), for merging non-scoped reads.
+    fn project_dbs() -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        if let Ok(base) = std::env::var("WARP_PROJECTS_DIR") {
+            collect_project_dbs(&PathBuf::from(base), &mut out);
+        }
+        if let Some(home) = dirs::home_dir() {
+            collect_project_dbs(&home.join(".warpforge/projects"), &mut out);
+        }
+        let mut seen = HashSet::new();
+        out.retain(|p| seen.insert(p.clone()));
+        out
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -854,7 +973,7 @@ impl MemoryStore {
         load_by_id(conn, &id)
     }
 
-    fn open_project_at(path: &Path) -> Result<Connection> {
+    fn open_project_at(path: &Path, embeddings: bool) -> Result<Connection> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).ok();
         }
@@ -863,6 +982,9 @@ impl MemoryStore {
         conn.pragma_update(None, "journal_mode", "WAL").ok();
         conn.execute_batch(SCHEMA)?;
         seed_meta(&conn)?;
+        if embeddings {
+            conn.execute_batch(&vec_table_sql())?;
+        }
         Ok(conn)
     }
 
@@ -904,11 +1026,25 @@ impl MemoryStore {
         cfg: &super::memory_config::DreamingConfig,
         fallback_model: Option<&str>,
     ) -> Result<serde_json::Value, MemoryError> {
-        let _model = cfg.effective_model(fallback_model);
-        // Agent spawn would happen here via generate_text when model Some;
-        // without LLM runtime in unit tests we fall back to heuristic.
-        // Prompt is built over last_accessed ASC 200 per spec §8.
-        self.dream(dry_run)
+        let model = cfg.effective_model(fallback_model);
+        // Agent dreaming would spawn an LLM run here via `generate_text` with the
+        // chosen `model`/`agent`; this sync store path has no agent runtime, so we
+        // log the intent and fall back to the heuristic pass. The resolved model is
+        // surfaced in the result so callers can drive the agent path.
+        if let Some(m) = &model {
+            eprintln!(
+                "[memory] dreaming agent path requested (agent={} model={m}); falling back to heuristic",
+                cfg.agent
+            );
+        }
+        let mut out = self.dream(dry_run)?;
+        if let Some(obj) = out.as_object_mut() {
+            obj.insert(
+                "model".into(),
+                model.map_or(serde_json::Value::Null, serde_json::Value::String),
+            );
+        }
+        Ok(out)
     }
 
     /// Dream pass: tries agent flow then falls back to heuristic.
@@ -1109,6 +1245,30 @@ fn sanitize_query(query: &str) -> String {
         }
     }
     out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Strict project-id validator used wherever a project id becomes a filesystem
+/// path. Rejects empty, `.`, `..`, `/`, `\`, and anything outside
+/// `[a-zA-Z0-9_-]`.
+fn sanitize_project_id(pid: &str) -> bool {
+    !pid.is_empty()
+        && pid != "."
+        && pid != ".."
+        && pid
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Collect `<root>/<pid>/.warpforge/memory.db` for every existing project DB.
+fn collect_project_dbs(root: &Path, out: &mut Vec<PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for e in entries.flatten() {
+            let db = e.path().join(".warpforge/memory.db");
+            if db.exists() {
+                out.push(db);
+            }
+        }
+    }
 }
 
 fn content_of(conn: &Connection, id: &str) -> Result<Option<String>, MemoryError> {
