@@ -203,9 +203,39 @@ impl MemoryStore {
         };
         self.config.embedding = mode.to_string();
         let _ = save_embedding(mode);
-        self.apply_embedding_config()?;
-        if mode == "fastembed" {
-            self.backfill_embeddings()?;
+        // apply_embedding_config and backfill may panic when ort dylib missing (ort-load-dynamic);
+        // catch unwind and degrade to FTS instead of killing tokio worker.
+        let apply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.apply_embedding_config()?;
+            if mode == "fastembed" {
+                // backfill triggers first model load — may panic on missing libonnxruntime
+                if let Err(e) = self.backfill_embeddings() {
+                    // model unavailable (offline) — keep hybrid flag but engine will report unavailable
+                    eprintln!("[memory] backfill skipped: {e}");
+                }
+            }
+            Result::<(), MemoryError>::Ok(())
+        }));
+        match apply {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                let msg = e.to_string();
+                eprintln!("[memory] embedding setup failed: {msg}");
+                self.config.embedding = "none".into();
+                let _ = save_embedding("none");
+                *self.embed.lock().unwrap() =
+                    super::memory_embed::EmbedEngine::new_disabled_with_reason(msg);
+                let _ = self.write_embedding_meta(false);
+            }
+            Err(_) => {
+                let msg = "ONNX Runtime unavailable (libonnxruntime missing — brew install onnxruntime; if already installed, re-select fastembed — no restart needed, or restart warpforge so ORT_DYLIB_PATH picks up /opt/homebrew/lib/libonnxruntime.dylib) — falling back to FTS";
+                eprintln!("[memory] {msg}");
+                self.config.embedding = "none".into();
+                let _ = save_embedding("none");
+                *self.embed.lock().unwrap() =
+                    super::memory_embed::EmbedEngine::new_disabled_with_reason(msg);
+                let _ = self.write_embedding_meta(false);
+            }
         }
         self.stats()
     }
@@ -214,7 +244,8 @@ impl MemoryStore {
     /// No-op when the model is unavailable.
     fn backfill_embeddings(&self) -> Result<(), MemoryError> {
         let conn = self.guard()?;
-        conn.execute("DELETE FROM memories_vec", [])?;
+        // memories_vec may not exist if apply failed — ignore
+        let _ = conn.execute("DELETE FROM memories_vec", []);
         let rows: Vec<(i64, String)> = {
             let mut stmt = conn.prepare("SELECT rowid, content FROM memories")?;
             let mapped = stmt.query_map([], |row| {
@@ -223,7 +254,14 @@ impl MemoryStore {
             mapped.collect::<rusqlite::Result<Vec<_>>>()?
         };
         for (rowid, content) in rows {
-            self.index_embedding(conn, rowid, &content)?;
+            // index_embedding already catches panics and degrades to no-op
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = self.index_embedding(conn, rowid, &content);
+            }));
+            // if engine became unavailable, stop backfilling
+            if self.embed.lock().unwrap().unavailable_reason().is_some() {
+                break;
+            }
         }
         Ok(())
     }
@@ -786,12 +824,12 @@ impl MemoryStore {
             [],
             |row| row.get(0),
         )?;
-        let embedding_mode = {
+        let (embedding_mode, embedding_unavailable) = {
             let engine = self.embed.lock().unwrap();
             if engine.is_enabled() && engine.unavailable_reason().is_none() {
-                "hybrid"
+                ("hybrid", None)
             } else {
-                "fts"
+                ("fts", engine.unavailable_reason().map(|s| s.to_string()))
             }
         };
         Ok(Stats {
@@ -803,6 +841,7 @@ impl MemoryStore {
                 project: self.config.project,
             },
             per_project_db_exists: Self::any_project_db_exists(),
+            embedding_unavailable,
         })
     }
 

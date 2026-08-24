@@ -66,6 +66,37 @@ impl EmbedEngine {
         }
     }
 
+    pub fn new_disabled_with_reason(reason: impl Into<String>) -> Self {
+        Self {
+            enabled: false,
+            model: None,
+            unavailable: Some(reason.into()),
+        }
+    }
+
+    fn ensure_ort_dylib_path() {
+        if std::env::var("ORT_DYLIB_PATH")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .is_some()
+        {
+            return;
+        }
+        for cand in [
+            "/opt/homebrew/lib/libonnxruntime.dylib",
+            "/opt/homebrew/opt/onnxruntime/lib/libonnxruntime.dylib",
+            "/usr/local/lib/libonnxruntime.dylib",
+            "/usr/local/opt/onnxruntime/lib/libonnxruntime.dylib",
+        ] {
+            if std::path::Path::new(cand).exists() {
+                // SAFETY: only called from daemon actor thread before ort init, no concurrent reads
+                unsafe { std::env::set_var("ORT_DYLIB_PATH", cand) };
+                eprintln!("[memory] set ORT_DYLIB_PATH={cand} (brew onnxruntime)");
+                break;
+            }
+        }
+    }
+
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -83,6 +114,9 @@ impl EmbedEngine {
             return None;
         }
         if self.model.is_none() && self.unavailable.is_none() {
+            // brew on arm installs to /opt/homebrew/lib which dyld doesn't search by default;
+            // if ORT_DYLIB_PATH not set, point it at the brew dylib so the next retry (no daemon restart needed) succeeds.
+            Self::ensure_ort_dylib_path();
             let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 TextEmbedding::try_new(
                     TextInitOptions::new(EmbeddingModel::AllMiniLML6V2)
@@ -96,8 +130,9 @@ impl EmbedEngine {
                     return None;
                 }
                 Err(_) => {
-                    self.unavailable =
-                        Some("ONNX Runtime unavailable (libonnxruntime missing)".into());
+                    self.unavailable = Some(
+                        "ONNX Runtime unavailable (libonnxruntime missing — brew install onnxruntime; if already installed, re-select fastembed or restart warpforge so ORT_DYLIB_PATH=/opt/homebrew/lib/libonnxruntime.dylib is picked up)".into(),
+                    );
                     return None;
                 }
             }
