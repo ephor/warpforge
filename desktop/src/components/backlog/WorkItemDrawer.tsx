@@ -1,6 +1,6 @@
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Flag, Pencil, Play, UserRound, X } from "lucide-react";
+import { ExternalLink, Flag, Pencil, Play, Trash2, UserRound, X } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 
@@ -174,6 +174,25 @@ function WorkItemDetails({
     void save({ body: next });
   }, [body, bodyDraft, save]);
 
+  /**
+   * Drop the item for good. Offered on local items only: a tracker row is a
+   * mirror, and deleting it here would simply be imported again on the next
+   * sync, while the issue itself stayed open where it actually lives.
+   */
+  const remove = React.useCallback(async () => {
+    const warning = item.taskId ? ` The task it started keeps running.` : "";
+    if (!window.confirm(`Delete "${title}"? This cannot be undone.${warning}`)) return;
+    try {
+      await daemon.deleteBacklog(item.id, item.project);
+      await queryClient.invalidateQueries({ queryKey: ["backlog", item.project] });
+      onClose();
+    } catch (error) {
+      toast.error("Could not delete the work item", {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [item.id, item.project, item.taskId, onClose, queryClient, title]);
+
   const commitTitle = React.useCallback(() => {
     const next = titleDraft?.trim();
     setTitleDraft(null);
@@ -236,6 +255,21 @@ function WorkItemDetails({
           )}
         </DialogTitle>
         <div className="flex shrink-0 items-center gap-0.5">
+          {editable && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7 text-muted-foreground hover:text-destructive"
+              title="Delete work item"
+              onClick={() => void remove()}
+            >
+              <Trash2 className="size-4" />
+              <span className="sr-only">Delete work item</span>
+            </Button>
+          )}
+          {/* The one destructive control sits a rule away from Close, which is
+              the button the same hand reaches for a dozen times a day. */}
+          {editable && <span aria-hidden className="mx-1 h-4 w-px bg-border/60" />}
           {item.url && (
             <Button
               variant="ghost"
