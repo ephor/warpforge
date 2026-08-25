@@ -1,14 +1,11 @@
 /**
- * Styles for the landing page's Warpforge miniature.
+ * The miniature's shell, task sidebar and conversation.
  *
- * Globally scoped but namespaced under `.wf-demo`, so it can live outside the
- * component and keep both files inside the repo's per-file size limit.
- *
- * The tokens below are the desktop app's own, copied from
- * `desktop/src/globals.css` as HSL triplets — including its depth model, where
- * `--card` is *darker* than `--background` (chrome above darker work islands).
- * Keeping the triplets in the same `H S% L%` form makes them diffable against
- * the app when its theme moves.
+ * Globally scoped but namespaced under `.wf-demo`. Tokens are the desktop
+ * app's own, copied from `desktop/src/globals.css` as HSL triplets — including
+ * its depth model, where `--card` is *darker* than `--background` (chrome
+ * above darker work islands). Keeping the triplets in the same `H S% L%` form
+ * makes them diffable against the app when its theme moves.
  */
 
 .wf-demo {
@@ -36,48 +33,164 @@
   color: hsl(var(--foreground));
   overflow: hidden;
   box-shadow: 0 40px 80px -32px rgb(0 0 0 / 0.7);
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
   /* The hero centres its own text; a UI does not inherit that. */
   text-align: left;
 }
 
 .wf-demo b,
-.wf-demo s {
+.wf-demo s,
+.wf-demo i {
   font-weight: inherit;
+  font-style: normal;
   text-decoration: none;
 }
 
-/* ---- window bar ---- */
-.wf-demo .bar {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid hsl(var(--border));
-  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
-  font-size: 0.6875rem;
-  color: hsl(var(--muted-foreground) / 0.75);
+/* ---- four columns, like the app ---- */
+.wf-demo .body {
+  display: grid;
+  grid-template-columns: 1fr;
 }
-.wf-demo .crumb-live {
-  color: hsl(var(--muted-foreground));
+.wf-demo .pane {
+  padding: 0.5rem;
+  border-top: 1px solid hsl(var(--border));
+  min-width: 0;
 }
-.wf-demo .bar-right {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  margin-left: auto;
-  color: hsl(var(--muted-foreground));
+@media (min-width: 820px) {
+  .wf-demo .body {
+    grid-template-columns: 0.78fr 1.25fr 1.3fr 0.85fr;
+  }
+  .wf-demo .pane {
+    border-top: 0;
+    border-left: 1px solid hsl(var(--border));
+    min-height: 21rem;
+  }
+  .wf-demo .side {
+    border-left: 0;
+  }
 }
 
+.wf-demo .pane-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+
+/* ---- sidebar ---- */
+.wf-demo .side {
+  background: hsl(var(--card));
+}
+.wf-demo .brand {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.5938rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: hsl(var(--muted-foreground));
+}
+.wf-demo .live {
+  width: 0.3rem;
+  height: 0.3rem;
+  border-radius: 999px;
+  background: hsl(var(--ok));
+}
+/* `+ New task`, per Sidebar.tsx: primary text on primary/15 with a primary/40 border. */
+.wf-demo .newtask {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.45rem;
+  margin-bottom: 0.4rem;
+  border: 1px solid hsl(var(--primary) / 0.4);
+  border-radius: var(--radius);
+  background: hsl(var(--primary) / 0.15);
+  color: hsl(var(--primary));
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.wf-demo .newtask b {
+  margin-left: auto;
+  opacity: 0.7;
+  font-size: 0.625rem;
+}
+.wf-demo .nav-row,
+.wf-demo .proj,
+.wf-demo .task {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.22rem 0.35rem;
+  border-radius: var(--radius);
+  color: hsl(var(--muted-foreground));
+  font-size: 0.6875rem;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.wf-demo .nav-row b,
+.wf-demo .proj b,
+.wf-demo .task b {
+  margin-left: auto;
+  padding-left: 0.35rem;
+  font-size: 0.625rem;
+  color: hsl(var(--muted-foreground) / 0.6);
+  font-variant-numeric: tabular-nums;
+}
+.wf-demo .side-sep {
+  height: 1px;
+  margin: 0.4rem 0;
+  background: hsl(var(--border));
+}
+/* Project square, per Sidebar.tsx's `bg-primary/15 text-primary` badge. */
+.wf-demo .sq {
+  display: grid;
+  place-items: center;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 5px;
+  background: hsl(var(--primary) / 0.15);
+  color: hsl(var(--primary));
+  font-size: 0.5rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.wf-demo .proj {
+  color: hsl(var(--foreground));
+  font-weight: 500;
+}
+.wf-demo .task {
+  padding-left: 0.85rem;
+  text-overflow: ellipsis;
+}
+.wf-demo .task-open {
+  background: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+/* Sub-agents are nested task rows, which is how the app really shows them. */
+.wf-demo .task-sub {
+  padding-left: 1.35rem;
+  opacity: 0;
+  transform: translateY(3px);
+  transition:
+    opacity 0.35s ease,
+    transform 0.35s ease;
+}
+.wf-demo .task-fold {
+  color: hsl(var(--muted-foreground) / 0.5);
+  font-size: 0.625rem;
+}
 .wf-demo .dot {
-  width: 0.375rem;
-  height: 0.375rem;
+  width: 0.3rem;
+  height: 0.3rem;
   border-radius: 999px;
   flex-shrink: 0;
-  background: hsl(var(--muted-foreground));
-}
-.wf-demo .dot-lead {
-  background: hsl(var(--primary));
 }
 .wf-demo .dot-codex {
   background: hsl(var(--codex));
@@ -86,104 +199,35 @@
   background: hsl(var(--oc));
 }
 
-/* ---- layout ---- */
-.wf-demo .body {
-  display: grid;
-  grid-template-columns: 1fr;
-}
-.wf-demo .pane {
-  padding: 0.75rem;
-  border-top: 1px solid hsl(var(--border));
-  min-width: 0;
-}
-.wf-demo .pane-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.625rem;
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: hsl(var(--muted-foreground) / 0.8);
-}
-.wf-demo .count {
-  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
-  font-weight: 400;
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-@media (min-width: 760px) {
-  .wf-demo .body {
-    grid-template-columns: 0.85fr 1.15fr 1.1fr;
-  }
-  .wf-demo .pane {
-    border-top: 0;
-    border-left: 1px solid hsl(var(--border));
-    min-height: 19rem;
-  }
-  .wf-demo .pane-run {
-    border-left: 0;
-  }
-}
-
-/* ---- agent rows ---- */
-.wf-demo .row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem;
-  border-radius: var(--radius);
-  border: 1px solid transparent;
-  margin-bottom: 0.375rem;
-}
-.wf-demo .row-lead {
-  border-color: hsl(var(--primary) / 0.4);
-  background: hsl(var(--primary) / 0.1);
-}
-.wf-demo .row-child {
-  background: hsl(var(--card));
-  border-color: hsl(var(--border));
-  opacity: 0;
-  transform: translateY(4px);
-  transition:
-    opacity 0.35s ease,
-    transform 0.35s ease;
-}
-.wf-demo .row-main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  flex: 1;
-}
-.wf-demo .row-name {
-  font-weight: 550;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.wf-demo .row-sub {
-  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
-  font-size: 0.625rem;
-  color: hsl(var(--muted-foreground) / 0.8);
-}
-
-/* ---- status pills, per StatusBadge.tsx ---- */
-.wf-demo .badge {
+/* ---- conversation ---- */
+.wf-demo .agents {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  padding: 0.1rem 0.4rem;
+  font-weight: 400;
+  font-size: 0.6563rem;
+  color: hsl(var(--muted-foreground));
+}
+.wf-demo .agents > b {
+  color: hsl(var(--foreground));
+}
+
+/* status pill, per StatusBadge.tsx */
+.wf-demo .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.05rem 0.35rem;
   border-radius: 999px;
   border: 1px solid hsl(var(--border));
   background: hsl(var(--secondary) / 0.4);
   color: hsl(var(--muted-foreground));
-  font-size: 0.625rem;
+  font-size: 0.5938rem;
   white-space: nowrap;
 }
 .wf-demo .badge b {
   display: none;
+  color: inherit;
 }
 .wf-demo .g {
   flex-shrink: 0;
@@ -191,8 +235,8 @@
 }
 .wf-demo .g-dot {
   position: relative;
-  width: 0.375rem;
-  height: 0.375rem;
+  width: 0.3rem;
+  height: 0.3rem;
   border-radius: 999px;
   background: currentColor;
 }
@@ -207,8 +251,8 @@
   animation: wf-ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 .wf-demo .g-check {
-  width: 0.6rem;
-  height: 0.6rem;
+  width: 0.55rem;
+  height: 0.55rem;
   fill: none;
   stroke: hsl(var(--ok));
   stroke-width: 2.2;
@@ -223,243 +267,122 @@
   }
 }
 
-/* Tone follows the app: ok while running, a neutral pill with a green check
-   once done — done is not a green pill, it is a finished one. */
-.wf-demo .badge-ok {
-  border-color: hsl(var(--ok) / 0.35);
-  background: hsl(var(--ok) / 0.1);
+.wf-demo .msg-user {
+  padding: 0.4rem 0.5rem;
+  margin-bottom: 0.4rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+}
+/* Collapsed `Use tool` row, as the transcript renders one. */
+.wf-demo .tool {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.32rem 0.45rem;
+  margin-bottom: 0.3rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+  font-size: 0.6875rem;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.wf-demo .chev {
+  color: hsl(var(--muted-foreground) / 0.6);
+}
+.wf-demo .tool i {
+  color: hsl(var(--primary));
+  font-size: 0.625rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wf-demo .tool b {
+  margin-left: auto;
+  padding-left: 0.35rem;
+  font-size: 0.625rem;
   color: hsl(var(--ok));
 }
-.wf-demo .badge-done {
-  border-color: hsl(var(--ok) / 0.5);
-  background: hsl(var(--ok) / 0.1);
+.wf-demo .prose {
+  padding: 0.15rem 0.1rem;
   color: hsl(var(--muted-foreground));
 }
-
-.wf-demo .run-note {
-  display: flex;
-  gap: 0.375rem;
-  margin: 0.75rem 0 0;
-  padding-top: 0.625rem;
-  border-top: 1px dashed hsl(var(--border));
-  font-size: 0.6875rem;
-  color: hsl(var(--muted-foreground) / 0.8);
-}
-.wf-demo .run-note b {
-  color: hsl(var(--foreground));
-  font-weight: 600;
-}
-
-/* ---- conversation ---- */
-.wf-demo .msg {
-  padding: 0.5rem 0.625rem;
-  border-radius: var(--radius);
-  line-height: 1.5;
-  margin-bottom: 0.5rem;
-}
-.wf-demo .msg-user {
-  background: hsl(var(--card));
-  border: 1px solid hsl(var(--border));
-}
-.wf-demo .msg-agent {
-  background: hsl(var(--primary) / 0.07);
-  border: 1px solid hsl(var(--primary) / 0.25);
-  color: hsl(var(--muted-foreground));
-}
-.wf-demo .msg code {
+.wf-demo .prose code {
   font-family: "JetBrains Mono Variable", ui-monospace, monospace;
   font-size: 0.9em;
   color: hsl(var(--foreground));
 }
-.wf-demo .ev {
-  display: flex;
-  gap: 0.5rem;
-  align-items: baseline;
-  padding: 0.3rem 0.625rem;
-  margin-bottom: 0.3rem;
-  border-left: 2px solid hsl(var(--border));
-  font-size: 0.6875rem;
-  min-width: 0;
-}
-.wf-demo .ev-k {
-  color: hsl(var(--primary));
-  white-space: nowrap;
-}
-.wf-demo .ev-v {
-  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
-  font-size: 0.625rem;
-  color: hsl(var(--muted-foreground) / 0.8);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.wf-demo .ev,
-.wf-demo .msg-agent {
+.wf-demo .tool,
+.wf-demo .prose {
   opacity: 0;
-  transform: translateY(4px);
+  transform: translateY(3px);
   transition:
     opacity 0.3s ease,
     transform 0.3s ease;
 }
 .wf-demo .composer {
-  display: flex;
-  align-items: center;
-  margin-top: 0.625rem;
-  padding: 0.5rem 0.625rem;
+  margin-top: 0.5rem;
   border: 1px solid hsl(var(--border));
   border-radius: var(--radius);
   background: hsl(var(--card));
-  color: hsl(var(--muted-foreground) / 0.7);
-  font-size: 0.75rem;
 }
-.wf-demo .composer-send {
+.wf-demo .composer-ph {
+  display: block;
+  padding: 0.45rem 0.5rem 0.3rem;
+  color: hsl(var(--muted-foreground) / 0.65);
+}
+.wf-demo .composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem 0.35rem;
+  font-size: 0.625rem;
+  color: hsl(var(--muted-foreground) / 0.8);
+}
+.wf-demo .send {
   margin-left: auto;
   color: hsl(var(--primary));
-}
-
-/* ---- changes, per FileDiffView.tsx ---- */
-.wf-demo .file {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.3rem 0;
-  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
-  font-size: 0.6875rem;
-  opacity: 0;
-  transform: translateY(4px);
-  transition:
-    opacity 0.3s ease,
-    transform 0.3s ease;
-}
-.wf-demo .fstatus {
-  flex-shrink: 0;
-  text-transform: uppercase;
-  font-size: 0.5625rem;
-  letter-spacing: 0.03em;
-}
-.wf-demo .fstatus-added {
-  color: hsl(var(--ok));
-}
-.wf-demo .fstatus-modified {
-  color: hsl(var(--warn));
-}
-.wf-demo .fstatus-deleted {
-  color: hsl(var(--destructive));
-}
-.wf-demo .fpath {
-  flex: 1;
-  min-width: 0;
-  color: hsl(var(--muted-foreground));
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl;
-  text-align: left;
-}
-.wf-demo .stat b {
-  color: hsl(var(--ok));
-}
-.wf-demo .stat s {
-  color: hsl(var(--destructive));
-  margin-left: 0.25rem;
-}
-.wf-demo .hunk {
-  margin-top: 0.5rem;
-  padding: 0.3rem 0;
-  border-top: 1px solid hsl(var(--border));
-  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
-  font-size: 0.625rem;
-  line-height: 1.75;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-.wf-demo .ln {
-  padding-inline: 0.3rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: hsl(var(--muted-foreground) / 0.85);
-}
-.wf-demo .ln-hd {
-  color: hsl(var(--muted-foreground) / 0.55);
-}
-.wf-demo .ln-add {
-  background: hsl(var(--ok) / 0.1);
-  color: hsl(var(--ok));
-}
-.wf-demo .commit {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  margin-top: 0.625rem;
-  padding: 0.5rem 0.625rem;
-  border: 1px solid hsl(var(--border));
-  border-radius: var(--radius);
-  background: hsl(var(--card));
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-.wf-demo .commit-label,
-.wf-demo .commit-hint {
-  font-size: 0.5625rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: hsl(var(--muted-foreground) / 0.7);
-}
-.wf-demo .commit-hint {
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 0.625rem;
-}
-.wf-demo .commit-msg {
-  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
-  font-size: 0.6875rem;
-  color: hsl(var(--foreground));
-}
-.wf-demo .caret {
-  display: none;
-  width: 0.4em;
-  height: 1em;
-  margin-left: 1px;
-  background: hsl(var(--primary));
-  vertical-align: text-bottom;
-  animation: wf-blink 1s step-end infinite;
-}
-@keyframes wf-blink {
-  50% {
-    opacity: 0;
-  }
 }
 
 /* ---- foot ---- */
 .wf-demo .foot {
   display: flex;
   align-items: center;
-  gap: 0.625rem;
-  padding: 0.5rem 0.75rem;
+  gap: 0.6rem;
+  padding: 0.35rem 0.6rem;
   border-top: 1px solid hsl(var(--border));
+  font-size: 0.625rem;
+  color: hsl(var(--muted-foreground) / 0.7);
+}
+.wf-demo .branch {
+  margin-left: auto;
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
 }
 .wf-demo .replay {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  padding: 0.2rem 0.5rem;
+  padding: 0.1rem 0.4rem;
   border: 1px solid hsl(var(--border));
   border-radius: var(--radius);
   background: transparent;
   color: hsl(var(--muted-foreground));
   font: inherit;
-  font-size: 0.6875rem;
+  font-size: 0.625rem;
   cursor: pointer;
   transition:
     color 0.15s ease,
-    background 0.15s ease;
+    background-color 0.15s ease;
 }
 .wf-demo .replay:hover {
   color: hsl(var(--foreground));
-  background: hsl(var(--accent));
+  background: hsl(var(--secondary));
 }
-.wf-demo .foot-note {
-  font-size: 0.625rem;
-  color: hsl(var(--muted-foreground) / 0.7);
+
+@media (prefers-reduced-motion: reduce) {
+  .wf-demo *,
+  .wf-demo *::after {
+    transition: none !important;
+    animation: none !important;
+  }
 }

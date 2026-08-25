@@ -5,11 +5,12 @@
  * image cannot show the one thing worth showing: several harnesses working
  * one task and the result landing as a reviewable diff.
  *
- * Styling mirrors the desktop app rather than approximating it. The tokens in
- * `forge-demo.css` are the HSL triplets from `desktop/src/globals.css`; the
- * status pills follow `StatusBadge.tsx` (a running dot pulses, done is a
- * neutral pill carrying a green check); diff status colours follow
- * `FileDiffView.tsx`, where added is ok and modified is warn.
+ * The layout is the app's own four columns, not an approximation of them:
+ * task sidebar, conversation, diff surface, changes rail. Sub-agents appear
+ * the way they really do — as task rows nested under their parent in the
+ * sidebar — rather than in an invented "agents" list. Tokens come from
+ * `desktop/src/globals.css`, status pills from `StatusBadge.tsx`, diff status
+ * colours from `FileDiffView.tsx`.
  *
  * The sequence is driven by `data-step` on the root; every transition is a CSS
  * rule keyed off it, so the script only advances an integer. The markup
@@ -17,17 +18,18 @@
  * whole picture rather than an empty shell.
  */
 import "./forge-demo.css";
+import "./forge-demo-diff.css";
 import "./forge-demo-timeline.css";
 
-const files = [
-  { path: "api/src/middleware/rate-limit.ts", add: 48, del: 0, status: "added" },
-  { path: "api/src/server.ts", add: 6, del: 1, status: "modified" },
-  { path: "api/test/rate-limit.test.ts", add: 31, del: 0, status: "added" },
+const children = [
+  { n: 1, name: "implement middleware", agent: "Codex", dot: "codex", age: "2m" },
+  { n: 2, name: "add tests", agent: "opencode", dot: "oc", age: "1m" },
 ];
 
-const children = [
-  { n: 1, name: "implement middleware", agent: "Codex", dot: "codex" },
-  { n: 2, name: "add tests", agent: "opencode", dot: "oc" },
+const files = [
+  { path: "middleware/rate-limit.ts", add: 48, del: 0, status: "added" },
+  { path: "server.ts", add: 6, del: 1, status: "modified" },
+  { path: "test/rate-limit.test.ts", add: 31, del: 0, status: "added" },
 ];
 ---
 
@@ -37,127 +39,146 @@ const children = [
   data-step="5"
   aria-label="Warpforge running one task across several coding agents"
 >
-  <div class="bar">
-    <span class="crumb">warpforge</span>
-    <span class="sep">/</span>
-    <span class="crumb crumb-live">Add rate limiting to the API</span>
-    <span class="bar-right"><i class="dot dot-lead"></i>Claude Code</span>
-  </div>
-
   <div class="body">
-    <!-- Agents -->
-    <section class="pane pane-run" aria-label="Agents">
-      <header class="pane-head"><span>Agents</span><span class="count">3</span></header>
+    <!-- Task sidebar -->
+    <aside class="pane side" aria-label="Tasks">
+      <div class="brand"><span>WARPFORGE</span><i class="live"></i></div>
+      <div class="newtask">+ New task<b>⌘N</b></div>
+      <div class="nav-row">Mission Control<b>3</b></div>
+      <div class="nav-row">Projects<b>7</b></div>
+      <div class="side-sep"></div>
 
-      <div class="row row-lead">
-        <i class="dot dot-lead"></i>
-        <span class="row-main">
-          <span class="row-name">lead</span>
-          <span class="row-sub">Claude Code</span>
-        </span>
-        <span class="badge" data-lead-badge>
-          <i class="g g-dot"></i>
-          <svg class="g g-check" viewBox="0 0 12 12" aria-hidden="true"
-            ><path d="M2 6.4 4.7 9 10 3.2"></path></svg
-          >
-          <b data-when="idle">queued</b>
-          <b data-when="run">orchestrating</b>
-          <b data-when="done">done</b>
-        </span>
-      </div>
-
+      <div class="proj"><i class="sq">w</i>warpforge<b>10</b></div>
+      <div class="task task-open">Add rate limiting to the API<b>now</b></div>
       {
         children.map((c) => (
-          <div class="row row-child" data-child={c.n}>
+          <div class="task task-sub" data-child={c.n}>
             <i class={`dot dot-${c.dot}`} />
-            <span class="row-main">
-              <span class="row-name">{c.name}</span>
-              <span class="row-sub">{c.agent}</span>
-            </span>
-            <span class="badge" data-child-badge>
-              <i class="g g-dot" />
-              <svg class="g g-check" viewBox="0 0 12 12" aria-hidden="true">
-                <path d="M2 6.4 4.7 9 10 3.2" />
-              </svg>
-              <b data-when="run">running</b>
-              <b data-when="done">done</b>
-            </span>
+            {c.name}
+            <b>{c.age}</b>
           </div>
         ))
       }
-
-      <p class="run-note"><span>one task</span><b>three harnesses</b></p>
-    </section>
+      <div class="task">Fix duplicate word cards<b>8d</b></div>
+      <div class="task task-fold">› 98 done</div>
+    </aside>
 
     <!-- Conversation -->
-    <section class="pane pane-chat" aria-label="Conversation">
-      <header class="pane-head"><span>Conversation</span></header>
+    <section class="pane chat" aria-label="Conversation">
+      <header class="pane-head">
+        <span>Conversation</span>
+        <span class="agents">
+          Agents <b data-agent-count>3</b> · Lead
+          <span class="badge" data-lead-badge>
+            <i class="g g-dot"></i>
+            <svg class="g g-check" viewBox="0 0 12 12" aria-hidden="true"
+              ><path d="M2 6.4 4.7 9 10 3.2"></path></svg
+            >
+            <b data-when="idle">queued</b>
+            <b data-when="run">running</b>
+            <b data-when="done">waiting</b>
+          </span>
+        </span>
+      </header>
 
       <div class="msg msg-user">Add rate limiting to the API. Tests too.</div>
 
-      <div class="ev" data-ev="1">
-        <span class="ev-k">Warpforge · Spawn agent</span>
-        <span class="ev-v">codex — implement middleware</span>
+      <div class="tool" data-ev="1">
+        <span class="chev">›</span>Use tool<i>Warpforge · Spawn agent</i><b>completed</b>
       </div>
-      <div class="ev" data-ev="2">
-        <span class="ev-k">Warpforge · Spawn agent</span>
-        <span class="ev-v">opencode — add tests</span>
+      <div class="tool" data-ev="2">
+        <span class="chev">›</span>Use tool<i>Warpforge · Spawn agent</i><b>completed</b>
       </div>
-      <div class="ev" data-ev="3">
-        <span class="ev-k">Warpforge · Read inbox</span>
-        <span class="ev-v">2 results</span>
+      <div class="tool" data-ev="3">
+        <span class="chev">›</span>Use tool<i>Warpforge · Read inbox</i><b>completed</b>
       </div>
 
-      <div class="msg msg-agent" data-ev="4">
+      <div class="prose" data-ev="4">
         Both landed. Token bucket in <code>rate-limit.ts</code>, wired in <code>server.ts</code>, 6
         tests green.
       </div>
 
       <div class="composer">
-        <span>Steer this session…</span>
-        <span class="composer-send" aria-hidden="true">↵</span>
+        <span class="composer-ph">Steer this session…</span>
+        <div class="composer-bar">
+          <span>Opus 5 ⌄</span><span>High ⌄</span><span>More</span>
+          <i class="send" aria-hidden="true">➤</i>
+        </div>
       </div>
     </section>
 
-    <!-- Changes -->
-    <section class="pane pane-diff" aria-label="Changes">
-      <header class="pane-head"><span>Changes</span><span class="count">3 files</span></header>
+    <!-- Diff surface -->
+    <section class="pane diff" aria-label="Diff">
+      <div class="tabs">
+        <span class="tab">Files</span>
+        <span class="tab tab-on">Diff<b data-file-count>3</b></span>
+        <span class="tab">Runtime<b>2</b></span>
+        <span class="tab">Pipeline</span>
+      </div>
+      <div class="diff-sub">
+        <span data-file-count-label>3 files</span>
+        <span class="seg"><i class="on">Unified</i><i>Split</i></span>
+      </div>
 
+      <div class="card" data-file="1">
+        <div class="card-head">
+          <span class="chev">⌄</span>
+          <span class="fstatus fstatus-added">ADDED</span>
+          <span class="fpath">middleware/rate-limit.ts</span>
+        </div>
+        <div class="card-act"><span class="hunkno">@@ -18,6 +18,9 @@</span><i class="ok">✓ accept</i><i>✕ reject</i></div>
+        <div class="ln ln-add">+ const bucket = new TokenBucket(limit, windowMs);</div>
+        <div class="ln ln-add">+ if (!bucket.take(key)) return tooMany(res);</div>
+        <div class="ln">&nbsp;&nbsp;return next();</div>
+      </div>
+
+      <div class="card" data-file="2">
+        <div class="card-head">
+          <span class="chev">⌄</span>
+          <span class="fstatus fstatus-modified">MODIFIED</span>
+          <span class="fpath">server.ts</span>
+        </div>
+        <div class="ln ln-del">− app.use(routes);</div>
+        <div class="ln ln-add">+ app.use(rateLimit(), routes);</div>
+      </div>
+    </section>
+
+    <!-- Changes rail -->
+    <aside class="pane rail" aria-label="Changes">
+      <header class="pane-head"><span>Changes</span></header>
+      <div class="rail-all"><i class="cb"></i><span data-file-count-label>3/3 files</span></div>
       {
         files.map((f, i) => (
-          <div class="file" data-file={i + 1}>
-            <span class={`fstatus fstatus-${f.status}`}>{f.status}</span>
-            <span class="fpath">{f.path}</span>
-            <span class="stat">
+          <div class="rail-row" data-file={i + 1}>
+            <i class="cb" />
+            <span class={`m m-${f.status}`}>{f.status === "modified" ? "M" : "A"}</span>
+            <span class="rail-path">{f.path}</span>
+            <span class="rail-stat">
               <b>+{f.add}</b>
               {f.del > 0 && <s>−{f.del}</s>}
             </span>
           </div>
         ))
       }
-
-      <div class="hunk">
-        <div class="ln ln-hd">@@ -18,6 +18,9 @@</div>
-        <div class="ln ln-add">+ const bucket = new TokenBucket(limit, windowMs);</div>
-        <div class="ln ln-add">+ if (!bucket.take(key)) return tooMany(res);</div>
-        <div class="ln">&nbsp;&nbsp;return next();</div>
-      </div>
-
       <div class="commit">
-        <span class="commit-label">Commit message</span>
-        <span class="commit-msg"
-          >feat(api): add token-bucket rate limiting<i class="caret" aria-hidden="true"></i></span
-        >
-        <span class="commit-hint">drafted from the diff</span>
+        <span class="commit-top">3 selected</span>
+        <span class="commit-box">
+          <span class="commit-msg"
+            >feat(api): add token-bucket rate limiting<i class="caret" aria-hidden="true"></i></span
+          >
+          <i class="gen" aria-hidden="true">✦</i>
+        </span>
+        <span class="commit-row"><i class="cbx"></i>amend<b class="commit-btn">Commit</b></span>
       </div>
-    </section>
+    </aside>
   </div>
 
   <div class="foot">
+    <span class="ws">Local Workspace</span>
     <button type="button" class="replay" data-replay
       ><span aria-hidden="true">↻</span> Replay</button
     >
-    <span class="foot-note">A scripted run. The app is the real thing.</span>
+    <span class="branch">feat/rate-limit</span>
   </div>
 </div>
 

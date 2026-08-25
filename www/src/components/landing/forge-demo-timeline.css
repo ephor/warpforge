@@ -1,122 +1,132 @@
 /**
- * The miniature's timeline: which parts of the run are visible at each
- * `data-step`, and which label and glyph its status pills carry.
+ * The miniature's timeline: what exists at each `data-step`, and which label
+ * and glyph the lead's status pill carries.
  *
- * Split from `forge-demo.css` only to keep both files inside the repo's
- * per-file size limit; it is imported alongside it and shares its namespace.
+ * The markup renders finished, so these rules only hide what has not happened
+ * yet. Split from `forge-demo.css` to keep every file inside the repo's
+ * per-file size limit; it shares that file's `.wf-demo` namespace.
  */
 
-/* ============================================================
- * Timeline. The markup renders finished; these rules hide what
- * has not happened yet at each step.
- * ============================================================ */
-.wf-demo[data-step="0"] .row-child,
-.wf-demo[data-step="0"] .ev,
-.wf-demo[data-step="0"] .msg-agent,
-.wf-demo[data-step="0"] .file,
-.wf-demo[data-step="0"] .hunk,
+/* Nothing has run yet. */
+.wf-demo[data-step="0"] .task-sub,
+.wf-demo[data-step="0"] .tool,
+.wf-demo[data-step="0"] .prose,
+.wf-demo[data-step="0"] .card,
+.wf-demo[data-step="0"] .rail-row,
 .wf-demo[data-step="0"] .commit,
-.wf-demo[data-step="1"] .row-child,
-.wf-demo[data-step="1"] .msg-agent,
-.wf-demo[data-step="1"] .file,
-.wf-demo[data-step="1"] .hunk,
+.wf-demo[data-step="1"] .task-sub,
+.wf-demo[data-step="1"] .prose,
+.wf-demo[data-step="1"] .card,
+.wf-demo[data-step="1"] .rail-row,
 .wf-demo[data-step="1"] .commit,
-.wf-demo[data-step="2"] .msg-agent,
-.wf-demo[data-step="2"] .file,
-.wf-demo[data-step="2"] .hunk,
+.wf-demo[data-step="2"] .prose,
+.wf-demo[data-step="2"] .card,
+.wf-demo[data-step="2"] .rail-row,
 .wf-demo[data-step="2"] .commit,
-.wf-demo[data-step="3"] .file,
-.wf-demo[data-step="3"] .hunk,
+.wf-demo[data-step="3"] .card,
+.wf-demo[data-step="3"] .rail-row,
 .wf-demo[data-step="3"] .commit,
 .wf-demo[data-step="4"] .commit {
   opacity: 0;
 }
 
-.wf-demo[data-step="1"] .ev[data-ev="1"],
-.wf-demo[data-step="2"] .ev[data-ev="1"],
-.wf-demo[data-step="2"] .ev[data-ev="2"],
-.wf-demo[data-step="2"] .row-child[data-child="1"],
-.wf-demo[data-step="3"] .ev,
-.wf-demo[data-step="3"] .row-child,
-.wf-demo[data-step="3"] .msg-agent,
-.wf-demo[data-step="4"] .ev,
-.wf-demo[data-step="4"] .row-child,
-.wf-demo[data-step="4"] .msg-agent,
-.wf-demo[data-step="4"] .file,
-.wf-demo[data-step="4"] .hunk,
-.wf-demo[data-step="5"] .ev,
-.wf-demo[data-step="5"] .row-child,
-.wf-demo[data-step="5"] .msg-agent,
-.wf-demo[data-step="5"] .file,
-.wf-demo[data-step="5"] .hunk,
+/* What each step has brought in. */
+.wf-demo[data-step="1"] .tool[data-ev="1"],
+.wf-demo[data-step="2"] .tool[data-ev="1"],
+.wf-demo[data-step="2"] .tool[data-ev="2"],
+.wf-demo[data-step="2"] .task-sub[data-child="1"],
+.wf-demo[data-step="3"] .tool,
+.wf-demo[data-step="3"] .task-sub,
+.wf-demo[data-step="3"] .prose,
+.wf-demo[data-step="4"] .tool,
+.wf-demo[data-step="4"] .task-sub,
+.wf-demo[data-step="4"] .prose,
+.wf-demo[data-step="4"] .card,
+.wf-demo[data-step="4"] .rail-row,
+.wf-demo[data-step="5"] .tool,
+.wf-demo[data-step="5"] .task-sub,
+.wf-demo[data-step="5"] .prose,
+.wf-demo[data-step="5"] .card,
+.wf-demo[data-step="5"] .rail-row,
 .wf-demo[data-step="5"] .commit {
   opacity: 1;
   transform: none;
 }
-.wf-demo[data-step="2"] .row-child[data-child="2"],
-.wf-demo[data-step="2"] .ev[data-ev="3"] {
+.wf-demo[data-step="2"] .task-sub[data-child="2"],
+.wf-demo[data-step="2"] .tool[data-ev="3"] {
   opacity: 0;
 }
 
-/* Which label and glyph each pill shows, per step. */
+/* A tool call is only `completed` once its result is back. */
+.wf-demo[data-step="1"] .tool b,
+.wf-demo[data-step="2"] .tool b {
+  color: hsl(var(--muted-foreground) / 0.6);
+}
+
+/* The agent count in the header grows with the run. */
+.wf-demo[data-step="0"] [data-agent-count],
+.wf-demo[data-step="1"] [data-agent-count] {
+  font-size: 0;
+}
+.wf-demo[data-step="0"] [data-agent-count]::before,
+.wf-demo[data-step="1"] [data-agent-count]::before {
+  content: "1";
+  font-size: 0.6563rem;
+}
+.wf-demo[data-step="2"] [data-agent-count] {
+  font-size: 0;
+}
+.wf-demo[data-step="2"] [data-agent-count]::before {
+  content: "2";
+  font-size: 0.6563rem;
+}
+
+/* Which label and glyph the lead's pill shows. */
 .wf-demo[data-step="0"] [data-lead-badge] b[data-when="idle"],
 .wf-demo[data-step="1"] [data-lead-badge] b[data-when="run"],
 .wf-demo[data-step="2"] [data-lead-badge] b[data-when="run"],
 .wf-demo[data-step="3"] [data-lead-badge] b[data-when="run"],
 .wf-demo[data-step="4"] [data-lead-badge] b[data-when="done"],
-.wf-demo[data-step="5"] [data-lead-badge] b[data-when="done"],
-.wf-demo[data-step="2"] [data-child-badge] b[data-when="run"],
-.wf-demo[data-step="3"] [data-child-badge] b[data-when="run"],
-.wf-demo[data-step="4"] [data-child-badge] b[data-when="done"],
-.wf-demo[data-step="5"] [data-child-badge] b[data-when="done"] {
+.wf-demo[data-step="5"] [data-lead-badge] b[data-when="done"] {
   display: inline;
 }
-
 .wf-demo[data-step="0"] [data-lead-badge] .g-dot,
 .wf-demo[data-step="1"] [data-lead-badge] .g-dot,
 .wf-demo[data-step="2"] [data-lead-badge] .g-dot,
 .wf-demo[data-step="3"] [data-lead-badge] .g-dot,
-.wf-demo[data-step="2"] [data-child-badge] .g-dot,
-.wf-demo[data-step="3"] [data-child-badge] .g-dot {
-  display: inline-block;
-}
 .wf-demo[data-step="4"] [data-lead-badge] .g-check,
-.wf-demo[data-step="5"] [data-lead-badge] .g-check,
-.wf-demo[data-step="4"] [data-child-badge] .g-check,
-.wf-demo[data-step="5"] [data-child-badge] .g-check {
+.wf-demo[data-step="5"] [data-lead-badge] .g-check {
   display: inline-block;
 }
 
-/* Running is an ok pill; queued and done are neutral / finished. */
+/* Running is an ok-toned pill; queued and waiting stay neutral. A queued dot
+   does not pulse — only a running one does. */
 .wf-demo[data-step="1"] [data-lead-badge],
 .wf-demo[data-step="2"] [data-lead-badge],
-.wf-demo[data-step="3"] [data-lead-badge],
-.wf-demo[data-step="2"] [data-child-badge],
-.wf-demo[data-step="3"] [data-child-badge] {
+.wf-demo[data-step="3"] [data-lead-badge] {
   border-color: hsl(var(--ok) / 0.35);
   background: hsl(var(--ok) / 0.1);
   color: hsl(var(--ok));
 }
-.wf-demo[data-step="4"] [data-lead-badge],
-.wf-demo[data-step="5"] [data-lead-badge],
-.wf-demo[data-step="4"] [data-child-badge],
-.wf-demo[data-step="5"] [data-child-badge] {
-  border-color: hsl(var(--ok) / 0.5);
-  background: hsl(var(--ok) / 0.1);
-}
-
-/* Only the queued pill sits still — a queued dot does not pulse. */
 .wf-demo[data-step="0"] [data-lead-badge] .g-dot::after {
   display: none;
+}
+
+/* The file counts only exist once there is a diff. */
+.wf-demo[data-step="0"] [data-file-count],
+.wf-demo[data-step="1"] [data-file-count],
+.wf-demo[data-step="2"] [data-file-count],
+.wf-demo[data-step="3"] [data-file-count],
+.wf-demo[data-step="0"] [data-file-count-label],
+.wf-demo[data-step="1"] [data-file-count-label],
+.wf-demo[data-step="2"] [data-file-count-label],
+.wf-demo[data-step="3"] [data-file-count-label] {
+  visibility: hidden;
 }
 
 /* The commit message types itself on the last beat. */
 .wf-demo[data-step="5"] .commit-msg {
   animation: wf-type 1.1s steps(38, end);
-  display: inline-block;
-  overflow: hidden;
-  white-space: nowrap;
-  vertical-align: bottom;
 }
 .wf-demo[data-step="5"] .caret {
   display: inline-block;
@@ -126,14 +136,6 @@
     max-width: 0;
   }
   to {
-    max-width: 26rem;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .wf-demo *,
-  .wf-demo *::after {
-    transition: none !important;
-    animation: none !important;
+    max-width: 20rem;
   }
 }

@@ -1,0 +1,292 @@
+/**
+ * The miniature's diff surface and changes rail.
+ *
+ * Surface tabs, the Unified/Split segmented control, the diff card header and
+ * its accept/reject row follow `FilesSurface`, `DiffSurface` and
+ * `FileDiffView.tsx`; the rail follows `ChangesRail.tsx`. Split from
+ * `forge-demo.css` to keep both files inside the repo's per-file size limit.
+ */
+
+/* ---- surface tabs ---- */
+.wf-demo .tabs {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+  border-bottom: 1px solid hsl(var(--border));
+  font-size: 0.6563rem;
+}
+.wf-demo .tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: hsl(var(--muted-foreground));
+  white-space: nowrap;
+}
+.wf-demo .tab b {
+  color: hsl(var(--muted-foreground) / 0.65);
+  font-variant-numeric: tabular-nums;
+}
+.wf-demo .tab-on {
+  border-bottom-color: hsl(var(--primary));
+  color: hsl(var(--foreground));
+}
+.wf-demo .diff-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.45rem;
+  font-size: 0.625rem;
+  color: hsl(var(--muted-foreground) / 0.8);
+}
+/* Unified / Split, per DiffSurface's `rounded-md border bg-background/30 p-0.5`. */
+.wf-demo .seg {
+  display: inline-flex;
+  gap: 0.1rem;
+  padding: 0.1rem;
+  border: 1px solid hsl(var(--border) / 0.8);
+  border-radius: var(--radius);
+  background: hsl(var(--background) / 0.3);
+}
+.wf-demo .seg i {
+  padding: 0.05rem 0.35rem;
+  border-radius: calc(var(--radius) - 2px);
+  font-size: 0.5938rem;
+  color: hsl(var(--muted-foreground) / 0.8);
+}
+.wf-demo .seg .on {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+/* ---- diff card ---- */
+.wf-demo .card {
+  margin-bottom: 0.45rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(3px);
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
+.wf-demo .card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.45rem;
+  background: hsl(var(--secondary) / 0.5);
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.625rem;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.wf-demo .fstatus {
+  flex-shrink: 0;
+  letter-spacing: 0.03em;
+}
+.wf-demo .fstatus-added {
+  color: hsl(var(--ok));
+}
+.wf-demo .fstatus-modified {
+  color: hsl(var(--warn));
+}
+.wf-demo .fstatus-deleted {
+  color: hsl(var(--destructive));
+}
+.wf-demo .fpath {
+  color: hsl(var(--muted-foreground));
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wf-demo .card-act {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.45rem;
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.5938rem;
+  color: hsl(var(--muted-foreground) / 0.6);
+}
+.wf-demo .card-act i {
+  color: hsl(var(--muted-foreground));
+}
+.wf-demo .card-act i:first-of-type {
+  margin-left: auto;
+}
+.wf-demo .card-act .ok {
+  color: hsl(var(--ok));
+}
+.wf-demo .ln {
+  padding: 0.02rem 0.45rem;
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.5938rem;
+  line-height: 1.7;
+  color: hsl(var(--muted-foreground) / 0.85);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* `bg-ok/10 text-ok` and `bg-destructive/10 text-destructive`, per FileDiffView. */
+.wf-demo .ln-add {
+  background: hsl(var(--ok) / 0.1);
+  color: hsl(var(--ok));
+}
+.wf-demo .ln-del {
+  background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
+}
+
+/* ---- changes rail ---- */
+.wf-demo .rail-all,
+.wf-demo .rail-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.22rem 0.2rem;
+  font-size: 0.6563rem;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.wf-demo .rail-all {
+  color: hsl(var(--muted-foreground));
+  border-bottom: 1px solid hsl(var(--border));
+  margin-bottom: 0.2rem;
+  padding-bottom: 0.35rem;
+}
+.wf-demo .rail-row {
+  opacity: 0;
+  transform: translateY(3px);
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
+/* Checked tri-state box from the rail's staging tree. */
+.wf-demo .cb {
+  width: 0.6rem;
+  height: 0.6rem;
+  flex-shrink: 0;
+  border-radius: 2px;
+  background: hsl(var(--primary));
+  box-shadow: inset 0 0 0 1px hsl(var(--primary));
+}
+.wf-demo .m {
+  flex-shrink: 0;
+  width: 0.6rem;
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.5625rem;
+  text-transform: uppercase;
+}
+.wf-demo .m-added {
+  color: hsl(var(--ok));
+}
+.wf-demo .m-modified {
+  color: hsl(var(--warn));
+}
+.wf-demo .rail-path {
+  flex: 1;
+  min-width: 0;
+  color: hsl(var(--muted-foreground));
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.5938rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+.wf-demo .rail-stat {
+  flex-shrink: 0;
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.5625rem;
+}
+.wf-demo .rail-stat b {
+  color: hsl(var(--ok));
+}
+.wf-demo .rail-stat s {
+  color: hsl(var(--destructive));
+  margin-left: 0.2rem;
+}
+
+/* The expanded CommitBox: a "N selected" line, the message field with its
+   generate button, then amend + Commit — per components/changes/CommitBox.tsx,
+   whose own container is `border-t bg-background/30 p-2.5`. */
+.wf-demo .commit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.35rem;
+  border-top: 1px solid hsl(var(--border));
+  background: hsl(var(--background) / 0.3);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.wf-demo .commit-top {
+  font-size: 0.5938rem;
+  color: hsl(var(--muted-foreground) / 0.8);
+  font-variant-numeric: tabular-nums;
+}
+.wf-demo .commit-box {
+  position: relative;
+  display: block;
+  padding: 0.3rem 1.1rem 0.3rem 0.4rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+  overflow: hidden;
+}
+.wf-demo .commit-msg {
+  display: block;
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.5938rem;
+  color: hsl(var(--foreground));
+  white-space: nowrap;
+  overflow: hidden;
+}
+.wf-demo .gen {
+  position: absolute;
+  right: 0.25rem;
+  bottom: 0.2rem;
+  color: hsl(var(--muted-foreground) / 0.8);
+  font-size: 0.625rem;
+}
+.wf-demo .commit-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.5938rem;
+  color: hsl(var(--muted-foreground));
+}
+.wf-demo .cbx {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 2px;
+  border: 1px solid hsl(var(--border));
+}
+/* The Commit button is the default (primary) variant at `size="sm"`. */
+.wf-demo .commit-btn {
+  margin-left: auto;
+  padding: 0.12rem 0.4rem;
+  border-radius: var(--radius);
+  background: hsl(var(--primary));
+  color: hsl(20 40% 10%);
+  font-size: 0.5938rem;
+  font-weight: 500;
+}
+.wf-demo .caret {
+  display: none;
+  width: 0.4em;
+  height: 0.95em;
+  margin-left: 1px;
+  background: hsl(var(--primary));
+  vertical-align: text-bottom;
+  animation: wf-blink 1s step-end infinite;
+}
+@keyframes wf-blink {
+  50% {
+    opacity: 0;
+  }
+}
