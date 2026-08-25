@@ -113,6 +113,24 @@ describe("NewWorkItemDrawer", () => {
     expect(screen.queryByLabelText("Assignee")).not.toBeInTheDocument();
   });
 
+  it("sends the description typed under the title", async () => {
+    renderDrawer();
+    typeTitle("Rework the port allocator");
+    fireEvent.change(screen.getByLabelText("Description"), {
+      target: { value: "It runs out of range at 40 projects." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(daemon.createBacklog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Rework the port allocator",
+          body: "It runs out of range at 40 projects.",
+        }),
+      );
+    });
+  });
+
   it("rolls the local row back when the tracker create fails", async () => {
     const deleteBacklog = vi.spyOn(daemon, "deleteBacklog").mockResolvedValue();
     vi.spyOn(daemon, "createExternalWorkItem").mockRejectedValue(new Error("Linear said no"));

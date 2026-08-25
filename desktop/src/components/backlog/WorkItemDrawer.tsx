@@ -1,6 +1,6 @@
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Flag, Play, UserRound, X } from "lucide-react";
+import { ExternalLink, Flag, Pencil, Play, UserRound, X } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 
@@ -51,16 +51,32 @@ export function WorkItemDrawer({
   onOpenTask,
   linkedTask,
 }: WorkItemDrawerProps) {
+  // A ref, not state: this is read when a key arrives, never rendered, and the
+  // handler Radix holds on to must see the current value rather than the one
+  // from the render that installed it.
+  const editingRef = React.useRef(false);
+  const setEditing = React.useCallback((editing: boolean) => {
+    editingRef.current = editing;
+  }, []);
   return (
     <Dialog open={item !== null} onOpenChange={(next) => !next && onClose()}>
       <DialogContent
         hideClose
+        // Escape belongs to the description editor while one is open. Radix
+        // reads the key on the document before it reaches the textarea, so
+        // refusing the dismissal here is the only thing that keeps the panel —
+        // and the draft in it — from disappearing on the first Escape.
+        onEscapeKeyDown={(event) => {
+          if (editingRef.current) event.preventDefault();
+        }}
         className="fixed inset-y-0 right-0 left-auto top-0 flex h-full w-[min(56rem,calc(100vw-4rem))] max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-y-0 border-r-0 bg-popover p-0 shadow-2xl data-[state=closed]:zoom-out-100 data-[state=open]:zoom-in-100"
       >
         {item && (
           <WorkItemDetails
+            key={item.id}
             item={item}
             onClose={onClose}
+            onEditingChange={setEditing}
             linkedTask={linkedTask}
             onOpenTask={onOpenTask}
             onStartTask={onStartTask}
@@ -74,12 +90,15 @@ export function WorkItemDrawer({
 function WorkItemDetails({
   item,
   onClose,
+  onEditingChange,
   onStartTask,
   onOpenTask,
   linkedTask,
 }: {
   item: WorkItem;
   onClose: () => void;
+  /** Whether a field is mid-edit, so the panel can hold on to Escape. */
+  onEditingChange: (editing: boolean) => void;
   onStartTask?: (item: WorkItem) => void;
   onOpenTask?: (taskId: string) => void;
   linkedTask?: TaskInfo | null;
@@ -90,7 +109,16 @@ function WorkItemDetails({
   const [status, setStatus] = React.useState<WorkItemStatus>(item.status);
   const [priority, setPriority] = React.useState<WorkItemPriority>(item.priority);
   const [assignee, setAssignee] = React.useState<string | null>(item.assignee ?? null);
+  // The drawer is handed a snapshot of the row, not a live query, so an edit
+  // has to be reflected here or the panel keeps showing what was saved over.
+  const [body, setBody] = React.useState(item.body ?? "");
+  // The description being edited. `null` is "not editing" — an empty string is
+  // a real draft someone is about to clear the description with.
+  const [draft, setDraft] = React.useState<string | null>(null);
   const me = useMe();
+  // Only a local description is ours to rewrite: a tracker's body is a mirror,
+  // and an edit here would quietly disagree with the issue it came from.
+  const bodyEditable = item.source === "local";
   const statusMeta = STATUS_META[status];
   const StatusIcon = statusMeta.icon;
 
@@ -104,11 +132,13 @@ function WorkItemDetails({
       priority?: WorkItemPriority;
       /** `""` unassigns; an absent field leaves the assignee alone. */
       assignee?: string;
+      body?: string;
     }) => {
-      const previous = { assignee, priority, status };
+      const previous = { assignee, body, priority, status };
       if (patch.status) setStatus(patch.status);
       if (patch.priority) setPriority(patch.priority);
       if (patch.assignee !== undefined) setAssignee(patch.assignee || null);
+      if (patch.body !== undefined) setBody(patch.body);
       try {
         await daemon.updateBacklog({ itemId: item.id, project: item.project, ...patch });
         await queryClient.invalidateQueries({ queryKey: ["backlog", item.project] });
@@ -116,13 +146,24 @@ function WorkItemDetails({
         setStatus(previous.status);
         setPriority(previous.priority);
         setAssignee(previous.assignee);
+        setBody(previous.body);
         toast.error("Could not save the work item", {
           description: error instanceof Error ? error.message : String(error),
         });
       }
     },
-    [assignee, item.id, item.project, priority, queryClient, status],
+    [assignee, body, item.id, item.project, priority, queryClient, status],
   );
+
+  React.useEffect(() => onEditingChange(draft !== null), [draft, onEditingChange]);
+
+  /** Leave edit mode, saving only when the text actually moved. */
+  const commitDraft = React.useCallback(() => {
+    const next = draft;
+    setDraft(null);
+    if (next === null || next === body) return;
+    void save({ body: next });
+  }, [body, draft, save]);
 
   return (
     <>
@@ -240,18 +281,66 @@ function WorkItemDetails({
           )}
         </div>
 
-        {item.body ? (
-          // Tracker descriptions are markdown; rendering them as plain text
-          // turned every link and checklist in them into noise.
-          <Markdown
-            density="comfortable"
-            renderImage={TrackerImage}
-            className="max-w-[80ch] text-foreground/90"
-          >
-            {inlineHtmlImages(item.body)}
-          </Markdown>
+        {draft !== null ? (
+          <textarea
+            autoFocus
+            aria-label="Description"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={commitDraft}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setDraft(null);
+              }
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                commitDraft();
+              }
+            }}
+            placeholder="Describe the work… (markdown)"
+            className="min-h-[12rem] w-full max-w-[80ch] resize-y rounded-md border border-border/60 bg-background/40 p-3 text-[13px] leading-relaxed text-foreground/90 outline-none placeholder:text-muted-foreground/50 focus:border-border"
+          />
         ) : (
-          <p className="text-[13px] text-muted-foreground/60">No description.</p>
+          <div className="group/description relative max-w-[80ch]">
+            {body ? (
+              // Tracker descriptions are markdown; rendering them as plain text
+              // turned every link and checklist in them into noise.
+              <Markdown
+                density="comfortable"
+                renderImage={TrackerImage}
+                className="pr-8 text-foreground/90"
+              >
+                {inlineHtmlImages(body)}
+              </Markdown>
+            ) : bodyEditable ? (
+              <button
+                type="button"
+                onClick={() => setDraft("")}
+                className="text-[13px] text-muted-foreground/60 hover:text-foreground"
+              >
+                Add a description…
+              </button>
+            ) : (
+              <p className="text-[13px] text-muted-foreground/60">No description.</p>
+            )}
+            {/* Reveal on hover rather than standing next to the text: the
+                description is here to be read, and the button is padded out of
+                the prose so it never lands on a line of it. */}
+            {bodyEditable && body && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Edit description"
+                title="Edit description"
+                className="absolute right-0 top-0 size-7 text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/description:opacity-100"
+                onClick={() => setDraft(body)}
+              >
+                <Pencil className="size-3.5" />
+              </Button>
+            )}
+          </div>
         )}
 
         {linkedTask && <LinkedTaskSummary task={linkedTask} />}
