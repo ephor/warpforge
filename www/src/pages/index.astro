@@ -58,18 +58,27 @@ const specs = [
         with no script at all; the script below overrides it inline when
         another theme has been chosen. */}
     <style is:global set:html={rootTokens}></style>
-    <script is:inline define:vars={{ defaultId: DEFAULT_THEME_ID, storageKey: THEME_STORAGE_KEY, themes }}>
+    {/* The palettes travel as data rather than through `define:vars`: that
+        injects names the type checker cannot see, and every reference to them
+        is reported as undefined. */}
+    <script
+      type="application/json"
+      id="wf-themes"
+      set:html={JSON.stringify({ defaultId: DEFAULT_THEME_ID, storageKey: THEME_STORAGE_KEY, themes })}
+    />
+    <script is:inline>
       // Paint the chosen theme before the first frame. Without this the page
       // renders in the default palette and only corrects once the picker has
       // hydrated, which is a visible flash of the wrong colours.
       (() => {
-        let id = defaultId;
+        const data = JSON.parse(document.getElementById("wf-themes").textContent);
+        let id = data.defaultId;
         try {
-          id = localStorage.getItem(storageKey) || defaultId;
+          id = localStorage.getItem(data.storageKey) || data.defaultId;
         } catch {
           /* Storage unavailable — the default is a fine starting point. */
         }
-        const theme = themes[id] || themes[defaultId];
+        const theme = data.themes[id] || data.themes[data.defaultId];
         const root = document.documentElement;
         for (const [name, value] of Object.entries(theme.colors)) {
           root.style.setProperty(`--${name}`, value);

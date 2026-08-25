@@ -34,9 +34,15 @@ const themes = Object.fromEntries(THEMES.map((t) => [t.id, { colors: t.colors, m
       the default theme while the page around it kept the choice. Inline and
       before the island so there is no flash of the wrong palette.
     */}
-    <script is:inline define:vars={{ storageKey: THEME_STORAGE_KEY, themes }}>
+    <script
+      type="application/json"
+      id="wf-themes"
+      set:html={JSON.stringify({ storageKey: THEME_STORAGE_KEY, themes })}
+    />
+    <script is:inline>
       try {
-        const theme = themes[localStorage.getItem(storageKey)];
+        const data = JSON.parse(document.getElementById("wf-themes").textContent);
+        const theme = data.themes[localStorage.getItem(data.storageKey)];
         if (theme) {
           const root = document.documentElement;
           for (const [name, value] of Object.entries(theme.colors)) {
