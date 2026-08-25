@@ -6,7 +6,7 @@ sidebar:
   label: Configuration
 ---
 
-Project runtime lives in `.warpforge/workspace.yaml`. The legacy `.warpforge.yaml`, `.wf.yaml`, and `.workspace.yaml` names (at the project root) are also supported — Warpforge checks them in that order and uses the first one it finds.
+Project runtime lives in `.warpforge/workspace.yaml`. Workflow pipelines live beside it in `.warpforge/workflows/` and have [their own reference](/reference/workflow-files/). The legacy `.warpforge.yaml`, `.wf.yaml`, and `.workspace.yaml` names (at the project root) are also supported — Warpforge checks them in that order and uses the first one it finds.
 
 ```yaml
 name: my-app

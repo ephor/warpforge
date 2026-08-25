@@ -29,7 +29,9 @@ For repeatable work, choose one of the built-in **Plan + implement + review loop
 
 Workflows pause at safe boundaries, survive a daemon restart, and stop for structured human input when an agent asks a question or the review limit is reached. A completed pipeline never commits automatically; it lands in **Needs review** with its chats, timeline, and diff available for inspection.
 
-Workflow definitions are versioned YAML files in `.warpforge/workflows/`. Built-ins can be copied into a project and customized there, so the process travels with the code instead of living in one person's UI settings.
+The two built-ins are a starting point, not the menu. Workflow definitions are versioned YAML files in `.warpforge/workflows/`, and any file you add there shows up in the picker for everyone who checks out the repository — a different agent per stage, several reviewers with different briefs, your own prompts. Built-ins can be copied into a project and edited in place, so the process travels with the code instead of living in one person's UI settings.
+
+See the [workflow file reference](/reference/workflow-files/) for every key, the placeholders each stage can use, and a worked example.
 
 ### Pipelines under an orchestrator
 
