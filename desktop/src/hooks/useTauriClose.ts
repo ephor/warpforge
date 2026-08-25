@@ -6,6 +6,23 @@ import { daemon } from "@/daemon";
 const NAMED_SERVICES = 4;
 
 /**
+ * Whether a quit is already under way, parked on `window` rather than in this
+ * module or a closure.
+ *
+ * A hot reload re-evaluates the module and remounts the hook, but the listener
+ * the previous generation registered with the window stays registered. Each
+ * generation refusing the close on behalf of its own private flag is how a dev
+ * session ends up with a window that cannot be closed at all: one generation
+ * asks the window to close, every other generation refuses it. A flag they all
+ * read survives the reload and lets a quit that has begun finish.
+ */
+const QUITTING = "__warpforgeQuitting";
+
+function isQuitting(): boolean {
+  return (window as unknown as Record<string, unknown>)[QUITTING] === true;
+}
+
+/**
  * A quit that is waiting on an answer, because services are still running.
  * The window has already refused to close; nothing happens until `confirm`.
  */
@@ -39,7 +56,6 @@ export function useTauriClose(): PendingQuit | null {
     }
 
     let disposed = false;
-    let allowClose = false;
     let unlisten: (() => void) | undefined;
 
     void import("@tauri-apps/api/window")
@@ -53,13 +69,13 @@ export function useTauriClose(): PendingQuit | null {
           try {
             await daemon.stopRuntime();
           } catch {}
-          allowClose = true;
+          (window as unknown as Record<string, unknown>)[QUITTING] = true;
           await appWindow.close();
         };
         quitRef.current = quit;
 
         unlisten = await appWindow.onCloseRequested(async (event) => {
-          if (allowClose) {
+          if (isQuitting()) {
             return;
           }
           event.preventDefault();
