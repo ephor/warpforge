@@ -4,6 +4,7 @@ import { ExternalLink, Flag, Pencil, Play, Trash2, UserRound, X } from "lucide-r
 import * as React from "react";
 import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Markdown } from "@/components/Markdown";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -16,7 +17,6 @@ import { cn } from "@/lib/utils";
 import type { TaskInfo } from "@/protocol";
 
 import { relativeTime } from "./BacklogRow";
-import { DeleteWorkItemDialog } from "./DeleteWorkItemDialog";
 import { PRIORITY_LABEL, SOURCE_LABEL, SourceDot, STATUS_META } from "./labels";
 import { TrackerImage } from "./TrackerImage";
 import {
@@ -473,8 +473,17 @@ function WorkItemDetails({
         )}
       </footer>
 
-      <DeleteWorkItemDialog
-        item={confirmingDelete ? item : null}
+      <ConfirmDialog
+        open={confirmingDelete}
+        title="Delete this item?"
+        description={
+          <>
+            “{title}” will be removed from the backlog. This cannot be undone.
+            {item.taskId ? " The task it started keeps running." : ""}
+          </>
+        }
+        confirmLabel="Delete item"
+        busyLabel="Deleting…"
         onCancel={() => setConfirmingDelete(false)}
         onConfirm={remove}
       />

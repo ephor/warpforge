@@ -26,6 +26,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { AgentLogo } from "@/components/AgentLogo";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -197,6 +198,7 @@ function RowActions({
 }) {
   const [busy, setBusy] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const label = taskLabel(task);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- reopening must recompute "1 hour from now"
   const presets = useMemo(() => buildSnoozePresets(Date.now()), [snoozeOpen]);
@@ -315,11 +317,7 @@ function RowActions({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               className="text-destructive focus:text-destructive"
-              onSelect={() => {
-                if (window.confirm(`Delete "${label}"? This cannot be undone.`)) {
-                  void daemon.deleteTask(task.id);
-                }
-              }}
+              onSelect={() => setConfirmingDelete(true)}
             >
               <Trash2 className="size-3.5 opacity-70" />
               Delete task
@@ -327,6 +325,19 @@ function RowActions({
           </DropdownMenuContent>
         </DropdownMenuPortal>
       </DropdownMenu>
+
+      <ConfirmDialog
+        open={confirmingDelete}
+        title="Delete this task?"
+        description={<>“{label}” and its conversation will be gone. This cannot be undone.</>}
+        confirmLabel="Delete task"
+        busyLabel="Deleting…"
+        onCancel={() => setConfirmingDelete(false)}
+        onConfirm={async () => {
+          await daemon.deleteTask(task.id);
+          setConfirmingDelete(false);
+        }}
+      />
     </div>
   );
 }
