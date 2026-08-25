@@ -178,8 +178,14 @@
   padding: 0.28rem 0;
   line-height: 1.45;
 }
+/* One width for every kind, so the text beside them starts on a single line
+   instead of stepping in and out with the length of the label. Sized to the
+   longest of them (`decision`, `dreaming`). */
 .claim .kind {
   flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  width: 4.4rem;
   font-style: normal;
   font-family: "JetBrains Mono Variable", ui-monospace, monospace;
   font-size: 0.5938rem;
