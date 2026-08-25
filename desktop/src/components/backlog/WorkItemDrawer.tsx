@@ -25,6 +25,10 @@ import {
   WORK_ITEM_PRIORITIES,
   WORK_ITEM_STATUSES,
 } from "./types";
+import { useMe } from "./use-tracker";
+
+/** Radix Select forbids an empty item value, so "nobody" needs a sentinel. */
+const UNASSIGNED = "__unassigned__";
 
 export interface WorkItemDrawerProps {
   item: WorkItem | null;
@@ -85,6 +89,8 @@ function WorkItemDetails({
   // behind it is what makes the change durable.
   const [status, setStatus] = React.useState<WorkItemStatus>(item.status);
   const [priority, setPriority] = React.useState<WorkItemPriority>(item.priority);
+  const [assignee, setAssignee] = React.useState<string | null>(item.assignee ?? null);
+  const me = useMe();
   const statusMeta = STATUS_META[status];
   const StatusIcon = statusMeta.icon;
 
@@ -93,22 +99,29 @@ function WorkItemDetails({
   const statusIsRemote = item.source !== "local";
 
   const save = React.useCallback(
-    async (patch: { status?: WorkItemStatus; priority?: WorkItemPriority }) => {
-      const previous = { priority, status };
+    async (patch: {
+      status?: WorkItemStatus;
+      priority?: WorkItemPriority;
+      /** `""` unassigns; an absent field leaves the assignee alone. */
+      assignee?: string;
+    }) => {
+      const previous = { assignee, priority, status };
       if (patch.status) setStatus(patch.status);
       if (patch.priority) setPriority(patch.priority);
+      if (patch.assignee !== undefined) setAssignee(patch.assignee || null);
       try {
         await daemon.updateBacklog({ itemId: item.id, project: item.project, ...patch });
         await queryClient.invalidateQueries({ queryKey: ["backlog", item.project] });
       } catch (error) {
         setStatus(previous.status);
         setPriority(previous.priority);
+        setAssignee(previous.assignee);
         toast.error("Could not save the work item", {
           description: error instanceof Error ? error.message : String(error),
         });
       }
     },
-    [item.id, item.project, priority, queryClient, status],
+    [assignee, item.id, item.project, priority, queryClient, status],
   );
 
   return (
@@ -203,10 +216,28 @@ function WorkItemDetails({
             <span className="truncate">{PRIORITY_LABEL[priority]}</span>
           </FieldChip>
 
-          <span className="inline-flex h-7 items-center gap-1.5 px-1 text-xs text-muted-foreground">
-            <UserRound className="size-3.5" />
-            {item.assignee || "Unassigned"}
-          </span>
+          {/* A tracker owns who its issues are on — a sync would overwrite an
+              edit made here — so only a local item gets the control. */}
+          {item.source === "local" && me ? (
+            <FieldChip
+              ariaLabel="Assignee"
+              value={assignee ?? UNASSIGNED}
+              options={[
+                { value: me, label: me },
+                { value: UNASSIGNED, label: "Unassigned" },
+              ]}
+              onValueChange={(next) => void save({ assignee: next === UNASSIGNED ? "" : next })}
+              triggerClassName="border-transparent bg-transparent text-muted-foreground hover:bg-secondary"
+            >
+              <UserRound className="size-3.5 shrink-0" />
+              <span className="truncate">{assignee ?? "Unassigned"}</span>
+            </FieldChip>
+          ) : (
+            <span className="inline-flex h-7 items-center gap-1.5 px-1 text-xs text-muted-foreground">
+              <UserRound className="size-3.5" />
+              {item.assignee || "Unassigned"}
+            </span>
+          )}
         </div>
 
         {item.body ? (

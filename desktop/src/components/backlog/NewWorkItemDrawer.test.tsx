@@ -68,6 +68,51 @@ describe("NewWorkItemDrawer", () => {
     expect(createExternal).not.toHaveBeenCalled();
   });
 
+  it("puts a local item on you, and lets you take it back off", async () => {
+    vi.spyOn(daemon, "trackerStatus").mockResolvedValue({
+      github: { connected: true, login: "lapa2112" },
+      linear: { connected: true, email: "me@example.com" },
+    });
+    renderDrawer();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    // The chip appears once the signed-in identity arrives.
+    await screen.findByLabelText("Assignee");
+    typeTitle("Mine to do");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(daemon.createBacklog).toHaveBeenCalledWith(
+        expect.objectContaining({ assignee: "lapa2112", source: "local" }),
+      );
+    });
+
+    await user.click(screen.getByLabelText("Assignee"));
+    await user.click(await screen.findByRole("option", { name: "Unassigned" }));
+    typeTitle("Nobody's yet");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(daemon.createBacklog).toHaveBeenLastCalledWith(
+        expect.objectContaining({ assignee: null }),
+      );
+    });
+  });
+
+  it("offers no assignee on an item a tracker will own", async () => {
+    vi.spyOn(daemon, "trackerStatus").mockResolvedValue({
+      github: { connected: true, login: "lapa2112" },
+      linear: { connected: true, email: "me@example.com" },
+    });
+    renderDrawer();
+    await screen.findByLabelText("Assignee");
+
+    await selectLinear();
+
+    // Linear answers for its own issues; a value set here would not survive
+    // the next sync, so the control is not offered at all.
+    expect(screen.queryByLabelText("Assignee")).not.toBeInTheDocument();
+  });
+
   it("rolls the local row back when the tracker create fails", async () => {
     const deleteBacklog = vi.spyOn(daemon, "deleteBacklog").mockResolvedValue();
     vi.spyOn(daemon, "createExternalWorkItem").mockRejectedValue(new Error("Linear said no"));

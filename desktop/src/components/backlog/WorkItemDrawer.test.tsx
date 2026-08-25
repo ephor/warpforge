@@ -118,6 +118,39 @@ describe("WorkItemDrawer", () => {
     expect(screen.getByRole("combobox", { name: "Priority" })).toBeInTheDocument();
   });
 
+  it("assigns a local item to you and unassigns it again", async () => {
+    vi.spyOn(daemon, "trackerStatus").mockResolvedValue({
+      github: { connected: true, login: "lapa2112" },
+      linear: { connected: false },
+    });
+    renderDrawer(localItem);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("combobox", { name: "Assignee" }));
+    await user.click(await screen.findByRole("option", { name: "lapa2112" }));
+    expect(daemon.updateBacklog).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: "b-1", assignee: "lapa2112" }),
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Assignee" }));
+    await user.click(await screen.findByRole("option", { name: "Unassigned" }));
+    // An absent field means "leave alone", so unassigning has to say `""`.
+    expect(daemon.updateBacklog).toHaveBeenLastCalledWith(
+      expect.objectContaining({ itemId: "b-1", assignee: "" }),
+    );
+  });
+
+  it("leaves a tracker-owned assignee read-only", async () => {
+    vi.spyOn(daemon, "trackerStatus").mockResolvedValue({
+      github: { connected: true, login: "lapa2112" },
+      linear: { connected: false },
+    });
+    renderDrawer({ ...localItem, source: "github", assignee: "someone-else" });
+
+    expect(await screen.findByText("someone-else")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Assignee" })).not.toBeInTheDocument();
+  });
+
   it("starts a task from an item that has none, and opens the one it has", async () => {
     const onStartTask = vi.fn<(item: WorkItem) => void>();
     const { unmount } = renderDrawer(localItem, { onStartTask });
