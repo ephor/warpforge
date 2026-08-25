@@ -100,6 +100,36 @@ export default function AppDemo() {
     return () => cancelAnimationFrame(frame);
   }, []);
 
+  // Keep the lead task's subtasks expanded so spawned sub-agents are visible.
+  // The button is `button[data-expand="tsk_rate_limit"]` (SidebarTaskRow.tsx:442)
+  // with label "Expand 2 subtasks of …" — not "Expand task".
+  useEffect(() => {
+    const tryExpand = () => {
+      const btn = document.querySelector<HTMLButtonElement>(`button[data-expand="${LEAD_TASK_ID}"]`)
+        ?? document.querySelector<HTMLButtonElement>(`button[data-expand]`);
+      if (btn && btn.getAttribute("aria-expanded") === "false") { btn.click(); return true; }
+      return false;
+    };
+    if (tryExpand()) return;
+    const id = setInterval(() => { if (tryExpand()) clearInterval(id); }, 300);
+    const timeout = setTimeout(() => clearInterval(id), 6000);
+    return () => { clearInterval(id); clearTimeout(timeout); };
+  }, []);
+
+  // Receive theme from parent landing page
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type !== "wf-theme" || !e.data?.theme) return;
+      const t = e.data.theme as { colors: Record<string,string>; mode: string; id: string };
+      const root = document.documentElement;
+      for (const [k, v] of Object.entries(t.colors)) root.style.setProperty(`--${k}`, v);
+      root.dataset.theme = t.id;
+      root.classList.toggle("dark", t.mode === "dark");
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
+
   // Run the script, hold on the finished state, then start over. Timers are
   // chained rather than scheduled up front so a paused background tab resumes
   // where it left off instead of firing the rest of the run at once.

@@ -6,6 +6,7 @@ import NimbusHead from "@cloudflare/nimbus-docs/components/NimbusHead.astro";
 import { config } from "virtual:nimbus/config";
 import ForgeDemo from "@/components/landing/ForgeDemo.astro";
 import ClaimPanels from "@/components/landing/ClaimPanels.astro";
+import ThemeSwitcher from "@/components/landing/ThemeSwitcher.tsx";
 
 const harnesses = [
   { name: "Claude Code", logo: "/logos/claude-ai-icon.svg" },
@@ -47,6 +48,7 @@ const specs = [
             <a href="/reference/mcp-tools/">Tools</a>
           </nav>
           <div class="nav-act">
+            <ThemeSwitcher client:load />
             <a
               href="https://github.com/ephor/warpforge"
               class="ghost-link"
@@ -87,10 +89,7 @@ const specs = [
 
           <div class="shell shell-wide demo-wrap">
             <ForgeDemo />
-            <p class="demo-cap">
-              A real run, not a recording: one task, a Claude lead that hands the test suite to Codex,
-              and one diff at the end of it. Click around — it is the app.
-            </p>
+            <p class="demo-cap">Live demo — interactive. One task, delegated across agents, one diff to review.</p>
           </div>
         </section>
 
@@ -328,11 +327,69 @@ const specs = [
     color: var(--fg);
   }
 
-  /* ---- hero ---- */
+  /* ---- hero VARIANTS (uncomment one) ---- */
+  /* HERO_VARIANT_A: Forge Grid
   .hero {
+    position: relative; overflow: hidden; padding-top: 4.5rem; text-align: center;
+    background:
+      radial-gradient(800px 400px at 50% -10%, hsl(var(--primary) / 0.18), transparent 70%),
+      radial-gradient(600px 300px at 85% 30%, hsl(var(--primary) / 0.1), transparent 60%),
+      linear-gradient(hsl(var(--border) / 0.12) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.12) 1px, transparent 1px),
+      var(--bg);
+    background-size: auto, auto, 32px 32px, 32px 32px, auto;
+  }
+  .hero::after { content:""; position:absolute; inset:0; background: radial-gradient(900px 500px at 50% 0%, transparent 55%, hsl(var(--background)/0.7) 95%); pointer-events:none; }
+  .hero > .shell { position:relative; z-index:1; }
+  */
+
+  /* HERO_VARIANT_B: Aurora Mesh
+  .hero { position:relative; overflow:hidden; padding-top:4.5rem; text-align:center; background:var(--bg); }
+  .hero::before { content:""; position:absolute; inset:-20%; background: radial-gradient(500px 500px at 20% 10%, hsl(20 73% 68%/0.28), transparent 60%), radial-gradient(600px 400px at 80% 20%, hsl(25 90% 60%/0.18), transparent 60%), radial-gradient(700px 500px at 50% 85%, hsl(120 3% 18%/0.8), transparent 60%); filter:blur(28px); pointer-events:none; }
+  .hero::after { content:""; position:absolute; inset:0; background:radial-gradient(900px 500px at 50% 0%, transparent 45%, hsl(var(--background)/0.55) 95%); pointer-events:none; }
+  .hero > .shell { position:relative; z-index:1; }
+  */
+
+  /* HERO_VARIANT_C: Noise + ember + breathing — active */
+  .hero {
+    position: relative;
+    overflow: hidden;
     padding-top: 4.5rem;
     text-align: center;
+    background:
+      radial-gradient(1100px 600px at 50% -12%, hsl(var(--primary) / 0.16), transparent 68%),
+      radial-gradient(700px 400px at 92% 18%, hsl(25 80% 60% / 0.1), transparent 62%),
+      radial-gradient(650px 380px at 8% 20%, hsl(20 73% 65% / 0.11), transparent 62%),
+      var(--bg);
   }
+  .hero::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    opacity: 0.32;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+    pointer-events: none;
+  }
+  /* animated ember layer */
+  .hero::after {
+    content: "";
+    position: absolute;
+    inset: -15%;
+    background:
+      radial-gradient(500px 380px at 50% 0%, hsl(var(--primary) / 0.14), transparent 65%),
+      radial-gradient(420px 320px at 10% 15%, hsl(20 73% 65% / 0.13), transparent 60%);
+    filter: blur(22px);
+    opacity: 0.9;
+    animation: hero-breathe 14s ease-in-out infinite alternate;
+    pointer-events: none;
+  }
+  @keyframes hero-breathe {
+    0% { transform: translate3d(-1.5%, -0.8%, 0) scale(1); opacity: 0.75; }
+    100% { transform: translate3d(2.2%, 1.2%, 0) scale(1.08); opacity: 1; }
+  }
+  .hero::after { animation: hero-breathe 7s ease-in-out infinite alternate; }
+  .hero > .shell { position: relative; z-index: 1; }
+  @media (prefers-reduced-motion: reduce) { .hero::after { animation: none; } }
   .eyebrow {
     display: inline-flex;
     align-items: center;
@@ -392,21 +449,24 @@ const specs = [
     color: var(--mut);
   }
 
+  .hero { padding-bottom: 2.5rem; }
   .demo-wrap {
     margin-top: 3.25rem;
   }
   .demo-cap {
-    margin: 0.9rem 0 0;
+    margin: 1rem 0 0;
     font-size: 0.8125rem;
     color: var(--faint);
     text-align: center;
   }
 
-  /* ---- harness strip ---- */
+  /* ---- harness strip ---- seamless: transparent, margin not padded bg */
   .strip {
-    margin-top: 5rem;
-    border-block: 1px solid var(--line);
-    background: var(--panel);
+    margin-top: 0;
+    padding-block: 0;
+    border-top: 1px solid hsl(var(--border) / 0.22);
+    border-bottom: 1px solid hsl(var(--border) / 0.22);
+    background: transparent;
   }
   .strip-in {
     display: flex;

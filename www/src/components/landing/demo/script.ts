@@ -76,6 +76,15 @@ export const script: Beat[] = [
       text: "Delegating: **Claude** takes the middleware, **Codex** writes the suite. I'll review both before anything is staged.",
     }),
   },
+  // Sub-agent conversations — so switching to them isn't empty
+  { after: 400, event: say(apiTask.id, { kind: "agent_text", text: "On it — implementing token-bucket middleware and wiring it into the router." }) },
+  { after: 300, event: tool(apiTask.id, "t-api-1", "Write rate-limit.ts", "edit", "in_progress") },
+  { after: 600, event: tool(apiTask.id, "t-api-1", "Write rate-limit.ts", "edit", "completed") },
+  { after: 200, event: say(apiTask.id, { kind: "agent_text", text: "Middleware done. Router updated with `rateLimit(120, 60_000)`." }) },
+  { after: 400, event: say(testTask.id, { kind: "agent_text", text: "Covering burst, refill and tenant isolation." }) },
+  { after: 300, event: tool(testTask.id, "t-test-1", "Write rate-limit.test.ts", "edit", "in_progress") },
+  { after: 700, event: tool(testTask.id, "t-test-1", "Write rate-limit.test.ts", "edit", "completed") },
+  { after: 200, event: say(testTask.id, { kind: "agent_text", text: "Tests added — refill after window covered." }) },
 
   {
     after: 900,

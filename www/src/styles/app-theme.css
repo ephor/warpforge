@@ -10,3 +10,4 @@
 @import "tailwindcss";
 @config "../../../desktop/tailwind.config.ts";
 @source "../../../desktop/src/**/*.{ts,tsx}";
+@source "../**/*.{astro,ts,tsx}";

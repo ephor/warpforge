@@ -55,14 +55,23 @@ import "./claim-panels.css";
     </div>
 
     <div class="frag" aria-hidden="true">
-      <div class="frag-head"><span>Runtime</span><span class="count">2 services</span></div>
-      <div class="srow"><i class="dot ok"></i><span class="sname">api</span><span class="surl">http://localhost:4001</span></div>
-      <div class="srow"><i class="dot ok"></i><span class="sname">web</span><span class="surl">http://localhost:4002</span></div>
-      <div class="frag-sep"></div>
-      <div class="tool">Warpforge · Read service logs<i>api</i></div>
-      <div class="log log-err">12:04:31Z  ERR  connect ECONNREFUSED 127.0.0.1:5432</div>
-      <div class="tool">Warpforge · Restart service<i>db</i></div>
-      <div class="log">12:04:36Z  database system is ready to accept connections</div>
+      <div class="frag-head"><span>Chat</span><span class="count">Warpforge · MCP</span></div>
+      <div class="chat">
+        <div class="bubble">api crashed after migration — what happened?</div>
+        <div class="call"><span>read_service_logs</span><span>api · filter: "ERR" · after: 0 · limit: 5</span></div>
+        <div class="result">
+          <div class="log">12:04:29Z  INFO  POST /api/users 500 12ms</div>
+          <div class="log log-err">12:04:31Z  ERR  connect ECONNREFUSED 127.0.0.1:5432</div>
+          <div class="log">12:04:31Z  WARN  db pool exhausted — 10/10</div>
+          <div class="log" style="color:hsl(var(--muted-foreground)/0.5)">→ 1 match · nextSeq: 47 · filter over full buffer</div>
+        </div>
+        <div class="bubble">DB pool down — restarting…</div>
+        <div class="call"><span>service_restart</span><span>db</span></div>
+        <div class="result">
+          <div class="log">12:04:36Z  INFO database ready to accept connections</div>
+          <div class="log">12:04:36Z  INFO api retry succeeded 200</div>
+        </div>
+      </div>
     </div>
   </div>
 </section>
