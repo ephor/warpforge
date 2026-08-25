@@ -111,14 +111,17 @@ function WorkItemDetails({
   const [assignee, setAssignee] = React.useState<string | null>(item.assignee ?? null);
   // The drawer is handed a snapshot of the row, not a live query, so an edit
   // has to be reflected here or the panel keeps showing what was saved over.
+  const [title, setTitle] = React.useState(item.title);
   const [body, setBody] = React.useState(item.body ?? "");
-  // The description being edited. `null` is "not editing" — an empty string is
-  // a real draft someone is about to clear the description with.
-  const [draft, setDraft] = React.useState<string | null>(null);
+  // The text being edited. `null` is "not editing" — an empty string is a real
+  // draft someone is about to clear the field with.
+  const [titleDraft, setTitleDraft] = React.useState<string | null>(null);
+  const [bodyDraft, setBodyDraft] = React.useState<string | null>(null);
   const me = useMe();
-  // Only a local description is ours to rewrite: a tracker's body is a mirror,
-  // and an edit here would quietly disagree with the issue it came from.
-  const bodyEditable = item.source === "local";
+  // Only a local item's words are ours to rewrite: a tracker's title and body
+  // are a mirror, and an edit here would quietly disagree with the issue it
+  // came from — nothing pushes it back, and nothing pulls the original in.
+  const editable = item.source === "local";
   const statusMeta = STATUS_META[status];
   const StatusIcon = statusMeta.icon;
 
@@ -132,12 +135,14 @@ function WorkItemDetails({
       priority?: WorkItemPriority;
       /** `""` unassigns; an absent field leaves the assignee alone. */
       assignee?: string;
+      title?: string;
       body?: string;
     }) => {
-      const previous = { assignee, body, priority, status };
+      const previous = { assignee, body, priority, status, title };
       if (patch.status) setStatus(patch.status);
       if (patch.priority) setPriority(patch.priority);
       if (patch.assignee !== undefined) setAssignee(patch.assignee || null);
+      if (patch.title !== undefined) setTitle(patch.title);
       if (patch.body !== undefined) setBody(patch.body);
       try {
         await daemon.updateBacklog({ itemId: item.id, project: item.project, ...patch });
@@ -146,24 +151,37 @@ function WorkItemDetails({
         setStatus(previous.status);
         setPriority(previous.priority);
         setAssignee(previous.assignee);
+        setTitle(previous.title);
         setBody(previous.body);
         toast.error("Could not save the work item", {
           description: error instanceof Error ? error.message : String(error),
         });
       }
     },
-    [assignee, body, item.id, item.project, priority, queryClient, status],
+    [assignee, body, item.id, item.project, priority, queryClient, status, title],
   );
 
-  React.useEffect(() => onEditingChange(draft !== null), [draft, onEditingChange]);
+  React.useEffect(
+    () => onEditingChange(titleDraft !== null || bodyDraft !== null),
+    [bodyDraft, onEditingChange, titleDraft],
+  );
 
   /** Leave edit mode, saving only when the text actually moved. */
-  const commitDraft = React.useCallback(() => {
-    const next = draft;
-    setDraft(null);
+  const commitBody = React.useCallback(() => {
+    const next = bodyDraft;
+    setBodyDraft(null);
     if (next === null || next === body) return;
     void save({ body: next });
-  }, [body, draft, save]);
+  }, [body, bodyDraft, save]);
+
+  const commitTitle = React.useCallback(() => {
+    const next = titleDraft?.trim();
+    setTitleDraft(null);
+    // An item with no title is a row nobody can read; an emptied field is a
+    // slip, so it reverts rather than saving.
+    if (!next || next === title) return;
+    void save({ title: next });
+  }, [save, title, titleDraft]);
 
   return (
     <>
@@ -176,9 +194,46 @@ function WorkItemDetails({
       <header className="flex min-h-12 shrink-0 items-center gap-3 border-b border-border/60 px-6 py-2">
         <DialogTitle
           className="min-w-0 flex-1 text-base font-medium leading-snug text-foreground"
-          title={item.title}
+          title={title}
         >
-          {item.title}
+          {titleDraft !== null ? (
+            <>
+              {/* The heading is the dialog's accessible name, and an input's
+                  value is not text — so the name stays here while it is one. */}
+              <span className="sr-only">{title}</span>
+              <input
+                autoFocus
+                aria-label="Title"
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                onBlur={commitTitle}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setTitleDraft(null);
+                  }
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitTitle();
+                  }
+                }}
+                className="-my-1 w-full rounded-md border border-border/60 bg-background/40 px-2 py-1 text-base font-medium text-foreground outline-none focus:border-border"
+              />
+            </>
+          ) : editable ? (
+            // The title is plain text with nothing to click inside it, so it
+            // can be the control itself rather than carrying one beside it.
+            <button
+              type="button"
+              onClick={() => setTitleDraft(title)}
+              title="Rename"
+              className="-mx-1.5 block w-full rounded-md px-1.5 py-0.5 text-left hover:bg-secondary/60"
+            >
+              {title}
+            </button>
+          ) : (
+            title
+          )}
         </DialogTitle>
         <div className="flex shrink-0 items-center gap-0.5">
           {item.url && (
@@ -281,21 +336,21 @@ function WorkItemDetails({
           )}
         </div>
 
-        {draft !== null ? (
+        {bodyDraft !== null ? (
           <textarea
             autoFocus
             aria-label="Description"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onBlur={commitDraft}
+            value={bodyDraft}
+            onChange={(event) => setBodyDraft(event.target.value)}
+            onBlur={commitBody}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
                 event.preventDefault();
-                setDraft(null);
+                setBodyDraft(null);
               }
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
                 event.preventDefault();
-                commitDraft();
+                commitBody();
               }
             }}
             placeholder="Describe the work… (markdown)"
@@ -313,10 +368,10 @@ function WorkItemDetails({
               >
                 {inlineHtmlImages(body)}
               </Markdown>
-            ) : bodyEditable ? (
+            ) : editable ? (
               <button
                 type="button"
-                onClick={() => setDraft("")}
+                onClick={() => setBodyDraft("")}
                 className="text-[13px] text-muted-foreground/60 hover:text-foreground"
               >
                 Add a description…
@@ -327,7 +382,7 @@ function WorkItemDetails({
             {/* Reveal on hover rather than standing next to the text: the
                 description is here to be read, and the button is padded out of
                 the prose so it never lands on a line of it. */}
-            {bodyEditable && body && (
+            {editable && body && (
               <Button
                 type="button"
                 variant="ghost"
@@ -335,7 +390,7 @@ function WorkItemDetails({
                 aria-label="Edit description"
                 title="Edit description"
                 className="absolute right-0 top-0 size-7 text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover/description:opacity-100"
-                onClick={() => setDraft(body)}
+                onClick={() => setBodyDraft(body)}
               >
                 <Pencil className="size-3.5" />
               </Button>
