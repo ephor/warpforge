@@ -293,28 +293,51 @@ describe("WorkItemDrawer", () => {
     expect(screen.getByText("3 files")).toBeInTheDocument();
   });
 
-  it("deletes a local item after a confirmation, and closes with it", async () => {
+  it("deletes a local item once the confirmation is accepted, and closes with it", async () => {
     const onClose = vi.fn<() => void>();
     const deleteBacklog = vi.spyOn(daemon, "deleteBacklog").mockResolvedValue();
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     renderDrawer(localItem, { onClose });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await user.click(screen.getByRole("button", { name: "Delete work item" }));
+    // The click alone deletes nothing — a dialog asks first.
+    expect(deleteBacklog).not.toHaveBeenCalled();
+    expect(await screen.findByText(/will be removed from the backlog/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Delete item" }));
 
     await vi.waitFor(() => expect(deleteBacklog).toHaveBeenCalledWith("b-1", "warpforge"));
     await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
-  it("keeps the item when the confirmation is declined", async () => {
+  it("keeps the item when the confirmation is cancelled", async () => {
     const deleteBacklog = vi.spyOn(daemon, "deleteBacklog").mockResolvedValue();
-    vi.spyOn(window, "confirm").mockReturnValue(false);
     renderDrawer(localItem);
     const user = userEvent.setup({ pointerEventsCheck: 0 });
 
     await user.click(screen.getByRole("button", { name: "Delete work item" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
 
     expect(deleteBacklog).not.toHaveBeenCalled();
+    expect(screen.queryByText(/will be removed from the backlog/)).not.toBeInTheDocument();
+  });
+
+  // A destructive step that fails must not look like it worked: the dialog
+  // stays, and the panel behind it is still showing the item.
+  it("keeps the confirmation open when the delete fails", async () => {
+    const onClose = vi.fn<() => void>();
+    vi.spyOn(daemon, "deleteBacklog").mockRejectedValue(new Error("daemon is offline"));
+    renderDrawer(localItem, { onClose });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: "Delete work item" }));
+    await user.click(await screen.findByRole("button", { name: "Delete item" }));
+
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Delete item" })).toBeEnabled(),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/will be removed from the backlog/)).toBeInTheDocument();
   });
 
   // A tracker issue is not ours to delete: the row would be imported straight

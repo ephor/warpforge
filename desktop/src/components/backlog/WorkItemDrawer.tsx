@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import type { TaskInfo } from "@/protocol";
 
 import { relativeTime } from "./BacklogRow";
+import { DeleteWorkItemDialog } from "./DeleteWorkItemDialog";
 import { PRIORITY_LABEL, SOURCE_LABEL, SourceDot, STATUS_META } from "./labels";
 import { TrackerImage } from "./TrackerImage";
 import {
@@ -117,6 +118,7 @@ function WorkItemDetails({
   // draft someone is about to clear the field with.
   const [titleDraft, setTitleDraft] = React.useState<string | null>(null);
   const [bodyDraft, setBodyDraft] = React.useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = React.useState(false);
   const me = useMe();
   // Only a local item's words are ours to rewrite: a tracker's title and body
   // are a mirror, and an edit here would quietly disagree with the issue it
@@ -178,20 +180,14 @@ function WorkItemDetails({
    * Drop the item for good. Offered on local items only: a tracker row is a
    * mirror, and deleting it here would simply be imported again on the next
    * sync, while the issue itself stayed open where it actually lives.
+   *
+   * Throws on failure — the confirmation dialog reports it and stays open.
    */
   const remove = React.useCallback(async () => {
-    const warning = item.taskId ? ` The task it started keeps running.` : "";
-    if (!window.confirm(`Delete "${title}"? This cannot be undone.${warning}`)) return;
-    try {
-      await daemon.deleteBacklog(item.id, item.project);
-      await queryClient.invalidateQueries({ queryKey: ["backlog", item.project] });
-      onClose();
-    } catch (error) {
-      toast.error("Could not delete the work item", {
-        description: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }, [item.id, item.project, item.taskId, onClose, queryClient, title]);
+    await daemon.deleteBacklog(item.id, item.project);
+    await queryClient.invalidateQueries({ queryKey: ["backlog", item.project] });
+    onClose();
+  }, [item.id, item.project, onClose, queryClient]);
 
   const commitTitle = React.useCallback(() => {
     const next = titleDraft?.trim();
@@ -261,7 +257,7 @@ function WorkItemDetails({
               size="icon"
               className="size-7 text-muted-foreground hover:text-destructive"
               title="Delete work item"
-              onClick={() => void remove()}
+              onClick={() => setConfirmingDelete(true)}
             >
               <Trash2 className="size-4" />
               <span className="sr-only">Delete work item</span>
@@ -476,6 +472,12 @@ function WorkItemDetails({
           </Button>
         )}
       </footer>
+
+      <DeleteWorkItemDialog
+        item={confirmingDelete ? item : null}
+        onCancel={() => setConfirmingDelete(false)}
+        onConfirm={remove}
+      />
     </>
   );
 }
