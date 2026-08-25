@@ -1,3 +1,4 @@
+import { DismissableLayer } from "radix-ui/internal";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -76,22 +77,30 @@ export function ConfirmDialog({
           if (busy) event.preventDefault();
         }}
       >
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="ghost" disabled={busy} onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button
-            variant={destructive ? "destructive" : "default"}
-            disabled={busy}
-            onClick={() => void submit()}
-          >
-            {busy ? busyLabel : confirmLabel}
-          </Button>
-        </DialogFooter>
+        {/* A confirmation usually opens over another dialog, and its content is
+            portaled out of that one's DOM — so answering it reads to the layer
+            underneath as a click outside, which dismisses it. Cancelling then
+            asked the same question again, forever. Registering the answer as a
+            branch of the layer stack is how Radix says "this belongs to what is
+            already open". `contents` keeps it out of the content grid. */}
+        <DismissableLayer.Branch className="contents" data-layer-branch>
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>{description}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" disabled={busy} onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button
+              variant={destructive ? "destructive" : "default"}
+              disabled={busy}
+              onClick={() => void submit()}
+            >
+              {busy ? busyLabel : confirmLabel}
+            </Button>
+          </DialogFooter>
+        </DismissableLayer.Branch>
       </DialogContent>
     </Dialog>
   );
