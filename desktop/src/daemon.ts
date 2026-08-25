@@ -1269,7 +1269,11 @@ export class DaemonClient {
     })) as BacklogItem;
   }
 
-  /** Edit an item's own fields. Omitted fields are left as they are. */
+  /**
+   * Edit an item's own fields. Omitted fields are left as they are, so an
+   * assignee is cleared by sending `""` — `null` reads as "leave alone" by the
+   * time it reaches the daemon, not as "unassign".
+   */
   async updateBacklog(input: {
     itemId: string;
     project: string;
@@ -1277,7 +1281,7 @@ export class DaemonClient {
     body?: string;
     status?: string;
     priority?: string;
-    assignee?: string | null;
+    assignee?: string;
   }): Promise<BacklogItem> {
     return (await this.request("backlog.update", {
       item_id: input.itemId,

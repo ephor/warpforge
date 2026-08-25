@@ -23,7 +23,7 @@ import {
   WORK_ITEM_SOURCES,
   WORK_ITEM_STATUSES,
 } from "./types";
-import { sourceAvailable, useProjectSources, useTrackerStatus } from "./use-tracker";
+import { sourceAvailable, useMe, useProjectSources } from "./use-tracker";
 
 /** Radix Select forbids an empty item value, so "no filter" needs a sentinel. */
 const ALL = "__all__";
@@ -121,10 +121,9 @@ export function BacklogToolbar({
  * identity is pinned to the top of the list instead of being one name among
  * many — and it is offered even before any row assigned to you has loaded.
  *
- * GitHub writes the login into `assignee` and reports the same login here, so
- * the two match. Linear writes a display name but only tells us the account's
- * email, so there is nothing to match on; Linear-only projects get the names
- * from their rows and no "me" entry.
+ * Items created here are stamped with the same identity ([`useMe`]), so a
+ * local note lands in this filter next to the tracker issues assigned to you
+ * rather than falling out of the view entirely.
  */
 function AssigneeFilter({
   value,
@@ -135,8 +134,7 @@ function AssigneeFilter({
   assignees: string[];
   onChange: (value: string | null) => void;
 }) {
-  const status = useTrackerStatus();
-  const me = status.data?.github?.login ?? null;
+  const me = useMe();
   const others = assignees.filter((name) => name !== me);
   // Nothing to choose from: no identity, and no assignee on any row so far.
   if (!me && others.length === 0) return null;

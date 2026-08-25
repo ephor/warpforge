@@ -20,6 +20,18 @@ export function useTrackerStatus() {
 }
 
 /**
+ * The signed-in identity, as trackers spell it. GitHub reports the same login
+ * it writes into `assignee`, so the two match; Linear only tells us the
+ * account's email, which no issue is ever assigned to — hence GitHub only.
+ *
+ * This is what "you" means across the backlog: the pinned entry in the
+ * assignee filter, and the owner stamped on an item you create here.
+ */
+export function useMe(): string | null {
+  return useTrackerStatus().data?.github?.login ?? null;
+}
+
+/**
  * Which sources *this* project can read and write. The global connection
  * state says nothing about a project: Linear only counts once a team is
  * mapped to it, GitHub only once its dir resolves to a repo. This is what

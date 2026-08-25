@@ -180,7 +180,10 @@ impl ItemPatch {
             item.priority = priority.clone();
         }
         if let Some(assignee) = &self.assignee {
-            item.assignee = Some(assignee.clone());
+            // An empty name is how a caller says "unassigned": `None` already
+            // means "leave this field alone", so without this there is no way
+            // to take an assignee back off an item.
+            item.assignee = (!assignee.trim().is_empty()).then(|| assignee.clone());
         }
     }
 }
@@ -305,6 +308,22 @@ mod tests {
             sort_desc,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn an_empty_assignee_in_a_patch_clears_it() {
+        let mut cleared = item("a", "none", "todo", Some("Ada Lovelace"));
+        ItemPatch {
+            assignee: Some(String::new()),
+            ..Default::default()
+        }
+        .apply(&mut cleared);
+        assert_eq!(cleared.assignee, None);
+
+        // …while an absent one still means "leave it alone".
+        let mut untouched = item("a", "none", "todo", Some("Ada Lovelace"));
+        ItemPatch::default().apply(&mut untouched);
+        assert_eq!(untouched.assignee.as_deref(), Some("Ada Lovelace"));
     }
 
     #[test]
