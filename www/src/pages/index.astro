@@ -83,7 +83,7 @@ const specs = [
     <div class="wf">
       <header class="nav">
         <div class="shell nav-in">
-          <a href="/" class="logo"><span class="mark" aria-hidden="true"></span>Warpforge</a>
+          <a href="/" class="logo" aria-label="Warpforge — home">Warp<span>forge</span></a>
           <nav class="nav-links" aria-label="Primary">
             <a href="/overview/">Docs</a>
             <a href="/concepts/memory/">Memory</a>
@@ -190,7 +190,7 @@ const specs = [
 
       <footer class="foot">
         <div class="shell foot-in">
-          <a href="/" class="logo logo-sm"><span class="mark" aria-hidden="true"></span>Warpforge</a>
+          <a href="/" class="logo logo-sm" aria-label="Warpforge — home">Warp<span>forge</span></a>
           <nav aria-label="Footer">
             <a href="/overview/">Docs</a>
             <a href="https://github.com/ephor/warpforge" target="_blank" rel="noopener">GitHub</a>
@@ -259,22 +259,23 @@ const specs = [
     justify-content: space-between;
     height: 3.25rem;
   }
+  /* The wordmark the app itself wears, in its sidebar and its task headers:
+     uppercase, widely tracked, the second half in the accent. A rotated
+     square and title case were this page's own invention and matched nothing
+     the product shows. See `desktop/src/components/Sidebar.tsx`. */
   .logo {
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
-    font-weight: 600;
-    font-size: 0.9375rem;
-    letter-spacing: -0.01em;
+    font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+    font-weight: 700;
+    font-size: 0.8125rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
     color: var(--fg);
     text-decoration: none;
   }
-  .mark {
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 2px;
-    background: hsl(var(--primary));
-    transform: rotate(45deg);
+  .logo span {
+    color: hsl(var(--primary));
   }
   .nav-links {
     display: none;
@@ -287,9 +288,11 @@ const specs = [
     text-decoration: none;
     transition: color 0.15s ease;
   }
+  /* Hover lands on the accent, the way every other link on the page does —
+     these were the only ones that merely brightened to the body colour. */
   .nav-links a:hover,
   .foot nav a:hover {
-    color: var(--fg);
+    color: hsl(var(--primary));
   }
   @media (min-width: 768px) {
     .nav-links {
@@ -629,7 +632,7 @@ const specs = [
     }
   }
   .logo-sm {
-    font-size: 0.8125rem;
+    font-size: 0.6875rem;
     color: var(--mut);
   }
   .foot nav {
