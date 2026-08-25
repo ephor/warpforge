@@ -7,13 +7,16 @@ import { daemon } from "@/daemon";
 
 import { NewWorkItemDrawer } from "./NewWorkItemDrawer";
 
-function renderDrawer() {
+function renderDrawer(onOpenChange = vi.fn<(open: boolean) => void>()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={client}>
-      <NewWorkItemDrawer open onOpenChange={vi.fn<(open: boolean) => void>()} project="warpforge" />
-    </QueryClientProvider>,
-  );
+  return {
+    onOpenChange,
+    ...render(
+      <QueryClientProvider client={client}>
+        <NewWorkItemDrawer open onOpenChange={onOpenChange} project="warpforge" />
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 function typeTitle(text: string) {
@@ -129,6 +132,31 @@ describe("NewWorkItemDrawer", () => {
         }),
       );
     });
+  });
+
+  // Closing over a typed draft used to call `window.confirm`, which this
+  // webview answers without drawing — so the draft went in the bin unasked.
+  it("asks before throwing away a typed draft", async () => {
+    const { onOpenChange } = renderDrawer();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    typeTitle("Half an idea");
+
+    await user.keyboard("{Escape}");
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(await screen.findByText(/loses what you typed/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Discard draft" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("closes without asking when nothing was typed", async () => {
+    const { onOpenChange } = renderDrawer();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.keyboard("{Escape}");
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.queryByText(/loses what you typed/)).not.toBeInTheDocument();
   });
 
   it("rolls the local row back when the tracker create fails", async () => {

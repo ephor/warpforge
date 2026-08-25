@@ -15,6 +15,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -128,6 +129,7 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
   const me = useMe();
   const owner = assignee === undefined ? me : assignee;
   const [creating, setCreating] = useState(false);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const [enhancing, setEnhancing] = useState(false);
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
@@ -171,9 +173,11 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
+      // Closing over typed text asks first — including Escape and a click
+      // outside, which both arrive here.
       if (!next && title.trim()) {
-        const keep = window.confirm("Discard this work item draft?");
-        if (keep === false) return;
+        setConfirmingDiscard(true);
+        return;
       }
       onOpenChange(next);
     },
@@ -541,6 +545,18 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
           </footer>
         </DialogContent>
       </DialogPortal>
+
+      <ConfirmDialog
+        open={confirmingDiscard}
+        title="Discard this draft?"
+        description="The work item has not been created yet, so closing loses what you typed."
+        confirmLabel="Discard draft"
+        onCancel={() => setConfirmingDiscard(false)}
+        onConfirm={() => {
+          setConfirmingDiscard(false);
+          onOpenChange(false);
+        }}
+      />
     </Dialog>
   );
 }
