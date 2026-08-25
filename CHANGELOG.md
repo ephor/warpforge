@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.10.2
+
+### Patch Changes
+
+- [#41](https://github.com/ephor/warpforge/pull/41) [`1f6909a`](https://github.com/ephor/warpforge/commit/1f6909a80c28efdb485d6ae25a95d85f89451912) Thanks [@lapa2112](https://github.com/lapa2112)! - Items you own can be deleted from their details panel, with a confirmation first — useful for the note you jotted down and no longer need. Issues that came from a tracker have no delete here: closing one belongs in the tracker it lives in, and a row removed on this side would return on the next sync.
+
+- [#41](https://github.com/ephor/warpforge/pull/41) [`bc1bb6e`](https://github.com/ephor/warpforge/commit/bc1bb6e8e61ef1f916906bc4dfe43baf3547e521) Thanks [@lapa2112](https://github.com/lapa2112)! - Work items can carry a description again. The new-item dialog has a description field under the title — markdown, growing as you type — and on items you own the description is editable from the details panel: hover it and click the pencil, or start one on an item that has none. Escape backs out of an edit without closing the panel. Descriptions on issues that came from a tracker stay read-only, since the tracker is where they are written.
+
+- [#41](https://github.com/ephor/warpforge/pull/41) [`27f16d0`](https://github.com/ephor/warpforge/commit/27f16d076c5dc31bbf650115c4c209a683a3c733) Thanks [@lapa2112](https://github.com/lapa2112)! - Items you own can be renamed from their details panel: click the title, type, and press Enter — Escape backs out. Emptying the field leaves the old title in place rather than saving a nameless row. Titles on issues that came from a tracker stay read-only, as their descriptions already do.
+
+- [#41](https://github.com/ephor/warpforge/pull/41) [`f0dbe8f`](https://github.com/ephor/warpforge/commit/f0dbe8fabd15df60170cda8eaf06f5602c328a71) Thanks [@lapa2112](https://github.com/lapa2112)! - Backlog items now reflect what your tracker actually says. GitHub issues take their status from your project board — Todo, In Progress, In Test, Done — instead of every item reading "To do", and the board's own wording shows on the item's details. Created and Updated are the issue's real dates, so an item no longer looks like it was created the moment Warpforge first saw it, and Linear issues arrive with the person they are assigned to instead of showing as unassigned. Items imported earlier are corrected on the next sync; hit Sync in the backlog toolbar to refresh straight away. Board statuses come from your GitHub CLI sign-in, and items fall back to open/closed if it cannot see your projects.
+
+- [#41](https://github.com/ephor/warpforge/pull/41) [`6e9e9d7`](https://github.com/ephor/warpforge/commit/6e9e9d77a237a165463a3b768c787cb61d80085e) Thanks [@lapa2112](https://github.com/lapa2112)! - Filtering the backlog by yourself now shows your own notes too. Items you create are put on you by default and can be reassigned or unassigned from the item's details, so they sit alongside the tracker issues assigned to you instead of dropping out of the view. The backlog also remembers how you left each project — filters and sort order survive switching projects and restarting — while the search box starts empty each time.
+
+- [#41](https://github.com/ephor/warpforge/pull/41) [`c4d9ea9`](https://github.com/ephor/warpforge/commit/c4d9ea93a88ca413b5de979b4c6b08e286a51e4c) Thanks [@lapa2112](https://github.com/lapa2112)! - Warpforge now actually asks before doing something you cannot take back. Deleting a task, quitting while services are running, closing a half-written work item, and switching memory search to the downloadable model all went ahead silently — the prompt they relied on never appeared. Each one now shows a real dialog naming what is about to happen, with the failure reported instead of passing for success.
+
 ## 0.10.1
 
 ### Patch Changes
