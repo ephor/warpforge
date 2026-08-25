@@ -1,11 +1,10 @@
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import AppHeader from "@app/components/AppHeader";
 import Sidebar from "@app/components/Sidebar";
 import { TooltipProvider } from "@app/components/ui/tooltip";
 import { daemon } from "@app/daemon";
-import { queryClient } from "@app/query";
 import { SIDEBAR_WIDTH_MIN, useUi } from "@app/store/ui";
 import TaskDetail from "@app/views/TaskDetail";
 
@@ -14,6 +13,19 @@ import { script } from "./script";
 
 /** How long the finished run stays on screen before the demo replays. */
 const REPLAY_PAUSE_MS = 6000;
+
+/**
+ * The demo's own query client, rather than the app's exported one.
+ *
+ * Components read the client off React context, so nothing here needs the
+ * app's instance — and borrowing it would drag a nominal type across the two
+ * package trees, which ends with the checker and the bundler disagreeing about
+ * how many query clients exist. Nothing is fetched over a network here, so
+ * there is nothing to retry and nothing to go stale.
+ */
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { refetchOnWindowFocus: false, retry: false, staleTime: 0 } },
+});
 
 /**
  * The landing page's demo: the desktop app, running on the page.

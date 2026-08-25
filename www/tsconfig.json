@@ -10,14 +10,7 @@
       // checker the same route. `@app/` only ever points into the app, so the
       // `@/` the app spells internally still resolves against `src/` here —
       // the mapping below is what keeps those two meanings apart.
-      "@app/*": ["../desktop/src/*"],
-      // `astro.config.ts` routes the app's bare imports through this package
-      // tree so the page ends up with one of each singleton. The checker needs
-      // telling too, at least where a type is nominal: two copies of
-      // `QueryClient` have private fields the other cannot see, so a client
-      // built on one side is rejected by a provider typed against the other.
-      "@tanstack/react-query": ["node_modules/@tanstack/react-query"],
-      "@tanstack/query-core": ["node_modules/@tanstack/query-core"]
+      "@app/*": ["../desktop/src/*"]
     }
   },
   "include": [".astro/types.d.ts", "**/*"],

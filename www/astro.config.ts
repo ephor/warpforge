@@ -53,7 +53,22 @@ function dualSourceAlias(): import("vite").Plugin {
       // throws. This site installs the app's dependencies at the app's
       // versions, so route those imports here and keep one of everything.
       if (!root && fromApp && !source.startsWith(".")) {
-        return this.resolve(source, resolve(WWW_SRC, "_.ts"), { ...options, skipSelf: true });
+        const here = await this.resolve(source, resolve(WWW_SRC, "_.ts"), {
+          ...options,
+          skipSelf: true,
+        });
+        // Returning null would let Vite resolve it from the app's own tree
+        // instead, quietly restoring the duplicate this branch exists to
+        // prevent — and a duplicated React or store fails at runtime, long
+        // after the build said it was fine. Say so now instead.
+        if (!here) {
+          throw new Error(
+            `www: ${importer} imports "${source}", which this site does not install. ` +
+              `Add it to www/package.json at the version desktop/package.json uses — ` +
+              `resolving it from the app's tree would give the page two copies.`,
+          );
+        }
+        return here;
       }
 
       const target = root
