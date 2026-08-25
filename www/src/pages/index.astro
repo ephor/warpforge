@@ -18,12 +18,14 @@ const harnesses = [
   { name: "Pi", logo: "/logos/pi_dark.svg" },
 ];
 
+/* The page's factual floor, as five answers rather than five sentences: the
+   figure carries the point and the line under it says what it means. */
 const specs = [
-  ["Runs", "On your machine. No account, no API key of ours."],
-  ["Harnesses", "Eight, using the logins you already have."],
-  ["Agent tools", "31 over MCP — runtime, memory, tasks, delegation."],
-  ["Editor", "Go to definition, references, rename, hover, diagnostics."],
-  ["License", "MIT. Fork the whole thing."],
+  ["Local", "Runs on your machine. No account, no API key of ours."],
+  ["8", "Harnesses, on the logins you already have."],
+  ["31", "Agent tools over MCP — runtime, memory, tasks, delegation."],
+  ["LSP", "Go to definition, references, rename, hover, diagnostics."],
+  ["MIT", "Licensed. Fork the whole thing."],
 ];
 ---
 
@@ -114,7 +116,7 @@ const specs = [
         <!-- Spec sheet -->
         <section class="specs">
           <div class="shell">
-            <dl>
+            <dl class="spec-grid">
               {
                 specs.map(([k, v]) => (
                   <div class="spec">
@@ -446,34 +448,48 @@ const specs = [
     border-bottom: 1px solid var(--line);
     padding-block: 3rem;
   }
-  .specs dl {
+  /* Five columns of answer-then-caption, divided by hairlines. The old shape
+     was a two-column definition list, which put a quiet label beside a full
+     sentence and read as a datasheet. */
+  .spec-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
     margin: 0;
+    background: var(--line);
+    border-block: 1px solid var(--line);
+  }
+  @media (min-width: 720px) {
+    .spec-grid {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
   }
   .spec {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 0.15rem;
-    padding-block: 0.7rem;
-    border-top: 1px dashed var(--line);
-    font-size: 0.875rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 1.4rem 1.1rem;
+    background: var(--bg);
   }
-  .spec:first-child {
-    border-top: 0;
-  }
-  @media (min-width: 620px) {
-    .spec {
-      grid-template-columns: 9rem 1fr;
-      gap: 1rem;
+  /* An odd count leaves a gap in the two-column phone layout; let the last
+     cell take the full row instead of trailing an empty one. */
+  @media (max-width: 719px) {
+    .spec:last-child {
+      grid-column: 1 / -1;
     }
   }
   .spec dt {
     font-family: "JetBrains Mono Variable", ui-monospace, monospace;
-    font-size: 0.75rem;
-    color: var(--faint);
-    padding-top: 0.1rem;
+    font-size: 1.35rem;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    color: hsl(20 73% 70%);
+    line-height: 1;
   }
   .spec dd {
     margin: 0;
+    font-size: 0.8125rem;
+    line-height: 1.5;
     color: var(--mut);
   }
 

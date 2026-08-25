@@ -39,26 +39,44 @@
 }
 @media (min-width: 900px) {
   .claim-in {
-    grid-template-columns: 3rem minmax(0, 1fr) minmax(0, 1.05fr);
-    gap: 0 2.5rem;
+    /* Two columns, not three: the counter used to hold a 3rem gutter of its
+       own and spend it on one unreadable number. Centred rather than top
+       aligned, so the space a short panel leaves is shared with the copy
+       instead of pooling under it. */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    gap: 0 3.5rem;
+    align-items: center;
   }
 }
 
-.claim .idx {
-  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
-  font-size: 0.75rem;
-  color: hsl(var(--border));
-  padding-top: 0.3rem;
-}
 .claim .copy {
   max-width: 34rem;
 }
 .claim .kicker {
-  display: inline-block;
-  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
   font-size: 0.6875rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  color: hsl(var(--primary));
+}
+
+/* The counter, now part of the label it belongs to. Boxed so it reads as a
+   marker at a size where the digits are still legible. */
+.claim .idx {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.4rem;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid hsl(var(--primary) / 0.35);
+  border-radius: 999px;
+  background: hsl(var(--primary) / 0.1);
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.625rem;
+  font-style: normal;
+  letter-spacing: 0.02em;
   color: hsl(var(--primary));
 }
 .claim h2 {
