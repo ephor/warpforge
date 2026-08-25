@@ -118,6 +118,141 @@ describe("WorkItemDrawer", () => {
     expect(screen.getByRole("combobox", { name: "Priority" })).toBeInTheDocument();
   });
 
+  it("assigns a local item to you and unassigns it again", async () => {
+    vi.spyOn(daemon, "trackerStatus").mockResolvedValue({
+      github: { connected: true, login: "lapa2112" },
+      linear: { connected: false },
+    });
+    renderDrawer(localItem);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(await screen.findByRole("combobox", { name: "Assignee" }));
+    await user.click(await screen.findByRole("option", { name: "lapa2112" }));
+    expect(daemon.updateBacklog).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: "b-1", assignee: "lapa2112" }),
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Assignee" }));
+    await user.click(await screen.findByRole("option", { name: "Unassigned" }));
+    // An absent field means "leave alone", so unassigning has to say `""`.
+    expect(daemon.updateBacklog).toHaveBeenLastCalledWith(
+      expect.objectContaining({ itemId: "b-1", assignee: "" }),
+    );
+  });
+
+  it("leaves a tracker-owned assignee read-only", async () => {
+    vi.spyOn(daemon, "trackerStatus").mockResolvedValue({
+      github: { connected: true, login: "lapa2112" },
+      linear: { connected: false },
+    });
+    renderDrawer({ ...localItem, source: "github", assignee: "someone-else" });
+
+    expect(await screen.findByText("someone-else")).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Assignee" })).not.toBeInTheDocument();
+  });
+
+  it("renames a local item from its heading", async () => {
+    renderDrawer(localItem);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: localItem.title }));
+    const field = screen.getByRole("textbox", { name: "Title" });
+    await user.clear(field);
+    await user.type(field, "Rework the port allocator range{Enter}");
+
+    await vi.waitFor(() =>
+      expect(daemon.updateBacklog).toHaveBeenCalledWith(
+        expect.objectContaining({ itemId: "b-1", title: "Rework the port allocator range" }),
+      ),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Rework the port allocator range" }),
+    ).toBeInTheDocument();
+  });
+
+  it("cancels a rename on Escape without closing the panel", async () => {
+    const onClose = vi.fn<() => void>();
+    renderDrawer(localItem, { onClose });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: localItem.title }));
+    await user.type(screen.getByRole("textbox", { name: "Title" }), " and more");
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("textbox", { name: "Title" })).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(daemon.updateBacklog).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: localItem.title })).toBeInTheDocument();
+  });
+
+  // A row with no title is one nobody can read in the list, so an emptied
+  // field is treated as a slip rather than an instruction.
+  it("keeps the old title when the field is emptied", async () => {
+    renderDrawer(localItem);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: localItem.title }));
+    await user.clear(screen.getByRole("textbox", { name: "Title" }));
+    await user.keyboard("{Enter}");
+
+    expect(daemon.updateBacklog).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: localItem.title })).toBeInTheDocument();
+  });
+
+  it("leaves a tracker-owned title read-only", () => {
+    renderDrawer({ ...localItem, source: "github" });
+
+    expect(screen.queryByRole("button", { name: localItem.title })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: localItem.title })).toBeInTheDocument();
+  });
+
+  it("writes a description on a local item and shows what was saved", async () => {
+    renderDrawer({ ...localItem, body: "" });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: "Add a description…" }));
+    await user.type(screen.getByRole("textbox", { name: "Description" }), "It runs out at 40.");
+    // Clicking away commits, the way a note-taking field is expected to.
+    await user.tab();
+
+    await vi.waitFor(() =>
+      expect(daemon.updateBacklog).toHaveBeenCalledWith(
+        expect.objectContaining({ itemId: "b-1", body: "It runs out at 40." }),
+      ),
+    );
+    // The drawer holds a snapshot of the row, so the edit has to land here too
+    // or the panel keeps showing the text it just replaced.
+    expect(await screen.findByText("It runs out at 40.")).toBeInTheDocument();
+  });
+
+  // Escape is the editor's while one is open — Radix reads the key before the
+  // textarea does, so without holding it the panel closes over the draft.
+  it("cancels an edit on Escape without closing the panel", async () => {
+    const onClose = vi.fn<() => void>();
+    renderDrawer(localItem, { onClose });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: "Edit description" }));
+    await user.type(screen.getByRole("textbox", { name: "Description" }), " and more");
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("textbox", { name: "Description" })).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(daemon.updateBacklog).not.toHaveBeenCalled();
+    expect(screen.getByText(/runs out of range/)).toBeInTheDocument();
+
+    // With no editor open, Escape is the panel's again.
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("leaves a tracker description read-only", () => {
+    renderDrawer({ ...localItem, source: "github", body: "Reported upstream." });
+
+    expect(screen.getByText("Reported upstream.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit description" })).not.toBeInTheDocument();
+  });
+
   it("starts a task from an item that has none, and opens the one it has", async () => {
     const onStartTask = vi.fn<(item: WorkItem) => void>();
     const { unmount } = renderDrawer(localItem, { onStartTask });
@@ -156,6 +291,61 @@ describe("WorkItemDrawer", () => {
     expect(screen.getByText("Reworking the allocator")).toBeInTheDocument();
     expect(screen.getByText("running")).toBeInTheDocument();
     expect(screen.getByText("3 files")).toBeInTheDocument();
+  });
+
+  it("deletes a local item once the confirmation is accepted, and closes with it", async () => {
+    const onClose = vi.fn<() => void>();
+    const deleteBacklog = vi.spyOn(daemon, "deleteBacklog").mockResolvedValue();
+    renderDrawer(localItem, { onClose });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: "Delete work item" }));
+    // The click alone deletes nothing — a dialog asks first.
+    expect(deleteBacklog).not.toHaveBeenCalled();
+    expect(await screen.findByText(/will be removed from the backlog/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Delete item" }));
+
+    await vi.waitFor(() => expect(deleteBacklog).toHaveBeenCalledWith("b-1", "warpforge"));
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("keeps the item when the confirmation is cancelled", async () => {
+    const deleteBacklog = vi.spyOn(daemon, "deleteBacklog").mockResolvedValue();
+    renderDrawer(localItem);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: "Delete work item" }));
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    expect(deleteBacklog).not.toHaveBeenCalled();
+    expect(screen.queryByText(/will be removed from the backlog/)).not.toBeInTheDocument();
+  });
+
+  // A destructive step that fails must not look like it worked: the dialog
+  // stays, and the panel behind it is still showing the item.
+  it("keeps the confirmation open when the delete fails", async () => {
+    const onClose = vi.fn<() => void>();
+    vi.spyOn(daemon, "deleteBacklog").mockRejectedValue(new Error("daemon is offline"));
+    renderDrawer(localItem, { onClose });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: "Delete work item" }));
+    await user.click(await screen.findByRole("button", { name: "Delete item" }));
+
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Delete item" })).toBeEnabled(),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/will be removed from the backlog/)).toBeInTheDocument();
+  });
+
+  // A tracker issue is not ours to delete: the row would be imported straight
+  // back, while the issue stayed open where it actually lives.
+  it("offers no delete on an item a tracker owns", () => {
+    renderDrawer({ ...localItem, source: "github" });
+
+    expect(screen.queryByRole("button", { name: "Delete work item" })).not.toBeInTheDocument();
   });
 
   it("closes from the close button", async () => {

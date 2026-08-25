@@ -24,7 +24,7 @@ concurrency:
 jobs:
   cask:
     name: Sync ephor/homebrew-tap cask
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 10
     env:
       VERSION: ${{ inputs.version || github.event.release.tag_name }}

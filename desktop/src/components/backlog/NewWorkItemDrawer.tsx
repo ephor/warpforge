@@ -2,10 +2,20 @@
 
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { useQueryClient } from "@tanstack/react-query";
-import { Flag, Loader2, Maximize2, Minimize2, Paperclip, WandSparkles, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Flag,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Paperclip,
+  UserRound,
+  WandSparkles,
+  X,
+} from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,7 +32,7 @@ import { useUi } from "@/store/ui";
 
 import { priorityTone, SOURCE_DOT, STATUS_META } from "./labels";
 import type { WorkItemPriority, WorkItemSource, WorkItemStatus } from "./types";
-import { sourceAvailable, useProjectSources } from "./use-tracker";
+import { sourceAvailable, useMe, useProjectSources } from "./use-tracker";
 
 interface NewWorkItemDrawerProps {
   open: boolean;
@@ -45,6 +55,9 @@ const PRIORITY_OPTIONS: { value: WorkItemPriority; label: string }[] = [
   { value: "medium", label: "Medium" },
   { value: "low", label: "Low" },
 ];
+
+/** Radix Select forbids an empty item value, so "nobody" needs a sentinel. */
+const UNASSIGNED = "__unassigned__";
 
 const SOURCE_LABELS: Record<WorkItemSource, string> = {
   github: "GitHub",
@@ -109,9 +122,17 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
   const [body, setBody] = useState("");
   const [status, setStatus] = useState<WorkItemStatus>("todo");
   const [priority, setPriority] = useState<WorkItemPriority>("none");
+  // `undefined` means "untouched", which resolves to you. Kept apart from an
+  // explicit `null` so the default still arrives when the signed-in identity
+  // loads after the drawer has already opened.
+  const [assignee, setAssignee] = useState<string | null | undefined>(undefined);
+  const me = useMe();
+  const owner = assignee === undefined ? me : assignee;
   const [creating, setCreating] = useState(false);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const [enhancing, setEnhancing] = useState(false);
   const titleRef = useRef<HTMLTextAreaElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const textGenAgentId = useUi((state) => state.textGenAgentId);
   const textGenModel = useUi((state) => state.textGenModel);
 
@@ -121,7 +142,24 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
     setBody("");
     setStatus("todo");
     setPriority("none");
+    setAssignee(undefined);
   }, []);
+
+  // Both prompts grow with what is typed rather than scrolling inside a fixed
+  // box: a description clipped mid-line reads as text the dialog swallowed.
+  // Same shape as the chat composer's auto-size.
+  useLayoutEffect(() => {
+    const grow = (node: HTMLTextAreaElement | null, cap: number) => {
+      if (!node) return;
+      node.style.height = "auto";
+      node.style.height = `${Math.min(node.scrollHeight, cap)}px`;
+    };
+    grow(titleRef.current, 120);
+    // Expanded mode hands the description whatever height is left, so an
+    // inline height would only fight the flex child for it.
+    if (expanded && bodyRef.current) bodyRef.current.style.height = "";
+    else grow(bodyRef.current, 260);
+  }, [body, expanded, title]);
 
   // Opens with the prompt focused. The drawer stays mounted (Radix keeps the
   // DOM hidden), so the reset runs on each open — and on each project switch,
@@ -135,9 +173,11 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
+      // Closing over typed text asks first — including Escape and a click
+      // outside, which both arrive here.
       if (!next && title.trim()) {
-        const keep = window.confirm("Discard this work item draft?");
-        if (keep === false) return;
+        setConfirmingDiscard(true);
+        return;
       }
       onOpenChange(next);
     },
@@ -151,6 +191,9 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
     setCreating(true);
     try {
       const item = await daemon.createBacklog({
+        // Only a local item owns its assignee: a tracker answers for its own
+        // issues, and the next sync would overwrite whatever was set here.
+        assignee: source === "local" ? owner : null,
         body: body.trim(),
         project,
         priority,
@@ -200,7 +243,7 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
     } finally {
       setCreating(false);
     }
-  }, [body, onOpenChange, queryClient, priority, project, source, status, title]);
+  }, [body, onOpenChange, owner, queryClient, priority, project, source, status, title]);
 
   // Polish the user's draft through the text-gen agent: first line becomes the
   // title, the rest the body. No task exists yet, so this goes over the raw text.
@@ -328,10 +371,12 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col px-4">
-            {/* Prompt: one borderless title. Focus is implied — autofocused on open. */}
+            {/* Prompt: a borderless title over a dimmer description, so the
+                one required field still reads as the whole prompt and the
+                optional detail sits under it rather than beside it. */}
             <div
               className={cn(
-                "flex shrink-0 flex-col pt-3",
+                "flex shrink-0 flex-col gap-1 pt-3",
                 expanded && "min-h-0 flex-1 overflow-y-auto",
               )}
             >
@@ -340,17 +385,28 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    void handleCreate();
-                  }
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  // A newline in a title is never what anyone meant, so the
+                  // shifted key moves on to where one belongs instead.
+                  if (event.shiftKey) bodyRef.current?.focus();
+                  else void handleCreate();
                 }}
                 placeholder="What needs to happen?"
                 rows={1}
                 aria-label="Title"
+                className="min-h-[2.25rem] resize-none overflow-y-auto bg-transparent text-lg font-medium text-foreground outline-none placeholder:text-muted-foreground/60"
+              />
+              <textarea
+                ref={bodyRef}
+                value={body}
+                onChange={(event) => setBody(event.target.value)}
+                placeholder="Add a description… (markdown, optional)"
+                rows={1}
+                aria-label="Description"
                 className={cn(
-                  "resize-none overflow-y-auto bg-transparent text-lg font-medium text-foreground outline-none placeholder:text-muted-foreground/60",
-                  expanded ? "min-h-[10vh] flex-1" : "min-h-[7rem] max-h-[40vh]",
+                  "resize-none overflow-y-auto bg-transparent text-sm leading-relaxed text-foreground/90 outline-none placeholder:text-muted-foreground/60",
+                  expanded ? "min-h-[10vh] flex-1" : "min-h-[3rem]",
                 )}
               />
             </div>
@@ -384,6 +440,24 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
                 <Flag className="size-3.5 shrink-0" />
                 <span className="truncate">{priorityLabel}</span>
               </FieldChip>
+
+              {/* Local items are the only ones warpforge owns the assignee of,
+                  and only a signed-in identity gives anyone to name. */}
+              {source === "local" && me && (
+                <FieldChip
+                  ariaLabel="Assignee"
+                  value={owner ?? UNASSIGNED}
+                  options={[
+                    { value: me, label: me, hint: "you" },
+                    { value: UNASSIGNED, label: "Unassigned" },
+                  ]}
+                  onValueChange={(next) => setAssignee(next === UNASSIGNED ? null : next)}
+                  triggerClassName="border-transparent bg-transparent text-muted-foreground transition-colors hover:bg-secondary"
+                >
+                  <UserRound className="size-3.5 shrink-0" />
+                  <span className="truncate">{owner ?? "Unassigned"}</span>
+                </FieldChip>
+              )}
 
               <FieldChip
                 ariaLabel="Source"
@@ -471,6 +545,18 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
           </footer>
         </DialogContent>
       </DialogPortal>
+
+      <ConfirmDialog
+        open={confirmingDiscard}
+        title="Discard this draft?"
+        description="The work item has not been created yet, so closing loses what you typed."
+        confirmLabel="Discard draft"
+        onCancel={() => setConfirmingDiscard(false)}
+        onConfirm={() => {
+          setConfirmingDiscard(false);
+          onOpenChange(false);
+        }}
+      />
     </Dialog>
   );
 }

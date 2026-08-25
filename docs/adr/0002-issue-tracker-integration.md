@@ -77,6 +77,19 @@ columns are per-project and unmappable to a fixed vocabulary. Warpforge shows
 the remote label verbatim and never writes it back. Linear states are mapped
 onto the normalized statuses.
 
+*Amended 2026-08-25:* the board column is now **read**, and mapped like a Linear
+state. The original decision left every GitHub row saying "To do" forever, which
+is not neutral — it is wrong on a board where the same issues read "In Progress"
+and "In Test". The read stays read-only: warpforge never writes a column back.
+Issues come from GraphQL (`projectItems → fieldValueByName("Status")`, which
+needs the `project` token scope) and the column name — not `OPEN`/`CLOSED` — is
+what `remoteStatus` shows. A token without the scope, or a repo on no board,
+falls back to the `gh issue list` listing and open/closed. Mapping is by
+substring (`normalize_status`), because columns are named by whoever built the
+board; an unmappable name still lands on `todo` for an open issue, which is
+invariant 6 unchanged. A *closed* issue is done (or `cancelled`, for GitHub's
+`NOT_PLANNED`) whatever column it sits in.
+
 **Opening a project pulls once; there is no timer.** The board runs one
 `import + sync` on mount, gated by a 5-minute staleness window, and the Sync
 button is the *same* query refetched — a manual refresh and the automatic one
@@ -118,9 +131,10 @@ extra information.
    local record first (it owns the id), so an error path that leaves it behind
    produces an item claiming to live in a tracker it never reached.
 6. **Unknown remote status labels do not overwrite the normalized status.**
-   Only the five values warpforge knows are accepted; anything else is kept in
-   `remoteStatus` for display. GitHub project columns are the reason this rule
-   exists.
+   Only the five values warpforge knows are accepted; anything a tracker's own
+   vocabulary cannot be mapped onto is kept in `remoteStatus` for display and
+   leaves the normalized status alone. `normalize_status` returning `None` is
+   that case, and it is why it returns an `Option` rather than defaulting.
 7. **`tracker.links` returns an empty list in demo mode, not an error.** The
    desktop's demo transport answers unknown methods with `{}`, so every tracker
    client method must tolerate missing fields.
@@ -132,7 +146,11 @@ extra information.
    stores a filter value in a second place will disagree with the request that
    was actually sent, which is exactly how Status and Priority came to be inert
    while looking selected. The one exception is the search box, whose local
-   draft is debounced into `params.search`.
+   draft is debounced into `params.search`. Since 2026-08-25 that one object
+   lives in the UI store keyed by project and is persisted — reading a board as
+   "assigned to me" is a stance, not a per-visit keystroke — with the search
+   term stripped on the way to storage, because a term typed days ago reopens a
+   narrowed list whose reason is invisible.
 10. **Status and priority sort by rank, never by their word.** Both storage
     backends order on `status_rank` / `priority_rank` (and their
     `*_RANK_SQL` twins), because alphabetical order puts `high` before `low`
@@ -160,9 +178,27 @@ extra information.
     pushed to a tracker carries a link too, and its title, body and priority
     exist nowhere else. Links that predate the column default to 0 and are never
     deleted, even though most of them came from the unscoped-import bug.
-16. **`rfc3339_secs` is display-only.** It is hand-rolled to avoid a date
+16. **An imported row carries the tracker's timestamps, not the sync's.**
+    `created_at` is the issue's own creation time and `updated_at` its last
+    remote change. Stamping the moment of the fetch made every row's Created
+    equal its Updated and re-sorted the board on each refresh. `created_at` is
+    written once and thereafter only repaired (`Store::set_backlog_created_at`);
+    a caller that does not know the issue's creation time must not be able to
+    overwrite it.
+17. **`rfc3339_secs` is display-only.** It is hand-rolled to avoid a date
    dependency and does not validate its input; never use it where a wrong
    timestamp would change behaviour rather than row order.
+
+**Warpforge owns the assignee of a local item.** *Added 2026-08-25.* A local
+item is created on the signed-in GitHub identity — the same login the assignee
+filter offers as "you" — and that is editable on the item. Without it a local
+item could never carry an assignee, so the filter everyone actually uses hid
+every local item, which reads as the backlog losing them. Tracker-sourced items
+keep their remote assignee and no control over it: `adopt_imported` adopts the
+tracker's answer on each sync, so an edit here would only survive until the next
+refresh. *Rejected:* teaching the filter that "local" implies "mine" — it needs
+no identity and fixes existing rows for free, but the YAML backlog is committed
+to the repository, where a teammate's item is not yours.
 
 ## Consequences
 

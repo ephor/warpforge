@@ -7,13 +7,16 @@ import { daemon } from "@/daemon";
 
 import { NewWorkItemDrawer } from "./NewWorkItemDrawer";
 
-function renderDrawer() {
+function renderDrawer(onOpenChange = vi.fn<(open: boolean) => void>()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={client}>
-      <NewWorkItemDrawer open onOpenChange={vi.fn<(open: boolean) => void>()} project="warpforge" />
-    </QueryClientProvider>,
-  );
+  return {
+    onOpenChange,
+    ...render(
+      <QueryClientProvider client={client}>
+        <NewWorkItemDrawer open onOpenChange={onOpenChange} project="warpforge" />
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 function typeTitle(text: string) {
@@ -66,6 +69,110 @@ describe("NewWorkItemDrawer", () => {
       expect(daemon.createBacklog).toHaveBeenCalled();
     });
     expect(createExternal).not.toHaveBeenCalled();
+  });
+
+  it("puts a local item on you, and lets you take it back off", async () => {
+    vi.spyOn(daemon, "trackerStatus").mockResolvedValue({
+      github: { connected: true, login: "lapa2112" },
+      linear: { connected: true, email: "me@example.com" },
+    });
+    renderDrawer();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    // The chip appears once the signed-in identity arrives.
+    await screen.findByLabelText("Assignee");
+    typeTitle("Mine to do");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(daemon.createBacklog).toHaveBeenCalledWith(
+        expect.objectContaining({ assignee: "lapa2112", source: "local" }),
+      );
+    });
+
+    await user.click(screen.getByLabelText("Assignee"));
+    await user.click(await screen.findByRole("option", { name: "Unassigned" }));
+    typeTitle("Nobody's yet");
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(daemon.createBacklog).toHaveBeenLastCalledWith(
+        expect.objectContaining({ assignee: null }),
+      );
+    });
+  });
+
+  it("offers no assignee on an item a tracker will own", async () => {
+    vi.spyOn(daemon, "trackerStatus").mockResolvedValue({
+      github: { connected: true, login: "lapa2112" },
+      linear: { connected: true, email: "me@example.com" },
+    });
+    renderDrawer();
+    await screen.findByLabelText("Assignee");
+
+    await selectLinear();
+
+    // Linear answers for its own issues; a value set here would not survive
+    // the next sync, so the control is not offered at all.
+    expect(screen.queryByLabelText("Assignee")).not.toBeInTheDocument();
+  });
+
+  it("sends the description typed under the title", async () => {
+    renderDrawer();
+    typeTitle("Rework the port allocator");
+    fireEvent.change(screen.getByLabelText("Description"), {
+      target: { value: "It runs out of range at 40 projects." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(daemon.createBacklog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Rework the port allocator",
+          body: "It runs out of range at 40 projects.",
+        }),
+      );
+    });
+  });
+
+  // Closing over a typed draft used to call `window.confirm`, which this
+  // webview answers without drawing — so the draft went in the bin unasked.
+  it("asks before throwing away a typed draft", async () => {
+    const { onOpenChange } = renderDrawer();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    typeTitle("Half an idea");
+
+    await user.keyboard("{Escape}");
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(await screen.findByText(/loses what you typed/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Discard draft" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  // Cancelling reached the drawer underneath as a click outside, which asked
+  // the question again: the dialog could not be dismissed by anything except
+  // throwing the draft away.
+  it("takes no for an answer and keeps the draft", async () => {
+    const { onOpenChange } = renderDrawer();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    typeTitle("Half an idea");
+
+    await user.keyboard("{Escape}");
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByText(/loses what you typed/)).not.toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Title")).toHaveValue("Half an idea");
+  });
+
+  it("closes without asking when nothing was typed", async () => {
+    const { onOpenChange } = renderDrawer();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.keyboard("{Escape}");
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.queryByText(/loses what you typed/)).not.toBeInTheDocument();
   });
 
   it("rolls the local row back when the tracker create fails", async () => {

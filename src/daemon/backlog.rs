@@ -55,20 +55,31 @@ pub fn write(project_path: &str, item: &wire::BacklogItem) -> Result<()> {
     Ok(())
 }
 
+/// One item by id, read from its own file rather than by scanning the whole
+/// directory: a sync touches every imported row, and a scan per row turns that
+/// into a quadratic pile of reads.
+pub fn read(project_path: &str, project: &str, item_id: &str) -> Result<Option<wire::BacklogItem>> {
+    let path = dir(project_path).join(format!("{}.yaml", safe_id(item_id)));
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Ok(None);
+    };
+    let item: wire::BacklogItem =
+        serde_yaml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    // `safe_id` is not injective, so the file that answers to a name still has
+    // to claim the id (and the project) before it is that item.
+    Ok((item.id == item_id && item.project == project).then_some(item))
+}
+
 /// Whether an item with the given id exists in this project's YAML backlog.
 pub fn item_exists(project_path: &str, project: &str, item_id: &str) -> Result<bool> {
-    Ok(list(project_path, project)?
-        .into_iter()
-        .any(|item| item.id == item_id))
+    Ok(read(project_path, project, item_id)?.is_some())
 }
 
 pub fn update<F>(project_path: &str, project: &str, item_id: &str, mutate: F) -> Result<()>
 where
     F: FnOnce(&mut wire::BacklogItem),
 {
-    let mut item = list(project_path, project)?
-        .into_iter()
-        .find(|item| item.id == item_id)
+    let mut item = read(project_path, project, item_id)?
         .with_context(|| format!("backlog item not found: {item_id}"))?;
     mutate(&mut item);
     write(project_path, &item)
@@ -169,7 +180,10 @@ impl ItemPatch {
             item.priority = priority.clone();
         }
         if let Some(assignee) = &self.assignee {
-            item.assignee = Some(assignee.clone());
+            // An empty name is how a caller says "unassigned": `None` already
+            // means "leave this field alone", so without this there is no way
+            // to take an assignee back off an item.
+            item.assignee = (!assignee.trim().is_empty()).then(|| assignee.clone());
         }
     }
 }
@@ -294,6 +308,22 @@ mod tests {
             sort_desc,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn an_empty_assignee_in_a_patch_clears_it() {
+        let mut cleared = item("a", "none", "todo", Some("Ada Lovelace"));
+        ItemPatch {
+            assignee: Some(String::new()),
+            ..Default::default()
+        }
+        .apply(&mut cleared);
+        assert_eq!(cleared.assignee, None);
+
+        // …while an absent one still means "leave it alone".
+        let mut untouched = item("a", "none", "todo", Some("Ada Lovelace"));
+        ItemPatch::default().apply(&mut untouched);
+        assert_eq!(untouched.assignee.as_deref(), Some("Ada Lovelace"));
     }
 
     #[test]

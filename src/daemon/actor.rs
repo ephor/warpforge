@@ -4836,6 +4836,7 @@ impl Daemon {
                                 &link.status,
                                 link.remote_status.as_deref(),
                                 &link.url,
+                                super::task::now_secs(),
                             ) {
                                 eprintln!(
                                     "[backlog] failed to persist remote status for {}: {e}",

@@ -16,7 +16,7 @@ jobs:
   changeset:
     name: Changeset
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,7 +35,7 @@ jobs:
 
   rust:
     name: Rust daemon and protocol
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 25
     env:
       CARGO_BUILD_JOBS: "2"
@@ -81,7 +81,7 @@ jobs:
 
   desktop-web:
     name: Desktop web
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     defaults:
       run:
         working-directory: desktop
@@ -128,7 +128,7 @@ jobs:
 
   desktop-rust:
     name: Desktop Rust
-    runs-on: ubuntu-22.04
+    runs-on: blacksmith-4vcpu-ubuntu-2204
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

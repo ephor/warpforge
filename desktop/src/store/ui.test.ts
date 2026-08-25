@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { DEFAULT_BACKLOG_PARAMS } from "@/components/backlog/types";
+
 import {
   clampSidebarWidth,
   DEFAULT_TASK_SURFACE,
@@ -51,8 +53,39 @@ describe("task-detail UI state", () => {
       beta: "backlog",
     });
 
-    useUi.getState().clearProjectSurface("alpha");
+    useUi.getState().clearProjectState("alpha");
     expect(useUi.getState().projectSurfaceByProject).toEqual({ beta: "backlog" });
+  });
+
+  it("remembers a project's backlog filters, but not its search term", async () => {
+    useUi.setState({ backlogParamsByProject: {} });
+    useUi.getState().patchBacklogParams("alpha", { assignee: "lapa2112" });
+    useUi.getState().patchBacklogParams("alpha", { search: "chart", sortBy: "priority" });
+
+    expect(useUi.getState().backlogParamsByProject.alpha).toMatchObject({
+      assignee: "lapa2112",
+      search: "chart",
+      sortBy: "priority",
+    });
+
+    const persistedValue = localStorage.getItem("wf-ui");
+    useUi.setState({ backlogParamsByProject: {} });
+    if (persistedValue) localStorage.setItem("wf-ui", persistedValue);
+    await useUi.persist.rehydrate();
+
+    // The stance survives; the lookup does not — a term typed days ago would
+    // reopen the board narrowed for no visible reason.
+    expect(useUi.getState().backlogParamsByProject.alpha).toMatchObject({
+      assignee: "lapa2112",
+      sortBy: "priority",
+      search: "",
+    });
+
+    useUi.getState().resetBacklogParams("alpha");
+    expect(useUi.getState().backlogParamsByProject.alpha).toEqual(DEFAULT_BACKLOG_PARAMS);
+
+    useUi.getState().clearProjectState("alpha");
+    expect(useUi.getState().backlogParamsByProject.alpha).toBeUndefined();
   });
 
   it("tracks transient repository activity for the task footer", () => {

@@ -795,16 +795,45 @@ impl Store {
         Ok(())
     }
 
+    /// Refresh the fields a tracker owns. `updated_at` is the caller's to pass:
+    /// a mirrored row carries the *issue's* last-touched time, not the moment
+    /// its sync ran, and only the import path knows the difference.
     pub fn update_backlog_remote(
         &self,
         item_id: &str,
         status: &str,
         remote_status: Option<&str>,
         url: &str,
+        updated_at: u64,
     ) -> Result<()> {
         self.conn.execute(
             "UPDATE backlog_items SET status=?1, remote_status=?2, url=?3, updated_at=?4 WHERE id=?5",
-            rusqlite::params![status, remote_status, url, super::task::now_secs(), item_id],
+            rusqlite::params![status, remote_status, url, updated_at, item_id],
+        )?;
+        Ok(())
+    }
+
+    /// Adopt the tracker's answer for who an issue is assigned to. Separate
+    /// from the update above for the same reason as `set_backlog_created_at`:
+    /// a caller without the issue in hand must not be able to clear it.
+    pub fn set_backlog_assignee(&self, item_id: &str, assignee: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            // `IS NOT` rather than `<>`, so unassigned (NULL) compares equal to
+            // unassigned and the row is left alone.
+            "UPDATE backlog_items SET assignee=?1 WHERE id=?2 AND assignee IS NOT ?1",
+            rusqlite::params![assignee, item_id],
+        )?;
+        Ok(())
+    }
+
+    /// Correct an imported row's creation time. Separate from the update above
+    /// because `created_at` is written once and then only ever repaired — a
+    /// caller that does not know the issue's real creation time must not be
+    /// able to overwrite it with the time of its own sync.
+    pub fn set_backlog_created_at(&self, item_id: &str, created_at: u64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE backlog_items SET created_at=?1 WHERE id=?2 AND created_at<>?1",
+            rusqlite::params![created_at, item_id],
         )?;
         Ok(())
     }
