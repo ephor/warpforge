@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use warpforge_protocol as wire;
 
-use super::{rfc3339_secs, RemoteIssue, IMPORT_LIMIT, NETWORK_TIMEOUT};
+use super::{normalize_status, rfc3339_secs, RemoteIssue, IMPORT_LIMIT, NETWORK_TIMEOUT};
 
 const LINEAR_API: &str = "https://api.linear.app/graphql";
 const KEYCHAIN_SERVICE: &str = "warpforge-linear";
@@ -269,22 +269,11 @@ pub async fn linear_teams() -> Result<Vec<wire::LinearTeam>> {
     Ok(teams)
 }
 
-/// Map a Linear state name to the normalized warpforge status.
+/// Map a Linear state name to the normalized warpforge status. A team's states
+/// are freely named, so an unrecognized one reads as untouched work rather
+/// than failing the import.
 fn linear_status_name(state: &str) -> String {
-    let low = state.to_lowercase();
-    if low.contains("done") || low.contains("cancel") || low.contains("closed") {
-        if low.contains("cancel") {
-            "cancelled".into()
-        } else {
-            "done".into()
-        }
-    } else if low.contains("in progress") || low.contains("started") {
-        "in_progress".into()
-    } else if low.contains("wait") || low.contains("block") {
-        "waiting".into()
-    } else {
-        "todo".into()
-    }
+    normalize_status(state).unwrap_or("todo").to_string()
 }
 
 #[derive(Deserialize)]
