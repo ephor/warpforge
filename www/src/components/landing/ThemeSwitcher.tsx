@@ -58,7 +58,7 @@ export default function ThemeSwitcher() {
   useEffect(() => {
     if (id === null) return;
     const theme = themeOf(id);
-    applyTheme(theme, Array.from(document.querySelectorAll<HTMLElement>(".wf, .claim")));
+    applyTheme(theme);
     storeThemeId(theme.id);
     tellDemo(theme);
   }, [id]);

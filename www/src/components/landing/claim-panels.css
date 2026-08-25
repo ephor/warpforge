@@ -6,20 +6,10 @@
  * does). Values come from `desktop/src/globals.css`.
  */
 
+/* Tokens are inherited from `:root`, where the page declares them and the
+   theme picker overrides them. Restating them here would shadow the picker's
+   inline values and pin these panels to one palette. */
 .claim {
-  --background: 120 3% 8%;
-  --foreground: 36 23% 91%;
-  --card: 120 3% 6%;
-  --secondary: 75 5% 15%;
-  --muted-foreground: 34 7% 62%;
-  --accent: 72 5% 20%;
-  --primary: 20 73% 70%;
-  --border: 72 5% 20%;
-  --ok: 137 47% 67%;
-  --warn: 39 72% 67%;
-  --destructive: 352 73% 74%;
-  --radius: 0.375rem;
-
   border-bottom: 1px solid hsl(var(--border) / 0.6);
 }
 

@@ -13,12 +13,16 @@ export const THEME_STORAGE_KEY = "wf-landing-theme";
 
 export const DEFAULT_THEME_ID = "forge";
 
-/** Paint a theme onto an element and mark the document light or dark. */
-export function applyTheme(theme: Theme, targets: HTMLElement[] = []) {
+/**
+ * Paint a theme, and mark the document light or dark.
+ *
+ * `:root` alone is enough: the page and its panels inherit these tokens rather
+ * than restating them, so there is nothing left to shadow an inline value.
+ */
+export function applyTheme(theme: Theme) {
   const root = document.documentElement;
   for (const [name, value] of Object.entries(theme.colors)) {
     root.style.setProperty(`--${name}`, value);
-    for (const target of targets) target.style.setProperty(`--${name}`, value);
   }
   root.dataset.theme = theme.id;
   root.classList.toggle("dark", theme.mode === "dark");

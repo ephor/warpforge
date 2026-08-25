@@ -7,6 +7,18 @@ import { config } from "virtual:nimbus/config";
 import ForgeDemo from "@/components/landing/ForgeDemo.astro";
 import ClaimPanels from "@/components/landing/ClaimPanels.astro";
 import ThemeSwitcher from "@/components/landing/ThemeSwitcher.tsx";
+import { THEMES } from "@app/lib/themes";
+import { DEFAULT_THEME_ID, THEME_STORAGE_KEY } from "@/lib/landing-theme";
+
+const themes = Object.fromEntries(THEMES.map((t) => [t.id, { colors: t.colors, mode: t.mode }]));
+const defaultTheme = themes[DEFAULT_THEME_ID];
+
+/* Built as CSS text rather than passed through `define:vars`: that directive
+   stamps the variables onto every element it renders as inline styles, which
+   nothing inheriting from `:root` can override — including the script below. */
+const rootTokens = `:root {\n${Object.entries(defaultTheme.colors)
+  .map(([name, value]) => `  --${name}: ${value};`)
+  .join("\n")}\n  --radius: 0.375rem;\n}`;
 
 const harnesses = [
   { name: "Claude Code", logo: "/logos/claude-ai-icon.svg" },
@@ -36,6 +48,36 @@ const specs = [
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <NimbusHead title={config.title} description={config.description} />
+
+    {/*
+      Tokens on `:root` rather than on `.wf`, so the picker — and the script
+      below — can set every one of them in a single place. Names and meanings
+      are the app's, from `desktop/src/lib/themes.ts`.
+    */}
+    {/* The default theme as a plain `:root` rule, so the page is fully painted
+        with no script at all; the script below overrides it inline when
+        another theme has been chosen. */}
+    <style is:global set:html={rootTokens}></style>
+    <script is:inline define:vars={{ defaultId: DEFAULT_THEME_ID, storageKey: THEME_STORAGE_KEY, themes }}>
+      // Paint the chosen theme before the first frame. Without this the page
+      // renders in the default palette and only corrects once the picker has
+      // hydrated, which is a visible flash of the wrong colours.
+      (() => {
+        let id = defaultId;
+        try {
+          id = localStorage.getItem(storageKey) || defaultId;
+        } catch {
+          /* Storage unavailable — the default is a fine starting point. */
+        }
+        const theme = themes[id] || themes[defaultId];
+        const root = document.documentElement;
+        for (const [name, value] of Object.entries(theme.colors)) {
+          root.style.setProperty(`--${name}`, value);
+        }
+        root.dataset.theme = id;
+        root.classList.toggle("dark", theme.mode === "dark");
+      })();
+    </script>
   </head>
   <body>
     <div class="wf">
@@ -166,18 +208,15 @@ const specs = [
      `desktop/src/globals.css` — same values, so the page and the product read
      as one thing. Fixed dark: this page does not render the docs chrome and so
      does not follow the docs theme toggle. */
+  /* The raw tokens live on `:root` (see the global block above) so the theme
+     picker's inline values reach every one of them. What is left here are the
+     page's own shorthands, which resolve through `var()` at use and so follow
+     whatever theme is current. `--accent` used to be one of them, meaning "the
+     accent, as a colour" — the opposite of the app's `--accent`, which is a
+     raw triplet. The picker wrote the triplet over it and the two things it
+     painted went transparent; the shorthand is gone and those rules name
+     `--primary` directly. */
   .wf {
-    --background: 120 3% 8%;
-    --foreground: 36 23% 91%;
-    --card: 120 3% 6%;
-    --muted-foreground: 34 7% 62%;
-    --border: 72 5% 20%;
-    --primary: 20 73% 70%;
-    --primary-foreground: 20 40% 10%;
-    --secondary: 75 5% 15%;
-    --ring: 20 73% 70%;
-    --radius: 0.375rem;
-
     --bg: hsl(var(--background));
     --panel: hsl(var(--card));
     --line: hsl(var(--border) / 0.55);
@@ -185,7 +224,6 @@ const specs = [
     --fg: hsl(var(--foreground));
     --mut: hsl(var(--muted-foreground));
     --faint: hsl(var(--muted-foreground) / 0.7);
-    --accent: hsl(var(--primary));
 
     background: var(--bg);
     color: var(--fg);
@@ -235,7 +273,7 @@ const specs = [
     width: 0.5rem;
     height: 0.5rem;
     border-radius: 2px;
-    background: var(--accent);
+    background: hsl(var(--primary));
     transform: rotate(45deg);
   }
   .nav-links {
@@ -405,7 +443,7 @@ const specs = [
     width: 0.35rem;
     height: 0.35rem;
     border-radius: 999px;
-    background: var(--accent);
+    background: hsl(var(--primary));
     box-shadow: 0 0 0 0 hsl(var(--primary) / 0.6);
     animation: pulse 2.4s ease-out infinite;
   }
