@@ -1,8 +1,38 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { daemon } from "@/daemon";
 
-export function useTauriClose() {
+/** How many service names the question names before it says "and N more". */
+const NAMED_SERVICES = 4;
+
+/**
+ * A quit that is waiting on an answer, because services are still running.
+ * The window has already refused to close; nothing happens until `confirm`.
+ */
+export interface PendingQuit {
+  /** Service names to show, at most [`NAMED_SERVICES`] of them. */
+  services: string[];
+  /** How many more are running beyond the named ones. */
+  more: number;
+  confirm: () => Promise<void>;
+  cancel: () => void;
+}
+
+/**
+ * Hold the window open while services are running, and hand the question to
+ * the app to ask.
+ *
+ * The question used to be `window.confirm`, which this webview answers without
+ * ever drawing it — so quitting stopped every running service with nobody
+ * asked. The state comes back out to be rendered as a real dialog.
+ */
+export function useTauriClose(): PendingQuit | null {
+  const [pending, setPending] = useState<{ services: string[]; more: number } | null>(null);
+  // The quit itself belongs to the listener's closure (it owns the window
+  // handle and the flag that lets the second close through), so the dialog
+  // reaches it through a ref rather than rebuilding it.
+  const quitRef = useRef<(() => Promise<void>) | null>(null);
+
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) {
       return;
@@ -18,6 +48,16 @@ export function useTauriClose() {
           return;
         }
         const appWindow = getCurrentWindow();
+
+        const quit = async () => {
+          try {
+            await daemon.stopRuntime();
+          } catch {}
+          allowClose = true;
+          await appWindow.close();
+        };
+        quitRef.current = quit;
+
         unlisten = await appWindow.onCloseRequested(async (event) => {
           if (allowClose) {
             return;
@@ -30,29 +70,16 @@ export function useTauriClose() {
               (service) => service.status === "running" || service.status === "starting",
             );
 
-          if (activeServices.length > 0) {
-            const preview = activeServices
-              .slice(0, 4)
-              .map((service) => `${service.project}/${service.name}`)
-              .join(", ");
-            const suffix =
-              activeServices.length > 4 ? `, and ${activeServices.length - 4} more` : "";
-            const confirmed = window.confirm(
-              `You have ${activeServices.length} service${
-                activeServices.length === 1 ? "" : "s"
-              } still running:\n${preview}${suffix}\n\nStop them and quit Warpforge?`,
-            );
-            if (!confirmed) {
-              return;
-            }
+          if (activeServices.length === 0) {
+            await quit();
+            return;
           }
-
-          try {
-            await daemon.stopRuntime();
-          } catch {}
-
-          allowClose = true;
-          await appWindow.close();
+          setPending({
+            services: activeServices
+              .slice(0, NAMED_SERVICES)
+              .map((service) => `${service.project}/${service.name}`),
+            more: Math.max(0, activeServices.length - NAMED_SERVICES),
+          });
         });
         if (disposed) {
           unlisten();
@@ -63,7 +90,20 @@ export function useTauriClose() {
 
     return () => {
       disposed = true;
+      quitRef.current = null;
       unlisten?.();
     };
   }, []);
+
+  if (!pending) return null;
+  return {
+    services: pending.services,
+    more: pending.more,
+    // No `setPending(null)` on the way out: the window is closing, and a
+    // dialog that clears itself first would flash the app back into view.
+    confirm: async () => {
+      await quitRef.current?.();
+    },
+    cancel: () => setPending(null),
+  };
 }

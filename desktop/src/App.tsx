@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import AppHeader from "@/components/AppHeader";
 import AttentionToast from "@/components/AttentionToast";
 import BootstrapWizard from "@/components/BootstrapWizard";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import { FindInFiles, FIND_LIMIT } from "@/components/FindInFiles";
 import { QuickOpen } from "@/components/QuickOpen";
@@ -237,7 +238,7 @@ export default function App() {
   useFontScaling();
   useTheme();
   useDaemonEvents();
-  useTauriClose();
+  const pendingQuit = useTauriClose();
 
   const handleOpenTask = (id: string) => {
     setNewTaskOpen(false);
@@ -390,6 +391,23 @@ export default function App() {
             <AddProjectDialog open onOpenChange={setAddProjectOpen} onAdded={handleProjectAdded} />
           )}
           <SettingsView open={settingsOpen} onOpenChange={setSettingsOpen} />
+          {pendingQuit && (
+            <ConfirmDialog
+              open
+              title="Stop running services and quit?"
+              description={
+                <>
+                  Still running: {pendingQuit.services.join(", ")}
+                  {pendingQuit.more > 0 ? `, and ${pendingQuit.more} more` : ""}. Quitting stops
+                  them.
+                </>
+              }
+              confirmLabel="Stop & quit"
+              busyLabel="Stopping…"
+              onCancel={pendingQuit.cancel}
+              onConfirm={pendingQuit.confirm}
+            />
+          )}
           {pendingAgentSetup && (
             <AgentSetupDialog
               detected={pendingAgentSetup}

@@ -4,6 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 
 import AccountsPanel from "@/components/AccountsPanel";
 import AgentSetupPanel from "@/components/AgentSetupPanel";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import LanguageServersPanel from "@/components/LanguageServersPanel";
 import TrackersPanel from "@/components/TrackersPanel";
 import { Button } from "@/components/ui/button";
@@ -103,6 +104,7 @@ interface Props {
 
 export default function SettingsView({ open, onOpenChange }: Props) {
   const queryClient = useQueryClient();
+  const [confirmingFastembed, setConfirmingFastembed] = useState(false);
   const backlogSettings = useQuery({
     queryKey: ["backlog", "settings"],
     queryFn: () => daemon.backlogSettings(),
@@ -111,6 +113,27 @@ export default function SettingsView({ open, onOpenChange }: Props) {
     queryKey: ["memory", "stats"],
     queryFn: () => daemon.memoryStats(),
   });
+  /**
+   * Switch the memory embedding mode. Failures and half-applied switches are
+   * reported as toasts: `alert` is as invisible in this webview as
+   * `window.confirm`, so the news never reached anyone.
+   */
+  const applyEmbeddingMode = async (mode: string) => {
+    try {
+      const stats = (await daemon.setMemoryEmbedding(mode)) as typeof memoryStats.data;
+      queryClient.setQueryData(["memory", "stats"], stats);
+      if (mode === "fastembed" && stats?.embeddingMode !== "hybrid") {
+        toast.warning("Still on keyword search (FTS)", {
+          description: stats?.embeddingUnavailable
+            ? `fastembed is not available: ${stats.embeddingUnavailable}. On macOS: brew install onnxruntime, then re-select fastembed — no restart needed. If it still fails, restart Warpforge so ORT_DYLIB_PATH picks up /opt/homebrew/lib/libonnxruntime.dylib.`
+            : "The ~80 MB model downloads on the next search. Offline, it stays on FTS.",
+        });
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const backlogStorage = useMutation({
     mutationFn: (mode: "sqlite" | "yaml") => daemon.setBacklogStorage(mode),
     onSuccess: (settings) => queryClient.setQueryData(["backlog", "settings"], settings),
@@ -388,30 +411,16 @@ export default function SettingsView({ open, onOpenChange }: Props) {
                     memoryStats.data?.embeddingMode === "hybrid" ? "fastembed" : "none"
                   }
                   disabled={memoryStats.isLoading}
-                  onChange={async (e) => {
+                  onChange={(e) => {
+                    // The select is controlled by the daemon's answer, so a
+                    // pick that is not applied snaps back on the next render —
+                    // there is nothing to undo here.
                     const mode = e.target.value;
                     if (mode === "fastembed") {
-                      const ok = window.confirm(
-                        "Switch to fastembed? On first use Warpforge will download ~80 MB model (all-MiniLM-L6-v2) and needs ONNX Runtime (brew install onnxruntime on macOS — auto-detected at /opt/homebrew/lib/libonnxruntime.dylib; if just installed, just re-select, no restart needed). If the runtime is missing it will stay on FTS. Continue?",
-                      );
-                      if (!ok) {
-                        e.target.value = "none";
-                        return;
-                      }
+                      setConfirmingFastembed(true);
+                      return;
                     }
-                    try {
-                      const stats = (await daemon.setMemoryEmbedding(mode)) as typeof memoryStats.data;
-                      queryClient.setQueryData(["memory", "stats"], stats);
-                      if (mode === "fastembed" && stats?.embeddingMode !== "hybrid") {
-                        alert(
-                          stats?.embeddingUnavailable
-                            ? `fastembed not available: ${stats.embeddingUnavailable}. Staying on FTS. On macOS: brew install onnxruntime, then re-select fastembed (no restart needed). If still fails, restart warpforge so ORT_DYLIB_PATH picks up /opt/homebrew/lib/libonnxruntime.dylib.`
-                            : "fastembed selected but still on FTS — will download ~80 MB model on next search. If offline, stays FTS.",
-                        );
-                      }
-                    } catch (err: any) {
-                      alert(err?.message ?? String(err));
-                    }
+                    void applyEmbeddingMode(mode);
                   }}
                   className="h-7 rounded-md border bg-background px-2 text-xs"
                 >
@@ -554,6 +563,20 @@ export default function SettingsView({ open, onOpenChange }: Props) {
           </Section>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmingFastembed}
+        title="Switch to fastembed?"
+        description="On first use Warpforge downloads a ~80 MB model (all-MiniLM-L6-v2) and needs ONNX Runtime — on macOS, brew install onnxruntime. Without it, memory search stays on keywords."
+        confirmLabel="Switch to fastembed"
+        busyLabel="Switching…"
+        destructive={false}
+        onCancel={() => setConfirmingFastembed(false)}
+        onConfirm={async () => {
+          await applyEmbeddingMode("fastembed");
+          setConfirmingFastembed(false);
+        }}
+      />
     </div>
   );
 }
