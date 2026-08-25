@@ -1,7 +1,73 @@
 import { defineConfig } from "astro/config";
 import tailwindcss from "@tailwindcss/vite";
+import react from "@astrojs/react";
 import nimbus, { defineConfig as defineNimbusConfig } from "@cloudflare/nimbus-docs";
 import { tableScroll } from "@cloudflare/nimbus-docs/markdown";
+import { dirname, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const WWW_SRC = resolve(HERE, "src");
+const APP_SRC = resolve(HERE, "../desktop/src");
+
+/**
+ * Both this site and the desktop app spell their own source root `@/`, and the
+ * landing page renders the app's real components — so one specifier has to mean
+ * two different roots. Resolve it by who is importing, rather than rewriting
+ * fifty-odd files in either tree. `@app/` is the explicit door from this site
+ * into the app.
+ *
+ * A plugin rather than a `resolve.alias` entry because an alias hands back a
+ * final path, which skips extension and index resolution (`@/components/ui/badge`
+ * → `badge/index.ts`); delegating to `this.resolve` keeps it.
+ *
+ * Two app modules are swapped for stubs on the way through. The demo only ever
+ * shows the Diff, Runtime and Pipeline surfaces, and the two it doesn't show
+ * are the two expensive ones: the editor is all of CodeMirror plus an LSP
+ * client, and the terminal is xterm, which is CommonJS and won't prerender.
+ * Everything the visitor actually sees is the app's own component.
+ */
+const APP_STUBS: Record<string, string> = {
+  "components/runtime/TerminalWorkspace":
+    "src/components/landing/demo/stubs/TerminalWorkspace.tsx",
+  "views/task-detail/FilesSurface": "src/components/landing/demo/stubs/FilesSurface.tsx",
+};
+
+function dualSourceAlias(): import("vite").Plugin {
+  return {
+    name: "warpforge-dual-source-alias",
+    enforce: "pre",
+    async resolveId(source, importer, options) {
+      const root = source.startsWith("@app/")
+        ? APP_SRC
+        : source.startsWith("@/")
+          ? importer?.includes(`${sep}desktop${sep}src${sep}`)
+            ? APP_SRC
+            : WWW_SRC
+          : null;
+      const fromApp = importer?.includes(`${sep}desktop${sep}src${sep}`) ?? false;
+
+      // A bare specifier imported by the app would otherwise resolve out of
+      // `desktop/node_modules`, giving the page two copies of React, React
+      // Query and Zustand — two contexts, and every hook that crosses the seam
+      // throws. This site installs the app's dependencies at the app's
+      // versions, so route those imports here and keep one of everything.
+      if (!root && fromApp && !source.startsWith(".")) {
+        return this.resolve(source, resolve(WWW_SRC, "_.ts"), { ...options, skipSelf: true });
+      }
+
+      const target = root
+        ? resolve(root, source.slice(source.startsWith("@app/") ? 5 : 2))
+        : fromApp && source.startsWith(".")
+          ? resolve(dirname(importer!), source)
+          : null;
+      if (!target) return null;
+      const stub = APP_STUBS[relative(APP_SRC, target).split(sep).join("/")];
+      if (stub) return this.resolve(resolve(HERE, stub), importer, { ...options, skipSelf: true });
+      return this.resolve(target, importer, { ...options, skipSelf: true });
+    },
+  };
+}
 
 const nimbusConfig = defineNimbusConfig({
   // Drives canonical URLs, OG images, robots.txt, sitemap, and the links in
@@ -32,7 +98,7 @@ export default defineConfig({
   // Tailwind v4 — replaces the PostCSS plugin, which doesn't build under
   // Astro 7's Vite 8 bundler).
   vite: {
-    plugins: [tailwindcss()],
+    plugins: [dualSourceAlias(), tailwindcss()],
   },
   // Hover-prefetch link targets so full-page navigations feel instant without
   // a client-side router.
@@ -41,6 +107,7 @@ export default defineConfig({
     defaultStrategy: "hover",
   },
   integrations: [
+    react(),
     nimbus(nimbusConfig, {
       // Authoring rules are opt-in by design — your repo, your taste. The
       // two below are the load-bearing pair: frontmatter has to validate
