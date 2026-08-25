@@ -151,6 +151,61 @@ describe("WorkItemDrawer", () => {
     expect(screen.queryByRole("combobox", { name: "Assignee" })).not.toBeInTheDocument();
   });
 
+  it("renames a local item from its heading", async () => {
+    renderDrawer(localItem);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: localItem.title }));
+    const field = screen.getByRole("textbox", { name: "Title" });
+    await user.clear(field);
+    await user.type(field, "Rework the port allocator range{Enter}");
+
+    await vi.waitFor(() =>
+      expect(daemon.updateBacklog).toHaveBeenCalledWith(
+        expect.objectContaining({ itemId: "b-1", title: "Rework the port allocator range" }),
+      ),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Rework the port allocator range" }),
+    ).toBeInTheDocument();
+  });
+
+  it("cancels a rename on Escape without closing the panel", async () => {
+    const onClose = vi.fn<() => void>();
+    renderDrawer(localItem, { onClose });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: localItem.title }));
+    await user.type(screen.getByRole("textbox", { name: "Title" }), " and more");
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("textbox", { name: "Title" })).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(daemon.updateBacklog).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: localItem.title })).toBeInTheDocument();
+  });
+
+  // A row with no title is one nobody can read in the list, so an emptied
+  // field is treated as a slip rather than an instruction.
+  it("keeps the old title when the field is emptied", async () => {
+    renderDrawer(localItem);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: localItem.title }));
+    await user.clear(screen.getByRole("textbox", { name: "Title" }));
+    await user.keyboard("{Enter}");
+
+    expect(daemon.updateBacklog).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: localItem.title })).toBeInTheDocument();
+  });
+
+  it("leaves a tracker-owned title read-only", () => {
+    renderDrawer({ ...localItem, source: "github" });
+
+    expect(screen.queryByRole("button", { name: localItem.title })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: localItem.title })).toBeInTheDocument();
+  });
+
   it("writes a description on a local item and shows what was saved", async () => {
     renderDrawer({ ...localItem, body: "" });
     const user = userEvent.setup({ pointerEventsCheck: 0 });
