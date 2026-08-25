@@ -85,9 +85,9 @@ const specs = [
         <div class="shell nav-in">
           <a href="/" class="logo" aria-label="Warpforge — home">Warp<span>forge</span></a>
           <nav class="nav-links" aria-label="Primary">
-            <a href="/overview/">Docs</a>
+            <a href="/concepts/orchestration/">Orchestration</a>
             <a href="/concepts/memory/">Memory</a>
-            <a href="/reference/mcp-tools/">Tools</a>
+            <a href="/guides/projects-and-runtime/">Runtime</a>
           </nav>
           <div class="nav-act">
             <ThemeSwitcher client:load />
@@ -266,13 +266,19 @@ const specs = [
   .logo {
     display: inline-flex;
     align-items: center;
-    font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+    /* The app's stack, not the page's. Warpforge draws its chrome in the
+       system UI face — SF Pro on macOS — so the wordmark rendered in the
+       page's Inter was a near-miss of the thing it is supposed to be. */
+    font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
     font-weight: 700;
-    font-size: 0.8125rem;
+    font-size: 0.6875rem;
     text-transform: uppercase;
     letter-spacing: 0.2em;
     color: var(--fg);
     text-decoration: none;
+    /* The tracking trails after the last letter too; pull it back so the mark
+       sits flush with the edge it is aligned to. */
+    margin-right: -0.2em;
   }
   .logo span {
     color: hsl(var(--primary));
@@ -632,7 +638,6 @@ const specs = [
     }
   }
   .logo-sm {
-    font-size: 0.6875rem;
     color: var(--mut);
   }
   .foot nav {
