@@ -142,6 +142,7 @@ mod tests {
                 status: "todo".into(),
                 remote_status: "open".into(),
                 assignee: None,
+                created_at: 7,
                 updated_at: 7,
             },
             RemoteIssue {
@@ -152,6 +153,7 @@ mod tests {
                 status: "todo".into(),
                 remote_status: "open".into(),
                 assignee: None,
+                created_at: 8,
                 updated_at: 8,
             },
         ];

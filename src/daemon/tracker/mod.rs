@@ -56,7 +56,24 @@ pub struct RemoteIssue {
     pub status: String,
     pub remote_status: String,
     pub assignee: Option<String>,
+    /// When the tracker says the issue was opened, unix seconds. 0 when the
+    /// provider did not give one; callers fall back to `updated_at` rather
+    /// than showing 1970.
+    pub created_at: u64,
     pub updated_at: u64,
+}
+
+impl RemoteIssue {
+    /// The issue's creation time, falling back to its last update. A backlog
+    /// row whose "Created" reads later than its "Updated" is worse than a
+    /// slightly late one.
+    pub fn created_or_updated(&self) -> u64 {
+        if self.created_at == 0 {
+            self.updated_at
+        } else {
+            self.created_at
+        }
+    }
 }
 
 /// Seconds since the epoch for an RFC-3339 UTC timestamp, 0 if unparseable.
@@ -213,6 +230,27 @@ pub fn link_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn issue(created_at: u64, updated_at: u64) -> RemoteIssue {
+        RemoteIssue {
+            external_id: "#1".into(),
+            title: String::new(),
+            body: String::new(),
+            url: String::new(),
+            status: "todo".into(),
+            remote_status: "OPEN".into(),
+            assignee: None,
+            created_at,
+            updated_at,
+        }
+    }
+
+    #[test]
+    fn creation_time_falls_back_to_the_last_update() {
+        assert_eq!(issue(100, 500).created_or_updated(), 100);
+        // A provider that gave no creation time must not date the row to 1970.
+        assert_eq!(issue(0, 500).created_or_updated(), 500);
+    }
 
     #[test]
     fn rfc3339_parsing() {
