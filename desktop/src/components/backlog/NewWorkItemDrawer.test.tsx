@@ -149,6 +149,22 @@ describe("NewWorkItemDrawer", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  // Cancelling reached the drawer underneath as a click outside, which asked
+  // the question again: the dialog could not be dismissed by anything except
+  // throwing the draft away.
+  it("takes no for an answer and keeps the draft", async () => {
+    const { onOpenChange } = renderDrawer();
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    typeTitle("Half an idea");
+
+    await user.keyboard("{Escape}");
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByText(/loses what you typed/)).not.toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Title")).toHaveValue("Half an idea");
+  });
+
   it("closes without asking when nothing was typed", async () => {
     const { onOpenChange } = renderDrawer();
     const user = userEvent.setup({ pointerEventsCheck: 0 });
