@@ -813,6 +813,19 @@ impl Store {
         Ok(())
     }
 
+    /// Adopt the tracker's answer for who an issue is assigned to. Separate
+    /// from the update above for the same reason as `set_backlog_created_at`:
+    /// a caller without the issue in hand must not be able to clear it.
+    pub fn set_backlog_assignee(&self, item_id: &str, assignee: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            // `IS NOT` rather than `<>`, so unassigned (NULL) compares equal to
+            // unassigned and the row is left alone.
+            "UPDATE backlog_items SET assignee=?1 WHERE id=?2 AND assignee IS NOT ?1",
+            rusqlite::params![assignee, item_id],
+        )?;
+        Ok(())
+    }
+
     /// Correct an imported row's creation time. Separate from the update above
     /// because `created_at` is written once and then only ever repaired — a
     /// caller that does not know the issue's real creation time must not be

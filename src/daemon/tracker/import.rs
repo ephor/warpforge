@@ -105,7 +105,9 @@ pub fn adopt_imported(
     };
     // The row mirrors the issue, so it carries the *tracker's* timestamps, not
     // the moment this sync ran: stamping `now` here made every synced item look
-    // freshly touched and re-sorted the board on each refresh.
+    // freshly touched and re-sorted the board on each refresh. The assignee is
+    // the tracker's to answer for too, and rows imported before it was asked
+    // for have none.
     let update_remote = |item_id: &str, issue: &RemoteIssue| {
         let created_at = issue.created_or_updated();
         if let Some(dir) = yaml_project_path {
@@ -113,6 +115,7 @@ pub fn adopt_imported(
                 item.status = issue.status.clone();
                 item.remote_status = Some(issue.remote_status.clone());
                 item.url = Some(issue.url.clone());
+                item.assignee = issue.assignee.clone();
                 item.created_at = created_at;
                 item.updated_at = issue.updated_at;
             })
@@ -124,7 +127,8 @@ pub fn adopt_imported(
                 &issue.url,
                 issue.updated_at,
             )?;
-            store.set_backlog_created_at(item_id, created_at)
+            store.set_backlog_created_at(item_id, created_at)?;
+            store.set_backlog_assignee(item_id, issue.assignee.as_deref())
         }
     };
 
@@ -181,13 +185,15 @@ pub fn adopt_imported(
                     || existing.remote_status.as_deref() != Some(issue.remote_status.as_str());
                 // Rows imported before the tracker's own timestamps were read
                 // stored the fetch time as their creation time, so "Created"
-                // and "Updated" always read the same. Repair them in place
-                // rather than asking anyone to re-import.
-                let stamps_stale = stored.is_some_and(|item| {
+                // and "Updated" always read the same; rows imported before the
+                // assignee was asked for have none. Repair them in place rather
+                // than asking anyone to re-import.
+                let mirror_stale = stored.is_some_and(|item| {
                     item.created_at != issue.created_or_updated()
                         || item.updated_at != issue.updated_at
+                        || item.assignee != issue.assignee
                 });
-                if !status_moved && !stamps_stale {
+                if !status_moved && !mirror_stale {
                     continue;
                 }
                 if !status_moved {
@@ -434,6 +440,55 @@ mod tests {
                 .unwrap()
                 .created_at,
             100
+        );
+    }
+
+    #[test]
+    fn a_row_imported_without_an_assignee_picks_one_up_on_the_next_sync() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        let issue = |assignee: Option<&str>| RemoteIssue {
+            external_id: "ENG-1".into(),
+            title: "Assigned since".into(),
+            body: String::new(),
+            url: "https://linear.app/x/ENG-1".into(),
+            status: "todo".into(),
+            remote_status: "Todo".into(),
+            assignee: assignee.map(str::to_string),
+            created_at: 100,
+            updated_at: 500,
+        };
+
+        // The listing that first adopted this issue did not ask for one.
+        let (imported, _) = adopt_imported(
+            &store,
+            "demo",
+            None,
+            vec![("linear".into(), vec![issue(None)])],
+        )
+        .unwrap();
+        let item_id = imported[0].item_id.clone();
+        assert_eq!(
+            store.get_backlog_item(&item_id).unwrap().unwrap().assignee,
+            None
+        );
+
+        let (again, _) = adopt_imported(
+            &store,
+            "demo",
+            None,
+            vec![("linear".into(), vec![issue(Some("Ada Lovelace"))])],
+        )
+        .unwrap();
+        assert!(again.is_empty(), "a known issue is not imported twice");
+        assert_eq!(
+            store
+                .get_backlog_item(&item_id)
+                .unwrap()
+                .unwrap()
+                .assignee
+                .as_deref(),
+            Some("Ada Lovelace"),
+            "the tracker owns who an imported issue is assigned to"
         );
     }
 
