@@ -10,6 +10,8 @@
  * the agent switcher and a multi-file diff without inventing any of them.
  */
 import { daemon } from "@app/daemon";
+
+import { unchangedDoc } from "./files";
 import type {
   AgentConfig,
   FileDoc,
@@ -233,12 +235,13 @@ const DOCS: Record<string, string> = {
 };
 
 export function fileDocFor(path: string): FileDoc {
-  return {
-    newText: DOCS[path] ?? `// ${path}\n`,
-    oldText: "",
-    path,
-    status: "added",
-  };
+  // A file this run created reads as added, with nothing on the left. Anything
+  // else is just a file in the repository — same text both sides, so the
+  // editor opens it as a file rather than as a change.
+  const written = DOCS[path];
+  return written
+    ? { newText: written, oldText: "", path, status: "added" }
+    : unchangedDoc(path);
 }
 
 /**

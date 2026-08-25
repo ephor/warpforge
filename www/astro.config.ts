@@ -21,16 +21,16 @@ const APP_SRC = resolve(HERE, "../desktop/src");
  * final path, which skips extension and index resolution (`@/components/ui/badge`
  * → `badge/index.ts`); delegating to `this.resolve` keeps it.
  *
- * Two app modules are swapped for stubs on the way through. The demo only ever
- * shows the Diff, Runtime and Pipeline surfaces, and the two it doesn't show
- * are the two expensive ones: the editor is all of CodeMirror plus an LSP
- * client, and the terminal is xterm, which is CommonJS and won't prerender.
- * Everything the visitor actually sees is the app's own component.
+ * One app module is swapped for a stub on the way through. The terminal is
+ * xterm driven against a live PTY: CommonJS, so it will not prerender, and
+ * with nothing to talk to on a static page. Its stand-in keeps the real
+ * chrome and shows a fixed transcript. Everything else on the page — the
+ * editor included, whose CodeMirror stays in its own lazy chunk — is the
+ * app\'s own component.
  */
 const APP_STUBS: Record<string, string> = {
   "components/runtime/TerminalWorkspace":
     "src/components/landing/demo/stubs/TerminalWorkspace.tsx",
-  "views/task-detail/FilesSurface": "src/components/landing/demo/stubs/FilesSurface.tsx",
 };
 
 function dualSourceAlias(): import("vite").Plugin {
