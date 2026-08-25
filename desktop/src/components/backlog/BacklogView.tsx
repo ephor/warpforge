@@ -3,6 +3,7 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { daemon } from "@/daemon";
+import { useUi } from "@/store/ui";
 
 import { BacklogList } from "./BacklogList";
 import type { BacklogRowActions } from "./BacklogRow";
@@ -26,29 +27,31 @@ interface BacklogViewProps {
 
 export function BacklogView({ project, onStartTask, onOpenTask, onOpenItem }: BacklogViewProps) {
   const queryClient = useQueryClient();
-  const [seenAssignees, setSeenAssignees] = React.useState<string[]>([]);
 
   // Sorting and filtering are the daemon's job, so one object holds the whole
-  // request and doubles as the query key. Storing the project alongside it
-  // resets the view when the project changes, in the same render rather than
-  // in an effect that would fire a request for the old filters first.
-  const [state, setState] = React.useState({ project, params: DEFAULT_BACKLOG_PARAMS });
-  if (state.project !== project) {
-    setState({ project, params: DEFAULT_BACKLOG_PARAMS });
-    setSeenAssignees([]);
-  }
-  const params = state.params;
+  // request and doubles as the query key. It lives in the UI store, per
+  // project and persisted: how you read a board is a stance you hold, not
+  // something to restate on every visit.
+  const params = useUi((state) => state.backlogParamsByProject[project]) ?? DEFAULT_BACKLOG_PARAMS;
+  const patchParams = useUi((state) => state.patchBacklogParams);
+  const resetParams = useUi((state) => state.resetBacklogParams);
 
   /** Any change starts the listing over — the key changes, so page 0 is refetched. */
-  const patch = React.useCallback((next: Partial<BacklogParams>) => {
-    setState((current) => ({
-      project: current.project,
-      params: { ...current.params, ...next },
-    }));
-  }, []);
-  const reset = React.useCallback(() => {
-    setState((current) => ({ project: current.project, params: DEFAULT_BACKLOG_PARAMS }));
-  }, []);
+  const patch = React.useCallback(
+    (next: Partial<BacklogParams>) => patchParams(project, next),
+    [patchParams, project],
+  );
+  const reset = React.useCallback(() => resetParams(project), [project, resetParams]);
+
+  // Names accumulate as rows load, so they are per project and reset with it —
+  // in the same render as the switch, not in an effect that would first offer
+  // the previous project's people.
+  const [seen, setSeen] = React.useState<{ project: string; names: string[] }>({
+    project,
+    names: [],
+  });
+  if (seen.project !== project) setSeen({ project, names: [] });
+  const seenAssignees = seen.names;
 
   const sync = useQuery({
     queryKey: ["backlog", project, "sync"],
@@ -104,14 +107,13 @@ export function BacklogView({ project, onStartTask, onOpenTask, onOpenItem }: Ba
   // Names accumulate rather than being derived from `items`, because `items`
   // is the *filtered* listing: reading the options out of it meant picking one
   // assignee narrowed the rows, which then emptied the list of everyone else.
-  // Reset belongs to the project switch above, next to the params reset.
   React.useEffect(() => {
-    setSeenAssignees((current) => {
-      const merged = new Set(current);
+    setSeen((current) => {
+      const merged = new Set(current.names);
       for (const item of items) if (item.assignee) merged.add(item.assignee);
-      return merged.size === current.length
+      return merged.size === current.names.length
         ? current
-        : [...merged].sort((a, b) => a.localeCompare(b));
+        : { project: current.project, names: [...merged].sort((a, b) => a.localeCompare(b)) };
     });
   }, [items]);
 

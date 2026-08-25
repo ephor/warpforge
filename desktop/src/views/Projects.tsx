@@ -64,7 +64,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
     (state) => state.projectSurfaceByProject[projectName] ?? DEFAULT_PROJECT_SURFACE,
   );
   const setProjectSurface = useUi((state) => state.setProjectSurface);
-  const clearProjectSurface = useUi((state) => state.clearProjectSurface);
+  const clearProjectState = useUi((state) => state.clearProjectState);
   const services = useMemo(
     () => snapshot.services.filter((s) => s.project === projectName),
     [snapshot.services, projectName],
@@ -152,12 +152,12 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
     const remainingProjects = snapshot.projects.filter((item) => item.name !== removeProject);
     await daemon.removeProject(removeProject, true);
     disposeTerminalWorkspace(removeProject);
-    clearProjectSurface(removeProject);
+    clearProjectState(removeProject);
     setRemoveProject(null);
     if (selectedProjectId === removeProject) {
       openProject(remainingProjects[0]?.name ?? "");
     }
-  }, [clearProjectSurface, openProject, removeProject, selectedProjectId, snapshot.projects]);
+  }, [clearProjectState, openProject, removeProject, selectedProjectId, snapshot.projects]);
 
   if (!project) {
     return (
