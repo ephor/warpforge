@@ -1,226 +1,82 @@
 ---
 /**
- * A working miniature of Warpforge, built in DOM rather than shown as a
- * screenshot — a dark IDE shrunk to page width is unreadable, and a still
- * image cannot show the one thing worth showing: several harnesses working
- * one task and the result landing as a reviewable diff.
+ * The hero demo: the Warpforge desktop app, running on this page.
  *
- * The layout is the app's own four columns, not an approximation of them:
- * task sidebar, conversation, diff surface, changes rail. Sub-agents appear
- * the way they really do — as task rows nested under their parent in the
- * sidebar — rather than in an invented "agents" list. Tokens come from
- * `desktop/src/globals.css`, status pills from `StatusBadge.tsx`, diff status
- * colours from `FileDiffView.tsx`.
+ * There is no lookalike here. The frame loads `/embed/app-demo/`, which mounts
+ * `Sidebar`, `AppHeader` and `TaskDetail` straight out of `desktop/src`
+ * against a seeded daemon — so a visitor is looking at the product's own
+ * markup, tokens and behaviour, and can click around in it. A screenshot that
+ * can go stale is replaced by something that can't.
  *
- * The sequence is driven by `data-step` on the root; every transition is a CSS
- * rule keyed off it, so the script only advances an integer. The markup
- * renders at its final state, so no-JS and reduced-motion visitors get the
- * whole picture rather than an empty shell.
+ * It renders at the app's own width and is scaled to whatever room the page
+ * has: a desk layout squeezed into a phone-width column stops being a picture
+ * of the product.
  */
-import "./forge-demo.css";
-import "./forge-demo-diff.css";
-import "./forge-demo-timeline.css";
-
-const children = [
-  { n: 1, name: "implement middleware", agent: "Codex", dot: "codex", age: "2m" },
-  { n: 2, name: "add tests", agent: "opencode", dot: "oc", age: "1m" },
-];
-
-const files = [
-  { path: "middleware/rate-limit.ts", add: 48, del: 0, status: "added" },
-  { path: "server.ts", add: 6, del: 1, status: "modified" },
-  { path: "test/rate-limit.test.ts", add: 31, del: 0, status: "added" },
-];
+const APP_WIDTH = 1440;
+const APP_HEIGHT = 860;
 ---
 
-<div
-  class="wf-demo"
-  data-forge-demo
-  data-step="5"
-  aria-label="Warpforge running one task across several coding agents"
->
-  <div class="body">
-    <!-- Task sidebar -->
-    <aside class="pane side" aria-label="Tasks">
-      <div class="brand"><span>WARPFORGE</span><i class="live"></i></div>
-      <div class="newtask">+ New task<b>⌘N</b></div>
-      <div class="nav-row">Mission Control<b>3</b></div>
-      <div class="nav-row">Projects<b>7</b></div>
-      <div class="side-sep"></div>
-
-      <div class="proj"><i class="sq">w</i>warpforge<b>10</b></div>
-      <div class="task task-open">Add rate limiting to the API<b>now</b></div>
-      {
-        children.map((c) => (
-          <div class="task task-sub" data-child={c.n}>
-            <i class={`dot dot-${c.dot}`} />
-            {c.name}
-            <b>{c.age}</b>
-          </div>
-        ))
-      }
-      <div class="task">Fix duplicate word cards<b>8d</b></div>
-      <div class="task task-fold">› 98 done</div>
-    </aside>
-
-    <!-- Conversation -->
-    <section class="pane chat" aria-label="Conversation">
-      <header class="pane-head">
-        <span>Conversation</span>
-        <span class="agents">
-          Agents <b data-agent-count>3</b> · Lead
-          <span class="badge" data-lead-badge>
-            <i class="g g-dot"></i>
-            <svg class="g g-check" viewBox="0 0 12 12" aria-hidden="true"
-              ><path d="M2 6.4 4.7 9 10 3.2"></path></svg
-            >
-            <b data-when="idle">queued</b>
-            <b data-when="run">running</b>
-            <b data-when="done">waiting</b>
-          </span>
-        </span>
-      </header>
-
-      <div class="msg msg-user">Add rate limiting to the API. Tests too.</div>
-
-      <div class="tool" data-ev="1">
-        <span class="chev">›</span>Use tool<i>Warpforge · Spawn agent</i><b>completed</b>
-      </div>
-      <div class="tool" data-ev="2">
-        <span class="chev">›</span>Use tool<i>Warpforge · Spawn agent</i><b>completed</b>
-      </div>
-      <div class="tool" data-ev="3">
-        <span class="chev">›</span>Use tool<i>Warpforge · Read inbox</i><b>completed</b>
-      </div>
-
-      <div class="prose" data-ev="4">
-        Both landed. Token bucket in <code>rate-limit.ts</code>, wired in <code>server.ts</code>, 6
-        tests green.
-      </div>
-
-      <div class="composer">
-        <span class="composer-ph">Steer this session…</span>
-        <div class="composer-bar">
-          <span>Opus 5 ⌄</span><span>High ⌄</span><span>More</span>
-          <i class="send" aria-hidden="true">➤</i>
-        </div>
-      </div>
-    </section>
-
-    <!-- Diff surface -->
-    <section class="pane diff" aria-label="Diff">
-      <div class="tabs">
-        <span class="tab">Files</span>
-        <span class="tab tab-on">Diff<b data-file-count>3</b></span>
-        <span class="tab">Runtime<b>2</b></span>
-        <span class="tab">Pipeline</span>
-      </div>
-      <div class="diff-sub">
-        <span data-file-count-label>3 files</span>
-        <span class="seg"><i class="on">Unified</i><i>Split</i></span>
-      </div>
-
-      <div class="card" data-file="1">
-        <div class="card-head">
-          <span class="chev">⌄</span>
-          <span class="fstatus fstatus-added">ADDED</span>
-          <span class="fpath">middleware/rate-limit.ts</span>
-        </div>
-        <div class="card-act"><span class="hunkno">@@ -18,6 +18,9 @@</span><i class="ok">✓ accept</i><i>✕ reject</i></div>
-        <div class="ln ln-add">+ const bucket = new TokenBucket(limit, windowMs);</div>
-        <div class="ln ln-add">+ if (!bucket.take(key)) return tooMany(res);</div>
-        <div class="ln">&nbsp;&nbsp;return next();</div>
-      </div>
-
-      <div class="card" data-file="2">
-        <div class="card-head">
-          <span class="chev">⌄</span>
-          <span class="fstatus fstatus-modified">MODIFIED</span>
-          <span class="fpath">server.ts</span>
-        </div>
-        <div class="ln ln-del">− app.use(routes);</div>
-        <div class="ln ln-add">+ app.use(rateLimit(), routes);</div>
-      </div>
-    </section>
-
-    <!-- Changes rail -->
-    <aside class="pane rail" aria-label="Changes">
-      <header class="pane-head"><span>Changes</span></header>
-      <div class="rail-all"><i class="cb"></i><span data-file-count-label>3/3 files</span></div>
-      {
-        files.map((f, i) => (
-          <div class="rail-row" data-file={i + 1}>
-            <i class="cb" />
-            <span class={`m m-${f.status}`}>{f.status === "modified" ? "M" : "A"}</span>
-            <span class="rail-path">{f.path}</span>
-            <span class="rail-stat">
-              <b>+{f.add}</b>
-              {f.del > 0 && <s>−{f.del}</s>}
-            </span>
-          </div>
-        ))
-      }
-      <div class="commit">
-        <span class="commit-top">3 selected</span>
-        <span class="commit-box">
-          <span class="commit-msg"
-            >feat(api): add token-bucket rate limiting<i class="caret" aria-hidden="true"></i></span
-          >
-          <i class="gen" aria-hidden="true">✦</i>
-        </span>
-        <span class="commit-row"><i class="cbx"></i>amend<b class="commit-btn">Commit</b></span>
-      </div>
-    </aside>
-  </div>
-
-  <div class="foot">
-    <span class="ws">Local Workspace</span>
-    <button type="button" class="replay" data-replay
-      ><span aria-hidden="true">↻</span> Replay</button
-    >
-    <span class="branch">feat/rate-limit</span>
-  </div>
+<div class="wf-demo-frame" data-forge-demo>
+  <iframe
+    src="/embed/app-demo/"
+    title="Warpforge, running a task"
+    loading="lazy"
+    width={APP_WIDTH}
+    height={APP_HEIGHT}
+    scrolling="no"></iframe>
 </div>
 
-<script>
-  const STEP_MS = [900, 700, 900, 900, 800, 3600];
-
-  function run(demo: HTMLElement) {
-    let timer: number | undefined;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-    const advance = (step: number) => {
-      demo.dataset.step = String(step);
-      if (step >= STEP_MS.length - 1) return;
-      timer = window.setTimeout(() => advance(step + 1), STEP_MS[step]);
-    };
-
-    const start = () => {
-      window.clearTimeout(timer);
-      if (reduced) {
-        demo.dataset.step = "5";
-        return;
-      }
-      advance(0);
-    };
-
-    demo.querySelector("[data-replay]")?.addEventListener("click", start);
-
-    // Only play once it is on screen — an animation that finished above the
-    // fold is an animation nobody saw.
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            start();
-            io.disconnect();
-          }
-        }
-      },
-      { threshold: 0.35 },
-    );
-    io.observe(demo);
+<style define:vars={{ appW: `${APP_WIDTH}`, appH: `${APP_HEIGHT}` }}>
+  .wf-demo-frame {
+    container-type: inline-size;
+    position: relative;
+    aspect-ratio: var(--appW) / var(--appH);
+    border: 1px solid hsl(var(--border));
+    border-radius: 12px;
+    overflow: hidden;
+    background: hsl(var(--background));
+    box-shadow:
+      0 1px 0 hsl(0 0% 100% / 0.03) inset,
+      0 30px 80px -30px hsl(0 0% 0% / 0.7);
   }
 
-  document.querySelectorAll<HTMLElement>("[data-forge-demo]").forEach(run);
+  /* Laid out at desk size, then scaled down to whatever width the column
+     gives it. The ratio comes from script because `scale()` needs a unitless
+     number and CSS cannot divide one length by another; until it arrives the
+     frame is transparent rather than showing a burst of full-size app. */
+  iframe {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+    border: 0;
+    color-scheme: dark;
+    opacity: 0;
+    transform: scale(var(--wf-demo-scale, 1));
+    transform-origin: top left;
+    transition: opacity 0.25s ease;
+  }
+  .wf-demo-frame[data-scaled] iframe {
+    opacity: 1;
+  }
+</style>
+
+<script>
+  // Keep the frame's scale in step with its width. One observer for the page;
+  // `--wf-demo-scale` is the only thing it writes.
+  const frames = document.querySelectorAll<HTMLElement>("[data-forge-demo]");
+  if (frames.length > 0) {
+    const APP_WIDTH = 1440;
+    const fit = (frame: HTMLElement) => {
+      frame.style.setProperty("--wf-demo-scale", String(frame.clientWidth / APP_WIDTH));
+      frame.dataset.scaled = "";
+    };
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) fit(entry.target as HTMLElement);
+    });
+    frames.forEach((frame) => {
+      fit(frame);
+      observer.observe(frame);
+    });
+  }
 </script>

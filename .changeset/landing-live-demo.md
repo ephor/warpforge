@@ -2,4 +2,4 @@
 "warpforge": patch
 ---
 
-The website's front page now opens with Warpforge running rather than a screenshot of it: a working miniature plays a real task through — a Claude Code lead dispatching a Codex sub-agent and an opencode sub-agent, both reporting back, and the whole thing landing as a diff with its commit message already drafted. Replay it as often as you like.
+The website's front page now opens with Warpforge itself running, not a screenshot or a mock-up of it. A real task plays through — a Claude lead that hands the test suite to Codex, both reporting back, edits stacking up into a diff you can read line by line, and a commit waiting at the end. Click into it: the tabs, the file tree and the changes rail all work, because it is the app.
