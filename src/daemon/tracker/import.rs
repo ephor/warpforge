@@ -87,13 +87,13 @@ pub fn adopt_imported(
         })
         .collect();
 
-    // A project-local item check that respects the configured backend so a YAML
+    // A project-local item read that respects the configured backend so a YAML
     // mode never reads (or writes) the SQLite `backlog_items` shadow rows.
-    let item_exists = |item_id: &str| -> Result<bool> {
+    let load_item = |item_id: &str| -> Result<Option<wire::BacklogItem>> {
         if let Some(dir) = yaml_project_path {
-            Ok(crate::daemon::backlog::item_exists(dir, project, item_id)?)
+            crate::daemon::backlog::read(dir, project, item_id)
         } else {
-            Ok(store.get_backlog_item(item_id)?.is_some())
+            store.get_backlog_item(item_id)
         }
     };
     let write_item = |item: &wire::BacklogItem| -> Result<()> {
@@ -103,16 +103,28 @@ pub fn adopt_imported(
             store.upsert_backlog_item(item)
         }
     };
-    let update_remote = |item_id: &str, status: &str, remote_status: Option<&str>, url: &str| {
+    // The row mirrors the issue, so it carries the *tracker's* timestamps, not
+    // the moment this sync ran: stamping `now` here made every synced item look
+    // freshly touched and re-sorted the board on each refresh.
+    let update_remote = |item_id: &str, issue: &RemoteIssue| {
+        let created_at = issue.created_or_updated();
         if let Some(dir) = yaml_project_path {
             crate::daemon::backlog::update(dir, project, item_id, |item| {
-                item.status = status.to_string();
-                item.remote_status = remote_status.map(str::to_string);
-                item.url = Some(url.to_string());
-                item.updated_at = crate::daemon::task::now_secs();
+                item.status = issue.status.clone();
+                item.remote_status = Some(issue.remote_status.clone());
+                item.url = Some(issue.url.clone());
+                item.created_at = created_at;
+                item.updated_at = issue.updated_at;
             })
         } else {
-            store.update_backlog_remote(item_id, status, remote_status, url)
+            store.update_backlog_remote(
+                item_id,
+                &issue.status,
+                Some(issue.remote_status.as_str()),
+                &issue.url,
+                issue.updated_at,
+            )?;
+            store.set_backlog_created_at(item_id, created_at)
         }
     };
 
@@ -128,7 +140,8 @@ pub fn adopt_imported(
                 issue.external_id.clone(),
             );
             if let Some(existing) = known.get(&key) {
-                if !item_exists(&existing.item_id)? {
+                let stored = load_item(&existing.item_id)?;
+                if stored.is_none() {
                     let item = wire::BacklogItem {
                         id: existing.item_id.clone(),
                         number: next_number,
@@ -142,7 +155,7 @@ pub fn adopt_imported(
                         url: Some(issue.url.clone()),
                         remote_status: Some(issue.remote_status.clone()),
                         assignee: issue.assignee.clone(),
-                        created_at: issue.updated_at,
+                        created_at: issue.created_or_updated(),
                         updated_at: issue.updated_at,
                         task_id: existing.task_id.clone(),
                     };
@@ -164,9 +177,21 @@ pub fn adopt_imported(
                     next_number += 1;
                     continue;
                 }
-                if existing.status == issue.status
-                    && existing.remote_status.as_deref() == Some(issue.remote_status.as_str())
-                {
+                let status_moved = existing.status != issue.status
+                    || existing.remote_status.as_deref() != Some(issue.remote_status.as_str());
+                // Rows imported before the tracker's own timestamps were read
+                // stored the fetch time as their creation time, so "Created"
+                // and "Updated" always read the same. Repair them in place
+                // rather than asking anyone to re-import.
+                let stamps_stale = stored.is_some_and(|item| {
+                    item.created_at != issue.created_or_updated()
+                        || item.updated_at != issue.updated_at
+                });
+                if !status_moved && !stamps_stale {
+                    continue;
+                }
+                if !status_moved {
+                    update_remote(&existing.item_id, &issue)?;
                     continue;
                 }
                 let mut link = existing.clone();
@@ -174,12 +199,7 @@ pub fn adopt_imported(
                 link.remote_status = Some(issue.remote_status.clone());
                 link.last_synced_at = now;
                 store.upsert_tracker_link(&link)?;
-                update_remote(
-                    &link.item_id,
-                    &link.status,
-                    link.remote_status.as_deref(),
-                    &link.url,
-                )?;
+                update_remote(&link.item_id, &issue)?;
                 synced.push(wire::SyncedExternalItem {
                     id: link.item_id,
                     url: link.url,
@@ -214,7 +234,7 @@ pub fn adopt_imported(
                 url: Some(issue.url.clone()),
                 remote_status: Some(issue.remote_status.clone()),
                 assignee: issue.assignee.clone(),
-                created_at: issue.updated_at,
+                created_at: issue.created_or_updated(),
                 updated_at: issue.updated_at,
                 task_id: None,
             })?;
@@ -362,6 +382,7 @@ mod tests {
             status: "todo".into(),
             remote_status: "OPEN".into(),
             assignee: None,
+            created_at: 1,
             updated_at: 1,
         };
         let (imported, _) =
@@ -370,6 +391,49 @@ mod tests {
         assert_eq!(
             store.get_backlog_item("item-1").unwrap().unwrap().title,
             "Recovered issue"
+        );
+    }
+
+    #[test]
+    fn imported_rows_carry_the_issue_creation_time_and_repair_older_rows() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+        let issue = || RemoteIssue {
+            external_id: "#1".into(),
+            title: "Opened long ago".into(),
+            body: String::new(),
+            url: "https://github.com/demo/1".into(),
+            status: "todo".into(),
+            remote_status: "OPEN".into(),
+            assignee: None,
+            created_at: 100,
+            updated_at: 500,
+        };
+
+        let (imported, _) =
+            adopt_imported(&store, "demo", None, vec![("github".into(), vec![issue()])]).unwrap();
+        let item_id = imported[0].item_id.clone();
+        let item = store.get_backlog_item(&item_id).unwrap().unwrap();
+        assert_eq!(item.created_at, 100, "created is the issue's own open time");
+        assert_eq!(item.updated_at, 500);
+
+        // A row imported before creation times were read stored the fetch time
+        // as its creation time. The next sync repairs it, even though the
+        // issue's status has not moved.
+        store.set_backlog_created_at(&item_id, 500).unwrap();
+        let (again, synced) =
+            adopt_imported(&store, "demo", None, vec![("github".into(), vec![issue()])]).unwrap();
+        assert!(again.is_empty(), "a known issue is not imported twice");
+        assert!(
+            synced.is_empty(),
+            "an unmoved status is not a status change"
+        );
+        assert_eq!(
+            store
+                .get_backlog_item(&item_id)
+                .unwrap()
+                .unwrap()
+                .created_at,
+            100
         );
     }
 
@@ -395,6 +459,7 @@ mod tests {
             status: "todo".into(),
             remote_status: "OPEN".into(),
             assignee: None,
+            created_at: 1,
             updated_at: 1,
         };
         let (imported, _) = adopt_imported(
@@ -531,6 +596,7 @@ mod tests {
             status: "todo".into(),
             remote_status: "OPEN".into(),
             assignee: None,
+            created_at: 1,
             updated_at: 1,
         };
         let (imported, _) =
@@ -550,6 +616,7 @@ mod tests {
             status: "todo".into(),
             remote_status: "OPEN".into(),
             assignee: None,
+            created_at: 1,
             updated_at: 1,
         };
         let (second, _) =

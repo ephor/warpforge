@@ -84,7 +84,7 @@ pub(super) async fn github_list_issues(repo_dir: &str, state: &str) -> Result<Ve
             "--limit",
             &limit,
             "--json",
-            "number,title,body,state,updatedAt,url,assignees",
+            "number,title,body,state,createdAt,updatedAt,url,assignees",
         ],
     )
     .await?;
@@ -130,6 +130,11 @@ pub(super) async fn github_list_issues(repo_dir: &str, state: &str) -> Result<Ve
                 },
                 remote_status: state.to_string(),
                 assignee: assignee_login(issue.get("assignees"), issue.get("assignee")),
+                created_at: issue
+                    .get("createdAt")
+                    .and_then(|u| u.as_str())
+                    .map(rfc3339_secs)
+                    .unwrap_or(0),
                 updated_at: issue
                     .get("updatedAt")
                     .and_then(|u| u.as_str())
@@ -259,6 +264,11 @@ pub(super) async fn github_search_issues_page(
                 .into(),
                 remote_status: native_state.into(),
                 assignee: assignee_login(issue.get("assignees"), issue.get("assignee")),
+                created_at: issue
+                    .get("created_at")
+                    .and_then(|v| v.as_str())
+                    .map(rfc3339_secs)
+                    .unwrap_or_default(),
                 updated_at: issue
                     .get("updated_at")
                     .and_then(|v| v.as_str())

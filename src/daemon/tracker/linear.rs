@@ -320,6 +320,8 @@ struct LinearIssueNode {
     description: Option<String>,
     url: String,
     #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
     updated_at: Option<String>,
     state: Option<LinearState>,
     #[serde(default)]
@@ -345,7 +347,7 @@ pub(super) async fn linear_list_issues(team_id: &str) -> Result<Vec<RemoteIssue>
     let req = serde_json::json!({
         "query": "query TeamIssues($teamId: String!, $first: Int!) { \
                   team(id: $teamId) { issues(first: $first) { nodes { \
-                  identifier title description url updatedAt state { name } } } } }",
+                  identifier title description url createdAt updatedAt state { name } } } } }",
         "variables": { "teamId": team_id, "first": IMPORT_LIMIT as i64 }
     });
     let data: TeamIssuesData = linear_query(&req).await?;
@@ -365,6 +367,7 @@ pub(super) async fn linear_list_issues(team_id: &str) -> Result<Vec<RemoteIssue>
                 status: linear_status_name(&state),
                 remote_status: state,
                 assignee: node.assignee.and_then(|a| a.display_name.or(a.name)),
+                created_at: node.created_at.as_deref().map(rfc3339_secs).unwrap_or(0),
                 updated_at: node.updated_at.as_deref().map(rfc3339_secs).unwrap_or(0),
             }
         })
@@ -384,7 +387,7 @@ pub(super) async fn linear_list_issues_page(
     let mut has_next = false;
     for _ in 0..=page {
         let req = serde_json::json!({
-            "query": "query TeamIssues($teamId: String!, $first: Int!, $after: String) { team(id: $teamId) { issues(first: $first, after: $after) { nodes { identifier title description url updatedAt state { name } assignee { name displayName } } pageInfo { hasNextPage endCursor } } } }",
+            "query": "query TeamIssues($teamId: String!, $first: Int!, $after: String) { team(id: $teamId) { issues(first: $first, after: $after) { nodes { identifier title description url createdAt updatedAt state { name } assignee { name displayName } } pageInfo { hasNextPage endCursor } } } }",
             "variables": { "teamId": team_id, "first": page_size as i64, "after": cursor }
         });
         let data: TeamIssuesData = linear_query(&req).await?;
@@ -409,6 +412,7 @@ pub(super) async fn linear_list_issues_page(
                     status: linear_status_name(&state),
                     remote_status: state,
                     assignee: node.assignee.and_then(|a| a.display_name.or(a.name)),
+                    created_at: node.created_at.as_deref().map(rfc3339_secs).unwrap_or(0),
                     updated_at: node.updated_at.as_deref().map(rfc3339_secs).unwrap_or(0),
                 }
             })
