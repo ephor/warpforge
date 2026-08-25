@@ -151,6 +151,53 @@ describe("WorkItemDrawer", () => {
     expect(screen.queryByRole("combobox", { name: "Assignee" })).not.toBeInTheDocument();
   });
 
+  it("writes a description on a local item and shows what was saved", async () => {
+    renderDrawer({ ...localItem, body: "" });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: "Add a description…" }));
+    await user.type(screen.getByRole("textbox", { name: "Description" }), "It runs out at 40.");
+    // Clicking away commits, the way a note-taking field is expected to.
+    await user.tab();
+
+    await vi.waitFor(() =>
+      expect(daemon.updateBacklog).toHaveBeenCalledWith(
+        expect.objectContaining({ itemId: "b-1", body: "It runs out at 40." }),
+      ),
+    );
+    // The drawer holds a snapshot of the row, so the edit has to land here too
+    // or the panel keeps showing the text it just replaced.
+    expect(await screen.findByText("It runs out at 40.")).toBeInTheDocument();
+  });
+
+  // Escape is the editor's while one is open — Radix reads the key before the
+  // textarea does, so without holding it the panel closes over the draft.
+  it("cancels an edit on Escape without closing the panel", async () => {
+    const onClose = vi.fn<() => void>();
+    renderDrawer(localItem, { onClose });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: "Edit description" }));
+    await user.type(screen.getByRole("textbox", { name: "Description" }), " and more");
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("textbox", { name: "Description" })).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(daemon.updateBacklog).not.toHaveBeenCalled();
+    expect(screen.getByText(/runs out of range/)).toBeInTheDocument();
+
+    // With no editor open, Escape is the panel's again.
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("leaves a tracker description read-only", () => {
+    renderDrawer({ ...localItem, source: "github", body: "Reported upstream." });
+
+    expect(screen.getByText("Reported upstream.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit description" })).not.toBeInTheDocument();
+  });
+
   it("starts a task from an item that has none, and opens the one it has", async () => {
     const onStartTask = vi.fn<(item: WorkItem) => void>();
     const { unmount } = renderDrawer(localItem, { onStartTask });

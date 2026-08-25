@@ -12,7 +12,7 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -130,6 +130,7 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
   const [creating, setCreating] = useState(false);
   const [enhancing, setEnhancing] = useState(false);
   const titleRef = useRef<HTMLTextAreaElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const textGenAgentId = useUi((state) => state.textGenAgentId);
   const textGenModel = useUi((state) => state.textGenModel);
 
@@ -141,6 +142,22 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
     setPriority("none");
     setAssignee(undefined);
   }, []);
+
+  // Both prompts grow with what is typed rather than scrolling inside a fixed
+  // box: a description clipped mid-line reads as text the dialog swallowed.
+  // Same shape as the chat composer's auto-size.
+  useLayoutEffect(() => {
+    const grow = (node: HTMLTextAreaElement | null, cap: number) => {
+      if (!node) return;
+      node.style.height = "auto";
+      node.style.height = `${Math.min(node.scrollHeight, cap)}px`;
+    };
+    grow(titleRef.current, 120);
+    // Expanded mode hands the description whatever height is left, so an
+    // inline height would only fight the flex child for it.
+    if (expanded && bodyRef.current) bodyRef.current.style.height = "";
+    else grow(bodyRef.current, 260);
+  }, [body, expanded, title]);
 
   // Opens with the prompt focused. The drawer stays mounted (Radix keeps the
   // DOM hidden), so the reset runs on each open — and on each project switch,
@@ -350,10 +367,12 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
           </header>
 
           <div className="flex min-h-0 flex-1 flex-col px-4">
-            {/* Prompt: one borderless title. Focus is implied — autofocused on open. */}
+            {/* Prompt: a borderless title over a dimmer description, so the
+                one required field still reads as the whole prompt and the
+                optional detail sits under it rather than beside it. */}
             <div
               className={cn(
-                "flex shrink-0 flex-col pt-3",
+                "flex shrink-0 flex-col gap-1 pt-3",
                 expanded && "min-h-0 flex-1 overflow-y-auto",
               )}
             >
@@ -362,17 +381,28 @@ export function NewWorkItemDrawer({ open, onOpenChange, project }: NewWorkItemDr
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    void handleCreate();
-                  }
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  // A newline in a title is never what anyone meant, so the
+                  // shifted key moves on to where one belongs instead.
+                  if (event.shiftKey) bodyRef.current?.focus();
+                  else void handleCreate();
                 }}
                 placeholder="What needs to happen?"
                 rows={1}
                 aria-label="Title"
+                className="min-h-[2.25rem] resize-none overflow-y-auto bg-transparent text-lg font-medium text-foreground outline-none placeholder:text-muted-foreground/60"
+              />
+              <textarea
+                ref={bodyRef}
+                value={body}
+                onChange={(event) => setBody(event.target.value)}
+                placeholder="Add a description… (markdown, optional)"
+                rows={1}
+                aria-label="Description"
                 className={cn(
-                  "resize-none overflow-y-auto bg-transparent text-lg font-medium text-foreground outline-none placeholder:text-muted-foreground/60",
-                  expanded ? "min-h-[10vh] flex-1" : "min-h-[7rem] max-h-[40vh]",
+                  "resize-none overflow-y-auto bg-transparent text-sm leading-relaxed text-foreground/90 outline-none placeholder:text-muted-foreground/60",
+                  expanded ? "min-h-[10vh] flex-1" : "min-h-[3rem]",
                 )}
               />
             </div>
