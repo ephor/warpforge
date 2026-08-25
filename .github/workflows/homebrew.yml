@@ -41,7 +41,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download "$VERSION" --repo ephor/warpforge \
+          gh release download "$VERSION" --repo warpforgehq/warpforge \
             --pattern 'SHA256SUMS' --dir .
           cat SHA256SUMS
 

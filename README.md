@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ephor/warpforge/releases/latest"><img src="https://img.shields.io/github/v/release/ephor/warpforge?display_name=tag&label=download%20for%20macOS&color=7c9cff" alt="Latest release"></a>
-  <a href="https://github.com/ephor/warpforge/actions/workflows/ci.yml"><img src="https://github.com/ephor/warpforge/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/warpforgehq/warpforge/releases/latest"><img src="https://img.shields.io/github/v/release/warpforgehq/warpforge?display_name=tag&label=download%20for%20macOS&color=7c9cff" alt="Latest release"></a>
+  <a href="https://github.com/warpforgehq/warpforge/actions/workflows/ci.yml"><img src="https://github.com/warpforgehq/warpforge/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-8bcf6a" alt="MIT license"></a>
 </p>
 
@@ -43,7 +43,7 @@ brew install --cask ephor/tap/warpforge
 
 **Or manually:**
 
-1. Open the [latest Warpforge release](https://github.com/ephor/warpforge/releases/latest).
+1. Open the [latest Warpforge release](https://github.com/warpforgehq/warpforge/releases/latest).
 2. Download `Warpforge_<version>_aarch64.dmg`.
 3. Open the DMG and drag **Warpforge** into **Applications**.
 4. Launch it and select the coding agents you want enabled.
@@ -106,7 +106,7 @@ Full guide: **[Projects and their runtime](https://warpforge.app/guides/projects
 Only needed to develop Warpforge itself or to run it where no build is published — the [installer](#install) above is the recommended path otherwise.
 
 ```bash
-git clone https://github.com/ephor/warpforge.git
+git clone https://github.com/warpforgehq/warpforge.git
 cd warpforge/desktop
 bun install
 bun run tauri dev
