@@ -13,6 +13,11 @@
 import "../../styles/app-theme.css";
 import "../../../../desktop/src/globals.css";
 import AppDemo from "../../components/landing/demo/AppDemo";
+import { THEMES } from "@app/lib/themes";
+import { THEME_STORAGE_KEY } from "../../lib/landing-theme";
+
+// Handed to the inline script below, which runs before the island hydrates.
+const themes = Object.fromEntries(THEMES.map((t) => [t.id, { colors: t.colors, mode: t.mode }]));
 ---
 
 <!doctype html>
@@ -22,6 +27,27 @@ import AppDemo from "../../components/landing/demo/AppDemo";
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex, nofollow" />
     <title>Warpforge demo</title>
+    {/*
+      The frame shares an origin with the landing page, so it can read the
+      chosen theme rather than wait to be told. It used to only learn one from
+      a `postMessage`, which a reload never replays — so the demo came back in
+      the default theme while the page around it kept the choice. Inline and
+      before the island so there is no flash of the wrong palette.
+    */}
+    <script is:inline define:vars={{ storageKey: THEME_STORAGE_KEY, themes }}>
+      try {
+        const theme = themes[localStorage.getItem(storageKey)];
+        if (theme) {
+          const root = document.documentElement;
+          for (const [name, value] of Object.entries(theme.colors)) {
+            root.style.setProperty(`--${name}`, value);
+          }
+          root.classList.toggle("dark", theme.mode === "dark");
+        }
+      } catch {
+        /* Storage unavailable — the built-in theme is a fine fallback. */
+      }
+    </script>
     <style>
       html,
       body {

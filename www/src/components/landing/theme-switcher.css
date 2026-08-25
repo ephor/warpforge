@@ -1,0 +1,129 @@
+/**
+ * The nav's theme picker. Plain CSS, because the landing page has no Tailwind
+ * build to resolve utility classes against.
+ *
+ * Colours are the app's tokens, which the switcher itself keeps up to date —
+ * so the control repaints in whatever theme it just chose.
+ */
+
+.wf-theme {
+  position: relative;
+}
+
+.wf-theme-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 1.9rem;
+  padding: 0 0.55rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.wf-theme-btn:hover {
+  border-color: hsl(var(--primary) / 0.5);
+}
+.wf-theme-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.55);
+}
+
+/* One circle that names the theme: its accent against its ground. */
+.wf-theme-dot {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid hsl(var(--border));
+}
+.wf-theme-name {
+  white-space: nowrap;
+}
+@media (max-width: 560px) {
+  .wf-theme-name {
+    display: none;
+  }
+}
+.wf-theme-caret {
+  width: 0.75rem;
+  height: 0.75rem;
+  flex-shrink: 0;
+  color: hsl(var(--muted-foreground));
+}
+
+/* ---- the panel ---- */
+.wf-theme-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.375rem;
+  width: 19rem;
+  padding: 0.375rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.75rem;
+  background: hsl(var(--popover, var(--card)));
+  box-shadow: 0 16px 40px -12px hsl(0 0% 0% / 0.55);
+}
+
+/* One card per theme, as the app's Appearance section draws them. */
+.wf-theme-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid hsl(var(--border) / 0.7);
+  border-radius: 0.5rem;
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.wf-theme-item:hover {
+  border-color: hsl(var(--primary) / 0.5);
+}
+.wf-theme-item:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.55);
+}
+.wf-theme-item-on {
+  border-color: hsl(var(--ring));
+  background: hsl(var(--accent));
+}
+.wf-theme-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.wf-sw {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.wf-sw > span {
+  border-radius: 50%;
+  border: 1px solid hsl(var(--border));
+}
+.wf-sw-md > span {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+.wf-sw-sm > span {
+  width: 0.75rem;
+  height: 0.75rem;
+}
