@@ -8,9 +8,9 @@
 //! `diff`); Linear uses its GraphQL API over reqwest with a personal API key.
 //!
 //! Directionality: warpforge creates issues in either tracker and *reads* their
-//! status back. Writing status *to* GitHub is deliberately unsupported
-//! (GitHub's status model is project-specific); Linear status writes are also
-//! out of scope for now — the board mirrors remote state.
+//! status back — for GitHub that means the Projects V2 board column, which is
+//! where a repo's real status lives. Writing status *out* is deliberately
+//! unsupported for both trackers; the board mirrors remote state.
 //!
 //! Persistence (`tracker_links` rows) is owned by `Store`; the actor layer
 //! hands rows in/out because `Store` (rusqlite `Connection`) is not `Send` and
@@ -73,6 +73,59 @@ impl RemoteIssue {
         } else {
             self.created_at
         }
+    }
+}
+
+/// A tracker's own status word, mapped onto warpforge's five. `None` for a
+/// label this vocabulary does not recognize — the caller decides what an
+/// unknown column means, because only it knows what else it has to go on
+/// (ADR-0002 invariant 6: an unknown label never overwrites the normalized
+/// status, it is kept in `remote_status` for display).
+///
+/// Substring matching, not a table: Linear states and GitHub project columns
+/// are named by whoever set the board up ("In progress", "In Progress · dev",
+/// "Doing"), and no fixed list survives contact with that.
+fn normalize_status(label: &str) -> Option<&'static str> {
+    let low = label.trim().to_lowercase();
+    if low.is_empty() {
+        return None;
+    }
+    // Cancelled is checked first: "Cancelled (done)" is not done.
+    if low.contains("cancel") || low.contains("won't") || low.contains("wont ") {
+        Some("cancelled")
+    } else if low.contains("done")
+        || low.contains("complete")
+        || low.contains("closed")
+        || low.contains("shipped")
+        || low.contains("merged")
+    {
+        Some("done")
+    } else if low.contains("progress")
+        || low.contains("started")
+        || low.contains("doing")
+        || low.contains("review")
+        // Boards name the verification column "In Test", "Testing" or "QA";
+        // work sitting there is in flight, not waiting to be picked up.
+        || low.contains("test")
+        || low
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|word| word == "qa")
+    {
+        Some("in_progress")
+    } else if low.contains("wait") || low.contains("block") || low.contains("hold") {
+        Some("waiting")
+    } else if low.contains("todo")
+        || low.contains("to do")
+        || low.contains("backlog")
+        || low.contains("triage")
+        || low.contains("ready")
+        || low.contains("planned")
+        || low.contains("open")
+        || low.contains("new")
+    {
+        Some("todo")
+    } else {
+        None
     }
 }
 
@@ -243,6 +296,25 @@ mod tests {
             created_at,
             updated_at,
         }
+    }
+
+    #[test]
+    fn status_words_normalize_across_trackers() {
+        let of = |label: &str| normalize_status(label);
+        assert_eq!(of("Done"), Some("done"));
+        assert_eq!(of("In Progress"), Some("in_progress"));
+        assert_eq!(of("In review"), Some("in_progress"));
+        assert_eq!(of("In Test"), Some("in_progress"));
+        assert_eq!(of("QA"), Some("in_progress"));
+        assert_eq!(of("Blocked"), Some("waiting"));
+        assert_eq!(of("Backlog"), Some("todo"));
+        // Cancelled wins over done, or "Cancelled (not done)" reads as shipped.
+        assert_eq!(of("Cancelled"), Some("cancelled"));
+        assert_eq!(of("Won't do"), Some("cancelled"));
+        // A board column nobody can guess the meaning of stays unknown rather
+        // than being forced into one of the five.
+        assert_eq!(of("Icebox"), None);
+        assert_eq!(of("  "), None);
     }
 
     #[test]

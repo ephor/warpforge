@@ -1,10 +1,14 @@
 //! GitHub, through the user's `gh` CLI session (already required for PRs in
 //! `diff`).
+//!
+//! Status comes from the issue's Projects V2 board column, so the listing is a
+//! GraphQL query rather than `gh issue list`; the CLI listing remains as the
+//! fallback for a token without the `project` scope.
 
 use anyhow::{anyhow, bail, Context, Result};
 use tokio::process::Command;
 
-use super::{rfc3339_secs, RemoteIssue, IMPORT_LIMIT, NETWORK_TIMEOUT};
+use super::{normalize_status, rfc3339_secs, RemoteIssue, IMPORT_LIMIT, NETWORK_TIMEOUT};
 
 /// Run `gh` with args in the given repo dir (None = anywhere / current dir).
 ///
@@ -67,12 +71,163 @@ pub(crate) async fn github_owner_repo(repo_dir: &str) -> Result<(String, String)
     Ok((owner.to_string(), repo.to_string()))
 }
 
-/// List the repo's issues. Pull requests are excluded: `gh issue list` already
-/// filters them out, unlike the REST issues endpoint.
+/// The normalized status of a GitHub issue.
+///
+/// A closed issue is finished work whatever a board says, so its state decides;
+/// `NOT_PLANNED` is the closest thing GitHub has to "cancelled". An open issue
+/// takes the status from its Projects V2 board column, which is where GitHub
+/// users actually track progress — an unrecognized column name leaves it as
+/// untouched work rather than guessing.
+fn github_status(state: &str, state_reason: Option<&str>, board_column: Option<&str>) -> String {
+    if state.eq_ignore_ascii_case("closed") {
+        return if state_reason.is_some_and(|reason| reason.eq_ignore_ascii_case("not_planned")) {
+            "cancelled"
+        } else {
+            "done"
+        }
+        .to_string();
+    }
+    board_column
+        .and_then(normalize_status)
+        .unwrap_or("todo")
+        .to_string()
+}
+
+/// List the repo's issues with the board column each one sits in.
+///
+/// GitHub's own status vocabulary is only open/closed; the status a team reads
+/// off a repo lives in a Projects V2 "Status" field, and only GraphQL can
+/// answer for it. A token without the `project` scope (or a host that has no
+/// projects) falls back to [`github_rest_issues`], which is the same listing
+/// with open/closed as the status.
+pub(super) async fn github_list_issues(repo_dir: &str, state: &str) -> Result<Vec<RemoteIssue>> {
+    match github_project_issues(repo_dir, state).await {
+        Ok(issues) => Ok(issues),
+        Err(e) => {
+            eprintln!("[tracker] github board statuses unavailable ({e:#}); using open/closed");
+            github_rest_issues(repo_dir, state).await
+        }
+    }
+}
+
+/// The issue listing query. `state` is `open` for import (a closed issue is not
+/// backlog) and anything else for sync (an item on the board may since have
+/// been closed).
+///
+/// The state filter is interpolated rather than passed as a variable: `gh`
+/// sends every `-f` as a string and the field takes a list of enums. Both
+/// values are ours, not a caller's, so there is nothing to inject.
+fn project_issues_query(state: &str) -> String {
+    let states = if state.eq_ignore_ascii_case("open") {
+        "[OPEN]"
+    } else {
+        "[OPEN, CLOSED]"
+    };
+    format!(
+        "query($owner: String!, $repo: String!, $first: Int!) {{ \
+           repository(owner: $owner, name: $repo) {{ \
+             issues(first: $first, states: {states}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ \
+               nodes {{ number title body url state stateReason createdAt updatedAt \
+                 assignees(first: 1) {{ nodes {{ login }} }} \
+                 projectItems(first: 5, includeArchived: false) {{ nodes {{ \
+                   fieldValueByName(name: \"Status\") {{ \
+                     ... on ProjectV2ItemFieldSingleSelectValue {{ name }} }} }} }} }} }} }} }}"
+    )
+}
+
+/// The GraphQL listing: issues plus their Projects V2 "Status" field.
+async fn github_project_issues(repo_dir: &str, state: &str) -> Result<Vec<RemoteIssue>> {
+    let (owner, repo) = github_owner_repo(repo_dir).await?;
+    // The state filter is interpolated rather than passed as a variable: `gh`
+    // sends every `-f` as a string and the field takes a list of enums. The two
+    // values are ours, not the caller's, so there is nothing to inject.
+    let query_arg = format!("query={}", project_issues_query(state));
+    let owner_arg = format!("owner={owner}");
+    let repo_arg = format!("repo={repo}");
+    let first_arg = format!("first={IMPORT_LIMIT}");
+    let out = gh(
+        Some(repo_dir),
+        &[
+            "api", "graphql", "-f", &query_arg, "-F", &owner_arg, "-F", &repo_arg, "-F", &first_arg,
+        ],
+    )
+    .await?;
+    if !out.status.success() {
+        bail!(
+            "GitHub issue query failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let payload: serde_json::Value =
+        serde_json::from_slice(&out.stdout).context("parsing GitHub issue query")?;
+    let nodes = payload
+        .pointer("/data/repository/issues/nodes")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow!("GitHub issue query returned no issues"))?;
+    Ok(nodes
+        .iter()
+        .filter_map(|issue| {
+            let number = issue.get("number")?.as_u64()?;
+            let text = |key: &str| {
+                issue
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let state = issue
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("OPEN");
+            let column = board_column(issue);
+            Some(RemoteIssue {
+                external_id: format!("#{number}"),
+                title: text("title"),
+                body: text("body"),
+                url: text("url"),
+                status: github_status(
+                    state,
+                    issue.get("stateReason").and_then(|v| v.as_str()),
+                    column.as_deref(),
+                ),
+                // The board column is what the team sees on GitHub, so that is
+                // the label to show; without one there is only open/closed.
+                remote_status: column.unwrap_or_else(|| state.to_string()),
+                assignee: issue
+                    .pointer("/assignees/nodes")
+                    .and_then(|v| v.as_array())
+                    .and_then(|nodes| nodes.first())
+                    .and_then(|node| node.get("login"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                created_at: rfc3339_secs(&text("createdAt")),
+                updated_at: rfc3339_secs(&text("updatedAt")),
+            })
+        })
+        .collect())
+}
+
+/// The issue's Projects V2 "Status" column. An issue can sit on several boards;
+/// the first one that has a Status value answers, because a project without
+/// that field says nothing about the work.
+fn board_column(issue: &serde_json::Value) -> Option<String> {
+    issue
+        .pointer("/projectItems/nodes")?
+        .as_array()?
+        .iter()
+        .find_map(|item| {
+            item.pointer("/fieldValueByName/name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+}
+
+/// The `gh issue list` fallback. Pull requests are excluded: `gh issue list`
+/// already filters them out, unlike the REST issues endpoint.
 ///
 /// `state` is `open` for import (a closed issue is not backlog) and `all` for
 /// sync (an item on the board may since have been closed).
-pub(super) async fn github_list_issues(repo_dir: &str, state: &str) -> Result<Vec<RemoteIssue>> {
+async fn github_rest_issues(repo_dir: &str, state: &str) -> Result<Vec<RemoteIssue>> {
     let limit = IMPORT_LIMIT.to_string();
     let out = gh(
         Some(repo_dir),
@@ -121,13 +276,11 @@ pub(super) async fn github_list_issues(repo_dir: &str, state: &str) -> Result<Ve
                     .and_then(|u| u.as_str())
                     .unwrap_or_default()
                     .to_string(),
-                // GitHub has no status vocabulary beyond open/closed; the
-                // native label is surfaced as-is and never written back.
-                status: if state.eq_ignore_ascii_case("closed") {
-                    "done".into()
-                } else {
-                    "todo".into()
-                },
+                status: github_status(
+                    state,
+                    issue.get("stateReason").and_then(|v| v.as_str()),
+                    None,
+                ),
                 remote_status: state.to_string(),
                 assignee: assignee_login(issue.get("assignees"), issue.get("assignee")),
                 created_at: issue
@@ -256,12 +409,11 @@ pub(super) async fn github_search_issues_page(
                     .and_then(|v| v.as_str())
                     .unwrap_or_default()
                     .into(),
-                status: if native_state.eq_ignore_ascii_case("closed") {
-                    "done"
-                } else {
-                    "todo"
-                }
-                .into(),
+                status: github_status(
+                    native_state,
+                    issue.get("state_reason").and_then(|v| v.as_str()),
+                    None,
+                ),
                 remote_status: native_state.into(),
                 assignee: assignee_login(issue.get("assignees"), issue.get("assignee")),
                 created_at: issue
@@ -328,4 +480,58 @@ pub async fn github_create_issue(
         .unwrap_or("")
         .to_string();
     Ok((format!("#{number}"), url))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_issue_is_finished_whatever_the_board_says() {
+        assert_eq!(github_status("CLOSED", None, Some("In Progress")), "done");
+        assert_eq!(github_status("CLOSED", Some("COMPLETED"), None), "done");
+        assert_eq!(
+            github_status("CLOSED", Some("NOT_PLANNED"), None),
+            "cancelled"
+        );
+    }
+
+    #[test]
+    fn an_open_issue_takes_its_status_from_the_board() {
+        assert_eq!(
+            github_status("OPEN", None, Some("In Progress")),
+            "in_progress"
+        );
+        assert_eq!(github_status("OPEN", None, Some("Done")), "done");
+        // No board, or a column this vocabulary cannot place, reads as
+        // untouched work rather than a guess.
+        assert_eq!(github_status("OPEN", None, None), "todo");
+        assert_eq!(github_status("OPEN", None, Some("Icebox")), "todo");
+    }
+
+    #[test]
+    fn the_board_column_is_the_first_project_that_has_a_status_field() {
+        let issue = serde_json::json!({
+            "projectItems": { "nodes": [
+                { "fieldValueByName": null },
+                { "fieldValueByName": { "name": "In Test" } },
+            ]}
+        });
+        assert_eq!(board_column(&issue).as_deref(), Some("In Test"));
+        assert_eq!(board_column(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn the_issue_query_asks_for_the_status_field_and_scopes_by_state() {
+        let import = project_issues_query("open");
+        assert!(import.contains("states: [OPEN]"), "{import}");
+        assert!(
+            project_issues_query("all").contains("states: [OPEN, CLOSED]"),
+            "sync must see issues that were closed since"
+        );
+        assert!(
+            import.contains("fieldValueByName(name: \"Status\")"),
+            "{import}"
+        );
+    }
 }
