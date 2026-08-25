@@ -146,7 +146,11 @@ extra information.
    stores a filter value in a second place will disagree with the request that
    was actually sent, which is exactly how Status and Priority came to be inert
    while looking selected. The one exception is the search box, whose local
-   draft is debounced into `params.search`.
+   draft is debounced into `params.search`. Since 2026-08-25 that one object
+   lives in the UI store keyed by project and is persisted — reading a board as
+   "assigned to me" is a stance, not a per-visit keystroke — with the search
+   term stripped on the way to storage, because a term typed days ago reopens a
+   narrowed list whose reason is invisible.
 10. **Status and priority sort by rank, never by their word.** Both storage
     backends order on `status_rank` / `priority_rank` (and their
     `*_RANK_SQL` twins), because alphabetical order puts `high` before `low`
@@ -184,6 +188,17 @@ extra information.
 17. **`rfc3339_secs` is display-only.** It is hand-rolled to avoid a date
    dependency and does not validate its input; never use it where a wrong
    timestamp would change behaviour rather than row order.
+
+**Warpforge owns the assignee of a local item.** *Added 2026-08-25.* A local
+item is created on the signed-in GitHub identity — the same login the assignee
+filter offers as "you" — and that is editable on the item. Without it a local
+item could never carry an assignee, so the filter everyone actually uses hid
+every local item, which reads as the backlog losing them. Tracker-sourced items
+keep their remote assignee and no control over it: `adopt_imported` adopts the
+tracker's answer on each sync, so an edit here would only survive until the next
+refresh. *Rejected:* teaching the filter that "local" implies "mine" — it needs
+no identity and fixes existing rows for free, but the YAML backlog is committed
+to the repository, where a teammate's item is not yours.
 
 ## Consequences
 

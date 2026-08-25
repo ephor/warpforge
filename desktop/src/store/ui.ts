@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+import { type BacklogParams, DEFAULT_BACKLOG_PARAMS } from "@/components/backlog/types";
 import { DEFAULT_THEME } from "@/lib/themes";
 
 import type { EditHunk } from "../protocol";
@@ -115,6 +116,14 @@ interface UiState extends SettingsState {
    * you left it rather than snapping back to Backlog.
    */
   projectSurfaceByProject: Record<string, ProjectSurface>;
+  /**
+   * The backlog's filters, sort and search, per project. Persisted because a
+   * filter is a stance, not a keystroke: someone who reads their board as
+   * "assigned to me" had to say so again on every project switch and every
+   * restart. The search term is deliberately dropped on the way to storage —
+   * see `partialize`.
+   */
+  backlogParamsByProject: Record<string, BacklogParams>;
   pinnedTaskIds: string[];
   pinnedLayout: Record<string, PinnedTileLayout>;
   missionControlTab: "live" | "needs" | "failed" | "pinned";
@@ -146,7 +155,11 @@ interface UiState extends SettingsState {
   setRightPanel: (panel: RightPanel) => void;
   setActiveSurface: (surface: TaskSurface) => void;
   setProjectSurface: (project: string, surface: ProjectSurface) => void;
-  clearProjectSurface: (project: string) => void;
+  /** Merge a change into one project's backlog query. */
+  patchBacklogParams: (project: string, patch: Partial<BacklogParams>) => void;
+  resetBacklogParams: (project: string) => void;
+  /** Forget every per-project memory — for a project that was removed. */
+  clearProjectState: (project: string) => void;
   togglePinnedTask: (id: string) => void;
   setPinnedTaskIds: (ids: string[]) => void;
   setPinnedLayout: (id: string, layout: PinnedTileLayout) => void;
@@ -183,6 +196,7 @@ export const useUi = create<UiState>()(
       rightPanel: null,
       activeSurface: DEFAULT_TASK_SURFACE,
       projectSurfaceByProject: {},
+      backlogParamsByProject: {},
       pinnedTaskIds: [],
       pinnedLayout: {},
       missionControlTab: "live" as const,
@@ -235,11 +249,30 @@ export const useUi = create<UiState>()(
         set((s) => ({
           projectSurfaceByProject: { ...s.projectSurfaceByProject, [project]: surface },
         })),
-      clearProjectSurface: (project) =>
+      patchBacklogParams: (project, patch) =>
+        set((s) => ({
+          backlogParamsByProject: {
+            ...s.backlogParamsByProject,
+            [project]: {
+              ...(s.backlogParamsByProject[project] ?? DEFAULT_BACKLOG_PARAMS),
+              ...patch,
+            },
+          },
+        })),
+      resetBacklogParams: (project) =>
+        set((s) => ({
+          backlogParamsByProject: {
+            ...s.backlogParamsByProject,
+            [project]: DEFAULT_BACKLOG_PARAMS,
+          },
+        })),
+      clearProjectState: (project) =>
         set((s) => {
           const projectSurfaceByProject = { ...s.projectSurfaceByProject };
+          const backlogParamsByProject = { ...s.backlogParamsByProject };
           delete projectSurfaceByProject[project];
-          return { projectSurfaceByProject };
+          delete backlogParamsByProject[project];
+          return { backlogParamsByProject, projectSurfaceByProject };
         }),
       setPinnedTaskIds: (pinnedTaskIds) => set({ pinnedTaskIds }),
       togglePinnedTask: (id) =>
@@ -326,8 +359,20 @@ export const useUi = create<UiState>()(
         repositoryOperation: _repositoryOperation,
         rightPanel: _rightPanel,
         activeSurface: _activeSurface,
+        backlogParamsByProject,
         ...rest
-      }) => rest,
+      }) => ({
+        ...rest,
+        // Filters and sort are kept; the search box is not. A term typed days
+        // ago would reopen the app on a narrowed list with no visible reason,
+        // which reads as "the backlog lost my items".
+        backlogParamsByProject: Object.fromEntries(
+          Object.entries(backlogParamsByProject).map(([project, params]) => [
+            project,
+            { ...params, search: "" },
+          ]),
+        ),
+      }),
     },
   ),
 );

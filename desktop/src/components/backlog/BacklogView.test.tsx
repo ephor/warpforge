@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { daemon } from "@/daemon";
+import { useUi } from "@/store/ui";
 
 import { BacklogView } from "./BacklogView";
 import type { WorkItem } from "./types";
@@ -50,6 +51,9 @@ async function loadMore() {
 
 beforeEach(() => {
   vi.restoreAllMocks();
+  // The query lives in the persisted UI store, so a filter picked by one test
+  // is still there for the next one.
+  useUi.setState({ backlogParamsByProject: {} });
   vi.spyOn(daemon, "listBacklog").mockImplementation(async (input) => {
     const sorted = [...allItems].sort((a, b) => {
       if (input.sortBy === "title") {
@@ -188,6 +192,21 @@ describe("BacklogView", () => {
 
     await user.click(screen.getByRole("combobox", { name: "Assignee" }));
     expect(await screen.findByRole("option", { name: "lapa2112" })).toBeInTheDocument();
+  });
+
+  // Someone who reads their board as "assigned to me" said so once; leaving
+  // and coming back must not put every other person's work in front of them.
+  it("opens with the filter this project was left on", async () => {
+    useUi.getState().patchBacklogParams("warpforge", { assignee: "lapa2112" });
+    renderBacklog();
+
+    await vi.waitFor(() =>
+      expect(daemon.listBacklog).toHaveBeenCalledWith(
+        expect.objectContaining({ assignee: "lapa2112" }),
+      ),
+    );
+    // …and a different project is not dragged along with it.
+    expect(useUi.getState().backlogParamsByProject.other).toBeUndefined();
   });
 
   // Nothing to choose from should not leave a dead control in the toolbar.
