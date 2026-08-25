@@ -98,7 +98,6 @@ const specs = [
               rel="noopener"
               aria-label="GitHub"><Icon name="ph:github-logo" size={16} /></a
             >
-            <a href="https://github.com/ephor/warpforge/releases/latest" class="btn btn-sm">Download</a>
           </div>
         </div>
       </header>
@@ -253,11 +252,17 @@ const specs = [
     background: hsl(var(--background) / 0.86);
     backdrop-filter: blur(10px);
   }
+  /* Three tracks with equal outer columns, so the links sit on the page's
+     centre line whatever the mark and the controls happen to measure.
+     `space-between` only centres the middle child when both sides match. */
   .nav-in {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: space-between;
     height: 3.25rem;
+  }
+  .nav-act {
+    justify-self: end;
   }
   /* The wordmark the app itself wears, in its sidebar and its task headers:
      uppercase, widely tracked, the second half in the accent. A rotated
