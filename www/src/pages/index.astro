@@ -546,16 +546,15 @@ const specs = [
     border-bottom: 1px solid var(--line);
     padding-block: 3rem;
   }
-  /* Five columns of answer-then-caption, divided by hairlines. The old shape
-     was a two-column definition list, which put a quiet label beside a full
-     sentence and read as a datasheet. */
+  /* Five columns of answer-then-caption. No rules between them and no boxes:
+     the section already has its own separator, so cell borders only doubled
+     it and turned a row of facts back into the datasheet it replaced. Space
+     does the dividing. */
   .spec-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1px;
+    gap: 2rem 2.5rem;
     margin: 0;
-    background: var(--line);
-    border-block: 1px solid var(--line);
   }
   @media (min-width: 720px) {
     .spec-grid {
@@ -566,8 +565,6 @@ const specs = [
     display: flex;
     flex-direction: column;
     gap: 0.4rem;
-    padding: 1.4rem 1.1rem;
-    background: var(--bg);
   }
   /* An odd count leaves a gap in the two-column phone layout; let the last
      cell take the full row instead of trailing an empty one. */
@@ -581,7 +578,7 @@ const specs = [
     font-size: 1.35rem;
     font-weight: 500;
     letter-spacing: -0.01em;
-    color: hsl(20 73% 70%);
+    color: hsl(var(--primary));
     line-height: 1;
   }
   .spec dd {
