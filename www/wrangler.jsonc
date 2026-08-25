@@ -5,5 +5,11 @@
   "assets": {
     "directory": "./dist",
     "not_found_handling": "404-page"
-  }
+  },
+  // Declaring the domain here means the first deploy creates the DNS record
+  // and the certificate too — no dashboard step, and no window where the site
+  // is live only on a workers.dev hostname while every link in the docs points
+  // at warpforge.app. Apex only: a second custom domain would serve the same
+  // pages under a second canonical URL.
+  "routes": [{ "pattern": "warpforge.app", "custom_domain": true }]
 }
