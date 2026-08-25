@@ -293,6 +293,38 @@ describe("WorkItemDrawer", () => {
     expect(screen.getByText("3 files")).toBeInTheDocument();
   });
 
+  it("deletes a local item after a confirmation, and closes with it", async () => {
+    const onClose = vi.fn<() => void>();
+    const deleteBacklog = vi.spyOn(daemon, "deleteBacklog").mockResolvedValue();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderDrawer(localItem, { onClose });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: "Delete work item" }));
+
+    await vi.waitFor(() => expect(deleteBacklog).toHaveBeenCalledWith("b-1", "warpforge"));
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("keeps the item when the confirmation is declined", async () => {
+    const deleteBacklog = vi.spyOn(daemon, "deleteBacklog").mockResolvedValue();
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    renderDrawer(localItem);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(screen.getByRole("button", { name: "Delete work item" }));
+
+    expect(deleteBacklog).not.toHaveBeenCalled();
+  });
+
+  // A tracker issue is not ours to delete: the row would be imported straight
+  // back, while the issue stayed open where it actually lives.
+  it("offers no delete on an item a tracker owns", () => {
+    renderDrawer({ ...localItem, source: "github" });
+
+    expect(screen.queryByRole("button", { name: "Delete work item" })).not.toBeInTheDocument();
+  });
+
   it("closes from the close button", async () => {
     const onClose = vi.fn<() => void>();
     renderDrawer(localItem, { onClose });
