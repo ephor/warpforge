@@ -334,9 +334,13 @@ struct LinearState {
 /// sync: per-issue lookups turned a twenty-item board into forty round trips.
 pub(super) async fn linear_list_issues(team_id: &str) -> Result<Vec<RemoteIssue>> {
     let req = serde_json::json!({
+        // `assignee` is asked for here as well as in the paged query below: the
+        // mapping has always read it, so omitting it from the import query is
+        // what left every imported issue unassigned.
         "query": "query TeamIssues($teamId: String!, $first: Int!) { \
                   team(id: $teamId) { issues(first: $first) { nodes { \
-                  identifier title description url createdAt updatedAt state { name } } } } }",
+                  identifier title description url createdAt updatedAt state { name } \
+                  assignee { name displayName } } } } }",
         "variables": { "teamId": team_id, "first": IMPORT_LIMIT as i64 }
     });
     let data: TeamIssuesData = linear_query(&req).await?;
