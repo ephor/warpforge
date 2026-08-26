@@ -9,7 +9,6 @@
 
 import { appendCoalescedUpdate, coalesceUpdates } from "./lib/sessionStream";
 import { stampSessionHistoryStartTimes } from "./lib/sessionTiming";
-import { queryClient } from "./query";
 import type {
   AccountInfo,
   AgentConfig,
@@ -41,6 +40,7 @@ import type {
   UpdateHandoff,
 } from "./protocol";
 import { EMPTY_SNAPSHOT, isEvent } from "./protocol";
+import { queryClient } from "./query";
 
 export type ConnectionState = "connecting" | "connected" | "disconnected";
 

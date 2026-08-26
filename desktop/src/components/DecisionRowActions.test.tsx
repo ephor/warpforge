@@ -52,9 +52,7 @@ describe("DecisionRowActions", () => {
   });
 
   it("answers a permission row through session.permission", async () => {
-    const request = vi
-      .spyOn(daemon, "request")
-      .mockImplementation(async () => ({}));
+    const request = vi.spyOn(daemon, "request").mockImplementation(async () => ({}));
     const user = userEvent.setup();
     const row = item({ permission: perm(["allow_once", "deny"]) });
     render(<DecisionRowActions item={row} />);

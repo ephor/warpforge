@@ -66,10 +66,14 @@ export function computeGutterChanges(oldText: string, newText: string): GutterCh
   // Use CodeMirror's diff (Myers) — fast, handles large files with scanLimit.
   let changes: Array<{ fromA: number; toA: number; fromB: number; toB: number }> = [];
   try {
-    changes = (diff as unknown as (a: string, b: string, cfg?: unknown) => typeof changes)(oldText, newText, {
-      scanLimit: 20000,
-      timeout: 250,
-    });
+    changes = (diff as unknown as (a: string, b: string, cfg?: unknown) => typeof changes)(
+      oldText,
+      newText,
+      {
+        scanLimit: 20000,
+        timeout: 250,
+      },
+    );
   } catch {
     changes = [];
   }
@@ -273,7 +277,10 @@ export interface ChangeGutterOptions {
  * - Small triangle for deleted lines.
  * Clicking the gutter calls onMarkerClick.
  */
-export function changeGutterExtension(oldText: string, onMarkerClick?: (info: { block: ChangeBlock | DeletedBlock; line: number }) => void) {
+export function changeGutterExtension(
+  oldText: string,
+  onMarkerClick?: (info: { block: ChangeBlock | DeletedBlock; line: number }) => void,
+) {
   const changesField = StateField.define<GutterChanges>({
     create(state) {
       return computeGutterChanges(oldText, state.doc.toString());

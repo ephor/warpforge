@@ -161,7 +161,9 @@ export default function TrackersPanel() {
               variant="outline"
               size="sm"
               disabled={busy === "github"}
-              onClick={() => void run("github", () => daemon.disconnectGithub(), "GitHub disconnected")}
+              onClick={() =>
+                void run("github", () => daemon.disconnectGithub(), "GitHub disconnected")
+              }
             >
               Disconnect
             </Button>
@@ -192,12 +194,19 @@ export default function TrackersPanel() {
                 )
               }
             >
-              {busy === "github" ? <Loader2 className="size-3.5 animate-spin" /> : github?.connected ? "Update" : "Connect"}
+              {busy === "github" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : github?.connected ? (
+                "Update"
+              ) : (
+                "Connect"
+              )}
             </Button>
           </div>
           <p className="text-xs text-muted-foreground/80">
-            Personal access token (classic with <code className="rounded bg-secondary px-1">repo, read:project</code>{" "}
-            or fine-grained). Stored in keychain.{" "}
+            Personal access token (classic with{" "}
+            <code className="rounded bg-secondary px-1">repo, read:project</code> or fine-grained).
+            Stored in keychain.{" "}
             <button
               type="button"
               className="inline-flex items-center gap-0.5 underline underline-offset-2"
@@ -205,7 +214,12 @@ export default function TrackersPanel() {
             >
               Create one <ExternalLink className="size-3" />
             </button>{" "}
-            {github?.connected ? "— leave empty and use gh CLI." : "— or run "} {!github?.connected && (<><code className="rounded bg-secondary px-1">gh auth login</code> then Connect.</>)}
+            {github?.connected ? "— leave empty and use gh CLI." : "— or run "}{" "}
+            {!github?.connected && (
+              <>
+                <code className="rounded bg-secondary px-1">gh auth login</code> then Connect.
+              </>
+            )}
           </p>
           {github?.warning && <p className="text-xs text-amber-500">{github.warning}</p>}
         </div>

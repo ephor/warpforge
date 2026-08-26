@@ -29,7 +29,11 @@ export function truncateToolContent(update: SessionUpdate): SessionUpdate {
 
 function truncateAgentText(text: string): string {
   if (text.length <= AGENT_TEXT_MAX) return text;
-  return text.slice(0, AGENT_TEXT_KEEP_HEAD) + TOOL_CONTENT_TRUNCATE_MARKER + text.slice(-AGENT_TEXT_KEEP_TAIL);
+  return (
+    text.slice(0, AGENT_TEXT_KEEP_HEAD) +
+    TOOL_CONTENT_TRUNCATE_MARKER +
+    text.slice(-AGENT_TEXT_KEEP_TAIL)
+  );
 }
 
 export function capSessionUpdates(updates: SessionUpdate[]): SessionUpdate[] {
@@ -178,7 +182,10 @@ export function appendCoalesced(
     (update.kind === "agent_text" || update.kind === "agent_thought") &&
     previous?.kind === update.kind
   ) {
-    output[output.length - 1] = { ...previous, text: truncateAgentText(previous.text + update.text) };
+    output[output.length - 1] = {
+      ...previous,
+      text: truncateAgentText(previous.text + update.text),
+    };
   } else if (update.kind === "tool_call") {
     const index = toolIndexes.get(update.tool_call_id);
     const existing = index !== undefined ? output[index] : undefined;

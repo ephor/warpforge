@@ -1,10 +1,6 @@
 import type { SessionUpdate, TaskInfo } from "@/protocol";
 
-export type FailureKind =
-  | "interrupted"
-  | "tool_call"
-  | "orchestration"
-  | "workflow_stage";
+export type FailureKind = "interrupted" | "tool_call" | "orchestration" | "workflow_stage";
 
 export interface FailureInfo {
   kind: FailureKind;
@@ -12,9 +8,7 @@ export interface FailureInfo {
   reason: string;
 }
 
-function latestToolCallFailure(
-  updates: SessionUpdate[],
-): { title: string } | null {
+function latestToolCallFailure(updates: SessionUpdate[]): { title: string } | null {
   // Daemon merges by tool_call_id: the LAST entry per id is its terminal state.
   const latest = new Map<string, { failed: boolean; idx: number; title: string }>();
   updates.forEach((update, idx) => {
@@ -52,10 +46,7 @@ export function detectFailure(
   task: TaskInfo,
   updates: SessionUpdate[] | undefined,
 ): FailureInfo | null {
-  if (
-    task.workflowRun?.waiting != null &&
-    task.workflowRun.waiting.kind !== "paused"
-  ) {
+  if (task.workflowRun?.waiting != null && task.workflowRun.waiting.kind !== "paused") {
     return null;
   }
   if (task.status === "blocked") return null;
@@ -71,9 +62,7 @@ export function detectFailure(
     }
   }
 
-  const failedNode = task.orchestrationGraph?.nodes.find(
-    (n) => n.status === "failed",
-  );
+  const failedNode = task.orchestrationGraph?.nodes.find((n) => n.status === "failed");
   if (failedNode) {
     return {
       kind: "orchestration",

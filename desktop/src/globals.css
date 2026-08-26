@@ -71,42 +71,70 @@
  * ============================================================ */
 
 @keyframes fade-in {
-  from { opacity: 0; }
+  from {
+    opacity: 0;
+  }
 }
 @keyframes fade-out {
-  to { opacity: 0; }
+  to {
+    opacity: 0;
+  }
 }
 @keyframes zoom-in-95 {
-  from { transform: scale(0.95); }
+  from {
+    transform: scale(0.95);
+  }
 }
 @keyframes zoom-out-95 {
-  to { transform: scale(0.95); }
+  to {
+    transform: scale(0.95);
+  }
 }
 @keyframes zoom-in-100 {
-  from { transform: scale(1); }
+  from {
+    transform: scale(1);
+  }
 }
 @keyframes zoom-out-100 {
-  to { transform: scale(1); }
+  to {
+    transform: scale(1);
+  }
 }
 @keyframes slide-in-from-top-2 {
-  from { transform: translateY(-0.5rem); }
+  from {
+    transform: translateY(-0.5rem);
+  }
 }
 @keyframes slide-in-from-bottom-2 {
-  from { transform: translateY(0.5rem); }
+  from {
+    transform: translateY(0.5rem);
+  }
 }
 @keyframes slide-in-from-left-2 {
-  from { transform: translateX(-0.5rem); }
+  from {
+    transform: translateX(-0.5rem);
+  }
 }
 @keyframes slide-in-from-right-2 {
-  from { transform: translateX(0.5rem); }
+  from {
+    transform: translateX(0.5rem);
+  }
 }
 @keyframes accordion-down {
-  from { height: 0; }
-  to { height: var(--radix-accordion-content-height); }
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--radix-accordion-content-height);
+  }
 }
 @keyframes accordion-up {
-  from { height: var(--radix-accordion-content-height); }
-  to { height: 0; }
+  from {
+    height: var(--radix-accordion-content-height);
+  }
+  to {
+    height: 0;
+  }
 }
 
 /* Animation utilities for enter/exit states (replaces tailwindcss-animate).

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import type { TaskInfo, WorkflowWaitKind } from "../protocol";
 import type { AttentionItem } from "./attentionRail";
 import { decisionActionKinds, permissionApproveOption } from "./decisionActions";
 import type { PermissionUpdate } from "./sessionPermissions";
-import type { TaskInfo, WorkflowWaitKind } from "../protocol";
 
 function task(overrides: Partial<TaskInfo>): TaskInfo {
   return {
@@ -46,7 +46,9 @@ describe("decisionActionKinds", () => {
       workflowName: "Wf",
     });
     expect(
-      decisionActionKinds(item({ task: task({ status: "waiting", workflowRun: run("question") }) })),
+      decisionActionKinds(
+        item({ task: task({ status: "waiting", workflowRun: run("question") }) }),
+      ),
     ).toEqual(["question"]);
     expect(
       decisionActionKinds(item({ task: task({ status: "waiting", workflowRun: run("limit") }) })),

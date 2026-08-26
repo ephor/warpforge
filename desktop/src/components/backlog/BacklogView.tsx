@@ -115,13 +115,19 @@ export function BacklogView({
   const syncNow = React.useCallback(async () => {
     setManualSyncing(true);
     try {
-      try { await daemon.syncExternalWorkItems(); } catch { /* toast handled */ }
+      try {
+        await daemon.syncExternalWorkItems();
+      } catch {
+        /* toast handled */
+      }
       await queryClient.refetchQueries({ queryKey: ["backlog", project, "sync"] });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["backlog", project, "list"] }),
         queryClient.invalidateQueries({ queryKey: ["backlog", project, "count"] }),
       ]);
-    } finally { setManualSyncing(false); }
+    } finally {
+      setManualSyncing(false);
+    }
   }, [project, queryClient]);
 
   const items = React.useMemo(

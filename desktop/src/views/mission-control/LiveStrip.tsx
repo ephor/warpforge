@@ -1,8 +1,8 @@
 import { memo, useEffect, useState } from "react";
 
 import { AgentAvatar } from "@/components/AgentAvatar";
-import { cn } from "@/lib/utils";
 import { formatElapsed, type LiveStripItem } from "@/lib/liveStrip";
+import { cn } from "@/lib/utils";
 
 const TONE_CLASS: Record<LiveStripItem["tone"], string> = {
   thinking: "text-sky-400",
@@ -47,7 +47,9 @@ export const LiveStrip = memo(function LiveStrip({ items, nowMs, onOpenTask }: L
                 {item.startedAt !== null ? formatElapsed(item.startedAt, effectiveNow) : ""}
               </span>
               {item.toolCount > 0 && (
-                <span className="shrink-0 text-[11px] text-muted-foreground">{item.toolCount} tools</span>
+                <span className="shrink-0 text-[11px] text-muted-foreground">
+                  {item.toolCount} tools
+                </span>
               )}
             </span>
             <span className="truncate text-sm font-medium text-foreground">{item.title}</span>
@@ -61,7 +63,9 @@ export const LiveStrip = memo(function LiveStrip({ items, nowMs, onOpenTask }: L
               <span className="truncate text-xs text-muted-foreground">{item.detail}</span>
             ) : null}
             {item.previewText ? (
-              <span className="line-clamp-2 text-xs text-muted-foreground/90">{item.previewText}</span>
+              <span className="line-clamp-2 text-xs text-muted-foreground/90">
+                {item.previewText}
+              </span>
             ) : null}
           </button>
         ))}

@@ -154,7 +154,9 @@ export function MergeDiff({
     <div className="flex flex-col">
       {(editable || onSendToChat) && (
         <div className="flex h-9 shrink-0 items-center gap-2 border-b bg-secondary/30 px-3 text-xs">
-          <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{doc.path}</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
+            {doc.path}
+          </span>
           <span className="ml-auto flex shrink-0 items-center gap-2">
             {editable && (
               <span
@@ -164,7 +166,13 @@ export function MergeDiff({
                   status === "saved" && "text-ok",
                 )}
               >
-                {status === "unsaved" ? "● unsaved" : status === "saved" ? <><Check className="size-3" /> saved</> : null}
+                {status === "unsaved" ? (
+                  "● unsaved"
+                ) : status === "saved" ? (
+                  <>
+                    <Check className="size-3" /> saved
+                  </>
+                ) : null}
               </span>
             )}
             {editable && (

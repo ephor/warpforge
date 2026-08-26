@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { SessionUpdate } from "../protocol";
 import { latestCommands, summarizeFiles, summarizeTools } from "./sessionUpdatesSummary";
 
-const tool = (id: string, status: "pending" | "in_progress" | "completed" | "failed"): SessionUpdate => ({
+const tool = (
+  id: string,
+  status: "pending" | "in_progress" | "completed" | "failed",
+): SessionUpdate => ({
   kind: "tool_call",
   status,
   title: id,

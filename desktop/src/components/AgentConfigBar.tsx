@@ -232,10 +232,7 @@ function AgentConfigSelect({
     // Close on focus leaving the whole picker, not the trigger alone: the search
     // box takes focus away from the trigger the moment the menu opens, and a
     // trigger-level blur would shut the menu the user just opened.
-    <div
-      ref={containerRef}
-      className="relative"
-    >
+    <div ref={containerRef} className="relative">
       <button
         type="button"
         aria-label={`${opt.name}: ${cur}`}

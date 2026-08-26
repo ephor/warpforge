@@ -1,12 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import {
-  Activity,
-  ExternalLink,
-  FileText,
-  MoreHorizontal,
-  PinOff,
-  Wrench,
-} from "lucide-react";
+import { Activity, ExternalLink, FileText, MoreHorizontal, PinOff, Wrench } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Card } from "@/components/ui/card";
@@ -16,8 +9,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { sessionActivity } from "@/lib/sessionActivity";
-import { latestCommands, summarizeFiles, summarizeTools } from "@/lib/sessionUpdatesSummary";
 import { latestPendingPermission } from "@/lib/sessionPermissions";
+import { latestCommands, summarizeFiles, summarizeTools } from "@/lib/sessionUpdatesSummary";
 import { elapsed } from "@/lib/status";
 import {
   flattenTaskTree,

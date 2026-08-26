@@ -1,3 +1,5 @@
+#![allow(clippy::question_mark)]
+#![allow(deprecated)]
 //! GitHub via PAT (preferred) or `gh` CLI fallback (deprecated).
 //!
 //! Preferred: personal access token with `repo` + `read:project`, stored in
@@ -95,7 +97,7 @@ pub(super) fn github_keychain_delete() -> Result<()> {
     Ok(())
 }
 
-fn github_api_client(token: &str) -> reqwest::Client {
+fn github_api_client(_token: &str) -> reqwest::Client {
     reqwest::Client::new()
 }
 pub(super) fn _github_token_header(token: &str) -> String {
@@ -131,6 +133,7 @@ pub(super) async fn gh(repo: Option<&str>, args: &[&str]) -> Result<std::process
 
 /// The `gh` login the API will act as. Returns None when unauthenticated.
 pub async fn github_login() -> Option<String> {
+    #[allow(deprecated)]
     let out = gh(None, &["api", "user", "--jq", ".login"]).await.ok()?;
     if !out.status.success() {
         return None;

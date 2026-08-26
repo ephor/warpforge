@@ -3,10 +3,28 @@ import { jumpToDefinition } from "@codemirror/lsp-client";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
-import { ArrowDown, ArrowUp, Check, Code, Copy, Eye, Loader2, Save, Undo2, Wand2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  Code,
+  Copy,
+  Eye,
+  Loader2,
+  Save,
+  Undo2,
+  Wand2,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useThemeMode } from "@/hooks/useTheme";
+import {
+  applyRevert,
+  changeGutterExtension,
+  computeGutterChanges,
+  type ChangeBlock,
+  type DeletedBlock,
+} from "@/lib/changeGutter";
 import {
   codemirrorLanguageForPath,
   lspDocumentLanguageForPath,
@@ -20,7 +38,6 @@ import { daemon } from "../daemon";
 import type { FileDoc, FileRange, SymbolMatch } from "../protocol";
 import { useUi } from "../store/ui";
 import { Markdown } from "./Markdown";
-import { applyRevert, changeGutterExtension, computeGutterChanges, type ChangeBlock, type DeletedBlock } from "@/lib/changeGutter";
 
 type SaveStatus = "clean" | "unsaved" | "saved";
 
@@ -160,23 +177,26 @@ export function CodeEditor({
     return true;
   };
 
-  const handleGutterClick = useCallback((info: { block: ChangeBlock | DeletedBlock; line: number }) => {
-    const view = viewRef.current;
-    if (!view) return;
-    const lineNum = info.line;
-    const line = view.state.doc.line(Math.min(Math.max(lineNum, 1), view.state.doc.lines));
-    const coords = view.coordsAtPos(line.from);
-    const hostRect = host.current?.getBoundingClientRect();
-    if (!coords || !hostRect) {
-      setActiveChange({ block: info.block, line: info.line, x: 24, y: 0 });
-      return;
-    }
-    // Position popup just to the right of gutter, aligned to line top
-    const x = 24;
-    const y = coords.top - hostRect.top + view.scrollDOM.scrollTop;
-    setActiveChange({ block: info.block, line: info.line, x, y });
-    setCommitMsg("");
-  }, []);
+  const handleGutterClick = useCallback(
+    (info: { block: ChangeBlock | DeletedBlock; line: number }) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const lineNum = info.line;
+      const line = view.state.doc.line(Math.min(Math.max(lineNum, 1), view.state.doc.lines));
+      const coords = view.coordsAtPos(line.from);
+      const hostRect = host.current?.getBoundingClientRect();
+      if (!coords || !hostRect) {
+        setActiveChange({ block: info.block, line: info.line, x: 24, y: 0 });
+        return;
+      }
+      // Position popup just to the right of gutter, aligned to line top
+      const x = 24;
+      const y = coords.top - hostRect.top + view.scrollDOM.scrollTop;
+      setActiveChange({ block: info.block, line: info.line, x, y });
+      setCommitMsg("");
+    },
+    [],
+  );
 
   const handleGutterClickRef = useRef(handleGutterClick);
   useEffect(() => {
@@ -467,7 +487,13 @@ export function CodeEditor({
             EditorState.readOnly.of(!editable || isReadOnly),
             // WebStorm-style change gutter — thin bar, no background, click for revert/commit
             ...(!isReadOnly && doc.oldText !== undefined
-              ? [changeGutterCompartment.current.of(changeGutterExtension(doc.oldText, (info) => handleGutterClickRef.current(info)))]
+              ? [
+                  changeGutterCompartment.current.of(
+                    changeGutterExtension(doc.oldText, (info) =>
+                      handleGutterClickRef.current(info),
+                    ),
+                  ),
+                ]
               : []),
             keymap.of([
               { key: "Mod-s", run: flushSave },
@@ -842,14 +868,19 @@ export function CodeEditor({
                   <button
                     type="button"
                     onClick={() => {
-                      const text = activeChange.block.type === "deleted"
-                        ? (activeChange.block as DeletedBlock).oldText
-                        : (activeChange.block as ChangeBlock).type === "added"
-                          ? viewRef.current?.state.sliceDoc(
-                              viewRef.current.state.doc.line((activeChange.block as ChangeBlock).from).from,
-                              viewRef.current.state.doc.line((activeChange.block as ChangeBlock).to).to,
-                            ) ?? ""
-                          : (activeChange.block as ChangeBlock).oldText;
+                      const text =
+                        activeChange.block.type === "deleted"
+                          ? (activeChange.block as DeletedBlock).oldText
+                          : (activeChange.block as ChangeBlock).type === "added"
+                            ? (viewRef.current?.state.sliceDoc(
+                                viewRef.current.state.doc.line(
+                                  (activeChange.block as ChangeBlock).from,
+                                ).from,
+                                viewRef.current.state.doc.line(
+                                  (activeChange.block as ChangeBlock).to,
+                                ).to,
+                              ) ?? "")
+                            : (activeChange.block as ChangeBlock).oldText;
                       if (text) void navigator.clipboard.writeText(text);
                     }}
                     className="flex items-center gap-1 rounded px-1.5 py-1 text-xs hover:bg-accent hover:text-accent-foreground"
@@ -877,16 +908,20 @@ export function CodeEditor({
                     </pre>
                   </div>
                 )}
-                {activeChange.block.type !== "deleted" && (activeChange.block as ChangeBlock).oldText && (
-                  <div className="max-h-24 overflow-auto border-y bg-muted/30 p-2">
-                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      Previous • {(activeChange.block as ChangeBlock).type === "added" ? "new lines" : "modified"}
+                {activeChange.block.type !== "deleted" &&
+                  (activeChange.block as ChangeBlock).oldText && (
+                    <div className="max-h-24 overflow-auto border-y bg-muted/30 p-2">
+                      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Previous •{" "}
+                        {(activeChange.block as ChangeBlock).type === "added"
+                          ? "new lines"
+                          : "modified"}
+                      </div>
+                      <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-4 text-muted-foreground">
+                        {(activeChange.block as ChangeBlock).oldText.slice(0, 600)}
+                      </pre>
                     </div>
-                    <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-4 text-muted-foreground">
-                      {(activeChange.block as ChangeBlock).oldText.slice(0, 600)}
-                    </pre>
-                  </div>
-                )}
+                  )}
                 <div className="flex items-center gap-2 p-2">
                   <input
                     value={commitMsg}

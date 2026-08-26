@@ -191,17 +191,20 @@ describe("MissionControl failed section", () => {
     const failedTitle = "Run tests for the failing module";
     render(
       createElement(MissionControl, {
-        state: missionState([task({ id: "with-failure", title: "With failure", status: "running" })], {
-          "with-failure": [
-            {
-              kind: "tool_call",
-              status: "failed",
-              title: failedTitle,
-              tool_call_id: "t1",
-              tool_kind: "execute",
-            },
-          ],
-        }),
+        state: missionState(
+          [task({ id: "with-failure", title: "With failure", status: "running" })],
+          {
+            "with-failure": [
+              {
+                kind: "tool_call",
+                status: "failed",
+                title: failedTitle,
+                tool_call_id: "t1",
+                tool_kind: "execute",
+              },
+            ],
+          },
+        ),
         onNewTask: vi.fn<(project?: string) => void>(),
         onOpenTask: vi.fn<(id: string) => void>(),
       }),

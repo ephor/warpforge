@@ -47,7 +47,12 @@ describe("buildLiveStripItems", () => {
   it("excludes permission-blocked sessions", () => {
     const t = task({ id: "perm", status: "running" });
     const updates: SessionUpdate[] = [
-      { kind: "permission_request", request_id: "req-1", title: "Allow?", options: ["allow", "deny"] },
+      {
+        kind: "permission_request",
+        request_id: "req-1",
+        title: "Allow?",
+        options: ["allow", "deny"],
+      },
     ];
     const items = buildLiveStripItems([t], { perm: updates }, new Set());
     expect(items).toHaveLength(0);
@@ -57,8 +62,20 @@ describe("buildLiveStripItems", () => {
     const t = task({ id: "tools", status: "running" });
     const updates: SessionUpdate[] = [
       { kind: "agent_text", text: "hi" },
-      { kind: "tool_call", tool_call_id: "c1", title: "read", status: "pending", tool_kind: "read" },
-      { kind: "tool_call", tool_call_id: "c2", title: "write", status: "completed", tool_kind: "write" },
+      {
+        kind: "tool_call",
+        tool_call_id: "c1",
+        title: "read",
+        status: "pending",
+        tool_kind: "read",
+      },
+      {
+        kind: "tool_call",
+        tool_call_id: "c2",
+        title: "write",
+        status: "completed",
+        tool_kind: "write",
+      },
       { kind: "agent_text", text: "done" },
     ];
     const items = buildLiveStripItems([t], { tools: updates }, new Set());
@@ -175,5 +192,3 @@ describe("formatElapsed", () => {
     expect(formatElapsed(10_000, 5_000)).toBe("0s");
   });
 });
-
-

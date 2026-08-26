@@ -32,7 +32,9 @@ export function DecisionQueue({
                 {items.length}
               </span>
             </div>
-            <p className="mt-0.5 text-xs text-muted-foreground">Only work blocked on human input.</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Only work blocked on human input.
+            </p>
           </div>
         </div>
       )}
@@ -69,9 +71,7 @@ export function DecisionQueue({
                     className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40"
                   />
                   <AgentAvatarGroup agentId={item.task.agent} />
-                  <span className="tnum ml-auto shrink-0">
-                    {elapsed(item.task.updatedAt)} ago
-                  </span>
+                  <span className="tnum ml-auto shrink-0">{elapsed(item.task.updatedAt)} ago</span>
                 </div>
               </button>
               {decisionActionKinds(item).length > 0 && (

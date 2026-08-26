@@ -1,6 +1,5 @@
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
-
 import { Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactGridLayout, { useContainerWidth } from "react-grid-layout";
@@ -25,7 +24,12 @@ import { DecisionQueue } from "./mission-control/DecisionQueue";
 import { FailedSection } from "./mission-control/FailedSection";
 import { FocusGroupPane } from "./mission-control/FocusPane";
 import { LiveStrip } from "./mission-control/LiveStrip";
-const TAB_LABEL: Record<string, string> = { live: "Live", needs: "Needs you", failed: "Failed", pinned: "Pinned" };
+const TAB_LABEL: Record<string, string> = {
+  live: "Live",
+  needs: "Needs you",
+  failed: "Failed",
+  pinned: "Pinned",
+};
 const EMPTY_PINNED_SET: ReadonlySet<string> = new Set();
 
 export { StreamLine } from "./mission-control/StreamLine";
@@ -234,7 +238,12 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
                 onClick={() => setActiveTab(tab)}
                 className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
               >
-                {TAB_LABEL[tab]} <span className={`ml-1 rounded-full px-1.5 py-0.5 text-xs ${active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>{count}</span>
+                {TAB_LABEL[tab]}{" "}
+                <span
+                  className={`ml-1 rounded-full px-1.5 py-0.5 text-xs ${active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}
+                >
+                  {count}
+                </span>
               </button>
             );
           })}
@@ -245,7 +254,9 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
             {liveStripItems.length > 0 ? (
               <LiveStrip items={liveStripItems} onOpenTask={onOpenTask} />
             ) : (
-              <p className="py-6 text-center text-sm text-muted-foreground">Nothing running — start a task.</p>
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                Nothing running — start a task.
+              </p>
             )}
           </section>
         )}
@@ -261,41 +272,46 @@ export default function MissionControl({ state, onOpenTask, onNewTask }: Props) 
         )}
         {activeTab === "pinned" && (
           <section aria-labelledby="pinned-work-heading" className="min-w-0">
-          <div ref={containerRef} className="min-w-0 w-full">
+            <div ref={containerRef} className="min-w-0 w-full">
               {pinnedGroups.length > 0 ? (
-                  <ReactGridLayout
-                    key={pinnedWidth || width}
-                    className="layout"
-                    layout={layout}
-                    width={pinnedWidth || width || 800}
-                    gridConfig={{ cols: 4, rowHeight, margin: [8, 0], containerPadding: [0, 0] }}
-                    dragConfig={{ enabled: true }}
-                    resizeConfig={{ enabled: true, handles: ["se", "sw", "ne", "nw", "n", "s", "e", "w"] }}
-                    onDragStart={beginGridInteraction}
-                    onDragStop={endGridInteraction}
-                    onResizeStart={beginResizeInteraction}
-                    onResize={handleResize}
-                    onResizeStop={revealResizedCard}
-                    onLayoutChange={handleLayoutChange}
-                  >
-                    {pinnedGroups.map((tree) => (
-                      <div key={tree.task.id} className="h-full min-h-0">
-                        <FocusGroupPane
-                          tree={tree}
-                          updatesByTaskId={state.sessionUpdates}
-                          attentionTargetId={attentionTargetId}
-                          attentionTargetNonce={attentionTargetNonce}
-                          onUnpin={handleUnpin}
-                          onOpen={onOpenTask}
-                          agents={(state.snapshot.agents ?? []).filter((a) => a.enabled)}
-                        />
-                      </div>
-                    ))}
-                  </ReactGridLayout>
-                ) : (
+                <ReactGridLayout
+                  key={pinnedWidth || width}
+                  className="layout"
+                  layout={layout}
+                  width={pinnedWidth || width || 800}
+                  gridConfig={{ cols: 4, rowHeight, margin: [8, 0], containerPadding: [0, 0] }}
+                  dragConfig={{ enabled: true }}
+                  resizeConfig={{
+                    enabled: true,
+                    handles: ["se", "sw", "ne", "nw", "n", "s", "e", "w"],
+                  }}
+                  onDragStart={beginGridInteraction}
+                  onDragStop={endGridInteraction}
+                  onResizeStart={beginResizeInteraction}
+                  onResize={handleResize}
+                  onResizeStop={revealResizedCard}
+                  onLayoutChange={handleLayoutChange}
+                >
+                  {pinnedGroups.map((tree) => (
+                    <div key={tree.task.id} className="h-full min-h-0">
+                      <FocusGroupPane
+                        tree={tree}
+                        updatesByTaskId={state.sessionUpdates}
+                        attentionTargetId={attentionTargetId}
+                        attentionTargetNonce={attentionTargetNonce}
+                        onUnpin={handleUnpin}
+                        onOpen={onOpenTask}
+                        agents={(state.snapshot.agents ?? []).filter((a) => a.enabled)}
+                      />
+                    </div>
+                  ))}
+                </ReactGridLayout>
+              ) : (
                 <div className="flex flex-col items-center gap-1 rounded-md border border-dashed border-border/70 px-4 py-8 text-center text-muted-foreground">
                   <p className="text-sm text-foreground">No pinned sessions.</p>
-                  <p className="max-w-md text-xs">Pin sessions from the sidebar when you want them on the Mission Control board.</p>
+                  <p className="max-w-md text-xs">
+                    Pin sessions from the sidebar when you want them on the Mission Control board.
+                  </p>
                 </div>
               )}
             </div>

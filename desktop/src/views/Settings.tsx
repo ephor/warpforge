@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, X } from "lucide-react";
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { toast } from "sonner";
 
 import AccountsPanel from "@/components/AccountsPanel";
 import AgentSetupPanel from "@/components/AgentSetupPanel";
@@ -12,7 +13,6 @@ import { daemon } from "@/daemon";
 import { configRole } from "@/lib/configRole";
 import { THEMES } from "@/lib/themes";
 import { useUi } from "@/store/ui";
-import { toast } from "sonner";
 
 // ── Helpers ──
 
@@ -155,8 +155,7 @@ export default function SettingsView({ open, onOpenChange }: Props) {
   const setTheoMod = useUi((s) => s.setTheoMod);
   const state = useSyncExternalStore(daemon.subscribe, daemon.getState);
   const [dreamProject, setDreamProject] = useState<string>("");
-  const effectiveDreamProject =
-    dreamProject || state.snapshot.projects[0]?.name || "";
+  const effectiveDreamProject = dreamProject || state.snapshot.projects[0]?.name || "";
   const enabledAgents = (state.snapshot.agents ?? []).filter((a) => a.enabled);
   // The daemon caches an agent's config options after probing it over ACP; the
   // model list is empty until that probe has happened at least once.
@@ -340,41 +339,76 @@ export default function SettingsView({ open, onOpenChange }: Props) {
               title="Dream now"
               description="Run compaction: duplicates, contradictions, stale facts → pending proposals."
               control={
-                <div className="flex items-center gap-2"><select aria-label="Dream project" value={dreamProject} onChange={(e)=>setDreamProject(e.target.value)} className="h-7 rounded-md border bg-background px-2 text-xs"><option value="">global</option>{(state.snapshot.projects ?? []).map((p:any)=><option key={p.name} value={p.name}>{p.name}</option>)}</select><div className="flex gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-7 text-xs"
-                    onClick={async () => {
-                      const pid = effectiveDreamProject || state.snapshot.projects[0]?.name || "global";
-                      const agent = (state.snapshot.agents ?? []).find(a=>a.enabled)?.id || "opencode";
-                      toast.info("Dreaming…", { description: "Running LLM+heuristic sweep" });
-                      const res: any = await (daemon as any).request("memory.dream", { dry_run: false, project_id: pid });
-                      const inserted = res?.inserted ?? 0;
-                      const pending = res?.pending ?? 0;
-                      const prompt = `Dreaming just ran for '${pid}' (same background path as cron): ${JSON.stringify(res).slice(0,3000)}\n\nYour job: verify each proposal against the codebase (grep/read files). Summarize what was actually stale/duplicate/contradiction vs false positive. Write a short human summary. Proposals stay pending in memory_compaction_log — don't apply without user approval.`;
-                      const r: any = await (daemon as any).request("task.create", { project: pid, prompt, agent, tags: ["dreaming"], worktree: false });
-                      const tid = r?.taskId || r?.id;
-                      toast.success(`Dreaming done — ${inserted} new, ${pending} pending — task ${tid ?? pid}`, { description: "Agent verifies against code" });
-                    }}
+                <div className="flex items-center gap-2">
+                  <select
+                    aria-label="Dream project"
+                    value={dreamProject}
+                    onChange={(e) => setDreamProject(e.target.value)}
+                    className="h-7 rounded-md border bg-background px-2 text-xs"
                   >
-                    Dream
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-7 text-xs"
-                    onClick={async () => {
-                      const pid = effectiveDreamProject || state.snapshot.projects[0]?.name || "global";
-                      const res: any = await (daemon as any).request("memory.dream", { dry_run: true, project_id: pid });
-                      toast.info(`Dry run: ${res?.inserted ?? 0} would propose`, { description: JSON.stringify(res?.proposals ?? res).slice(0,200) });
-                    }}
-                  >
-                    Dry run
-                  </Button>
-                </div></div>
+                    <option value="">global</option>
+                    {(state.snapshot.projects ?? []).map((p: any) => (
+                      <option key={p.name} value={p.name}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={async () => {
+                        const pid =
+                          effectiveDreamProject || state.snapshot.projects[0]?.name || "global";
+                        const agent =
+                          (state.snapshot.agents ?? []).find((a) => a.enabled)?.id || "opencode";
+                        toast.info("Dreaming…", { description: "Running LLM+heuristic sweep" });
+                        const res: any = await (daemon as any).request("memory.dream", {
+                          dry_run: false,
+                          project_id: pid,
+                        });
+                        const inserted = res?.inserted ?? 0;
+                        const pending = res?.pending ?? 0;
+                        const prompt = `Dreaming just ran for '${pid}' (same background path as cron): ${JSON.stringify(res).slice(0, 3000)}\n\nYour job: verify each proposal against the codebase (grep/read files). Summarize what was actually stale/duplicate/contradiction vs false positive. Write a short human summary. Proposals stay pending in memory_compaction_log — don't apply without user approval.`;
+                        const r: any = await (daemon as any).request("task.create", {
+                          project: pid,
+                          prompt,
+                          agent,
+                          tags: ["dreaming"],
+                          worktree: false,
+                        });
+                        const tid = r?.taskId || r?.id;
+                        toast.success(
+                          `Dreaming done — ${inserted} new, ${pending} pending — task ${tid ?? pid}`,
+                          { description: "Agent verifies against code" },
+                        );
+                      }}
+                    >
+                      Dream
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={async () => {
+                        const pid =
+                          effectiveDreamProject || state.snapshot.projects[0]?.name || "global";
+                        const res: any = await (daemon as any).request("memory.dream", {
+                          dry_run: true,
+                          project_id: pid,
+                        });
+                        toast.info(`Dry run: ${res?.inserted ?? 0} would propose`, {
+                          description: JSON.stringify(res?.proposals ?? res).slice(0, 200),
+                        });
+                      }}
+                    >
+                      Dry run
+                    </Button>
+                  </div>
+                </div>
               }
             />
             <SettingRow
@@ -385,7 +419,8 @@ export default function SettingsView({ open, onOpenChange }: Props) {
                   className="text-xs text-muted-foreground"
                   title="Read-only: edit ~/.warpforge/config.yaml memory.dreaming"
                 >
-                  {(memoryStats.data as any)?.dreaming?.enabled ? "on" : "off"} ({(memoryStats.data as any)?.dreaming?.trigger ?? "manual"})
+                  {(memoryStats.data as any)?.dreaming?.enabled ? "on" : "off"} (
+                  {(memoryStats.data as any)?.dreaming?.trigger ?? "manual"})
                 </span>
               }
             />
@@ -407,9 +442,7 @@ export default function SettingsView({ open, onOpenChange }: Props) {
               control={
                 <select
                   aria-label="Embedding mode"
-                  value={
-                    memoryStats.data?.embeddingMode === "hybrid" ? "fastembed" : "none"
-                  }
+                  value={memoryStats.data?.embeddingMode === "hybrid" ? "fastembed" : "none"}
                   disabled={memoryStats.isLoading}
                   onChange={(e) => {
                     // The select is controlled by the daemon's answer, so a
@@ -450,10 +483,14 @@ export default function SettingsView({ open, onOpenChange }: Props) {
                   className="flex items-center gap-2 text-xs tabular-nums"
                   title="Read-only: edit config.yaml"
                 >
-                  <span className={`rounded-full border px-2 py-0.5 ${memoryStats.data?.scopesEnabled.global ? "border-foreground/30 bg-foreground/10 text-foreground" : "border-border text-muted-foreground/50"}`}>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 ${memoryStats.data?.scopesEnabled.global ? "border-foreground/30 bg-foreground/10 text-foreground" : "border-border text-muted-foreground/50"}`}
+                  >
                     global
                   </span>
-                  <span className={`rounded-full border px-2 py-0.5 ${memoryStats.data?.scopesEnabled.project ? "border-foreground/30 bg-foreground/10 text-foreground" : "border-border text-muted-foreground/50"}`}>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 ${memoryStats.data?.scopesEnabled.project ? "border-foreground/30 bg-foreground/10 text-foreground" : "border-border text-muted-foreground/50"}`}
+                  >
                     project
                   </span>
                 </span>
@@ -467,7 +504,11 @@ export default function SettingsView({ open, onOpenChange }: Props) {
                   className="text-xs tabular-nums text-muted-foreground"
                   title="Auto-created overlay, not manual"
                 >
-                  {memoryStats.isLoading ? "…" : memoryStats.data?.perProjectDbExists ? "exists" : "not found — using global"}
+                  {memoryStats.isLoading
+                    ? "…"
+                    : memoryStats.data?.perProjectDbExists
+                      ? "exists"
+                      : "not found — using global"}
                 </span>
               }
             />

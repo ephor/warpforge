@@ -4,8 +4,8 @@ import { createElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DaemonState } from "../../daemon";
-import type { SessionUpdate, TaskInfo } from "../../protocol";
 import { buildLiveStripItems } from "../../lib/liveStrip";
+import type { SessionUpdate, TaskInfo } from "../../protocol";
 import { LiveStrip } from "./LiveStrip";
 
 function task(overrides: Partial<TaskInfo>): TaskInfo {

@@ -176,7 +176,13 @@ export function UnifiedDiff({
               status === "saved" && "text-ok",
             )}
           >
-            {status === "unsaved" ? "● unsaved" : status === "saved" ? <><Check className="size-3" /> saved</> : null}
+            {status === "unsaved" ? (
+              "● unsaved"
+            ) : status === "saved" ? (
+              <>
+                <Check className="size-3" /> saved
+              </>
+            ) : null}
           </span>
           {editable && (
             <button

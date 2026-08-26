@@ -17,7 +17,13 @@ export function DecisionRowActions({ item }: { item: AttentionItem }) {
   return <RowActions item={item} kind={kinds[0]} />;
 }
 
-function RowActions({ item, kind }: { item: AttentionItem; kind: "permission" | "question" | "limit" }) {
+function RowActions({
+  item,
+  kind,
+}: {
+  item: AttentionItem;
+  kind: "permission" | "question" | "limit";
+}) {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState("");

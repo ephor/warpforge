@@ -108,8 +108,7 @@ export const BacklogRow = React.memo(function BacklogRow({
             <span className="sr-only">Open in tracker</span>
           </Button>
         )}
-        {item.taskId &&
-        (actions.liveTaskIds === undefined || actions.liveTaskIds.has(item.taskId))
+        {item.taskId && (actions.liveTaskIds === undefined || actions.liveTaskIds.has(item.taskId))
           ? actions.onOpenTask && (
               <Button
                 type="button"

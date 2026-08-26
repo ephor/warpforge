@@ -79,7 +79,10 @@ export function FailedSection({
               </p>
               <div className="flex min-w-0 items-center gap-2 pl-1 text-[11px] text-muted-foreground/80">
                 <span className="truncate">{item.task.project}</span>
-                <span aria-hidden className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40" />
+                <span
+                  aria-hidden
+                  className="h-1 w-1 shrink-0 rounded-full bg-muted-foreground/40"
+                />
                 <AgentAvatarGroup agentId={item.task.agent} />
                 <span className="tnum ml-auto shrink-0">{elapsed(item.task.updatedAt)} ago</span>
               </div>

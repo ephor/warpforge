@@ -71,7 +71,17 @@ interface Props {
 }
 
 export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function DiffWorkspace(
-  { diff, diffError, diffView, editable, localRes: _localRes, onOpenFiles, onResolve: _onResolve, onSendToChat, taskId },
+  {
+    diff,
+    diffError,
+    diffView,
+    editable,
+    localRes: _localRes,
+    onOpenFiles,
+    onResolve: _onResolve,
+    onSendToChat,
+    taskId,
+  },
   ref,
 ) {
   const unifiedScrollParent = useRef<HTMLDivElement>(null);
@@ -212,19 +222,23 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
                 >
                   {doc ? (
                     <Suspense fallback={<EditorLoading />}>
-                        <UnifiedDiff
-                          key={`${doc.path}:${editable}`}
-                          doc={doc}
-                          file={file}
-                          editable={editable}
-                          highlightedHunks={
-                            _highlightedEdit?.path === file.path ? _highlightedEdit.hunks : undefined
-                          }
-                          onSave={(content) =>
-                            void daemon.request("file.save", { content, path: doc.path, task_id: taskId })
-                          }
-                          onSendToChat={onSendToChat}
-                        />
+                      <UnifiedDiff
+                        key={`${doc.path}:${editable}`}
+                        doc={doc}
+                        file={file}
+                        editable={editable}
+                        highlightedHunks={
+                          _highlightedEdit?.path === file.path ? _highlightedEdit.hunks : undefined
+                        }
+                        onSave={(content) =>
+                          void daemon.request("file.save", {
+                            content,
+                            path: doc.path,
+                            task_id: taskId,
+                          })
+                        }
+                        onSendToChat={onSendToChat}
+                      />
                     </Suspense>
                   ) : query?.error ? (
                     <p className="p-3 text-sm text-destructive">

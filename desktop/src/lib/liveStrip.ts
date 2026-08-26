@@ -1,7 +1,7 @@
 import type { SessionUpdate, TaskInfo } from "../protocol";
+import { sessionActivity, type SessionActivity } from "./sessionActivity";
 import { latestPendingPermission } from "./sessionPermissions";
 import { latestSessionPreview } from "./sessionPreview";
-import { sessionActivity, type SessionActivity } from "./sessionActivity";
 import { coalesceTailUpdates } from "./sessionStream";
 
 export interface LiveStripItem {
@@ -72,5 +72,3 @@ export function formatElapsed(startedAtMs: number, nowMs: number): string {
   const m = Math.floor((totalSeconds % 3600) / 60);
   return `${h}h ${String(m).padStart(2, "0")}m`;
 }
-
-
