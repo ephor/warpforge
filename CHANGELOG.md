@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.11.0
+
+### Minor Changes
+
+- [`fc10039`](https://github.com/warpforgehq/warpforge/commit/fc10039df85848b9f2bc4921664a44fbd581e3d0) Thanks [@ephor](https://github.com/ephor)! - GitHub backlog now prefers a PAT (`repo` + `read:project`) stored in keychain (Settings → Trackers), with `gh` CLI as deprecated fallback for backlog only (PR creation still uses `gh`). Sync reconciles remote status, removes deleted issues, surfaces missing-scope warnings via toast, and no longer blocks the daemon (parallel checks, 30s global timeout, immediate spinner).
+
+### Patch Changes
+
+- [`82f63d2`](https://github.com/warpforgehq/warpforge/commit/82f63d2aaae260762bd323ca078cddae412b30d4) Thanks [@ephor](https://github.com/ephor)! - The agent's session pickers (model, effort, and the "More" overflow) now close
+  when you click anywhere else — in the composer textarea, the editor, or any
+  other part of the app — instead of staying open until you click the trigger
+  again. Opening one picker also dismisses the one you had open, so several can't
+  stay open at once. The model picker keeps focus in its search box when it opens
+  so you can start filtering right away.
+
+- [`e4e744d`](https://github.com/warpforgehq/warpforge/commit/e4e744d3929534dd873ff86bf525558793ba917b) Thanks [@ephor](https://github.com/ephor)! - Project Files is now editable: the sidebar's file tree opens any checkout file
+  in a write-enabled editor (⌘S to save), with `file.save` and `git.commit`
+  addressed by project name when no task owns the file. Project files picked from
+  the tree also open with the same WebStorm-style change gutter as task files —
+  thin colored bars for added (green) and modified (blue) lines, a marker for
+  deleted lines, and a click-to-revert / per-file commit popup.
+
+- [`c8f12da`](https://github.com/warpforgehq/warpforge/commit/c8f12dae837165dfb08790a2ad488817344b75f3) Thanks [@ephor](https://github.com/ephor)! - Fix ghost backlog rows after deleting a task linked to a tracker item. Deleting a task now clears `backlog_items.task_id` / `tracker_links.task_id` and YAML `task_id` refs, resets status to `todo`, and invalidates the backlog query. The board only shows "Open task" when the task still exists.
+
+- [`c8f12da`](https://github.com/warpforgehq/warpforge/commit/c8f12dae837165dfb08790a2ad488817344b75f3) Thanks [@ephor](https://github.com/ephor)! - Discovered follow-up work can now be saved directly to the local backlog as a
+  todo item without starting an agent. The new `create_backlog_task` action
+  supports a title, details, priority, and status; the older `create_task` name
+  continues to work as a deprecated compatibility alias.
+
+- [`26353aa`](https://github.com/warpforgehq/warpforge/commit/26353aa62d7aaec37766b0ab21dfa81f0ccd49a9) Thanks [@ephor](https://github.com/ephor)! - In the unified diff view, clicking a "changed lines" marker in a chat message
+  now scrolls the editor to the matching change instead of leaving you to hunt
+  for it. The move to a single CodeMirror editor had dropped that jump; it is
+  restored via the editor's own scroll, so the changed rows (which CodeMirror's
+  diff already tints) land in the center of the pane.
+
+- [`afb8355`](https://github.com/warpforgehq/warpforge/commit/afb8355a4bd6363cda6d9735be78f8cb49101b2c) Thanks [@ephor](https://github.com/ephor)! - Dropdowns, menus, tooltips, and dialogs no longer make the button you clicked
+  flicker. Opening a filter on the backlog board, switching between two
+  dropdowns, or moving the mouse off a tooltip used to flash the control for a
+  moment; now only the panel itself fades in and out, so clicking through filters
+  stays calm.
+
+- [`d6752c9`](https://github.com/warpforgehq/warpforge/commit/d6752c99f795a124863030bf038f6e6bbfc4d0ca) Thanks [@ephor](https://github.com/ephor)! - Dropdowns and context menus now read at the same size as the rest of the app
+  instead of standing out — an open list of options or a task's "..." menu was
+  noticeably larger than the rows behind it. Options sit tighter, and hovering
+  one gives you a pointer cursor so it looks as clickable as it is.
+
+- [`5dc8b5a`](https://github.com/warpforgehq/warpforge/commit/5dc8b5ac43805850f102fb66cba8090030466610) Thanks [@ephor](https://github.com/ephor)! - The desktop app now builds on Tailwind CSS v4, replacing the v3 PostCSS
+  pipeline with the dedicated Vite plugin. The theme (colors, radii, fonts, and
+  animations) moved into a single CSS `@theme` block, and the shadcn enter/exit
+  animations are defined as native CSS keyframes instead of a plugin. The app's
+  unified-diff and markdown surfaces now use the shadcn `typeset` typography
+  system, giving chat and preview text a consistent, container-aware rhythm that
+  follows the selected color theme.
+
+- [`2c90796`](https://github.com/warpforgehq/warpforge/commit/2c907967bd79ecb30484ade34fe4ba4e6f0a6ae8) Thanks [@ephor](https://github.com/ephor)! - Rendered markdown now uses the shadcn `typeset` style system. Chat messages get
+  a tight `typeset-chat` rhythm and the editor's markdown preview a roomier
+  `typeset-docs` one, so headings, lists, code, and links read consistently and
+  follow the active color theme. This replaces the old `prose` classes, which
+  depended on a typography plugin the app did not ship.
+
+- [`b38e771`](https://github.com/warpforgehq/warpforge/commit/b38e7719831f91abd6dee95c9c897fe4618d9373) Thanks [@ephor](https://github.com/ephor)! - The demo iframe on the marketing page now loads the desktop app's own
+  stylesheet directly. The app's Tailwind v4 entry is self-contained (it scans
+  its own source for classes), so the separate `app-theme.css` that used to point
+  at the app's old v3 config is gone.
+
 ## 0.10.3
 
 ### Patch Changes

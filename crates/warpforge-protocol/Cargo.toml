@@ -1,6 +1,6 @@
 [package]
 name = "warpforge-protocol"
-version = "0.10.3"
+version = "0.11.0"
 edition = "2021"
 description = "Wire types for the warpforge daemon API (WebSocket, JSON envelope). Shared by the daemon and every client (TUI, desktop shell)."
 
