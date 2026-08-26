@@ -762,12 +762,14 @@ async fn dispatch(
             task_id,
             path,
             content,
+            project,
         } => {
             handle
                 .send(Command::SaveFile {
                     task_id,
                     path,
                     content,
+                    project,
                 })
                 .await;
             Ok(json!(null))
@@ -858,9 +860,10 @@ async fn dispatch(
             message,
             files,
             amend,
+            project,
         } => {
             handle
-                .git_commit(&task_id, &message, files, amend)
+                .git_commit(&task_id, &message, files, amend, project)
                 .await
                 .map_err(|e| wire::RpcError {
                     code: wire::ErrorCode::Internal,
@@ -2152,6 +2155,7 @@ mod tests {
                 message: "m".into(),
                 files: None,
                 amend: false,
+                project: None,
             },
         ] {
             assert!(

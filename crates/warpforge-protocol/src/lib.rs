@@ -468,9 +468,12 @@ pub enum Method {
     /// Write new contents to a file in the task's working tree (in-review edit).
     #[serde(rename = "file.save")]
     FileSave {
+        #[serde(default)]
         task_id: String,
         path: String,
         content: String,
+        #[serde(default)]
+        project: Option<String>,
     },
     #[serde(rename = "file.create")]
     FileCreate {
@@ -503,12 +506,15 @@ pub enum Method {
     /// changes; `amend` rewrites the previous commit.
     #[serde(rename = "git.commit")]
     GitCommit {
+        #[serde(default)]
         task_id: String,
         message: String,
         #[serde(default)]
         files: Option<Vec<String>>,
         #[serde(default)]
         amend: bool,
+        #[serde(default)]
+        project: Option<String>,
     },
     /// Pull the task's project repo up to its upstream (rebase + autostash).
     /// Any conflict rolls the working tree back to the exact prior state.

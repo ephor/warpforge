@@ -40,6 +40,7 @@ export function FilesSurface({
   fileDocError,
   editable,
   taskId,
+  project,
   onSave,
   rootPath,
   onRefresh,
@@ -61,6 +62,7 @@ export function FilesSurface({
   fileDocError?: string | null;
   editable: boolean;
   taskId: string;
+  project?: string;
   onSave: (content: string) => void;
   rootPath?: string;
   onRefresh: () => void;
@@ -146,6 +148,7 @@ export function FilesSurface({
                 doc={fileDoc}
                 editable={editable}
                 taskId={taskId}
+                project={project}
                 onSave={onSave}
                 onGotoDefinition={onGotoDefinition}
                 onOpenSymbol={onOpenSymbol}

@@ -897,6 +897,7 @@ pub enum Command {
         task_id: String,
         path: String,
         content: String,
+        project: Option<String>,
     },
     CreateFile {
         task_id: String,
@@ -935,6 +936,7 @@ pub enum Command {
         message: String,
         files: Option<Vec<String>>,
         amend: bool,
+        project: Option<String>,
         reply: oneshot::Sender<Result<(), String>>,
     },
     /// Read the task repo's latest commit message (for pre-filling an amend).
@@ -1875,6 +1877,7 @@ impl DaemonHandle {
         message: &str,
         files: Option<Vec<String>>,
         amend: bool,
+        project: Option<String>,
     ) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::GitCommit {
@@ -1882,6 +1885,7 @@ impl DaemonHandle {
             message: message.to_string(),
             files,
             amend,
+            project,
             reply: tx,
         })
         .await;
@@ -4079,15 +4083,25 @@ impl Daemon {
                 task_id,
                 path,
                 content,
+                project,
             } => {
-                let repo = self
-                    .tasks
-                    .get(&task_id)
-                    .and_then(|_| self.task_repo_path(&task_id));
+                let repo: Option<std::path::PathBuf> = if let Some(proj) = project.clone() {
+                    self.projects
+                        .iter()
+                        .find(|p| p.name == proj)
+                        .map(|p| std::path::PathBuf::from(&p.path))
+                } else {
+                    self.tasks
+                        .get(&task_id)
+                        .and_then(|_| self.task_repo_path(&task_id).map(std::path::PathBuf::from))
+                };
                 let cmd_tx = self.cmd_tx.clone();
+                let is_project = project.is_some();
                 tokio::task::spawn_blocking(move || {
                     let Some(p) = repo else { return };
-                    if super::diff::save_file(&p, &path, &content).is_ok() {
+                    if super::diff::save_file(&p.to_string_lossy(), &path, &content).is_ok()
+                        && !is_project
+                    {
                         // Nudge clients so the diff/file list refetches.
                         let _ = cmd_tx.blocking_send(Command::GitOpFinished {
                             task_id,
@@ -4187,18 +4201,31 @@ impl Daemon {
                 message,
                 files,
                 amend,
+                project,
                 reply,
             } => {
                 // git shells out; resolve the repo here and run it off the loop,
                 // reporting what changed back as GitOpFinished (ADR 0002).
-                let repo = self.task_repo_path(&task_id);
+                let repo: Option<String> = if let Some(proj) = project.clone() {
+                    self.projects
+                        .iter()
+                        .find(|p| p.name == proj)
+                        .map(|p| p.path.clone())
+                } else {
+                    self.task_repo_path(&task_id)
+                };
                 let cmd_tx = self.cmd_tx.clone();
+                let is_project = project.is_some();
                 tokio::spawn(async move {
                     let result = match repo {
                         Some(p) => super::diff::commit(&p, &message, files.as_deref(), amend)
                             .await
                             .map_err(|e| e.to_string()),
-                        None => Err(format!("no repo for task {task_id}")),
+                        None => Err(if is_project {
+                            format!("no repo for project {}", project.unwrap_or_default())
+                        } else {
+                            format!("no repo for task {task_id}")
+                        }),
                     };
                     if result.is_ok() {
                         let _ = cmd_tx

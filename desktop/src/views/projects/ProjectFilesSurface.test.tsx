@@ -70,10 +70,10 @@ describe("ProjectFilesSurface", () => {
     fireEvent.click(await screen.findByTitle("README.md"));
 
     // The strip gains a tab for it — its close control is the part only a tab
-    // has — and the file reaches the editor without write access.
+    // has — and the file reaches the editor with write access (project files are now editable).
     expect(await screen.findByRole("button", { name: "Close README.md" })).toBeInTheDocument();
     expect(screen.queryByText("No file open")).not.toBeInTheDocument();
-    expect(await screen.findByTestId("editor")).toHaveTextContent("README.md read-only");
+    expect(await screen.findByTestId("editor")).toHaveTextContent("README.md editable");
     expect(daemon.request).toHaveBeenCalledWith(
       "file.contents",
       expect.objectContaining({ path: "README.md", project: "warpforge" }),
@@ -96,13 +96,13 @@ describe("ProjectFilesSurface", () => {
     await screen.findByTestId("editor");
     fireEvent.click(await screen.findByTitle("Cargo.toml"));
     await vi.waitFor(() =>
-      expect(screen.getByTestId("editor")).toHaveTextContent("Cargo.toml read-only"),
+      expect(screen.getByTestId("editor")).toHaveTextContent("Cargo.toml editable"),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Close Cargo.toml" }));
 
     await vi.waitFor(() =>
-      expect(screen.getByTestId("editor")).toHaveTextContent("README.md read-only"),
+      expect(screen.getByTestId("editor")).toHaveTextContent("README.md editable"),
     );
   });
 });

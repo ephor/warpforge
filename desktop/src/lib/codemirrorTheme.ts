@@ -33,6 +33,18 @@ export function appChromeTheme(_mode: "light" | "dark") {
       color: "hsl(var(--muted-foreground))",
       borderRight: "1px solid hsl(var(--border))",
     },
+    ".warpforge-code-editor .cm-lineNumbers": {
+      minWidth: "26px",
+    },
+    ".warpforge-code-editor .cm-lineNumbers .cm-gutterElement": {
+      padding: "0 4px 0 2px",
+      textAlign: "right",
+    },
+    // Collapsed-chunk margin fix (globals.css) now keeps line numbers aligned
+    // with content, so the gutter bar needs no vertical transform.
+    ".cm-changedLineGutter": {
+      transform: "translateY(0px)",
+    },
     ".cm-activeLineGutter": {
       backgroundColor: "hsl(var(--muted) / 0.7)",
       color: "hsl(var(--foreground))",

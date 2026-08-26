@@ -139,8 +139,10 @@ textarea {
   color: hsl(var(--muted-foreground));
   background: hsl(var(--muted) / 0.5);
   border-radius: 0;
-  margin: 2px 0;
-  padding: 1px 8px !important;
+  /* No vertical margin: it adds layout height the gutter spacer doesn't
+   * measure, shifting every line below a collapsed chunk off its number. */
+  margin: 0;
+  padding: 2px 8px !important;
   border-top: 1px solid hsl(var(--border));
   border-bottom: 1px solid hsl(var(--border));
   font-size: 11px;

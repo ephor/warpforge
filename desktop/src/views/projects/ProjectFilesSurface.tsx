@@ -1,12 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 
+import { daemon } from "@/daemon";
 import type { FileDoc } from "@/protocol";
 import { daemonQuery, useProjectFilesQuery } from "@/query";
 
 import { FilesSurface, type OpenFileTab } from "../task-detail/FilesSurface";
-
-const noop = () => {};
 
 export interface ProjectFilesSurfaceProps {
   project: string;
@@ -16,10 +15,11 @@ export interface ProjectFilesSurfaceProps {
 /**
  * Browsing a project's checkout with no task open.
  *
- * This is the task workspace's Files surface, given a project instead of a
- * task: same tab strip, same tree, same editor. Read-only on purpose — a save
- * belongs to a task — so `taskId` is empty, which is also what keeps the
- * tree's create/rename/delete actions out of the context menu.
+ * Same tab strip/tree/editor as the task Files surface, but now editable:
+ * saves go straight to the project checkout via `file.save {project}` and
+ * commits via `git.commit {project}`. The gutter shows WebStorm-style
+ * change bars (green for added/modified, triangle for deleted) with
+ * click-to-revert and per-hunk commit.
  */
 export function ProjectFilesSurface({ project, rootPath }: ProjectFilesSurfaceProps) {
   const [open, setOpen] = useState<{ tabs: string[]; active: string | null }>({
@@ -66,6 +66,14 @@ export function ProjectFilesSurface({ project, rootPath }: ProjectFilesSurfacePr
     [files, open.tabs],
   );
 
+  const handleSave = useCallback(
+    (content: string) => {
+      if (!open.active) return;
+      void daemon.request("file.save", { project, path: open.active, content, task_id: "" });
+    },
+    [open.active, project],
+  );
+
   return (
     <FilesSurface
       projectFiles={files}
@@ -77,9 +85,10 @@ export function ProjectFilesSurface({ project, rootPath }: ProjectFilesSurfacePr
       onCloseTab={closeFile}
       fileDoc={docQuery.data ?? null}
       fileDocError={docQuery.error?.message ?? null}
-      editable={false}
-      taskId=""
-      onSave={noop}
+      editable={true}
+      taskId={project}
+      project={project}
+      onSave={handleSave}
       rootPath={rootPath}
       onRefresh={() => void filesQuery.refetch()}
     />

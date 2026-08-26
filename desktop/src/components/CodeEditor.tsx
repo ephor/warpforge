@@ -3,7 +3,7 @@ import { jumpToDefinition } from "@codemirror/lsp-client";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
-import { Check, Code, Eye, Loader2, Save, Wand2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Code, Copy, Eye, Loader2, Save, Undo2, Wand2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useThemeMode } from "@/hooks/useTheme";
@@ -20,6 +20,7 @@ import { daemon } from "../daemon";
 import type { FileDoc, FileRange, SymbolMatch } from "../protocol";
 import { useUi } from "../store/ui";
 import { Markdown } from "./Markdown";
+import { applyRevert, changeGutterExtension, computeGutterChanges, type ChangeBlock, type DeletedBlock } from "@/lib/changeGutter";
 
 type SaveStatus = "clean" | "unsaved" | "saved";
 
@@ -60,6 +61,7 @@ export function CodeEditor({
   doc,
   editable,
   taskId,
+  project,
   onSave,
   onGotoDefinition,
   onOpenSymbol,
@@ -70,6 +72,7 @@ export function CodeEditor({
   doc: FileDoc;
   editable: boolean;
   taskId: string;
+  project?: string;
   onSave: (content: string) => void;
   /** Resolve a symbol under the cursor to project lines (go-to-definition).
    *  When provided, ⌘/Ctrl-click and ⌘B run it. */
@@ -87,6 +90,7 @@ export function CodeEditor({
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const lspCompartment = useRef(new Compartment());
+  const changeGutterCompartment = useRef(new Compartment());
   const gotoLocationKey = useRef<string | null>(null);
   const lastSaved = useRef<string | null>(null);
   const onSaveRef = useRef(onSave);
@@ -120,6 +124,20 @@ export function CodeEditor({
   const previewText = text;
   const isReadOnly = binaryImage || svgImage;
 
+  // Change-gutter popup state (WebStorm-style)
+  const [activeChange, setActiveChange] = useState<{
+    block: ChangeBlock | DeletedBlock;
+    line: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [commitMsg, setCommitMsg] = useState("");
+  const [committing, setCommitting] = useState(false);
+  const activeChangeRef = useRef(activeChange);
+  useEffect(() => {
+    activeChangeRef.current = activeChange;
+  }, [activeChange]);
+
   useEffect(() => {
     onSaveRef.current = onSave;
   }, [onSave]);
@@ -141,6 +159,133 @@ export function CodeEditor({
     setStatus("saved");
     return true;
   };
+
+  const handleGutterClick = useCallback((info: { block: ChangeBlock | DeletedBlock; line: number }) => {
+    const view = viewRef.current;
+    if (!view) return;
+    const lineNum = info.line;
+    const line = view.state.doc.line(Math.min(Math.max(lineNum, 1), view.state.doc.lines));
+    const coords = view.coordsAtPos(line.from);
+    const hostRect = host.current?.getBoundingClientRect();
+    if (!coords || !hostRect) {
+      setActiveChange({ block: info.block, line: info.line, x: 24, y: 0 });
+      return;
+    }
+    // Position popup just to the right of gutter, aligned to line top
+    const x = 24;
+    const y = coords.top - hostRect.top + view.scrollDOM.scrollTop;
+    setActiveChange({ block: info.block, line: info.line, x, y });
+    setCommitMsg("");
+  }, []);
+
+  const handleGutterClickRef = useRef(handleGutterClick);
+  useEffect(() => {
+    handleGutterClickRef.current = handleGutterClick;
+  }, [handleGutterClick]);
+
+  const revertActive = useCallback(() => {
+    const view = viewRef.current;
+    const cur = activeChangeRef.current;
+    if (!view || !cur) return;
+    applyRevert(view, cur.block);
+    // mark unsaved then save
+    setStatus("unsaved");
+    const next = view.state.doc.toString();
+    setText(next);
+    // auto-save the revert
+    setTimeout(() => {
+      const current = view.state.doc.toString();
+      lastSaved.current = current;
+      setText(current);
+      onSaveRef.current(current);
+      setStatus("saved");
+    }, 0);
+    setActiveChange(null);
+  }, []);
+
+  const commitActive = useCallback(async () => {
+    const msg = commitMsg.trim();
+    if (!msg) return;
+    setCommitting(true);
+    try {
+      // Save first if unsaved
+      const view = viewRef.current;
+      if (view) {
+        const current = view.state.doc.toString();
+        if (current !== lastSaved.current) {
+          lastSaved.current = current;
+          setText(current);
+          onSaveRef.current(current);
+          setStatus("saved");
+          // give daemon a moment to write file before commit? commit will read working tree, so wait a tick
+          await new Promise((r) => setTimeout(r, 120));
+        }
+      }
+      await daemon.request("git.commit", {
+        task_id: project ? "" : taskId,
+        project: project ?? undefined,
+        message: msg,
+        files: [doc.path],
+      } as unknown as Record<string, unknown>);
+      setActiveChange(null);
+      setCommitMsg("");
+      // After commit the file is now clean — head catches up to working tree.
+      // Reconfigure gutter so its baseline becomes the just-committed text.
+      const view2 = viewRef.current;
+      if (view2) {
+        const newOld = view2.state.doc.toString();
+        view2.dispatch({
+          effects: changeGutterCompartment.current.reconfigure(
+            changeGutterExtension(newOld, (info) => handleGutterClickRef.current(info)),
+          ),
+        });
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("commit failed", e);
+    } finally {
+      setCommitting(false);
+    }
+  }, [commitMsg, doc.path, project, taskId]);
+
+  const navigateChange = useCallback(
+    (dir: 1 | -1) => {
+      const view = viewRef.current;
+      if (!view) return;
+      const curText = view.state.doc.toString();
+      const changes = computeGutterChanges(doc.oldText, curText);
+      const all: Array<{ line: number; block: ChangeBlock | DeletedBlock }> = [];
+      for (const b of changes.blocks) all.push({ line: b.from, block: b });
+      for (const d of changes.deleted) all.push({ line: d.line, block: d });
+      all.sort((a, b) => a.line - b.line);
+      if (all.length === 0) return;
+      const curLine = activeChangeRef.current?.line ?? (dir === 1 ? 0 : Number.MAX_SAFE_INTEGER);
+      let idx = all.findIndex((a) => a.block === activeChangeRef.current?.block);
+      if (idx === -1) {
+        // find nearest
+        if (dir === 1) idx = all.findIndex((a) => a.line > curLine);
+        else idx = [...all].reverse().findIndex((a) => a.line < curLine);
+        if (idx === -1) idx = dir === 1 ? 0 : all.length - 1;
+        else if (dir === -1) idx = all.length - 1 - idx;
+      } else {
+        idx = (idx + dir + all.length) % all.length;
+      }
+      const target = all[idx];
+      if (!target) return;
+      const line = view.state.doc.line(Math.min(target.line, view.state.doc.lines));
+      view.dispatch({
+        selection: { anchor: line.from },
+        effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+      });
+      view.focus();
+      const coords = view.coordsAtPos(line.from);
+      const hostRect = host.current?.getBoundingClientRect();
+      const x = 24;
+      const y = coords && hostRect ? coords.top - hostRect.top + view.scrollDOM.scrollTop : 0;
+      setActiveChange({ block: target.block, line: target.line, x, y });
+    },
+    [doc.oldText],
+  );
 
   const runGoto = useCallback((): boolean => {
     const view = viewRef.current;
@@ -260,6 +405,39 @@ export function CodeEditor({
     askSelectionRef.current = askSelection;
   }, [askSelection]);
 
+  // Close change-gutter popup when clicking outside or pressing Escape
+  useEffect(() => {
+    if (!activeChange) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("[data-change-popup]") || target?.closest(".cm-changeGutter")) return;
+      setActiveChange(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setActiveChange(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [activeChange]);
+
+  // Dismiss popup on scroll (otherwise it floats at stale coords)
+  useEffect(() => {
+    if (!activeChange || !viewRef.current) return;
+    const scroller = viewRef.current.scrollDOM;
+    const onScroll = () => setActiveChange(null);
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => scroller.removeEventListener("scroll", onScroll);
+  }, [activeChange]);
+
+  useEffect(() => {
+    // any external doc change dismisses popup (avoid stale coordinates)
+    setActiveChange(null);
+  }, [doc.path, doc.oldText]);
+
   useEffect(() => {
     const parent = host.current;
     if (!parent || binaryImage) {
@@ -274,6 +452,7 @@ export function CodeEditor({
       setText(doc.newText);
       setPreview(false);
       lastSaved.current = null;
+      setActiveChange(null);
       view = new EditorView({
         parent,
         state: EditorState.create({
@@ -286,6 +465,10 @@ export function CodeEditor({
             ...language,
             lspCompartment.current.of([]),
             EditorState.readOnly.of(!editable || isReadOnly),
+            // WebStorm-style change gutter — thin bar, no background, click for revert/commit
+            ...(!isReadOnly && doc.oldText !== undefined
+              ? [changeGutterCompartment.current.of(changeGutterExtension(doc.oldText, (info) => handleGutterClickRef.current(info)))]
+              : []),
             keymap.of([
               { key: "Mod-s", run: flushSave },
               ...(onGotoDefinition ? [{ key: "Mod-b", run: runGoto, preventDefault: true }] : []),
@@ -360,6 +543,17 @@ export function CodeEditor({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.path, editable, binaryImage, isReadOnly, themeMode]);
+
+  // Keep gutter baseline in sync when HEAD changes (e.g., after commit the parent refetches).
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || binaryImage || isReadOnly || doc.oldText === undefined) return;
+    view.dispatch({
+      effects: changeGutterCompartment.current.reconfigure(
+        changeGutterExtension(doc.oldText, (info) => handleGutterClickRef.current(info)),
+      ),
+    });
+  }, [doc.oldText, binaryImage, isReadOnly]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -612,6 +806,111 @@ export function CodeEditor({
                   {SEND_TO_CHAT_HINT}
                 </kbd>
               </button>
+            )}
+            {activeChange && !showPreview && !binaryImage && (
+              <div
+                data-change-popup
+                className="absolute z-30 flex min-w-[340px] max-w-[560px] flex-col overflow-hidden rounded-md border bg-popover shadow-lg"
+                style={{ left: Math.min(activeChange.x, 24), top: activeChange.y + 18 }}
+              >
+                <div className="flex items-center gap-1 border-b bg-background px-2 py-1.5">
+                  <button
+                    type="button"
+                    title="Previous change"
+                    onClick={() => navigateChange(-1)}
+                    className="rounded p-1 hover:bg-accent hover:text-accent-foreground"
+                  >
+                    <ArrowUp className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Next change"
+                    onClick={() => navigateChange(1)}
+                    className="rounded p-1 hover:bg-accent hover:text-accent-foreground"
+                  >
+                    <ArrowDown className="size-3.5" />
+                  </button>
+                  <div className="mx-1 h-4 w-px bg-border" />
+                  <button
+                    type="button"
+                    onClick={revertActive}
+                    className="flex items-center gap-1 rounded px-1.5 py-1 text-xs hover:bg-accent hover:text-accent-foreground"
+                    title="Revert this change"
+                  >
+                    <Undo2 className="size-3" /> Revert
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const text = activeChange.block.type === "deleted"
+                        ? (activeChange.block as DeletedBlock).oldText
+                        : (activeChange.block as ChangeBlock).type === "added"
+                          ? viewRef.current?.state.sliceDoc(
+                              viewRef.current.state.doc.line((activeChange.block as ChangeBlock).from).from,
+                              viewRef.current.state.doc.line((activeChange.block as ChangeBlock).to).to,
+                            ) ?? ""
+                          : (activeChange.block as ChangeBlock).oldText;
+                      if (text) void navigator.clipboard.writeText(text);
+                    }}
+                    className="flex items-center gap-1 rounded px-1.5 py-1 text-xs hover:bg-accent hover:text-accent-foreground"
+                    title="Copy changed fragment to clipboard"
+                  >
+                    <Copy className="size-3" /> Copy
+                  </button>
+                  <div className="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground">
+                    {activeChange.block.type === "deleted"
+                      ? `line ${activeChange.line} • deleted`
+                      : `lines ${(activeChange.block as ChangeBlock).from}-${(activeChange.block as ChangeBlock).to} • ${(activeChange.block as ChangeBlock).type}`}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveChange(null)}
+                    className="ml-1 rounded px-1 text-muted-foreground hover:text-foreground"
+                  >
+                    ✕
+                  </button>
+                </div>
+                {activeChange.block.type === "deleted" && (
+                  <div className="max-h-32 overflow-auto border-y bg-muted/30 p-2">
+                    <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-4 text-foreground">
+                      {(activeChange.block as DeletedBlock).oldText.slice(0, 800) || "(empty)"}
+                    </pre>
+                  </div>
+                )}
+                {activeChange.block.type !== "deleted" && (activeChange.block as ChangeBlock).oldText && (
+                  <div className="max-h-24 overflow-auto border-y bg-muted/30 p-2">
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Previous • {(activeChange.block as ChangeBlock).type === "added" ? "new lines" : "modified"}
+                    </div>
+                    <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-4 text-muted-foreground">
+                      {(activeChange.block as ChangeBlock).oldText.slice(0, 600)}
+                    </pre>
+                  </div>
+                )}
+                <div className="flex items-center gap-2 p-2">
+                  <input
+                    value={commitMsg}
+                    onChange={(e) => setCommitMsg(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void commitActive();
+                      }
+                    }}
+                    placeholder="Commit this change"
+                    className="flex-1 rounded border bg-background px-2 py-1.5 text-xs outline-none placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void commitActive()}
+                    disabled={!commitMsg.trim() || committing}
+                    className="flex h-7 items-center gap-1 rounded bg-foreground px-2.5 text-xs font-medium text-background hover:bg-foreground/90 disabled:opacity-50"
+                  >
+                    {committing ? <Loader2 className="size-3 animate-spin" /> : <span>↵</span>}
+                  </button>
+                </div>
+              </div>
             )}
             {showPreview && (
               <div className="h-full overflow-auto px-4 py-3">
