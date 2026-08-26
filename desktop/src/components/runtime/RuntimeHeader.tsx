@@ -18,7 +18,7 @@ export function RuntimeHeader({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+    <div className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
       {children}
       {actionError && (
         <span

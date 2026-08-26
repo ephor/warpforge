@@ -103,23 +103,30 @@ textarea {
  */
 .warpforge-merge-diff .cm-editor,
 .warpforge-merge-diff .cm-gutters,
+.warpforge-unified-diff .cm-editor,
+.warpforge-unified-diff .cm-gutters,
 .warpforge-code-editor .cm-editor,
 .warpforge-code-editor .cm-gutters {
   background-color: hsl(var(--card)) !important;
 }
 
-.cm-merge-a .cm-changedLine {
+.cm-merge-a .cm-changedLine,
+.warpforge-unified-diff .cm-deletedChunk {
   background-color: hsl(var(--destructive) / 0.08) !important;
 }
-.cm-merge-b .cm-changedLine {
+.cm-merge-b .cm-changedLine,
+.warpforge-unified-diff .cm-changedLine {
   background-color: hsl(var(--ok) / 0.08) !important;
 }
 .cm-merge-a .cm-changedText,
-.cm-merge-a .cm-deletedChunk .cm-deletedText {
+.cm-merge-a .cm-deletedChunk .cm-deletedText,
+.warpforge-unified-diff .cm-deletedChunk .cm-deletedText {
   background: hsl(var(--destructive) / 0.3) !important;
   border-radius: 2px;
 }
-.cm-merge-b .cm-changedText {
+.cm-merge-b .cm-changedText,
+.warpforge-unified-diff .cm-changedText,
+.warpforge-unified-diff .cm-inlineChangedText {
   background: hsl(var(--ok) / 0.2) !important;
   border-radius: 2px;
 }
@@ -127,17 +134,31 @@ textarea {
 /* Collapsed "unchanged lines" bar. CodeMirror's own &dark/&light styles use
  * hard constants (#222/#f3f3f3) that fight the app theme; clamp it to vars so
  * it tracks the selected palette on both light and dark themes. */
-.warpforge-merge-diff .cm-collapsedLines {
+.warpforge-merge-diff .cm-collapsedLines,
+.warpforge-unified-diff .cm-collapsedLines {
   color: hsl(var(--muted-foreground));
   background: hsl(var(--muted) / 0.5);
-  border-radius: 0.375rem;
-  margin: 0.25rem 0.5rem;
-  border: 1px solid hsl(var(--border));
+  border-radius: 0;
+  margin: 2px 0;
+  padding: 1px 8px !important;
+  border-top: 1px solid hsl(var(--border));
+  border-bottom: 1px solid hsl(var(--border));
+  font-size: 11px;
+  line-height: 1.5;
 }
-.warpforge-merge-diff .cm-collapsedLines:hover {
+.warpforge-merge-diff .cm-collapsedLines:hover,
+.warpforge-unified-diff .cm-collapsedLines:hover {
   color: hsl(var(--foreground));
   background: hsl(var(--accent));
   border-color: hsl(var(--ring));
+}
+.warpforge-merge-diff .cm-collapsedLines::before,
+.warpforge-merge-diff .cm-collapsedLines::after,
+.warpforge-unified-diff .cm-collapsedLines::before,
+.warpforge-unified-diff .cm-collapsedLines::after {
+  content: none !important;
+  display: none !important;
+  margin: 0 !important;
 }
 
 /*

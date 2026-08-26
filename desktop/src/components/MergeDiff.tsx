@@ -2,15 +2,16 @@ import { MergeView } from "@codemirror/merge";
 import type { Extension } from "@codemirror/state";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
-import { Check, Undo2 } from "lucide-react";
+import { Check, Send, Undo2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { useThemeMode } from "@/hooks/useTheme";
 import { codemirrorLanguageForPath } from "@/lib/codemirrorLanguages";
 import { cmChromeForMode } from "@/lib/codemirrorTheme";
 import { cn } from "@/lib/utils";
 
-import type { FileDoc } from "../protocol";
+import type { FileDiff, FileDoc } from "../protocol";
 
 type SaveStatus = "clean" | "unsaved" | "saved";
 
@@ -22,12 +23,16 @@ type SaveStatus = "clean" | "unsaved" | "saved";
  */
 export function MergeDiff({
   doc,
+  file,
   editable,
   onSave,
+  onSendToChat,
 }: {
   doc: FileDoc;
+  file?: FileDiff;
   editable: boolean;
   onSave: (content: string) => void;
+  onSendToChat?: (file: FileDiff) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<MergeView | null>(null);
@@ -147,35 +152,45 @@ export function MergeDiff({
 
   return (
     <div className="flex flex-col">
-      {editable && (
-        <div className="flex h-9 shrink-0 items-center gap-3 border-b px-3 text-xs text-muted-foreground">
-          <span className="font-mono">{doc.path}</span>
-          <span
-            className={cn(
-              "flex items-center gap-1",
-              status === "unsaved" && "text-warn",
-              status === "saved" && "text-ok",
+      {(editable || onSendToChat) && (
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b bg-secondary/30 px-3 text-xs">
+          <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{doc.path}</span>
+          <span className="ml-auto flex shrink-0 items-center gap-2">
+            {editable && (
+              <span
+                className={cn(
+                  "flex items-center gap-1 whitespace-nowrap text-[11px]",
+                  status === "unsaved" && "text-warn",
+                  status === "saved" && "text-ok",
+                )}
+              >
+                {status === "unsaved" ? "● unsaved" : status === "saved" ? <><Check className="size-3" /> saved</> : null}
+              </span>
             )}
-          >
-            {status === "unsaved" ? (
-              "● unsaved"
-            ) : status === "saved" ? (
-              <>
-                <Check className="size-3" /> saved
-              </>
-            ) : (
-              ""
+            {editable && (
+              <button
+                type="button"
+                onClick={discard}
+                className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground"
+                title="Restore this file to how the agent left it"
+              >
+                <Undo2 className="size-3" /> revert
+              </button>
+            )}
+            {file && onSendToChat && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-5 shrink-0 gap-1 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
+                onClick={() => onSendToChat(file)}
+                title="Send this file's diff to chat"
+              >
+                <Send className="size-3" />
+                send
+              </Button>
             )}
           </span>
-          <button
-            type="button"
-            onClick={discard}
-            className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-secondary hover:text-foreground"
-            title="Restore this file to how the agent left it"
-          >
-            <Undo2 className="size-3" /> discard edits
-          </button>
-          <span className="text-[10px]">⌘S save · ↩ revert hunk</span>
         </div>
       )}
       <div

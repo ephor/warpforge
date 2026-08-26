@@ -127,12 +127,12 @@ export function FileDiffView({
                   </Button>
                 </div>
               </div>
-              <pre className="overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed">
+              <pre className="px-3 py-2 font-mono text-xs leading-relaxed">
                 {withOccurrenceKeys(hunk.lines, (line) => line).map(({ item: line, key }) => (
                   <div
                     key={`${hunk.oldStart}:${hunk.newStart}:${key}`}
                     className={cn(
-                      "px-1",
+                      "whitespace-pre-wrap break-words px-1",
                       line.startsWith("+") && "bg-ok/10 text-ok",
                       line.startsWith("-") && "bg-destructive/10 text-destructive",
                     )}

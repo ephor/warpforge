@@ -16,11 +16,13 @@ import { daemon } from "../../daemon";
 import type { EditHunk, FileDiff, HunkResolution, TaskDiff } from "../../protocol";
 import { fileAnchor, hunkAnchor } from "./diffAnchors";
 import { matchingHunkIndexes } from "./editHunkMatch";
-import { FileDiffView } from "./FileDiffView";
 import { useSplitFileQueries } from "./useTaskQueries";
 
 const MergeDiff = lazy(async () => ({
   default: (await import("../../components/MergeDiff")).MergeDiff,
+}));
+const UnifiedDiff = lazy(async () => ({
+  default: (await import("../../components/UnifiedDiff")).UnifiedDiff,
 }));
 const EMPTY_DIFF_FILES: FileDiff[] = [];
 
@@ -69,13 +71,15 @@ interface Props {
 }
 
 export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function DiffWorkspace(
-  { diff, diffError, diffView, editable, localRes, onOpenFiles, onResolve, onSendToChat, taskId },
+  { diff, diffError, diffView, editable, localRes: _localRes, onOpenFiles, onResolve: _onResolve, onSendToChat, taskId },
   ref,
 ) {
   const unifiedScrollParent = useRef<HTMLDivElement>(null);
   const splitScrollParent = useRef<HTMLDivElement>(null);
   const [splitRange, setSplitRange] = useState({ start: 0, end: -1 });
-  const [highlightedEdit, setHighlightedEdit] = useState<{
+  const [unifiedRange, setUnifiedRange] = useState({ start: 0, end: -1 });
+  // kept for scrollToFile hunk-highlight; unified CM does not render it yet
+  const [_highlightedEdit, setHighlightedEdit] = useState<{
     path: string;
     hunks: ReadonlySet<number>;
   } | null>(null);
@@ -84,9 +88,9 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
 
   const unifiedVirtualizer = useVirtualizer({
     count: files.length,
-    estimateSize: () => 200,
+    estimateSize: () => 384,
     getScrollElement: () => unifiedScrollParent.current,
-    overscan: 5,
+    overscan: 1,
   });
   const splitVirtualizer = useVirtualizer({
     count: files.length,
@@ -94,9 +98,12 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
     getScrollElement: () => splitScrollParent.current,
     overscan: 1,
   });
+  const unifiedItems = unifiedVirtualizer.getVirtualItems();
   const splitItems = splitVirtualizer.getVirtualItems();
   const splitVisibleStart = splitItems[0]?.index;
   const splitVisibleEnd = splitItems[splitItems.length - 1]?.index;
+  const unifiedVisibleStart = unifiedItems[0]?.index;
+  const unifiedVisibleEnd = unifiedItems[unifiedItems.length - 1]?.index;
 
   useEffect(() => {
     if (splitVisibleStart === undefined || splitVisibleEnd === undefined) return;
@@ -107,7 +114,22 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
     );
   }, [splitVisibleEnd, splitVisibleStart]);
 
+  useEffect(() => {
+    if (unifiedVisibleStart === undefined || unifiedVisibleEnd === undefined) return;
+    setUnifiedRange((current) =>
+      current.start === unifiedVisibleStart && current.end === unifiedVisibleEnd
+        ? current
+        : { end: unifiedVisibleEnd, start: unifiedVisibleStart },
+    );
+  }, [unifiedVisibleEnd, unifiedVisibleStart]);
+
   const splitFileQueries = useSplitFileQueries(taskId, files, diffView === "split", splitRange);
+  const unifiedFileQueries = useSplitFileQueries(
+    taskId,
+    files,
+    diffView === "unified",
+    unifiedRange,
+  );
 
   useEffect(
     () => () => {
@@ -169,32 +191,45 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
 
   if (diffView === "unified") {
     return (
-      <div ref={unifiedScrollParent} className="min-h-0 flex-1 overflow-auto p-3">
-        {diffError && <p className="text-sm text-destructive">{diffError}</p>}
-        {!diff && !diffError && <p className="text-sm text-muted-foreground">Loading diff…</p>}
+      <div ref={unifiedScrollParent} className="min-h-0 flex-1 overflow-auto">
+        {diffError && <p className="p-3 text-sm text-destructive">{diffError}</p>}
+        {!diff && !diffError && <p className="p-3 text-sm text-muted-foreground">Loading diff…</p>}
         {diff && files.length === 0 && <EmptyChangesState onOpenFiles={onOpenFiles} />}
         {diff && files.length > 0 && (
           <div className="relative w-full" style={{ height: unifiedVirtualizer.getTotalSize() }}>
-            {unifiedVirtualizer.getVirtualItems().map((item) => {
+            {unifiedItems.map((item) => {
               const file = files[item.index];
+              const query = unifiedFileQueries[item.index];
+              const doc = query?.data;
               return (
                 <div
                   key={item.key}
+                  id={fileAnchor(file.path)}
                   data-index={item.index}
                   ref={unifiedVirtualizer.measureElement}
-                  className="absolute left-0 top-0 w-full pb-3"
+                  className="absolute left-0 top-0 w-full border-b"
                   style={{ transform: `translateY(${item.start}px)` }}
                 >
-                  <FileDiffView
-                    id={fileAnchor(file.path)}
-                    file={file}
-                    localRes={localRes}
-                    onResolve={onResolve}
-                    onSendToChat={onSendToChat}
-                    highlightedHunks={
-                      highlightedEdit?.path === file.path ? highlightedEdit.hunks : undefined
-                    }
-                  />
+                  {doc ? (
+                    <Suspense fallback={<EditorLoading />}>
+                      <UnifiedDiff
+                        key={`${doc.path}:${editable}`}
+                        doc={doc}
+                        file={file}
+                        editable={editable}
+                        onSave={(content) =>
+                          void daemon.request("file.save", { content, path: doc.path, task_id: taskId })
+                        }
+                        onSendToChat={onSendToChat}
+                      />
+                    </Suspense>
+                  ) : query?.error ? (
+                    <p className="p-3 text-sm text-destructive">
+                      Failed to load {file.path}: {query.error.message}
+                    </p>
+                  ) : (
+                    <p className="p-3 text-sm text-muted-foreground">Loading {file.path}…</p>
+                  )}
                 </div>
               );
             })}
@@ -230,6 +265,7 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
                     <MergeDiff
                       key={`${doc.path}:${editable}`}
                       doc={doc}
+                      file={file}
                       editable={editable}
                       onSave={(content) =>
                         void daemon.request("file.save", {
@@ -238,6 +274,7 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
                           task_id: taskId,
                         })
                       }
+                      onSendToChat={onSendToChat}
                     />
                   </Suspense>
                 ) : query?.error ? (
