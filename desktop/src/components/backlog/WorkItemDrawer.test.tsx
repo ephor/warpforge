@@ -263,7 +263,22 @@ describe("WorkItemDrawer", () => {
     unmount();
 
     const onOpenTask = vi.fn<(taskId: string) => void>();
-    renderDrawer({ ...localItem, taskId: "task-9" }, { onOpenTask });
+    renderDrawer({ ...localItem, taskId: "task-9" }, {
+      onOpenTask,
+      linkedTask: {
+        agent: "claude",
+        blockedReason: null,
+        createdAt: 1,
+        filesChanged: 0,
+        id: "task-9",
+        project: "warpforge",
+        prompt: "do it",
+        status: "running",
+        tags: [],
+        title: "Task 9",
+        updatedAt: 1,
+      },
+    });
     await user.click(screen.getByRole("button", { name: "Open task" }));
     expect(onOpenTask).toHaveBeenCalledWith("task-9");
   });

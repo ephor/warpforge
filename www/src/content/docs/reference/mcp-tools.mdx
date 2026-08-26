@@ -64,19 +64,19 @@ Control a service or port-forward. All dispatch **asynchronously and return imme
 
 ---
 
-## Tasks — turn discovered work into a queued task
+## Backlog — turn discovered work into a local backlog item
 
-### `create_task`
+### `create_backlog_task`
 
-Creates a task on the board **without** auto-running an agent. It lands as *Queued* for a human to start.
+Creates a local backlog item **without** auto-running an agent. It lands in the backlog with status *todo* by default.
 
 ```
-create_task(prompt, project?, agent?, workflow?)
+create_backlog_task(title, project?, body?, priority?, status?)
 ```
 
 **When:** an agent finds real work that isn't the work it was asked to do — a bug next door, a missing test, a refactor the change made obvious. Instead of scope-creeping the current diff or silently dropping it, it files it.
 
-**Why it doesn't auto-run:** discovered work is exactly the work a human should triage. Queued costs nothing; a runaway agent chain costs a lot.
+**Why it doesn't auto-run:** discovered work is exactly the work a human should triage. The deprecated `create_task(prompt, ...)` alias is retained for compatibility and now creates the same local backlog item.
 
 ---
 

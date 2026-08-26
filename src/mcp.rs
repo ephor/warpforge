@@ -477,8 +477,8 @@ fn tool_defs(is_orchestrator: bool) -> Value {
             }
         }),
         json!({
-            "name": "create_task",
-            "description": "Create a new task on the board without auto-running an agent. Task is queued (Queued) for manual start. Use for follow-up work discovered during implementation.",
+            "name": "create_backlog_task",
+            "description": "Create a local backlog item for follow-up work. It is recorded in the project's backlog and does not start an agent.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -486,18 +486,44 @@ fn tool_defs(is_orchestrator: bool) -> Value {
                         "type": "string",
                         "description": "Project name. Defaults to the current project."
                     },
+                    "title": {
+                        "type": "string",
+                        "description": "Short backlog item title."
+                    },
                     "prompt": {
                         "type": "string",
-                        "description": "Full task prompt / goal."
+                        "description": "Legacy alias for title; use title for new calls."
                     },
-                    "agent": {
+                    "body": {
                         "type": "string",
-                        "description": "Agent to run: claude, codex, opencode. Defaults to the current session's agent."
+                        "description": "Optional detailed description or acceptance notes."
                     },
-                    "workflow": {
+                    "priority": {
                         "type": "string",
-                        "description": "Optional workflow id (e.g. review-loop) to run the task through a pipeline."
+                        "description": "Optional priority, such as none, low, medium, high, or urgent."
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "Optional backlog status. Defaults to todo."
                     }
+                },
+                "anyOf": [{ "required": ["title"] }, { "required": ["prompt"] }]
+            }
+        }),
+        json!({
+            "name": "create_task",
+            "description": "Deprecated alias for create_backlog_task. Creates a local backlog item and does not start an agent.",
+            "deprecated": true,
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "project": { "type": "string", "description": "Project name. Defaults to the current project." },
+                    "prompt": { "type": "string", "description": "Backlog item title." },
+                    "body": { "type": "string", "description": "Optional detailed description or acceptance notes." },
+                    "priority": { "type": "string", "description": "Optional priority." },
+                    "status": { "type": "string", "description": "Optional backlog status. Defaults to todo." },
+                    "agent": { "type": "string", "description": "Ignored; retained for compatibility." },
+                    "workflow": { "type": "string", "description": "Ignored; retained for compatibility." }
                 },
                 "required": ["prompt"]
             }
@@ -1345,12 +1371,13 @@ async fn handle_tool_call(
                 "{method} dispatched for '{pf_name}' in project '{project}'."
             ))
         }
-        "create_task" => {
-            let prompt = args
-                .get("prompt")
+        "create_backlog_task" | "create_task" => {
+            let title = args
+                .get("title")
+                .or_else(|| args.get("prompt"))
                 .and_then(Value::as_str)
                 .filter(|s| !s.trim().is_empty())
-                .ok_or_else(|| anyhow!("'prompt' is required"))?;
+                .ok_or_else(|| anyhow!("'title' or 'prompt' is required"))?;
             let proj = args
                 .get("project")
                 .and_then(Value::as_str)
@@ -1365,25 +1392,20 @@ async fn handle_tool_call(
                     }
                 })
                 .ok_or_else(|| anyhow!("project is required"))?;
-            let agent = args
-                .get("agent")
-                .and_then(Value::as_str)
-                .filter(|s| !s.trim().is_empty())
-                .map(|s| s.to_string());
-            let workflow = args
-                .get("workflow")
-                .and_then(Value::as_str)
-                .filter(|s| !s.trim().is_empty());
-            let mut params = json!({ "project": proj, "prompt": prompt, "start": false });
-            if let Some(a) = agent {
-                params["agent"] = json!(a);
-            }
-            if let Some(w) = workflow {
-                params["workflow"] = json!(w);
-            }
-            let result = client.request("task.create", params).await?;
-            let id = result.get("taskId").and_then(Value::as_str).unwrap_or("?");
-            Ok(format!("Created task {id}"))
+            let result = client
+                .request(
+                    "backlog.create",
+                    json!({
+                        "project": proj,
+                        "title": title,
+                        "body": args.get("body").and_then(Value::as_str).unwrap_or_default(),
+                        "priority": args.get("priority").and_then(Value::as_str).unwrap_or_default(),
+                        "status": args.get("status").and_then(Value::as_str).unwrap_or_default(),
+                        "source": "local"
+                    }),
+                )
+                .await?;
+            Ok(format!("Created backlog item\n{}", json_text(&result)?))
         }
         "memory_store" => {
             let content = args
@@ -1998,6 +2020,13 @@ mod tests {
         assert!(names.contains(&"stop_agent"));
         assert!(names.contains(&"cleanup_agents"));
         assert!(!names.contains(&"kill_agent"));
+        assert!(names.contains(&"create_backlog_task"));
+        assert!(names.contains(&"create_task"));
+        let legacy = definitions
+            .iter()
+            .find(|definition| definition["name"] == "create_task")
+            .expect("deprecated create_task alias");
+        assert_eq!(legacy["deprecated"], true);
         assert_eq!(DEFAULT_CLEANUP_MAX_AGE_SECONDS, 0);
 
         let cleanup = definitions
@@ -2028,12 +2057,29 @@ mod tests {
             "service_restart",
             "portforward_start",
             "portforward_stop",
+            "create_backlog_task",
+            "create_task",
         ] {
             assert!(
                 core_names.contains(&tool),
                 "single mode must advertise {tool}"
             );
         }
+
+        let backlog = core
+            .iter()
+            .find(|tool| tool["name"] == "create_backlog_task")
+            .expect("backlog tool definition");
+        assert_eq!(backlog["deprecated"], Value::Null);
+        let legacy = core
+            .iter()
+            .find(|tool| tool["name"] == "create_task")
+            .expect("deprecated create_task alias");
+        assert_eq!(legacy["deprecated"], true);
+        assert!(legacy["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("create_backlog_task"));
         for tool in [
             "spawn_agent",
             "read_inbox",

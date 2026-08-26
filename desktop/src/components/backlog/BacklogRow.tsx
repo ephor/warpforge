@@ -12,6 +12,9 @@ export interface BacklogRowActions {
   onOpen: (item: WorkItem) => void;
   onStartTask?: (item: WorkItem) => void;
   onOpenTask?: (taskId: string) => void;
+  /** Set of task IDs the daemon still knows about. Used to downgrade a stale
+   *  "Open task" link to "Start task" when the referenced task was deleted. */
+  liveTaskIds?: ReadonlySet<string>;
 }
 
 export function relativeTime(ts: number, now = Date.now()): string {
@@ -105,7 +108,8 @@ export const BacklogRow = React.memo(function BacklogRow({
             <span className="sr-only">Open in tracker</span>
           </Button>
         )}
-        {item.taskId
+        {item.taskId &&
+        (actions.liveTaskIds === undefined || actions.liveTaskIds.has(item.taskId))
           ? actions.onOpenTask && (
               <Button
                 type="button"

@@ -449,7 +449,7 @@ function WorkItemDetails({
             </dd>
           </div>
         </dl>
-        {item.taskId ? (
+        {item.taskId && linkedTask ? (
           <Button
             type="button"
             size="sm"

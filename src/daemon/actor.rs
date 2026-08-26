@@ -297,7 +297,10 @@ for a port-forward.\n\
 start, stop, or restart a service. These dispatch asynchronously and return \
 immediately — follow up with read_service_logs to watch the outcome.\n\
 - portforward_start(name) / portforward_stop(name): start or stop a \
-port-forward.";
+port-forward.\n\
+- create_backlog_task(title, project?, body?, priority?, status?): record \
+follow-up work as a local backlog item without starting an agent. The older \
+create_task name is a deprecated alias.";
 
 /// Shared-memory preamble prepended to every session's first prompt when memory
 /// is enabled. This is the primary channel that teaches harnesses to use
@@ -5279,6 +5282,12 @@ impl Daemon {
                 if delete_result.is_ok() {
                     self.pending_permissions.cleanup_task(&id);
                 }
+                // Capture project path before the task is removed so we can
+                // clean up YAML backlog references afterwards.
+                let project_path = self
+                    .tasks
+                    .get(&id)
+                    .and_then(|t| self.project_path(&t.project));
                 // Clean up worktree if the task had one.
                 if let Some(task) = self.tasks.get(&id).filter(|_| delete_result.is_ok()) {
                     if task.worktree.is_some() {
@@ -5302,6 +5311,12 @@ impl Daemon {
                     // reappears on the next start with no explanation.
                     if let Err(error) = self.persist.ask(PersistAsk::DeleteTask(id.clone())).await {
                         delete_result = Err(error);
+                    }
+                    // Clear stale task_id from YAML backlog files.
+                    if let Some(ref path) = project_path {
+                        if let Err(e) = super::backlog::clear_task_refs(path, &id) {
+                            eprintln!("[daemon] YAML backlog cleanup failed for {id}: {e}");
+                        }
                     }
                     self.emit(Event::TaskRemoved { id: id.clone() });
                     // Deleting a stage child mid-run fails that stage.

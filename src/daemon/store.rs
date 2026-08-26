@@ -629,6 +629,16 @@ impl Store {
             "DELETE FROM workflow_runs WHERE task_id = ?1",
             rusqlite::params![id],
         )?;
+        // Break backlog/tracker links so the UI shows "Start task" instead of
+        // a dead "Open task" button after the task is gone.
+        self.conn.execute(
+            "UPDATE backlog_items SET task_id = NULL, status = 'todo' WHERE task_id = ?1",
+            rusqlite::params![id],
+        )?;
+        self.conn.execute(
+            "UPDATE tracker_links SET task_id = NULL WHERE task_id = ?1",
+            rusqlite::params![id],
+        )?;
         self.conn
             .execute("DELETE FROM tasks WHERE id = ?1", rusqlite::params![id])?;
         Ok(())

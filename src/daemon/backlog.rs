@@ -85,6 +85,34 @@ where
     write(project_path, &item)
 }
 
+/// Strip `task_id` from every YAML backlog item that references the given task.
+/// Called when a task is deleted so the file doesn't leave a stale pointer.
+pub fn clear_task_refs(project_path: &str, task_id: &str) -> Result<()> {
+    let root = dir(project_path);
+    if !root.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(&root)? {
+        let path = entry?.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+            continue;
+        }
+        let text = fs::read_to_string(&path)?;
+        let mut item: wire::BacklogItem = match serde_yaml::from_str(&text) {
+            Ok(item) => item,
+            Err(_) => continue,
+        };
+        if item.task_id.as_deref() == Some(task_id) {
+            item.task_id = None;
+            item.status = "todo".into();
+            item.updated_at = super::task::now_secs();
+            let text = serde_yaml::to_string(&item)?;
+            fs::write(&path, text)?;
+        }
+    }
+    Ok(())
+}
+
 /// Delete an item's YAML file. Returns `false` when no such file existed (an
 /// idempotent rollback helper).
 pub fn remove(project_path: &str, project: &str, item_id: &str) -> Result<bool> {

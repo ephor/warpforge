@@ -130,6 +130,10 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
     () => snapshot.tasks.find((task) => task.id === openItem?.taskId) ?? null,
     [openItem?.taskId, snapshot.tasks],
   );
+  const liveTaskIds = useMemo(
+    () => new Set(snapshot.tasks.map((task) => task.id)),
+    [snapshot.tasks],
+  );
 
   const startTaskFromItem = useCallback(
     (item: WorkItem) => {
@@ -259,6 +263,7 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
             <BacklogView
               key={project.name}
               project={project.name}
+              liveTaskIds={liveTaskIds}
               onOpenTask={onOpenTask}
               onOpenItem={setOpenItem}
               onStartTask={startTaskFromItem}

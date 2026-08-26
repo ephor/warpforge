@@ -21,11 +21,19 @@ interface BacklogViewProps {
   project: string;
   onStartTask?: (item: WorkItem) => void;
   onOpenTask?: (taskId: string) => void;
+  /** Set of task IDs the daemon still knows about. */
+  liveTaskIds?: ReadonlySet<string>;
   /** Row click: opens the item's details. */
   onOpenItem?: (item: WorkItem) => void;
 }
 
-export function BacklogView({ project, onStartTask, onOpenTask, onOpenItem }: BacklogViewProps) {
+export function BacklogView({
+  project,
+  onStartTask,
+  onOpenTask,
+  liveTaskIds,
+  onOpenItem,
+}: BacklogViewProps) {
   const queryClient = useQueryClient();
 
   // Sorting and filtering are the daemon's job, so one object holds the whole
@@ -127,8 +135,9 @@ export function BacklogView({ project, onStartTask, onOpenTask, onOpenItem }: Ba
       onOpen: (item) => onOpenItem?.(item),
       onOpenTask,
       onStartTask,
+      liveTaskIds,
     }),
-    [onOpenItem, onOpenTask, onStartTask],
+    [onOpenItem, onOpenTask, onStartTask, liveTaskIds],
   );
 
   return (

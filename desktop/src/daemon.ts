@@ -9,6 +9,7 @@
 
 import { appendCoalescedUpdate, coalesceUpdates } from "./lib/sessionStream";
 import { stampSessionHistoryStartTimes } from "./lib/sessionTiming";
+import { queryClient } from "./query";
 import type {
   AccountInfo,
   AgentConfig,
@@ -841,6 +842,7 @@ export class DaemonClient {
           sessionUpdates,
           snapshot: { ...snap, tasks: snap.tasks.filter((t) => t.id !== ev.data.id) },
         });
+        void queryClient.invalidateQueries({ queryKey: ["backlog"] });
         break;
       }
       case "session.update": {
