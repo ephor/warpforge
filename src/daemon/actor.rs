@@ -1061,6 +1061,10 @@ pub enum Command {
         links: Vec<super::store::TrackerLink>,
         reply: oneshot::Sender<()>,
     },
+    TrackerDeleteItems {
+        ids: Vec<String>,
+        reply: oneshot::Sender<()>,
+    },
     TrackerAdoptImported {
         project: String,
         fetched: Vec<(String, Vec<super::tracker::RemoteIssue>)>,
@@ -2181,6 +2185,13 @@ impl DaemonHandle {
     pub async fn tracker_persist_synced(&self, links: Vec<super::store::TrackerLink>) {
         let (tx, rx) = oneshot::channel();
         self.send(Command::TrackerPersistSynced { links, reply: tx })
+            .await;
+        let _ = rx.await;
+    }
+
+    pub async fn tracker_delete_items(&self, ids: Vec<String>) {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::TrackerDeleteItems { ids, reply: tx })
             .await;
         let _ = rx.await;
     }
@@ -4874,6 +4885,31 @@ impl Daemon {
                                 );
                             }
                         }
+                    }
+                }
+                let _ = reply.send(());
+            }
+            Command::TrackerDeleteItems { ids, reply } => {
+                if let Some(store) = &self.store {
+                    let store = store.lock().unwrap_or_else(|e| e.into_inner());
+                    let mode = store.backlog_storage_mode().ok();
+                    for item_id in ids {
+                        // need project for YAML mode — get link before deleting it
+                        let project = store
+                            .load_tracker_link(&item_id)
+                            .ok()
+                            .flatten()
+                            .map(|l| l.project);
+                        if mode == Some(wire::BacklogStorageMode::Yaml) {
+                            if let Some(proj) = &project {
+                                if let Some(path) = self.project_path(proj) {
+                                    let _ = super::backlog::remove(&path, proj, &item_id);
+                                }
+                            }
+                        } else {
+                            let _ = store.delete_backlog_item(&item_id);
+                        }
+                        let _ = store.delete_tracker_link(&item_id);
                     }
                 }
                 let _ = reply.send(());

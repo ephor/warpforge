@@ -1067,9 +1067,8 @@ export class DaemonClient {
     return (await this.request("tracker.disconnectLinear", {})) as TrackerStatus;
   }
 
-  /** Verify the `gh` CLI session; GitHub has no key of its own to store. */
-  async connectGithub(): Promise<TrackerStatus> {
-    return (await this.request("tracker.connectGithub", {})) as TrackerStatus;
+  async connectGithub(token?: string): Promise<TrackerStatus> {
+    return (await this.request("tracker.connectGithub", token ? { token } : {})) as TrackerStatus;
   }
 
   async disconnectGithub(): Promise<TrackerStatus> {
@@ -1160,7 +1159,17 @@ export class DaemonClient {
   async syncExternalWorkItems(ids: string[] = []): Promise<SyncedExternalItem[]> {
     const result = (await this.request("workItem.syncExternal", { ids })) as {
       items?: SyncedExternalItem[];
+      warning?: string;
+      deleted_ids?: string[];
     };
+    if (result.warning) {
+      const { toast: t } = await import("sonner");
+      t.warning(result.warning, { duration: 8000 });
+    }
+    if (result.deleted_ids?.length) {
+      const { toast: t } = await import("sonner");
+      t.info(`Removed ${result.deleted_ids.length} deleted issue(s) from backlog`);
+    }
     return result.items ?? [];
   }
 
@@ -1170,12 +1179,16 @@ export class DaemonClient {
   async importExternalWorkItems(
     project: string,
     provider?: "github" | "linear",
-  ): Promise<{ items: ImportedWorkItem[]; synced: SyncedExternalItem[] }> {
+  ): Promise<{ items: ImportedWorkItem[]; synced: SyncedExternalItem[]; warning?: string }> {
     const result = (await this.request("workItem.importExternal", {
       project,
       provider,
-    })) as { items?: ImportedWorkItem[]; synced?: SyncedExternalItem[] };
-    return { items: result.items ?? [], synced: result.synced ?? [] };
+    })) as { items?: ImportedWorkItem[]; synced?: SyncedExternalItem[]; warning?: string };
+    if (result.warning) {
+      const { toast } = await import("sonner");
+      toast.warning(result.warning, { duration: 8000 });
+    }
+    return { items: result.items ?? [], synced: result.synced ?? [], warning: result.warning };
   }
 
   async listExternalWorkItems(input: {

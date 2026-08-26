@@ -4,8 +4,8 @@
 //! macOS keychain, mirroring the Claude credential pattern in `claude_auth`),
 //! and the create/read network calls.
 //!
-//! GitHub uses the user's `gh` CLI session (already required for PRs in
-//! `diff`); Linear uses its GraphQL API over reqwest with a personal API key.
+//! GitHub prefers a PAT (`repo` + `read:project`) via keychain + reqwest;
+//! `gh` CLI is a deprecated fallback. Linear uses GraphQL over reqwest with a personal API key.
 //!
 //! Directionality: warpforge creates issues in either tracker and *reads* their
 //! status back — for GitHub that means the Projects V2 board column, which is
@@ -29,11 +29,12 @@ mod page;
 
 pub use github::github_login;
 pub(crate) use github::github_owner_repo;
+pub use github::take_last_board_warning;
 pub use import::{adopt_imported, fetch_importable, fetch_links_status};
 pub use linear::{keychain_read, linear_teams};
 pub use page::fetch_page;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 
 use warpforge_protocol as wire;
 
@@ -171,13 +172,45 @@ pub async fn status() -> wire::TrackerStatus {
         email: None,
         organization: None,
     });
-    let github = github::github_login()
-        .await
-        .map(|login| wire::TrackerGithubStatus {
+    let github = if github::github_token().is_some() {
+        Some(wire::TrackerGithubStatus {
             connected: true,
-            login: Some(login),
-        });
+            login: github::github_login().await,
+            warning: None,
+        })
+    } else {
+        github::github_login()
+            .await
+            .map(|login| wire::TrackerGithubStatus {
+                connected: true,
+                login: Some(login),
+                warning: None,
+            })
+    };
     wire::TrackerStatus { linear, github }
+}
+
+pub async fn connect_github(token: &str) -> Result<()> {
+    let t = token.trim();
+    if t.is_empty() {
+        bail!("GitHub token is empty");
+    }
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.github.com/user")
+        .header("Authorization", format!("Bearer {t}"))
+        .header("User-Agent", "warpforge")
+        .timeout(NETWORK_TIMEOUT)
+        .send()
+        .await
+        .context("GitHub token validation")?;
+    if !resp.status().is_success() {
+        bail!("GitHub token invalid: {}", resp.status());
+    }
+    github::github_keychain_write(t)
+}
+pub async fn disconnect_github() -> Result<()> {
+    github::github_keychain_delete()
 }
 
 /// Connect (or refresh) the Linear API key: validate it, then store it.

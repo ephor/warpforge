@@ -63,7 +63,19 @@ export function BacklogView({
 
   const sync = useQuery({
     queryKey: ["backlog", project, "sync"],
-    queryFn: () => daemon.importExternalWorkItems(project),
+    queryFn: async () => {
+      // Run sync (status/deleted reconcile) in parallel with import; don't let a
+      // slow/hung sync block the board from rendering. Deleted reconciliations
+      // will be reflected after the next list invalidation.
+      const importPromise = daemon.importExternalWorkItems(project);
+      const syncPromise = daemon.syncExternalWorkItems().catch(() => []);
+      const [imported] = await Promise.all([importPromise, syncPromise]);
+      // If sync deleted something, reflect it.
+      void syncPromise.then(() => {
+        queryClient.invalidateQueries({ queryKey: ["backlog", project, "list"] });
+      });
+      return imported;
+    },
     staleTime: SYNC_STALE_MS,
     retry: false,
   });
@@ -99,12 +111,17 @@ export function BacklogView({
     staleTime: 10_000,
   });
 
+  const [manualSyncing, setManualSyncing] = React.useState(false);
   const syncNow = React.useCallback(async () => {
-    await queryClient.refetchQueries({ queryKey: ["backlog", project, "sync"] });
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["backlog", project, "list"] }),
-      queryClient.invalidateQueries({ queryKey: ["backlog", project, "count"] }),
-    ]);
+    setManualSyncing(true);
+    try {
+      try { await daemon.syncExternalWorkItems(); } catch { /* toast handled */ }
+      await queryClient.refetchQueries({ queryKey: ["backlog", project, "sync"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["backlog", project, "list"] }),
+        queryClient.invalidateQueries({ queryKey: ["backlog", project, "count"] }),
+      ]);
+    } finally { setManualSyncing(false); }
   }, [project, queryClient]);
 
   const items = React.useMemo(
@@ -148,7 +165,7 @@ export function BacklogView({
         onChange={patch}
         onReset={reset}
         onSync={() => void syncNow()}
-        isSyncing={sync.isFetching}
+        isSyncing={sync.isFetching || manualSyncing}
         assignees={seenAssignees}
       />
       <div className="min-h-0 flex-1">

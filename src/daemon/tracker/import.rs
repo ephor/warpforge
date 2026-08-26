@@ -275,7 +275,7 @@ pub async fn fetch_links_status(
     links: &[TrackerLink],
     repo_dirs: &std::collections::HashMap<String, String>,
     linear_teams: &std::collections::HashMap<String, String>,
-) -> Vec<(TrackerLink, wire::SyncedExternalItem)> {
+) -> (Vec<(TrackerLink, wire::SyncedExternalItem)>, Vec<String>) {
     use std::collections::HashMap;
 
     // One listing per repo/team, not one lookup per item. The per-item path
@@ -339,9 +339,68 @@ pub async fn fetch_links_status(
 
     let now = crate::daemon::task::now_secs();
     let mut out = Vec::new();
+    // Collect missing links to check concurrently — sequential `gh issue view` per item
+    // blocked the daemon RPC (user saw infinite spinner, whole daemon unresponsive).
+    let missing: Vec<&TrackerLink> = links
+        .iter()
+        .filter(|link| {
+            !states.contains_key(&(
+                link.provider.clone(),
+                link.project.clone(),
+                link.external_id.clone(),
+            ))
+        })
+        .collect();
+
+    let deleted: Vec<String> = if missing.is_empty() {
+        Vec::new()
+    } else {
+        // Cap concurrency to avoid spawning 100 gh processes at once.
+        const CONCURRENCY: usize = 8;
+        let mut deleted = Vec::new();
+        for chunk in missing.chunks(CONCURRENCY) {
+            let checks = chunk.iter().map(|link| {
+                let dir = repo_dirs.get(&link.project).cloned();
+                let ext = link.external_id.clone();
+                let provider = link.provider.clone();
+                let item_id = link.item_id.clone();
+                async move {
+                    let is_deleted = if provider == "github" {
+                        if let Some(d) = dir {
+                            // Bound per-check to NETWORK_TIMEOUT so one hung `gh` doesn't stall sync forever.
+                            tokio::time::timeout(
+                                super::NETWORK_TIMEOUT,
+                                github::github_issue_exists(&d, &ext),
+                            )
+                            .await
+                            .ok()
+                            .flatten()
+                                == Some(false)
+                        } else {
+                            false
+                        }
+                    } else if provider == "linear" {
+                        tokio::time::timeout(
+                            super::NETWORK_TIMEOUT,
+                            linear::linear_issue_exists(&ext),
+                        )
+                        .await
+                        .ok()
+                        .flatten()
+                            == Some(false)
+                    } else {
+                        false
+                    };
+                    is_deleted.then_some(item_id)
+                }
+            });
+            let results = futures::future::join_all(checks).await;
+            deleted.extend(results.into_iter().flatten());
+        }
+        deleted
+    };
+
     for link in links {
-        // An issue outside the listing window (archived, or beyond the limit)
-        // keeps its last-known status rather than being reported as changed.
         let Some((status, remote_status)) = states.get(&(
             link.provider.clone(),
             link.project.clone(),
@@ -361,7 +420,7 @@ pub async fn fetch_links_status(
         };
         out.push((updated, item));
     }
-    out
+    (out, deleted)
 }
 
 #[cfg(test)]

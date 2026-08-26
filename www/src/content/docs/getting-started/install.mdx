@@ -45,12 +45,7 @@ The build is signed with a Developer ID certificate and notarized by Apple, so i
 The signed app needs no Rust toolchain or source checkout, but two features shell out to CLIs it does not bundle — install them separately if you want those features:
 
 - **Node.js and `npm` on `PATH`.** Powers the one-click install/update for most agents (see the [agent table](/concepts/agents/)) and for editor language servers. Without it, you can still point Warpforge at an agent binary you installed yourself.
-- **[GitHub CLI](https://cli.github.com/) (`gh`), authenticated.** Needed for **Open pull request** in the changes rail, and for the [GitHub backlog](/guides/tasks-and-backlog/) — Warpforge reads issues through the `gh` session you already have rather than asking for a token of its own, and uses it again to fetch attachments on private issues. Commit, push, and the rest of the git workflow go through `git` directly and don't need it.
-
-  ```bash
-  brew install gh
-  gh auth login
-  ```
+- **[GitHub CLI](https://cli.github.com/) (`gh`), authenticated.** Needed for **Open pull request** (`gh pr create` in `src/daemon/diff.rs`) and fetching attachments on private issues (`src/daemon/attachment.rs`). Backlog GitHub sync **prefers** a PAT (`repo` + `read:project` in Settings → Trackers) and falls back to `gh` (deprecated for backlog only — slow per-request process, will be removed for backlog; `gh` itself remains required for opening PRs, there is no PR list view in the app).
 
 <Aside type="note">
   Both are checked at the point of use — you'll get a clear error telling you what's missing and how to fix it, not a broken button.

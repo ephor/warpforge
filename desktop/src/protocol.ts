@@ -661,6 +661,7 @@ export interface TrackerLinearStatus {
 export interface TrackerGithubStatus {
   connected: boolean;
   login?: string | null;
+  warning?: string | null;
 }
 
 export interface TrackerStatus {

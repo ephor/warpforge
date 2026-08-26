@@ -1,19 +1,114 @@
-//! GitHub, through the user's `gh` CLI session (already required for PRs in
-//! `diff`).
+//! GitHub via PAT (preferred) or `gh` CLI fallback (deprecated).
 //!
-//! Status comes from the issue's Projects V2 board column, so the listing is a
-//! GraphQL query rather than `gh issue list`; the CLI listing remains as the
-//! fallback for a token without the `project` scope.
+//! Preferred: personal access token with `repo` + `read:project`, stored in
+//! keychain (`warpforge-github`), used via direct `reqwest` GraphQL/REST.
+//! Deprecated: `gh` CLI session — spawns a process per request, blocks the
+//! daemon, and is flaky for bulk ops. Kept as fallback until removed in a
+//! future version. New code should use `github_token()` + `github_graphql`/REST.
 
 use anyhow::{anyhow, bail, Context, Result};
+use std::path::PathBuf;
 use tokio::process::Command;
 
 use super::{normalize_status, rfc3339_secs, RemoteIssue, IMPORT_LIMIT, NETWORK_TIMEOUT};
 
-/// Run `gh` with args in the given repo dir (None = anywhere / current dir).
-///
-/// Bounded: a network call that never returns must not be able to hold a
-/// request open, and `gh` can hang on a stalled connection.
+const GITHUB_API: &str = "https://api.github.com";
+const GITHUB_GRAPHQL: &str = "https://api.github.com/graphql";
+const KEYCHAIN_SERVICE: &str = "warpforge-github";
+
+fn security_bin() -> Option<PathBuf> {
+    cfg!(target_os = "macos").then(|| PathBuf::from("/usr/bin/security"))
+}
+
+pub fn github_keychain_read() -> Option<String> {
+    if let Some(tok) = std::env::var("GH_TOKEN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
+        return Some(tok);
+    }
+    if let Some(tok) = std::env::var("GITHUB_TOKEN")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
+        return Some(tok);
+    }
+    let bin = security_bin()?;
+    let out = std::process::Command::new(bin)
+        .args([
+            "find-generic-password",
+            "-s",
+            KEYCHAIN_SERVICE,
+            "-a",
+            "github",
+            "-w",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let secret = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!secret.is_empty()).then_some(secret)
+}
+
+pub fn github_token() -> Option<String> {
+    github_keychain_read()
+}
+
+pub(super) fn github_keychain_write(secret: &str) -> Result<()> {
+    let bin = security_bin().ok_or_else(|| anyhow!("keychain unavailable on this platform"))?;
+    let out = std::process::Command::new(bin)
+        .args([
+            "add-generic-password",
+            "-U",
+            "-s",
+            KEYCHAIN_SERVICE,
+            "-a",
+            "github",
+            "-w",
+        ])
+        .arg(secret)
+        .output()
+        .context("running security add-generic-password")?;
+    if !out.status.success() {
+        bail!(
+            "keychain write failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn github_keychain_delete() -> Result<()> {
+    if let Some(bin) = security_bin() {
+        let _ = std::process::Command::new(bin)
+            .args([
+                "delete-generic-password",
+                "-s",
+                KEYCHAIN_SERVICE,
+                "-a",
+                "github",
+            ])
+            .output();
+    }
+    Ok(())
+}
+
+fn github_api_client(token: &str) -> reqwest::Client {
+    reqwest::Client::new()
+}
+pub(super) fn _github_token_header(token: &str) -> String {
+    format!("Bearer {token}")
+}
+
+/// Run `gh` — **deprecated for backlog only** when no PAT is configured.
+/// Backlog prefers `github_token()` + `reqwest`; `gh` remains required for
+/// `diff.rs` PR flows (`gh pr create/view`). This fallback will be removed for
+/// backlog in a future version.
+#[deprecated(
+    note = "Backlog: use PAT via github_token() + reqwest; gh CLI remains for PRs in diff.rs"
+)]
 pub(super) async fn gh(repo: Option<&str>, args: &[&str]) -> Result<std::process::Output> {
     let mut cmd = Command::new("gh");
     if let Some(dir) = repo {
@@ -46,6 +141,21 @@ pub async fn github_login() -> Option<String> {
 
 /// Resolve `owner/repo` from the given git directory's origin remote.
 pub(crate) async fn github_owner_repo(repo_dir: &str) -> Result<(String, String)> {
+    // Prefer git remote directly — works with token and without gh.
+    if let Ok(out) = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_dir)
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .await
+    {
+        if out.status.success() {
+            let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if let Some((o, r)) = parse_github_remote(&url) {
+                return Ok((o, r));
+            }
+        }
+    }
     let out = gh(
         Some(repo_dir),
         &[
@@ -69,6 +179,26 @@ pub(crate) async fn github_owner_repo(repo_dir: &str) -> Result<(String, String)
         .split_once('/')
         .ok_or_else(|| anyhow!("unexpected repo name: {name}"))?;
     Ok((owner.to_string(), repo.to_string()))
+}
+
+fn parse_github_remote(url: &str) -> Option<(String, String)> {
+    let url = url.trim();
+    // git@github.com:owner/repo.git  or https://github.com/owner/repo(.git)
+    let path = if let Some(rest) = url.strip_prefix("git@github.com:") {
+        rest
+    } else if let Some(rest) = url.strip_prefix("https://github.com/") {
+        rest
+    } else if let Some(rest) = url.strip_prefix("http://github.com/") {
+        rest
+    } else {
+        return None;
+    };
+    let path = path
+        .strip_suffix(".git")
+        .unwrap_or(path)
+        .trim_end_matches('/');
+    let (o, r) = path.split_once('/')?;
+    Some((o.to_string(), r.to_string()))
 }
 
 /// The normalized status of a GitHub issue.
@@ -100,12 +230,36 @@ fn github_status(state: &str, state_reason: Option<&str>, board_column: Option<&
 /// answer for it. A token without the `project` scope (or a host that has no
 /// projects) falls back to [`github_rest_issues`], which is the same listing
 /// with open/closed as the status.
+fn is_missing_scope_error(msg: &str) -> bool {
+    msg.contains("read:project") || msg.contains("requires one of the following scopes")
+}
+
+fn board_fallback_warning(original_error: &str) -> String {
+    if is_missing_scope_error(original_error) {
+        "GitHub board statuses unavailable — your token lacks 'read:project' scope. Add it at https://github.com/settings/tokens and re-auth with `gh auth refresh -s read:project`. Falling back to open/closed.".to_string()
+    } else {
+        format!("GitHub board statuses unavailable ({original_error}); using open/closed")
+    }
+}
+
+use std::sync::Mutex;
+static LAST_BOARD_WARNING: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn take_last_board_warning() -> Option<String> {
+    LAST_BOARD_WARNING.lock().ok()?.take()
+}
+
 pub(super) async fn github_list_issues(repo_dir: &str, state: &str) -> Result<Vec<RemoteIssue>> {
     match github_project_issues(repo_dir, state).await {
         Ok(issues) => Ok(issues),
         Err(e) => {
-            eprintln!("[tracker] github board statuses unavailable ({e:#}); using open/closed");
-            github_rest_issues(repo_dir, state).await
+            let warn = board_fallback_warning(&format!("{e:#}"));
+            eprintln!("[tracker] {warn}");
+            let issues = github_rest_issues(repo_dir, state).await?;
+            if let Ok(mut g) = LAST_BOARD_WARNING.lock() {
+                *g = Some(warn);
+            }
+            Ok(issues)
         }
     }
 }
@@ -135,31 +289,66 @@ fn project_issues_query(state: &str) -> String {
     )
 }
 
+async fn github_graphql(
+    token: &str,
+    query: &str,
+    vars: serde_json::Value,
+) -> Result<serde_json::Value> {
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(GITHUB_GRAPHQL)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .header("User-Agent", "warpforge")
+        .timeout(NETWORK_TIMEOUT)
+        .json(&serde_json::json!({"query":query,"variables":vars}))
+        .send()
+        .await
+        .context("GitHub GraphQL request")?;
+    let text = resp
+        .text()
+        .await
+        .context("reading GitHub GraphQL response")?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).context("parsing GitHub GraphQL response")?;
+    if let Some(errs) = v.get("errors") {
+        bail!("GitHub GraphQL error: {errs}");
+    }
+    Ok(v)
+}
+
 /// The GraphQL listing: issues plus their Projects V2 "Status" field.
 async fn github_project_issues(repo_dir: &str, state: &str) -> Result<Vec<RemoteIssue>> {
     let (owner, repo) = github_owner_repo(repo_dir).await?;
-    // The state filter is interpolated rather than passed as a variable: `gh`
-    // sends every `-f` as a string and the field takes a list of enums. The two
-    // values are ours, not the caller's, so there is nothing to inject.
-    let query_arg = format!("query={}", project_issues_query(state));
-    let owner_arg = format!("owner={owner}");
-    let repo_arg = format!("repo={repo}");
-    let first_arg = format!("first={IMPORT_LIMIT}");
-    let out = gh(
-        Some(repo_dir),
-        &[
-            "api", "graphql", "-f", &query_arg, "-F", &owner_arg, "-F", &repo_arg, "-F", &first_arg,
-        ],
-    )
-    .await?;
-    if !out.status.success() {
-        bail!(
-            "GitHub issue query failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    let payload: serde_json::Value =
-        serde_json::from_slice(&out.stdout).context("parsing GitHub issue query")?;
+    let query = project_issues_query(state);
+    let payload: serde_json::Value = if let Some(tok) = github_token() {
+        github_graphql(
+            &tok,
+            &query,
+            serde_json::json!({"owner":owner,"repo":repo,"first":IMPORT_LIMIT}),
+        )
+        .await?
+    } else {
+        let query_arg = format!("query={}", query);
+        let owner_arg = format!("owner={owner}");
+        let repo_arg = format!("repo={repo}");
+        let first_arg = format!("first={IMPORT_LIMIT}");
+        let out = gh(
+            Some(repo_dir),
+            &[
+                "api", "graphql", "-f", &query_arg, "-F", &owner_arg, "-F", &repo_arg, "-F",
+                &first_arg,
+            ],
+        )
+        .await?;
+        if !out.status.success() {
+            bail!(
+                "GitHub issue query failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        serde_json::from_slice(&out.stdout).context("parsing GitHub issue query")?
+    };
     let nodes = payload
         .pointer("/data/repository/issues/nodes")
         .and_then(|v| v.as_array())
@@ -430,6 +619,50 @@ pub(super) async fn github_search_issues_page(
         })
         .collect();
     Ok((issues, total))
+}
+
+pub(super) async fn github_issue_exists(repo_dir: &str, external_id: &str) -> Option<bool> {
+    let num = external_id.trim_start_matches('#');
+    let n: u64 = num.parse().ok()?;
+    if let Some(tok) = github_token() {
+        if let Ok((owner, repo)) = github_owner_repo(repo_dir).await {
+            let client = reqwest::Client::new();
+            let resp = client
+                .get(format!("{GITHUB_API}/repos/{owner}/{repo}/issues/{n}"))
+                .header("Authorization", format!("Bearer {tok}"))
+                .header("User-Agent", "warpforge")
+                .timeout(NETWORK_TIMEOUT)
+                .send()
+                .await
+                .ok()?;
+            if resp.status().is_success() {
+                return Some(true);
+            }
+            if resp.status().as_u16() == 404 {
+                return Some(false);
+            }
+            // 410 Gone also means deleted
+            if resp.status().as_u16() == 410 {
+                return Some(false);
+            }
+            return None;
+        }
+    }
+    let out = gh(Some(repo_dir), &["issue", "view", num, "--json", "state"])
+        .await
+        .ok()?;
+    if out.status.success() {
+        return Some(true);
+    }
+    let err = String::from_utf8_lossy(&out.stderr).to_lowercase();
+    if err.contains("could not find")
+        || err.contains("could not resolve")
+        || err.contains("not found")
+        || err.contains("404")
+    {
+        return Some(false);
+    }
+    None
 }
 
 /// Create a GitHub issue in the repo at `repo_dir`. Returns (issue number,

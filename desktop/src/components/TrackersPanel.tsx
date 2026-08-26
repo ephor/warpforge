@@ -30,6 +30,7 @@ export default function TrackersPanel() {
     () => daemon.getState().snapshot,
   );
   const [apiKey, setApiKey] = useState("");
+  const [githubToken, setGithubToken] = useState("");
   const [busy, setBusy] = useState<"linear" | "github" | null>(null);
 
   const linear = status.data?.linear;
@@ -154,31 +155,60 @@ export default function TrackersPanel() {
               </span>
             )}
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busy === "github"}
-            onClick={() =>
-              github?.connected
-                ? void run("github", () => daemon.disconnectGithub(), "GitHub disconnected")
-                : void run("github", () => daemon.connectGithub(), "GitHub connected")
-            }
-          >
-            {busy === "github" ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : github?.connected ? (
-              "Disconnect"
-            ) : (
-              "Connect"
-            )}
-          </Button>
+          {github?.connected && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy === "github"}
+              onClick={() => void run("github", () => daemon.disconnectGithub(), "GitHub disconnected")}
+            >
+              Disconnect
+            </Button>
+          )}
         </div>
-        <p className="text-xs text-muted-foreground/80">
-          Uses your <code className="rounded bg-secondary px-1">gh</code> CLI session — run{" "}
-          <code className="rounded bg-secondary px-1">gh auth login</code> first. Issue status is
-          read-only: GitHub's columns are project-specific, so warpforge never writes them back.
-        </p>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Input
+              type="password"
+              value={githubToken}
+              onChange={(e) => setGithubToken(e.target.value)}
+              placeholder={github?.connected ? "replace token (ghp_…)" : "ghp_… or github_pat_…"}
+              className="h-7 flex-1 text-xs"
+              aria-label="GitHub token"
+            />
+            <Button
+              type="button"
+              size="sm"
+              disabled={!githubToken.trim() || busy === "github"}
+              onClick={() =>
+                void run(
+                  "github",
+                  async () => {
+                    await daemon.connectGithub(githubToken.trim());
+                    setGithubToken("");
+                  },
+                  "GitHub connected",
+                )
+              }
+            >
+              {busy === "github" ? <Loader2 className="size-3.5 animate-spin" /> : github?.connected ? "Update" : "Connect"}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground/80">
+            Personal access token (classic with <code className="rounded bg-secondary px-1">repo, read:project</code>{" "}
+            or fine-grained). Stored in keychain.{" "}
+            <button
+              type="button"
+              className="inline-flex items-center gap-0.5 underline underline-offset-2"
+              onClick={() => void openExternalLink("https://github.com/settings/tokens/new")}
+            >
+              Create one <ExternalLink className="size-3" />
+            </button>{" "}
+            {github?.connected ? "— leave empty and use gh CLI." : "— or run "} {!github?.connected && (<><code className="rounded bg-secondary px-1">gh auth login</code> then Connect.</>)}
+          </p>
+          {github?.warning && <p className="text-xs text-amber-500">{github.warning}</p>}
+        </div>
       </div>
     </div>
   );

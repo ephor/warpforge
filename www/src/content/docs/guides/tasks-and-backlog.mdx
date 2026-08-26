@@ -17,11 +17,9 @@ Every project has one, and it can be fed straight from where your team already t
 <Tabs syncKey="tracker">
 <TabItem label="GitHub">
 
-Warpforge uses the [`gh` CLI](https://cli.github.com/) session you already have — no new token to mint, no OAuth app to authorize.
+Create a **personal access token** (classic with `repo` + `read:project`, or fine-grained) at [github.com/settings/tokens](https://github.com/settings/tokens/new) and paste it in **Settings → Trackers → GitHub**. Stored in OS keychain.
 
-```bash
-gh auth login
-```
+> **Deprecated:** `gh` CLI session (`gh auth login`) still works as a fallback if no token is set, but it spawns a process per request, is flaky for bulk sync, and will be removed in a future version. Prefer a token.
 
 A project's open issues import when you open it, and refresh on **Sync**.
 

@@ -1483,8 +1483,14 @@ async fn dispatch(
                 message: e.to_string(),
             })
         }
-        TrackerConnectGithub {} => {
-            if tracker::github_login().await.is_none() {
+        TrackerConnectGithub { token } => {
+            if !token.trim().is_empty() {
+                tracker::connect_github(&token)
+                    .await
+                    .map_err(|e| rpc_err(format!("{e:#}")))?;
+            } else if tracker::github_login().await.is_none()
+                && tracker::status().await.github.is_none()
+            {
                 return Err(rpc_err(
                     "GitHub CLI is not authenticated. Run `gh auth login` first.".to_string(),
                 ));
@@ -1620,13 +1626,31 @@ async fn dispatch(
             // its handlers inline, so a tracker call made inside it stalls
             // every project until the network answers.
             let (links, repo_dirs, linear_teams) = handle.tracker_sync_inputs(ids).await;
-            let synced = tracker::fetch_links_status(&links, &repo_dirs, &linear_teams).await;
+            // Bound whole sync so a hung `gh` never blocks the daemon/RPC forever (user saw infinite spinner).
+            let (synced, deleted_ids) = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                tracker::fetch_links_status(&links, &repo_dirs, &linear_teams),
+            )
+            .await
+            .unwrap_or_else(|_| {
+                eprintln!("[tracker] sync timed out after 30s");
+                (Vec::new(), Vec::new())
+            });
+            let warning = tracker::take_last_board_warning();
             let items: Vec<wire::SyncedExternalItem> =
                 synced.iter().map(|(_, item)| item.clone()).collect();
             handle
                 .tracker_persist_synced(synced.into_iter().map(|(link, _)| link).collect())
                 .await;
-            serde_json::to_value(wire::SyncExternalResult { items }).map_err(|e| wire::RpcError {
+            if !deleted_ids.is_empty() {
+                handle.tracker_delete_items(deleted_ids.clone()).await;
+            }
+            serde_json::to_value(wire::SyncExternalResult {
+                items,
+                warning,
+                deleted_ids,
+            })
+            .map_err(|e| wire::RpcError {
                 code: wire::ErrorCode::Internal,
                 message: e.to_string(),
             })
@@ -1653,11 +1677,15 @@ async fn dispatch(
                 .tracker_adopt_imported(&project, fetched)
                 .await
                 .map_err(rpc_err)?;
-            serde_json::to_value(wire::ImportExternalResult { items, synced }).map_err(|e| {
-                wire::RpcError {
-                    code: wire::ErrorCode::Internal,
-                    message: e.to_string(),
-                }
+            let warning = tracker::take_last_board_warning();
+            serde_json::to_value(wire::ImportExternalResult {
+                items,
+                synced,
+                warning,
+            })
+            .map_err(|e| wire::RpcError {
+                code: wire::ErrorCode::Internal,
+                message: e.to_string(),
             })
         }
         WorkItemList {

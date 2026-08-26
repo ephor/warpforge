@@ -419,6 +419,35 @@ pub(super) async fn linear_list_issues_page(
     Ok((current, has_next))
 }
 
+pub(super) async fn linear_issue_exists(identifier: &str) -> Option<bool> {
+    // Linear `issue(id)` returns null when missing, not error — treat accordingly.
+    // We query by identifier via search; fallback: try fetch and check null.
+    let text = {
+        let key = keychain_read()?;
+        let client = reqwest::Client::new();
+        let resp = client.post(LINEAR_API).header("Authorization", key).header("Content-Type","application/json")
+            .timeout(NETWORK_TIMEOUT).body(serde_json::to_string(&serde_json::json!({
+                "query": "query SearchIssue($q: String!) { searchIssues(query: $q) { nodes { identifier } } }",
+                "variables": { "q": identifier }
+            })).ok()?).send().await.ok()?;
+        resp.text().await.ok()?
+    };
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    if v.pointer("/errors").is_some() {
+        return None;
+    }
+    let nodes = v.pointer("/data/searchIssues/nodes")?.as_array()?;
+    if nodes
+        .iter()
+        .any(|n| n.get("identifier").and_then(|x| x.as_str()) == Some(identifier))
+    {
+        Some(true)
+    } else {
+        // search may miss archived; conservatively return None to avoid false delete
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

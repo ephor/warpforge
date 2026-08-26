@@ -775,7 +775,7 @@ pub enum Method {
     /// Connect GitHub, verifying the user's `gh` CLI session. Returns the status
     /// object.
     #[serde(rename = "tracker.connectGithub")]
-    TrackerConnectGithub {},
+    TrackerConnectGithub { token: String },
     /// Disconnect GitHub (removes stored links; `gh` login itself is untouched).
     #[serde(rename = "tracker.disconnectGithub")]
     TrackerDisconnectGithub {},
@@ -1085,6 +1085,8 @@ pub struct TrackerGithubStatus {
     pub connected: bool,
     #[serde(default)]
     pub login: Option<String>,
+    #[serde(default)]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1172,6 +1174,10 @@ pub struct SyncedExternalItem {
 #[serde(rename_all = "camelCase")]
 pub struct SyncExternalResult {
     pub items: Vec<SyncedExternalItem>,
+    #[serde(default)]
+    pub warning: Option<String>,
+    #[serde(default)]
+    pub deleted_ids: Vec<String>,
 }
 
 /// An issue that existed in a tracker before warpforge knew about it. The
@@ -1210,6 +1216,8 @@ pub struct ImportExternalResult {
     pub items: Vec<ImportedWorkItem>,
     #[serde(default)]
     pub synced: Vec<SyncedExternalItem>,
+    #[serde(default)]
+    pub warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
