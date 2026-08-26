@@ -40,6 +40,12 @@
 	--nb-primary-foreground: oklch(0.97 0 0);
 	--nb-primary-hover: oklch(0.371 0 0);
 
+	/* The product's accent, for the wordmark alone. `--nb-primary` is greyscale
+	   by design here, so FORGE painted in it would vanish into WARP. Darker
+	   than the app's peach because that shade reads as washed out on white;
+	   this one carries against the page. */
+	--nb-brand: oklch(0.56 0.14 45);
+
 	/* Borders / focus */
 	--nb-border: oklch(0.935 0 0);
 	--nb-border-strong: oklch(0.87 0 0);
@@ -119,6 +125,9 @@
 	--nb-primary-foreground: oklch(0.085 0 0);
 	--nb-primary-hover: oklch(0.7 0 0);
 
+	/* On a dark page the app's own peach is exactly right. */
+	--nb-brand: oklch(0.78 0.09 45);
+
 	--nb-border: oklch(0.269 0 0);
 	--nb-border-strong: oklch(0.371 0 0);
 	--nb-selected: oklch(0.371 0 0);
@@ -156,6 +165,7 @@
 	--color-card: var(--nb-card);
 	--color-card-foreground: var(--nb-card-foreground);
 
+	--color-brand: var(--nb-brand);
 	--color-muted: var(--nb-muted);
 	--color-muted-foreground: var(--nb-muted-foreground);
 

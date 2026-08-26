@@ -29,14 +29,23 @@ const { collection, showSidebar = true } = Astro.props;
 const currentSlug = Astro.url.pathname.replace(/\/$/, "") || "/";
 const sections = await getSidebarSections(currentSlug, { collection });
 const showSections = sections.length >= 2;
+
+// "Warpforge" reads as WARP + FORGE, the accent falling on the second half.
+const SPLIT_AT = 4;
+const markHead = config.title.slice(0, SPLIT_AT);
+const markTail = config.title.slice(SPLIT_AT);
 ---
 
 <header class="sticky top-0 z-30 border-b border-border bg-card/80 backdrop-blur-lg">
   <div class="mx-auto flex items-center justify-between h-14 px-4 lg:px-6">
     <div class="flex items-center gap-3">
-      <a href="/" class="group">
-        <span class="font-semibold text-sm text-foreground group-hover:text-primary transition-colors">
-          {config.title}
+      <a href="/" class="group" aria-label={`${config.title} — home`}>
+        {/* The wordmark the app and the landing page both wear: uppercase,
+            widely tracked, the second half in the product's accent. */}
+        <span
+          class="text-[11px] font-bold uppercase tracking-[0.2em] text-foreground transition-opacity group-hover:opacity-80"
+        >
+          {markHead}<span class="text-brand">{markTail}</span>
         </span>
       </a>
 
