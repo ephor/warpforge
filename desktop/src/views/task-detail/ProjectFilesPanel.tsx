@@ -117,6 +117,14 @@ export function ProjectFilesPanel({
     return out;
   }, [root, openFolders]);
 
+  // Deeply nested trees push file names off the panel's fixed width. Give the
+  // scroll content a width derived from the deepest visible row's indent so the
+  // panel scrolls horizontally and no label is clipped.
+  const contentWidth = useMemo(() => {
+    const maxDepth = rows.reduce((m, r) => Math.max(m, r.depth), 0);
+    return Math.max(240, maxDepth * 12 + 10 + 240);
+  }, [rows]);
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     estimateSize: () => PROJECT_ROW_HEIGHT,
@@ -348,11 +356,14 @@ export function ProjectFilesPanel({
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-9 items-center border-b px-3 text-sm font-semibold">Files</div>
       {error && <p className="border-b px-3 py-2 text-xs text-destructive">{error}</p>}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto py-1.5">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto overflow-x-auto py-1.5">
         {rows.length === 0 && !error ? (
           <p className="px-3 py-2 text-xs text-muted-foreground">No files found.</p>
         ) : (
-          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+          <div
+            className="relative"
+            style={{ height: virtualizer.getTotalSize(), width: contentWidth }}
+          >
             {virtualizer.getVirtualItems().map((vi) => {
               const row = rows[vi.index];
               const pad = { paddingLeft: `${row.depth * 12 + 10}px` };
