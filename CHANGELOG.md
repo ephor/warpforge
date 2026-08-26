@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.10.3
+
+### Patch Changes
+
+- [#44](https://github.com/warpforgehq/warpforge/pull/44) [`90e8f7a`](https://github.com/warpforgehq/warpforge/commit/90e8f7a4a8402f698029bb50a430fecc1cbcc983) Thanks [@ephor](https://github.com/ephor)! - The documentation site now wears the same wordmark as the app and the front page, instead of the site title in plain text.
+
+- [#43](https://github.com/warpforgehq/warpforge/pull/43) [`630c234`](https://github.com/warpforgehq/warpforge/commit/630c234eed2fcaa8c42c9e497da119dcbd9fbc80) Thanks [@ephor](https://github.com/ephor)! - Warpforge has a documentation site. It covers the whole product rather than the quick start: installing it, bringing your own agents and running several logins for each, everything agents can do on your behalf, memory they share across harnesses, choosing between a single agent, an orchestrator and a workflow, writing workflows of your own, the day-to-day craft of working inside a task, the git surface, and a page for every setting.
+
+  Its front page opens with Warpforge itself running rather than a screenshot: a real task plays through — a Claude lead handing the test suite to Codex, edits stacking up into a diff you can read line by line, a file tree and a terminal you can click into — and you can view the whole thing in any of the eight themes.
+
+- [#43](https://github.com/warpforgehq/warpforge/pull/43) [`630c234`](https://github.com/warpforgehq/warpforge/commit/630c234eed2fcaa8c42c9e497da119dcbd9fbc80) Thanks [@ephor](https://github.com/ephor)! - The YAML backlog now writes to `.warpforge/backlog` in your project, alongside every other Warpforge file, instead of a misspelled `.workforge` directory. If you already have items under the old name, move that folder across once and they will be picked up.
+
+- [#43](https://github.com/warpforgehq/warpforge/pull/43) [`630c234`](https://github.com/warpforgehq/warpforge/commit/630c234eed2fcaa8c42c9e497da119dcbd9fbc80) Thanks [@ephor](https://github.com/ephor)! - HTML previews in the editor now run their scripts, so an interactive prototype an agent just built behaves like one — click it instead of reading its markup. The preview stays isolated: it keeps its own origin and cannot reach anything else in Warpforge, submit forms, open popups, or navigate the app.
+
+- [#43](https://github.com/warpforgehq/warpforge/pull/43) [`630c234`](https://github.com/warpforgehq/warpforge/commit/630c234eed2fcaa8c42c9e497da119dcbd9fbc80) Thanks [@ephor](https://github.com/ephor)! - Links to the project's source now point at its new home, `warpforgehq/warpforge` — in the app's changelog link, the docs, and the update feed the desktop app checks.
+
+- [`38c2f43`](https://github.com/warpforgehq/warpforge/commit/38c2f43a2a3f512cd1507898dd19d562f731da69) Thanks [@ephor](https://github.com/ephor)! - Unified diff now uses CodeMirror's `unifiedMergeView` instead of the custom `<pre>` renderer, so wrapping tracks the container width, syntax highlighting and collapsed-unchanged handling match the split view, and backgrounds no longer clip on long lines.
+
 ## 0.10.2
 
 ### Patch Changes
