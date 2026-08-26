@@ -203,7 +203,7 @@ const MARKDOWN_COMPONENTS: Components = {
 export type MarkdownDensity = "compact" | "comfortable";
 
 const DENSITY_CLASS: Record<MarkdownDensity, string> = {
-  compact: "space-y-1 text-sm leading-relaxed",
+  compact: "typeset typeset-chat",
   comfortable:
     "space-y-3 text-[0.9375rem] leading-7 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-base [&_li]:my-0.5 [&_ol]:my-0 [&_p]:my-0 [&_ul]:my-0",
 };

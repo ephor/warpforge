@@ -939,7 +939,7 @@ export function CodeEditor({
                       />
                     ) : (
                       <div
-                        className="prose dark:prose-invert max-w-none"
+                        className="typeset typeset-docs max-w-none"
                         dangerouslySetInnerHTML={{ __html: previewText }}
                       />
                     )}
