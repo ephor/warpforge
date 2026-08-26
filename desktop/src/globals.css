@@ -1,6 +1,185 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "./typeset.css";
+@import "tailwindcss";
+
+/* Scan the app's own source for class names, so this stylesheet works as a
+   standalone Tailwind entry — for the desktop build and for the www embed,
+   which renders the app's real components and auto-detection can't reach
+   outside the site's own tree. */
+@source "./";
+
+/* ============================================================
+ * Tailwind v4 theme — color tokens, radii, fonts, animations.
+ *
+ * Colors are consumed as `hsl(var(--name))` throughout the app.
+ * The `--color-*` namespace generates Tailwind utilities:
+ *   bg-primary, text-foreground, border-border, etc.
+ * ============================================================ */
+@theme {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --color-ok: hsl(var(--ok));
+  --color-warn: hsl(var(--warn));
+  --color-info: hsl(var(--info));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Accordion animations (from shadcn) */
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+}
+
+/* ============================================================
+ * Dark mode — `.dark` class toggled by useTheme.ts.
+ * ============================================================ */
+@variant dark (&:where(.dark, .dark *));
+
+/* ============================================================
+ * tailwindcss-animate replacements — CSS keyframes + utilities
+ * for enter/exit animations used in shadcn UI components.
+ * ============================================================ */
+
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+@keyframes fade-out {
+  to { opacity: 0; }
+}
+@keyframes zoom-in-95 {
+  from { transform: scale(0.95); }
+}
+@keyframes zoom-out-95 {
+  to { transform: scale(0.95); }
+}
+@keyframes zoom-in-100 {
+  from { transform: scale(1); }
+}
+@keyframes zoom-out-100 {
+  to { transform: scale(1); }
+}
+@keyframes slide-in-from-top-2 {
+  from { transform: translateY(-0.5rem); }
+}
+@keyframes slide-in-from-bottom-2 {
+  from { transform: translateY(0.5rem); }
+}
+@keyframes slide-in-from-left-2 {
+  from { transform: translateX(-0.5rem); }
+}
+@keyframes slide-in-from-right-2 {
+  from { transform: translateX(0.5rem); }
+}
+@keyframes accordion-down {
+  from { height: 0; }
+  to { height: var(--radix-accordion-content-height); }
+}
+@keyframes accordion-up {
+  from { height: var(--radix-accordion-content-height); }
+  to { height: 0; }
+}
+
+/* Animation utilities for enter/exit states (replaces tailwindcss-animate) */
+
+[data-state="open"] {
+  animation: fade-in 150ms linear;
+}
+[data-state="closed"] {
+  animation: fade-out 150ms linear;
+}
+
+/* Dropdown/tooltip specific: zoom + directional slide */
+[data-side="bottom"] {
+  animation: slide-in-from-top-2 150ms ease-out;
+}
+[data-side="left"] {
+  animation: slide-in-from-right-2 150ms ease-out;
+}
+[data-side="right"] {
+  animation: slide-in-from-left-2 150ms ease-out;
+}
+[data-side="top"] {
+  animation: slide-in-from-bottom-2 150ms ease-out;
+}
+
+/* Dialog: overlay + content have different animations */
+.fixed[data-state="open"],
+.fixed[data-state="closed"] {
+  /* Override the general data-state rule for dialog overlays */
+}
+
+/* ============================================================
+ * shadcn/typeset presets — typography for rendered markdown surfaces
+ * (chat transcript, MD preview in the editor). Only containers that
+ * opt in are affected.
+ *   - `typeset typeset-docs` — roomy rhythm for documents/previews
+ *   - `typeset typeset-chat`  — tight rhythm for chat bubbles
+ * ============================================================ */
+.typeset-chat {
+  --typeset-font-body: var(--font-geist);
+  --typeset-font-heading: var(--font-geist);
+  --typeset-font-mono: var(--font-geist-mono);
+  --typeset-size: 1em;
+  --typeset-leading: 1.75;
+  --typeset-flow: 0.9em;
+
+  /* Bridge the desktop theme (HSL-triplet vars) onto the shadcn v4-style
+     tokens typeset.css reads. Scoped here so nothing leaks app-wide. */
+  --color-foreground: hsl(var(--foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-border: hsl(var(--border));
+  --color-ring: hsl(var(--ring));
+  --color-primary: hsl(var(--primary));
+}
+
+.typeset-docs {
+  --typeset-font-body: var(--font-geist);
+  --typeset-font-heading: var(--font-geist);
+  --typeset-font-mono: var(--font-geist-mono);
+  --typeset-size: 15px;
+  --typeset-leading: 1.75;
+  --typeset-flow: 1.25em;
+
+  /* Bridge the desktop theme (HSL-triplet vars) onto the shadcn v4-style
+     tokens typeset.css reads. Scoped here so nothing leaks app-wide. */
+  --color-foreground: hsl(var(--foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-border: hsl(var(--border));
+  --color-ring: hsl(var(--ring));
+  --color-primary: hsl(var(--primary));
+}
 
 /*
  * Warpforge desktop theme. Warm near-black ground (the forge at rest), a peach

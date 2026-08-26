@@ -1,5 +1,6 @@
 import { fileURLToPath, URL } from "node:url";
 
+import tailwindcss from "@tailwindcss/vite";
 import babel from "@rolldown/plugin-babel";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -7,6 +8,7 @@ import { defineConfig } from "vite";
 // Tauri expects a fixed dev port (see src-tauri/tauri.conf.json devUrl).
 export default defineConfig({
   plugins: [
+    tailwindcss(),
     react(),
     babel({
       presets: [reactCompilerPreset({ target: "19" })],

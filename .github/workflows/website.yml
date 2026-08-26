@@ -6,7 +6,6 @@ on:
     paths:
       - "www/**"
       - "desktop/src/**"
-      - "desktop/tailwind.config.ts"
       - ".github/workflows/website.yml"
   workflow_dispatch:
 
