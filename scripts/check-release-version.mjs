@@ -116,7 +116,7 @@ const releaseConfiguration = [
   [
     "the stable GitHub Releases updater endpoint is configured",
     tauriConfig.plugins?.updater?.endpoints?.includes(
-      "https://github.com/ephor/warpforge/releases/latest/download/latest.json",
+      "https://github.com/warpforgehq/warpforge/releases/latest/download/latest.json",
     ) === true,
   ],
   [
