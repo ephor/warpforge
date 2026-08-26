@@ -2,13 +2,14 @@
 name: warpforge
 
 services:
-  app:
-    command: bun run dev
-    port: 3000
+  # Landing/docs site (Astro + Tailwind v4). Runs from the www/ subdir.
+  web:
+    command: cd www && bun run dev -- --force
+    port: 4321
     # env:
     #   DATABASE_URL: postgres://localhost:${db.port}/mydb
     # healthcheck:
-    #   url: http://localhost:${app.port}/api/health
+    #   url: http://localhost:${web.port}/api/health
     #   interval: 5s
 
 # agentTemplates:
