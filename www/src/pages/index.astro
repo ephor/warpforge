@@ -265,13 +265,22 @@ const specs = [
      centre line whatever the mark and the controls happen to measure.
      `space-between` only centres the middle child when both sides match. */
   .nav-in {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    display: flex;
     align-items: center;
+    justify-content: space-between;
     height: 3.25rem;
   }
-  .nav-act {
-    justify-self: end;
+  @media (min-width: 768px) {
+    .nav-in {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+    }
+    .nav-links {
+      justify-self: center;
+    }
+    .nav-act {
+      justify-self: end;
+    }
   }
   /* The wordmark the app itself wears, in its sidebar and its task headers:
      uppercase, widely tracked, the second half in the accent. A rotated
