@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 
 import { daemon } from "../../daemon";
 import type { EditHunk, FileDiff, HunkResolution, TaskDiff } from "../../protocol";
-import { fileAnchor, hunkAnchor } from "./diffAnchors";
+import { fileAnchor } from "./diffAnchors";
 import { matchingHunkIndexes } from "./editHunkMatch";
 import { useSplitFileQueries } from "./useTaskQueries";
 
@@ -164,13 +164,13 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
           diffView === "unified" ? unifiedScrollParent.current : splitScrollParent.current;
         const virtualizer = diffView === "unified" ? unifiedVirtualizer : splitVirtualizer;
         virtualizer.scrollToIndex(index, { align: "start" });
+        // In unified mode the editor scrolls to the hunk itself via the
+        // highlighted-hunks decoration; here we only ensure the file is on
+        // screen (the file-level anchor still exists in the virtualized list).
+        if (diffView === "unified") return;
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            const anchor =
-              diffView === "unified" && matchingHunks.length > 0
-                ? hunkAnchor(path, matchingHunks[0])
-                : fileAnchor(path);
-            const anchorEl = document.getElementById(anchor);
+            const anchorEl = document.getElementById(fileAnchor(path));
             // Scroll only the virtualized list's own container. Native
             // Element.scrollIntoView() walks every scrollable ancestor
             // (including ones with overflow: hidden), which can drag
@@ -212,16 +212,19 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
                 >
                   {doc ? (
                     <Suspense fallback={<EditorLoading />}>
-                      <UnifiedDiff
-                        key={`${doc.path}:${editable}`}
-                        doc={doc}
-                        file={file}
-                        editable={editable}
-                        onSave={(content) =>
-                          void daemon.request("file.save", { content, path: doc.path, task_id: taskId })
-                        }
-                        onSendToChat={onSendToChat}
-                      />
+                        <UnifiedDiff
+                          key={`${doc.path}:${editable}`}
+                          doc={doc}
+                          file={file}
+                          editable={editable}
+                          highlightedHunks={
+                            _highlightedEdit?.path === file.path ? _highlightedEdit.hunks : undefined
+                          }
+                          onSave={(content) =>
+                            void daemon.request("file.save", { content, path: doc.path, task_id: taskId })
+                          }
+                          onSendToChat={onSendToChat}
+                        />
                     </Suspense>
                   ) : query?.error ? (
                     <p className="p-3 text-sm text-destructive">

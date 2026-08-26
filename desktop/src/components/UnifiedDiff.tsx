@@ -19,12 +19,15 @@ export function UnifiedDiff({
   doc,
   file,
   editable,
+  highlightedHunks,
   onSave,
   onSendToChat,
 }: {
   doc: FileDoc;
   file: FileDiff;
   editable?: boolean;
+  /** Indexes of hunks to bring into view / highlight (chat "changed lines"). */
+  highlightedHunks?: ReadonlySet<number>;
   onSave?: (content: string) => void;
   onSendToChat?: (file: FileDiff) => void;
 }) {
@@ -133,6 +136,33 @@ export function UnifiedDiff({
       view.dispatch({ effects: updateOriginalDoc.of({ doc: docText, changes }) });
     }
   }, [doc.oldText, status]);
+
+  // Chat "changed lines" (e.g. +34 -4) → bring the matched hunks into view.
+  // CodeMirror's mergeView already marks changed rows (cm-changedLine + gutter
+  // marker), so here we only scroll to the first changed line of the matched
+  // hunks — no extra flash layer.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    if (!highlightedHunks || highlightedHunks.size === 0) return;
+    let firstLine: number | null = null;
+    for (const index of highlightedHunks) {
+      const hunk = file.hunks[index];
+      if (!hunk) continue;
+      let newLine = hunk.newStart;
+      for (const line of hunk.lines) {
+        if (line.startsWith("+") || line.startsWith(" ")) {
+          if (line.startsWith("+") && firstLine === null) firstLine = newLine;
+          newLine += 1;
+        }
+        // "-" rows are removals: no new-doc line, counter stays put.
+      }
+      if (firstLine !== null) break;
+    }
+    if (firstLine === null) return;
+    const from = view.state.doc.line(Math.min(firstLine, view.state.doc.lines)).from;
+    view.dispatch({ effects: EditorView.scrollIntoView(from, { y: "center" }) });
+  }, [file, highlightedHunks]);
 
   return (
     <div className="flex flex-col">
