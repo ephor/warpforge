@@ -1,0 +1,219 @@
+---
+title: Agent tools (MCP)
+description: Every tool Warpforge hands your agents — what each one is for, when to reach for it, and which ones only an orchestrator gets.
+sidebar:
+  order: 4
+  label: Agent tools (MCP)
+---
+
+Most coding agents can read and write files and run shell commands. Inside Warpforge they get more: the running app, its logs, the task board, and a memory that outlives the session — as **tools**, not as instructions you paste into a prompt.
+
+Warpforge exposes these over the [Model Context Protocol](https://modelcontextprotocol.io/). Every agent session gets them automatically; nothing to configure.
+
+<Aside type="tip" title="Why this matters">
+  An agent that can restart your dev server and read the failure in the log fixes its own mistake before handing you a diff. An agent that can't, hands you the mistake.
+</Aside>
+
+## Two toolsets
+
+Which tools an agent sees depends on how the task was started:
+
+| | Regular task | Orchestrator task |
+| --- | --- | --- |
+| Runtime, tasks, memory (20 tools) | ✅ | ✅ |
+| Sub-agents and pipelines (11 tools) | — | ✅ |
+
+A regular session is one agent doing the work. An **orchestrator** session is an agent that can also *delegate* — so it gets 11 extra tools for dispatching sub-agents and driving pipelines. See [Choosing your mode](/guides/choosing-your-mode/) for which to reach for.
+
+---
+
+## Runtime — see and drive the running app
+
+Available in **every** session.
+
+### `list_runtime`
+
+Lists the project's services and port-forwards with live status, allocated ports, and URLs.
+
+**Reach for it first.** It's the discovery call — names, ports, and the `logSeq` cursor the log tools take. An agent that guesses `localhost:3000` is wrong in Warpforge, where every project gets [its own port range](/guides/projects-and-runtime/#no-port-roulette).
+
+```
+list_runtime(project?)
+```
+
+### `read_service_logs` · `read_portforward_logs`
+
+Read a window of a service's retained stdout/stderr. These behave like `kubectl logs --timestamps | grep | tail`:
+
+| Argument | What it does |
+| --- | --- |
+| `service` / `name` | Which one to read (from `list_runtime`) |
+| `after` | Monotonic sequence cursor. Start at `0`, then pass the returned `nextSeq` to cheaply poll for new lines — stable even as old lines age out of the ring buffer |
+| `limit` | Max lines, newest kept (default 100) |
+| `filter` | Case-insensitive substring, run over the **whole** buffer before `limit` is applied — so a match deep in history isn't lost |
+| `context` | N lines around each match, like `grep -C` |
+| `timestamps` | UTC timestamps prepended, `Z`-suffixed (default on) |
+
+**When:** after a change, to confirm the app actually came back up. After a failure, to find out why. The `after` cursor is what makes polling cheap enough for an agent to watch a restart.
+
+### `service_start` · `service_stop` · `service_restart` · `portforward_start` · `portforward_stop`
+
+Control a service or port-forward. All dispatch **asynchronously and return immediately** — the operation is still in flight when the call returns.
+
+**How to use them properly:** call, then follow with `read_service_logs` to watch the outcome. An agent that assumes success because the call returned is an agent that reports a broken app as fixed.
+
+---
+
+## Tasks — turn discovered work into a queued task
+
+### `create_task`
+
+Creates a task on the board **without** auto-running an agent. It lands as *Queued* for a human to start.
+
+```
+create_task(prompt, project?, agent?, workflow?)
+```
+
+**When:** an agent finds real work that isn't the work it was asked to do — a bug next door, a missing test, a refactor the change made obvious. Instead of scope-creeping the current diff or silently dropping it, it files it.
+
+**Why it doesn't auto-run:** discovered work is exactly the work a human should triage. Queued costs nothing; a runaway agent chain costs a lot.
+
+---
+
+## Memory — knowledge that outlives the session
+
+Available in **every** session. One store, shared across Claude Code, Codex, and opencode — see [Cross-harness memory](/concepts/memory/) for the full picture.
+
+### `memory_store`
+
+Persists a durable fact.
+
+```
+memory_store(content, scope?, kind?, tags?, project_id?)
+```
+
+- **`scope`** — `global` (every project) or `project` (this one). Defaults to project when a project is in play.
+- **`kind`** — `fact`, `decision`, `preference`, `gotcha`, or `note`. Defaults to `note`.
+- **`tags`** — free-form, and they're searchable.
+
+**What belongs here:** decisions and their reasons, gotchas that cost someone an hour, preferences that would otherwise be re-litigated every session. **What doesn't:** anything already obvious from the code — memory is for what the codebase *cannot* tell you.
+
+### `memory_search`
+
+Full-text, relevance-ranked search. With embeddings enabled it becomes a hybrid search that fuses keyword and semantic ranking, so a query phrased differently than the stored note still finds it.
+
+```
+memory_search(query, scope?, limit?, mode?)
+```
+
+**When:** at the *start* of a task, before making assumptions. This is the tool that turns "the new agent doesn't know why we did that" into "the new agent already knows."
+
+### `memory_list` · `memory_update` · `memory_delete` · `memory_stats`
+
+- `memory_list(scope?, kind?, limit?, offset?)` — browse most-recently-updated first.
+- `memory_update(id, content)` — rewrite a memory whose facts changed.
+- `memory_delete(id)` — permanent, and only ever an explicit action. Nothing is auto-deleted.
+- `memory_stats()` — counts and which scopes are live. Cheap; useful for an agent to check what it's working with before leaning on memory.
+
+### `memory_addEdge` · `memory_edges`
+
+Link two memories with a labelled, directed relation, and read a memory's links back.
+
+```
+memory_addEdge(src_id, dst_id, relation)
+memory_edges(id)
+```
+
+**When:** a decision supersedes an older one, or a gotcha explains a convention. Edges keep the *why* attached to the *what* instead of leaving two unrelated notes.
+
+### `memory_dream` · `memory_list_compaction` · `memory_resolve_compaction`
+
+Memory that only grows eventually rots. Dreaming is the pass that finds duplicates, contradictions, and stale facts — see [Dreaming](/concepts/memory/#dreaming).
+
+- `memory_dream(dry_run?)` — run the pass. Proposals are *written to a log*, never applied.
+- `memory_list_compaction()` — the pending proposals: id, type, targets, reason.
+- `memory_resolve_compaction(id, approve)` — approve or reject one.
+
+**The important part:** a dream never edits memory on its own. It proposes; a human (or an agent that verified against the code) decides.
+
+---
+
+## Orchestrator only — delegation
+
+These 11 tools appear **only** in an orchestrator session. They're what lets one agent act as a lead rather than a worker.
+
+### `spawn_agent`
+
+Dispatches a sub-agent — any configured harness, not just the lead's own — and returns immediately.
+
+```
+spawn_agent(agent, task)
+```
+
+**The point:** the lead keeps its context for coordinating instead of burning it on implementation detail, and you can put the right harness on each piece of work in the same task.
+
+### `read_inbox`
+
+Drains finished sub-agent results delivered since the last call.
+
+**When:** after dispatching. Because `spawn_agent` returns immediately, the inbox is where results actually arrive — an orchestrator that never reads its inbox never learns anything came back.
+
+### `message_agent`
+
+Sends a follow-up into an **existing** sub-agent's session, with its full history intact.
+
+```
+message_agent(task_id, message)
+```
+
+**Use this instead of `spawn_agent`** when you want to continue a conversation — a correction, a clarification, "also handle the null case." Spawning a fresh agent throws away everything the first one learned.
+
+### `list_agents` · `stop_agent` · `cleanup_agents`
+
+- `list_agents(project?)` — this orchestrator's children and their state. Also where a pipeline's `workflowRun.waiting` shows up, which the workflow tools below key off.
+- `stop_agent(task_id)` — hard-stop one child, keeping its history. Also stops an owned pipeline.
+- `cleanup_agents(max_age_seconds?, dry_run?, include_active?)` — permanently remove finished children and their history. `dry_run` first is the safe habit; `include_active` is required to touch anything still running.
+
+### `spawn_workflow`
+
+Dispatches a whole [pipeline](/concepts/orchestration/#workflow-pipelines) — `plan → implement → review ⇄ fix` — as a child, instead of a single sub-agent.
+
+```
+spawn_workflow(workflow_id, goal, agent)
+```
+
+<Aside type="caution" title="Not the default choice">
+  A pipeline costs several times what one sub-agent costs — multiple sessions, multiple review rounds. Warpforge's own tool description says it plainly: use it for changes that benefit from an independent review pass; for straightforward work, prefer `spawn_agent`.
+</Aside>
+
+### `pause_workflow` · `resume_workflow`
+
+Soft-pause at the **next stage boundary** — the running stage finishes its turn, then the pipeline holds. `resume_workflow(task_id, note?)` continues, and the optional note is delivered to the next stage as extra context.
+
+**When:** you learned something mid-flight that changes the remaining stages. Pausing is cheaper and less destructive than stopping and re-spawning.
+
+### `answer_workflow`
+
+Answers a stage's pending question — valid only while `list_agents` shows `workflowRun.waiting.kind == "question"`. The message is forwarded to the session that asked.
+
+### `decide_workflow`
+
+Decides what happens when a pipeline exhausts its review ⇄ fix rounds with findings still open (`waiting.kind == "limit"`) — grant more rounds, or accept and stop.
+
+```
+decide_workflow(task_id, decision, rounds?, note?)
+```
+
+**Why this exists:** an unbounded review loop is how an agent pipeline burns your quota all night. The limit is a feature; this tool is how you answer it deliberately.
+
+---
+
+## Project scoping
+
+Every tool takes an optional `project`, but it is not an escape hatch: a call naming a project other than the session's own is **refused**. The session's scope wins. A bridge configured outside the daemon, with no project set, resolves the project from the working directory instead — including task worktrees — so one setup covers every registered project.
+
+## See also
+
+- [Choosing your mode](/guides/choosing-your-mode/) — single, orchestrator, or pipeline
+- [Cross-harness memory](/concepts/memory/) — what the `memory_*` tools write into
+- [Orchestration and workflows](/concepts/orchestration/) — the concepts behind the delegation tools

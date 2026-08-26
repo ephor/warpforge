@@ -1,0 +1,30 @@
+---
+title: Architecture
+description: The Warpforge stack — desktop app, Rust daemon, agent protocol, runtime, and release pipeline.
+sidebar:
+  order: 3
+  label: Architecture
+---
+
+- **Desktop:** Tauri 2, React, TypeScript, Vite, Tailwind CSS, CodeMirror, xterm.js
+- **Core and daemon:** Rust, Tokio, SQLite, local WebSocket protocol, daemon bundled as a sidecar in packaged builds
+- **Agents:** ACP over stdio, persisted sessions, capability negotiation, permission flow, [MCP tool bridge](/reference/mcp-tools/)
+- **Runtime:** process-group service management, log capture, port isolation, readiness detection, Kubernetes port-forwards, interactive PTYs
+- **[Memory](/concepts/memory/):** separate SQLite store with FTS5, optional local embeddings and vector search with rank fusion, per-project overlays, proposal-based compaction
+- **[Backlog](/guides/tasks-and-backlog/):** one normalized work-item table; GitHub via the `gh` session, Linear via a key held in the OS keychain
+- **Git workflow:** optional worktrees, file browser/editor, structured diffs, hunk resolution, commit/update/push, pull requests via `gh`
+- **Release:** Developer ID signing, Apple notarization, signed updater artifacts, checksummed assets
+
+A local Rust daemon owns all state — projects, services, agent sessions, task history — behind a WebSocket JSON-RPC API. The Tauri desktop app is a thin client over that API, which is why work started in a task keeps running if the app window closes or the daemon restarts.
+
+## Current scope
+
+Warpforge is young software, shipped and built in the open:
+
+- macOS Apple Silicon is validated; Windows and Linux remain unvalidated previews;
+- automatic config detection covers a `package.json` `dev` script and basic Docker Compose services, with the [bootstrap wizard](/reference/cli/) for anything richer;
+- runtime state is local to one machine, and running processes do not survive a machine restart;
+- interrupted task recovery depends on the underlying agent's session-load support;
+- worktrees and multi-agent orchestration are powerful but still evolving — review branches before merging or pushing.
+
+Bug reports, design feedback, and focused pull requests are welcome. If you use Warpforge on a real multi-agent workflow, sharing what felt smooth — and what still sent you back to terminal juggling — is especially useful. Release notes live in [CHANGELOG.md](https://github.com/warpforgehq/warpforge/blob/main/CHANGELOG.md).

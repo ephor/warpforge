@@ -1,0 +1,81 @@
+---
+/**
+ * The hero demo: the Warpforge desktop app, running on this page.
+ *
+ * There is no lookalike here. The frame loads `/embed/app-demo/`, which mounts
+ * `Sidebar`, `AppHeader` and `TaskDetail` straight out of `desktop/src`
+ * against a seeded daemon — so a visitor is looking at the product's own
+ * markup, tokens and behaviour, and can click around in it. A screenshot that
+ * can go stale is replaced by something that can't.
+ *
+ * It renders at the app's own width and is scaled to whatever room the page
+ * has: a desk layout squeezed into a phone-width column stops being a picture
+ * of the product.
+ */
+const APP_WIDTH = 1440;
+const APP_HEIGHT = 860;
+---
+
+<div class="wf-demo-frame" data-forge-demo>
+  <iframe
+    src="/embed/app-demo/"
+    title="Warpforge, running a task"
+    loading="lazy"
+    width={APP_WIDTH}
+    height={APP_HEIGHT}></iframe>
+</div>
+
+<style define:vars={{ appW: `${APP_WIDTH}`, appH: `${APP_HEIGHT}` }}>
+  .wf-demo-frame {
+    container-type: inline-size;
+    position: relative;
+    aspect-ratio: var(--appW) / var(--appH);
+    border: 1px solid hsl(var(--border));
+    border-radius: 12px;
+    overflow: hidden;
+    background: hsl(var(--background));
+    box-shadow:
+      0 1px 0 hsl(0 0% 100% / 0.03) inset,
+      0 30px 80px -30px hsl(0 0% 0% / 0.7);
+  }
+
+  /* Laid out at desk size, then scaled down to whatever width the column
+     gives it. The ratio comes from script because `scale()` needs a unitless
+     number and CSS cannot divide one length by another; until it arrives the
+     frame is transparent rather than showing a burst of full-size app. */
+  iframe {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: block;
+    border: 0;
+    color-scheme: dark;
+    opacity: 0;
+    transform: scale(var(--wf-demo-scale, 1));
+    transform-origin: top left;
+    transition: opacity 0.25s ease;
+  }
+  .wf-demo-frame[data-scaled] iframe {
+    opacity: 1;
+  }
+</style>
+
+<script>
+  // Keep the frame's scale in step with its width. One observer for the page;
+  // `--wf-demo-scale` is the only thing it writes.
+  const frames = document.querySelectorAll<HTMLElement>("[data-forge-demo]");
+  if (frames.length > 0) {
+    const APP_WIDTH = 1440;
+    const fit = (frame: HTMLElement) => {
+      frame.style.setProperty("--wf-demo-scale", String(frame.clientWidth / APP_WIDTH));
+      frame.dataset.scaled = "";
+    };
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) fit(entry.target as HTMLElement);
+    });
+    frames.forEach((frame) => {
+      fit(frame);
+      observer.observe(frame);
+    });
+  }
+</script>

@@ -1,0 +1,43 @@
+---
+title: Why Warpforge?
+description: The coordination problem multi-agent development runs into, and how Warpforge solves it.
+sidebar:
+  order: 1
+  label: Why Warpforge?
+---
+
+AI-assisted development becomes a coordination problem long before it becomes a model problem:
+
+- one agent is editing while another waits for permission;
+- a third needs the app server and its real URL;
+- logs are hidden in terminal tabs;
+- two projects both assume port `3000`;
+- completed work is scattered across chats, worktrees, and diffs.
+
+Warpforge turns that sprawl into one visible workflow:
+
+<CardGrid>
+  <Card title="Mission Control for active work" icon="ph:squares-four">
+    Running, blocked, interrupted, and review-ready sessions across every project, with live conversation previews — no hunting through terminals.
+  </Card>
+  <Card title="The environment travels with the task" icon="ph:path">
+    Agents receive live service URLs, resolved ports, files, and project context instead of guessing how to run the app.
+  </Card>
+  <Card title="Parallel work without checkout collisions" icon="ph:git-branch">
+    A task can run in its own git worktree while staying attached to the same project.
+  </Card>
+  <Card title="Human control at the moments that matter" icon="ph:hand-palm">
+    Permission requests, commands, tool calls, changed files, and diffs stay visible before work moves forward.
+  </Card>
+  <Card title="From agent output to a reviewed branch" icon="ph:git-pull-request">
+    Unified or split diffs, hunk-level accept/reject, inline edits, commit, update, push, and pull request from the same workspace.
+  </Card>
+  <Card title="A lead agent when the task outgrows one session" icon="ph:tree-structure">
+    An [orchestrator](/concepts/orchestration/#the-orchestrator-agent) delegates bounded work to sub-agents, and every child task stays visible.
+  </Card>
+  <Card title="Repeatable workflows when a prompt is not enough" icon="ph:flow-arrow">
+    Put different agents and models into explicit plan, implement, review, and fix [stages](/concepts/orchestration/#workflow-pipelines); Warpforge drives the transitions and stops when a human decision is needed.
+  </Card>
+</CardGrid>
+
+That combination is what makes Warpforge an ADE rather than another coding agent: part cross-harness orchestrator, part project runtime, part review surface.

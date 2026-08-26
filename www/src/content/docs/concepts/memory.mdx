@@ -1,0 +1,92 @@
+---
+title: Cross-harness memory
+description: One memory your agents share — across Claude Code, Codex, and opencode, across projects, across sessions.
+sidebar:
+  order: 4
+  label: Cross-harness memory
+---
+
+Every coding agent has its own memory file. Claude Code reads `CLAUDE.md`. Codex reads `AGENTS.md`. opencode reads its own. Teach one of them why your auth flow is the way it is, and the other two still don't know.
+
+Warpforge gives them **one memory instead** — a single local store every harness reads and writes through the same tools. Tell Claude Code something once; Codex knows it tomorrow.
+
+<Aside type="tip" title="The thing that actually changes">
+  You stop re-explaining your project. Not to a new session, not to a new model, not after switching harnesses mid-task.
+</Aside>
+
+## What goes in it
+
+Memory is for what the codebase **cannot tell you**:
+
+| Kind | What it captures |
+| --- | --- |
+| `decision` | A choice and the reasoning behind it — the thing that reads as arbitrary six months later |
+| `gotcha` | The trap that cost someone an hour, so it costs nobody a second hour |
+| `preference` | How you want things done, instead of re-litigating it every session |
+| `fact` | Something durably true about the project that isn't obvious from reading it |
+| `note` | Everything else worth keeping |
+
+What doesn't belong: anything an agent could learn by reading the code. Memory that restates the codebase is memory that goes stale the moment the code changes.
+
+## Two scopes
+
+- **Global** — every project. Your conventions, your preferences, the way you like commits written.
+- **Project** — this project only. Its architecture decisions, its gotchas, its history.
+
+Both are on by default, and a search spans every enabled scope unless you narrow it. Project memories can also live in an overlay database inside the project itself, so project knowledge can travel with the repo rather than staying on one machine.
+
+## Search that finds the thing you meant
+
+The store is full-text searchable out of the box (SQLite FTS5, relevance-ranked, tags included).
+
+Turn on embeddings and it becomes **hybrid search**: keyword ranking and semantic vector ranking, fused together. In practice that's the difference between finding a note only when you remember its words, and finding it when you remember its *meaning* — an agent searching "why is the port weird here" surfaces the decision recorded as "4000-range allocation avoids collisions with Vite."
+
+Embeddings run locally too — a small model on your machine, no service call, no key.
+
+## Dreaming
+
+A memory store that only grows becomes a memory store you can't trust. Old facts contradict new ones. The same lesson gets written down three times. Something true in March is wrong by August.
+
+**Dreaming** is the pass that goes looking for exactly that. It reviews stored memories against **the actual codebase** and proposes changes: duplicates to merge, contradictions to resolve, facts the code no longer supports, notes that a newer memory supersedes.
+
+The critical design decision:
+
+<Aside type="caution" title="A dream never edits your memory">
+  Every finding is written to a compaction log as a **proposal** with its reasoning. Nothing is merged, superseded, or deleted until someone approves it. An automated pass that quietly rewrites what your agents believe is not a feature — it's a very slow way to corrupt a knowledge base.
+</Aside>
+
+When the pass isn't sure — or the call is genuinely yours to make — it says so and waits for you instead of guessing.
+
+### When it runs
+
+| Trigger | Behaviour |
+| --- | --- |
+| **Manual** | A Dream button in Settings. Run it when you feel the store drifting. |
+| **Idle** | After a configurable quiet period — the machine tidies up while you're not using it. |
+| **Cron** | On a schedule, e.g. nightly. |
+
+Dreaming is off until you enable it, runs on the harness and model you choose, and is scoped to the project you select rather than sweeping everything at once. Settings shows per-scope counts and how many proposals are waiting on you.
+
+## How agents use it
+
+Every session is told, in its own system prompt, to use shared memory instead of writing to per-harness files — and the [`memory_*` tools](/reference/mcp-tools/#memory--knowledge-that-outlives-the-session) are always visible, so the habit doesn't depend on you asking.
+
+A well-behaved agent:
+
+<Steps>
+
+1. **Searches before assuming.** `memory_search` at the start of a task, so it starts from what the team already learned.
+2. **Stores what it learned.** A decision made, a trap hit, a preference stated — `memory_store` with the right kind and scope.
+3. **Links related knowledge.** `memory_addEdge` keeps a decision attached to the gotcha that caused it.
+4. **Updates rather than duplicates.** When a fact changes, `memory_update` beats storing a second, contradictory note.
+
+</Steps>
+
+## Where it lives
+
+One SQLite database at `~/.warpforge/memory.db`, plus optional per-project overlays. It's yours, on your disk, alongside the rest of Warpforge's local state — no account, no sync service, no third party holding your team's institutional knowledge.
+
+## See also
+
+- [Agent tools (MCP)](/reference/mcp-tools/#memory--knowledge-that-outlives-the-session) — the exact memory tool surface
+- [Bring your own agents](/concepts/agents/) — the harnesses that share this store

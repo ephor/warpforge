@@ -96,6 +96,36 @@ jobs:
       - run: bun run test
       - run: bun run build
 
+  website:
+    name: Website
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: www
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      # The landing page compiles the desktop app's components, and points
+      # Tailwind at the app's config — which loads its plugins from the app's
+      # own tree. Runtime imports are routed through this site's packages so
+      # the page ends up with one React; this install is for the build.
+      - name: Install the app's dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint:docs
+      # The landing page compiles components out of `desktop/src`, so this
+      # build is what notices when a refactor there reaches the website.
+      - run: bun run build
+      - run: bunx playwright install --with-deps chromium
+      # A build is not enough on its own: the app's demo mode answers an RPC it
+      # does not recognise with `{}`, so the site can keep building while the
+      # hero quietly renders nothing. This plays the run and checks it happened.
+      - run: bun run test:demo
+
   desktop-rust:
     name: Desktop Rust
     runs-on: blacksmith-4vcpu-ubuntu-2204

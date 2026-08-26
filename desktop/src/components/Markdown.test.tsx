@@ -23,12 +23,12 @@ describe("Markdown links", () => {
 
   it("opens external links outside the app webview", async () => {
     const user = userEvent.setup();
-    render(<Markdown>[Open PR](https://github.com/ephor/warpforge/pull/4)</Markdown>);
+    render(<Markdown>[Open PR](https://github.com/warpforgehq/warpforge/pull/4)</Markdown>);
 
     await user.click(screen.getByRole("link", { name: "Open PR" }));
 
     expect(window.open).toHaveBeenCalledWith(
-      "https://github.com/ephor/warpforge/pull/4",
+      "https://github.com/warpforgehq/warpforge/pull/4",
       "_blank",
       "noopener,noreferrer",
     );
@@ -40,12 +40,12 @@ describe("Markdown links", () => {
       configurable: true,
       value: {},
     });
-    render(<Markdown>[Open PR](https://github.com/ephor/warpforge/pull/4)</Markdown>);
+    render(<Markdown>[Open PR](https://github.com/warpforgehq/warpforge/pull/4)</Markdown>);
 
     await user.click(screen.getByRole("link", { name: "Open PR" }));
 
     await waitFor(() =>
-      expect(openUrl).toHaveBeenCalledWith("https://github.com/ephor/warpforge/pull/4"),
+      expect(openUrl).toHaveBeenCalledWith("https://github.com/warpforgehq/warpforge/pull/4"),
     );
     expect(window.open).not.toHaveBeenCalled();
   });

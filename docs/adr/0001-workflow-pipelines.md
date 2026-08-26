@@ -1,6 +1,6 @@
 # 0001 — Workflow pipelines: deterministic engine, project-configured
 
-**Status:** accepted (2026-07-30) · introduced in `ephor/warpforge#21`
+**Status:** accepted (2026-07-30) · introduced in `warpforgehq/warpforge#21`
 
 ## Context
 

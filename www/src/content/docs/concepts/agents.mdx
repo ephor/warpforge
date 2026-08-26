@@ -1,0 +1,67 @@
+---
+title: Bring your own agents
+description: Supported coding agents, how Warpforge talks to them, and how to add a custom one.
+sidebar:
+  order: 2
+  label: Bring your own agents
+---
+
+Warpforge detects agents as globally installed binaries and spawns them directly — no `npx` at session start, so the first prompt is never blocked on a package download.
+
+| Agent | Binary | Default ACP command | Install integration |
+| --- | --- | --- | --- |
+| Claude Code | `claude-agent-acp` | `claude-agent-acp --acp` | `npm install -g @agentclientprotocol/claude-agent-acp` |
+| Codex | `codex-acp` | `codex-acp` | `npm install -g @agentclientprotocol/codex-acp` |
+| OpenCode | `opencode` | `opencode acp` | `npm install -g opencode-ai` |
+| Qwen Code | `qwen` | `qwen --acp` | `npm install -g @qwen-code/qwen-code` |
+| Goose | `goose` | `goose acp` | `brew install block-goose-cli` |
+| Junie | `junie` | `junie --acp true` | `npm install -g @jetbrains/junie-cli` |
+| Cursor | `cursor-agent-acp` | `cursor-agent-acp` | `npm install -g @blowmage/cursor-agent-acp` |
+| Pi | `pi-acp` | `pi-acp` | `npm install -g @earendil-works/pi-coding-agent pi-acp` |
+
+Claude Code and Codex reach ACP through small adapter binaries. Warpforge shows whether each agent is present, which version is installed, and whether a newer one exists — and installs or updates it in one click from the agent panel. Any other ACP-compatible agent can be added with a custom command, globally or per project through `agentTemplates` — see the [configuration reference](/reference/configuration/#agenttemplates).
+
+<Aside type="tip">
+  Agent capabilities vary. Image input, session resume, slash commands, model selection, and permission semantics are negotiated with each ACP implementation.
+</Aside>
+
+## Several logins for one agent
+
+Personal and work accounts. A shared team seat and your own. A plan that's hit its limit and a second one that hasn't. Warpforge can hold **several logins for the same agent** and switch which one new sessions use — without you logging out and back in through the CLI each time.
+
+Supported for **Claude Code** and **Codex**, the two agents with a credential store Warpforge knows how to keep. Agents without one simply don't show the panel.
+
+### Adding an account
+
+<Steps>
+
+1. **Sign in to the agent's CLI** as the account you want, the normal way.
+2. In **Settings → Accounts**, give it a name and press **Import current login**. The name is the account's identity here — "personal", "work" — so it's required.
+3. **Sign in as the other account** and import that one too.
+
+</Steps>
+
+From then on both are listed with their email and plan, and you switch between them from the account chip in the header — or from the chip in a task's own header, which names the harness that task is running under.
+
+### What happens to a running session
+
+Switching accounts affects **new sessions**. A running agent process can't change account underneath itself — Codex reads its home once at spawn, and Claude Code caches the credentials it authenticated with — so the daemon retires live sessions and resumes them in a fresh process **on your next message**.
+
+<Aside type="note" title="Not a crash">
+  The visible effect is that an open session picks up on the new account when you next say something to it. Worth knowing, because the other reading — "my task just died" — is the wrong one.
+</Aside>
+
+### Where credentials live
+
+Each account gets a vault under `~/.warpforge/accounts/<agent>/`, holding whatever that agent needs to *be* that account — for Codex its whole home directory, for Claude Code just the credential blob.
+
+Two rules hold for both, because the alternative is silently destroying your login:
+
+- **Warpforge never writes inside the agent's own home** (`~/.codex`, `~/.claude`). That's a read-only input; everything Warpforge creates lives in its own vault.
+- **Every vault path is proven to be Warpforge's before it's used** — inside the accounts root, not a symlink, and carrying a marker file naming the account. A database row isn't treated as proof.
+
+Credentials never leave that layer: what the rest of the app sees is a label, an email, and a plan — never a token.
+
+<Aside type="caution" title="Newer than the rest">
+  Account switching is one of the more recent additions and is less settled than the surrounding app. Renaming and removing an account are there (removing deletes its vault); rough edges are worth [reporting](https://github.com/warpforgehq/warpforge/issues).
+</Aside>

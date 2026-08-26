@@ -1,0 +1,69 @@
+---
+/**
+ * The hero demo, on a page of its own so the landing can embed it in a frame.
+ *
+ * It lives apart because the desktop app ships Tailwind's preflight: loading
+ * the app's stylesheet into the landing page would reset the landing's own
+ * hand-written CSS. A frame keeps the two stylesheets from ever meeting, and
+ * has a second payoff — the demo is safe to leave interactive, so a visitor
+ * can change tabs and poke at the tree instead of only watching.
+ *
+ * Not linked from anywhere and marked `noindex`: it is a part, not a page.
+ */
+import "../../styles/app-theme.css";
+import "../../../../desktop/src/globals.css";
+import AppDemo from "../../components/landing/demo/AppDemo";
+import { THEMES } from "@app/lib/themes";
+import { THEME_STORAGE_KEY } from "../../lib/landing-theme";
+
+// Handed to the inline script below, which runs before the island hydrates.
+const themes = Object.fromEntries(THEMES.map((t) => [t.id, { colors: t.colors, mode: t.mode }]));
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Warpforge demo</title>
+    {/*
+      The frame shares an origin with the landing page, so it can read the
+      chosen theme rather than wait to be told. It used to only learn one from
+      a `postMessage`, which a reload never replays — so the demo came back in
+      the default theme while the page around it kept the choice. Inline and
+      before the island so there is no flash of the wrong palette.
+    */}
+    <script
+      type="application/json"
+      id="wf-themes"
+      set:html={JSON.stringify({ storageKey: THEME_STORAGE_KEY, themes })}
+    />
+    <script is:inline>
+      try {
+        const data = JSON.parse(document.getElementById("wf-themes").textContent);
+        const theme = data.themes[localStorage.getItem(data.storageKey)];
+        if (theme) {
+          const root = document.documentElement;
+          for (const [name, value] of Object.entries(theme.colors)) {
+            root.style.setProperty(`--${name}`, value);
+          }
+          root.classList.toggle("dark", theme.mode === "dark");
+        }
+      } catch {
+        /* Storage unavailable — the built-in theme is a fine fallback. */
+      }
+    </script>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <AppDemo client:only="react" />
+  </body>
+</html>

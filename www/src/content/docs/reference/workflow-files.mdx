@@ -1,0 +1,199 @@
+---
+title: Workflow files
+description: The .warpforge/workflows/*.yaml format — every key, every placeholder, and how to write your own pipeline.
+sidebar:
+  order: 4
+  label: Workflow files
+---
+
+Warpforge ships **two** workflows. They are a starting point, not the menu: drop a YAML file in `.warpforge/workflows/` and it appears in the New Task picker alongside them, for everyone who checks out the repository.
+
+| Built-in | Stages |
+| --- | --- |
+| **Implement + review loop** (`review-loop`) | `implement → review ⇄ fix` |
+| **Plan + implement + review loop** (`plan-review-loop`) | `plan → implement → review ⇄ fix` |
+
+<Aside type="note">
+  The pipeline **shape** is fixed — `plan? → implement → review ⇄ fix`. A workflow file configures those stages; it does not declare new ones. That is what lets the daemon drive the run deterministically, survive a restart, and stop at known boundaries. See [ADR 0001](https://github.com/warpforgehq/warpforge/blob/main/docs/adr/0001-workflow-pipelines.md).
+</Aside>
+
+## Start from a built-in
+
+Don't write one from scratch. In the New Task dialog, pick a built-in and choose **Copy to project** — it writes the template into `.warpforge/workflows/<id>.yaml`, fully commented, with every stage spelled out. Edit from there.
+
+Copying refuses to overwrite an existing file, so it is safe to press twice.
+
+## Where files live, and who wins
+
+<Steps>
+
+1. Workflows are read from `.warpforge/workflows/*.yaml` (and `.yml`) in the **project** directory.
+
+2. The **file stem is the id** — `strict-review.yaml` is the workflow `strict-review`.
+
+3. A project file with the same id as a built-in **replaces** it in the picker. Copy `review-loop.yaml` in, edit it, and the built-in stops being offered — your version is what the team gets.
+
+</Steps>
+
+Because the files sit in the repository, the process travels with the code instead of living in one person's settings.
+
+## A minimal file
+
+Only `name` is required. Everything else falls back to Warpforge's defaults, and any stage you omit still runs.
+
+```yaml title=".warpforge/workflows/quick-review.yaml"
+version: 1
+name: Quick review
+description: One reviewer, one repair attempt.
+
+review:
+  max_rounds: 2
+  reviewers:
+    - focus: correctness and error handling
+```
+
+That is a complete workflow. It implements with the agent you picked as Lead, reviews once with a focus line appended to the built-in reviewer prompt, allows one fix, and asks you what to do if findings are still open.
+
+## Top level
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `version` | number | `1` | File format version. Only `1` is understood; anything else makes the file invalid. |
+| `name` | string | — | **Required.** What the picker shows. |
+| `description` | string | — | One line under the name in the picker. |
+| `plan` | mapping | absent | Enables the planning stage. Omit the key to run without one. |
+| `implement` | mapping | defaults | Implementation stage. |
+| `review` | mapping | defaults | Review rounds — see below. |
+| `fix` | mapping | inherits `implement` | Repair stage between review rounds. |
+
+An unknown key is a **warning**, not an error — the workflow still loads, and the picker shows the warning in its tooltip. That keeps a file written for a newer build usable on an older one.
+
+### The planning stage is the one real switch
+
+`plan` is the only stage you can add or remove; the other three always run.
+
+```yaml
+plan:              # present with defaults — planning runs
+plan: false        # planning is off (deleting the key does the same)
+```
+
+Omitting `implement`, `review` or `fix` does **not** remove them — it selects Warpforge's built-in settings for that stage.
+
+## Stage keys
+
+`plan`, `implement` and `fix` all take the same three keys:
+
+| Key | Default |
+| --- | --- |
+| `agent` | The Lead agent picked in the New Task dialog |
+| `model` | The Lead model picked in the New Task dialog |
+| `prompt` | Warpforge's built-in prompt for that stage |
+
+`fix` is the exception to the fallback: an omitted `agent` or `model` there inherits the **implement** stage rather than the Lead, so the same agent that wrote the code repairs it unless you say otherwise.
+
+Mixing agents per stage is the point — plan with one, implement with another, review with a third:
+
+```yaml
+plan:
+  agent: claude
+implement:
+  agent: codex
+review:
+  reviewers:
+    - agent: claude
+```
+
+## `review`
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `max_rounds` | number | `3` | Review rounds. A fix runs *between* rounds, so N rounds buy N−1 repair attempts. Must be ≥ 1; values above **5** are clamped with a warning. |
+| `on_limit` | `ask` \| `finish` | `ask` | What happens when the rounds run out with findings still open. `ask` suspends and asks you (extend / finish / stop); `finish` lands the task as **Waiting** with the open findings in its summary. |
+| `reask` | `same_session` \| `fresh` | `same_session` | How repeat rounds are staffed. `same_session` follows up with the reviewer that raised the findings, so it verifies its own — at the cost of some anchoring bias. `fresh` spawns new reviewers each round, still handed the previous findings to check. |
+| `context` | list | all four | Which sections the **built-in** reviewer prompt includes: `prompt`, `plan`, `implementer_summary`, `diff`. |
+| `reviewers` | list | one default reviewer | 1–4 reviewers, run in the same round. |
+
+### Reviewers
+
+Each entry takes `agent`, `model`, and then one of two ways to steer it:
+
+- **`focus`** — a sentence appended to the built-in reviewer prompt. The light touch.
+- **`prompt`** — a full replacement. You decide everything the reviewer sees.
+
+```yaml
+review:
+  max_rounds: 4
+  on_limit: finish
+  reask: fresh
+  reviewers:
+    - agent: claude
+      focus: correctness, error handling, and edge cases
+    - agent: codex
+      focus: performance and unnecessary allocation
+```
+
+<Aside type="caution">
+  `context` and `focus` only shape the **built-in** reviewer prompt. If every reviewer defines its own `prompt`, a custom prompt decides its own context — so those keys do nothing, and Warpforge warns you rather than ignoring them silently.
+</Aside>
+
+## Placeholders
+
+A custom `prompt` may interpolate `{{name}}`. **An unknown placeholder is a validation error, not a blank** — a typo like `{{taks_prompt}}` fails the file with the offending name rather than quietly sending an agent a prompt with a hole in it.
+
+| Placeholder | `plan` | `implement` | `review` | `fix` |
+| --- | :-: | :-: | :-: | :-: |
+| `{{task_prompt}}` — what you typed | ✓ | ✓ | ✓ | ✓ |
+| `{{plan}}` — the approved plan | | ✓ | ✓ | ✓ |
+| `{{implementer_summary}}` — the last implement/fix session's closing message | | | ✓ | ✓ |
+| `{{diff}}` — the working-copy diff | | | ✓ | ✓ |
+| `{{findings}}` — what the reviewers raised | | | | ✓ |
+| `{{round}}`, `{{max_rounds}}` — where the loop is | | | ✓ | ✓ |
+| `{{focus}}` — that reviewer's `focus` line | | | ✓ | |
+
+`{{plan}}` is only allowed when the file has a planning stage, and `{{focus}}` only in a reviewer that defines one — a placeholder nothing can fill would render as an empty section, so it is rejected up front instead.
+
+## A worked example
+
+Two reviewers with different jobs, on different agents, and a hard stop rather than a question:
+
+```yaml title=".warpforge/workflows/ship-it.yaml"
+version: 1
+name: Ship it
+description: Plan, implement on Codex, review on two agents, land without asking.
+
+plan:
+  agent: claude
+  prompt: |
+    Produce a short implementation plan: files to touch, approach, edge cases,
+    and how to verify. Do not edit files. End with the complete plan, because
+    it is handed to the implementer verbatim.
+
+    ## Task
+    {{task_prompt}}
+
+implement:
+  agent: codex
+
+review:
+  max_rounds: 4
+  on_limit: finish
+  reask: fresh
+  reviewers:
+    - agent: claude
+      focus: correctness, edge cases, and error handling
+    - agent: codex
+      focus: tests — is the new behaviour actually covered?
+
+fix:
+  agent: codex
+```
+
+## When a file is wrong
+
+Invalid workflows are not hidden. They stay in the picker, greyed out, with the reason in the tooltip — including the line and column for a YAML error — so a broken file is something you notice and fix rather than something that silently disappears.
+
+Errors that reject a file: a missing `name`, an unsupported `version`, `max_rounds: 0`, an unknown value for `on_limit`, `reask` or `context`, more than four reviewers, and any unknown placeholder. Warnings that still load: unknown keys, `max_rounds` above the cap, an empty `context`, and `context` or `focus` set where a custom prompt makes them inert.
+
+<Aside type="note">
+  Warpforge appends its own structured protocols to every stage prompt — how a stage asks you a question, and how a reviewer returns its verdict. You never write those; keep your prompt to the work itself.
+</Aside>

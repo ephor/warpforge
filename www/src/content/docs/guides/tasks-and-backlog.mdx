@@ -1,0 +1,126 @@
+---
+title: Tasks and backlog
+description: Where work comes from — your own list, GitHub, or Linear — and how it becomes a reviewed branch.
+sidebar:
+  order: 3
+  label: Tasks and backlog
+---
+
+A **task** is a running agent session. A **backlog item** is something someone wants done. Warpforge keeps them separate on purpose, and links them when work actually starts — so your backlog stays a list of intent, not a graveyard of stale agent runs.
+
+## The backlog
+
+Every project has one, and it can be fed straight from where your team already tracks work.
+
+### Connect a tracker
+
+<Tabs syncKey="tracker">
+<TabItem label="GitHub">
+
+Warpforge uses the [`gh` CLI](https://cli.github.com/) session you already have — no new token to mint, no OAuth app to authorize.
+
+```bash
+gh auth login
+```
+
+A project's open issues import when you open it, and refresh on **Sync**.
+
+</TabItem>
+<TabItem label="Linear">
+
+Connect with a personal API key, which is stored in your **OS keychain** — not in a config file, not in the database.
+
+A Linear key is account-wide, so each project picks the Linear team it reads from. Until you pick one, that project imports nothing from Linear.
+
+</TabItem>
+<TabItem label="Neither">
+
+The backlog works standalone. Some work never belongs in a tracker — "try this later," "look at why that's slow" — and local items are first-class here.
+
+</TabItem>
+</Tabs>
+
+Whichever you use, **new items are created the same way**: the destination is a chip on the form. Local, GitHub, or Linear — one form, one list, one shape.
+
+### Working the list
+
+The backlog loads more as you scroll, and each row reads across a single line: title, status, priority, tracker, assignee, and when it last changed.
+
+- **Search** titles and bodies; **filter** by status, priority, tracker, or assignee — your own account is offered first, since most of the time you're looking for your own work.
+- **Clicking a row opens details beside the list**, not somewhere else. The full description renders with any screenshots from the issue shown inline, plus assignee, timestamps, and a link straight to the issue.
+- **Priority is editable there.** So is status — for items you wrote yourself. Issues that came from a tracker show the tracker's status, because that's where it's decided.
+- **Escape, or a click outside**, puts you back exactly where you were in the list.
+
+### From item to task
+
+**Start task** turns a backlog item into an agent task and links the two. The row offers **Open task** from then on, so the connection survives — you can always get from the intent to the work and back.
+
+Agents can add to the queue too: the [`create_task` tool](/reference/mcp-tools/#create_task) files work an agent discovered but wasn't asked to do. It lands *Queued* for you to triage rather than auto-running, because discovered work is exactly the work a human should look at first.
+
+---
+
+## The task lifecycle
+
+| Status | What it means |
+| --- | --- |
+| **Queued** | Created; the agent hasn't started. |
+| **Running** | The agent is actively working. |
+| **Waiting** | The agent yielded — the ball is in your court. |
+| **Blocked** | Genuinely stuck; needs a decision or a permission grant. |
+| **Interrupted** | Cut short by a stop; the work is incomplete. |
+| **Done** | Finished or archived. |
+
+The distinction that matters: **Waiting** is an agent choosing to hand back, **Blocked** is an agent that can't proceed, and **Interrupted** is a run that was cut off. Three very different things that most tools show as one ambiguous "stopped."
+
+### Mission Control
+
+Active work across every project lives in four tabs:
+
+| Tab | For |
+| --- | --- |
+| **Live** | What's running right now, with the conversation streaming in full-width rows |
+| **Needs you** | Everything waiting on a human — approvals, questions, review-ready work |
+| **Failed** | What broke, so it doesn't hide among the healthy runs |
+| **Pinned** | The handful you're personally tracking |
+
+Queue actions are inline on the row, and the tab you were last on is remembered. It's a triage screen: the point is answering *what needs me right now* without opening anything.
+
+**Notifications carry the answer.** When something needs approval while Warpforge is in the background, the macOS notification has working **Approve**, **Reject**, and **Review** buttons — you don't have to switch back to the app to unblock an agent. They stay quiet while Warpforge is focused.
+
+---
+
+## Tasks and git
+
+### Isolated worktrees
+
+A task can run in **its own git worktree** while staying attached to the same project. Two agents on two tasks then edit two checkouts — no stashing, no branch juggling, no collisions.
+
+When the work is good, the worktree's branch merges back into its base and the worktree is removed. A task without a worktree just works in the project checkout, which is often what you want for a quick change.
+
+### Review, then commit
+
+Nothing an agent does reaches a commit without passing your review:
+
+<Steps>
+
+1. **Read the diff** — unified or split, hunk by hunk.
+2. **Accept or reject individual hunks**, or edit the file inline. The editor is a real editor, not a diff viewer.
+3. **Commit or amend.** The message is [drafted from the actual diff](/concepts/orchestration/) in Conventional Commits form — you edit or accept it.
+4. **Push** with `--force-with-lease`, and **open a pull request** with a title and body drafted from the branch's outgoing commits.
+
+</Steps>
+
+<Aside type="note">
+  Opening a pull request needs the [GitHub CLI](https://cli.github.com/) (`gh`) installed and authenticated — the same session the tracker uses. Commit and push don't.
+</Aside>
+
+### Work survives the window
+
+Task history and conversations persist locally. Close the app, restart the daemon, come back tomorrow — the conversation is still there, and long-running work keeps running while the window is shut.
+
+## See also
+
+- [Working in a task](/guides/working-in-a-task/) — the day-to-day craft once a task is running
+- [Choosing your mode](/guides/choosing-your-mode/) — how to start the task once you know what it is
+- [Projects and their runtime](/guides/projects-and-runtime/) — the services and ports a task inherits
+- [Agent tools (MCP)](/reference/mcp-tools/) — what an agent can do while the task runs

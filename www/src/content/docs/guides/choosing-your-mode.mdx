@@ -1,0 +1,114 @@
+---
+title: Choosing your mode
+description: When to run one agent, when to put a lead in charge, and when a task deserves a full review pipeline.
+sidebar:
+  order: 2
+  label: Choosing your mode
+---
+
+Warpforge gives you three ways to start work. Picking the right one is most of the difference between an agent that saves you an afternoon and one that burns your quota producing a diff you throw away.
+
+You don't have to guess which is which: the composer **draws what pressing Start will actually do** — a strip of blocks showing the shape of the run. For a workflow that's the selected template's real stages and round limit, not a stock illustration. For an orchestrator it's explicitly an example, staffed from your own enabled harnesses, because the lead decides the split once it has read the prompt.
+
+The short version:
+
+<CardGrid>
+  <Card title="Single session" icon="ph:chat-circle">
+    **Most work.** One agent, one conversation, full runtime and memory access.
+
+    *Default to this.*
+  </Card>
+  <Card title="Orchestrator" icon="ph:tree-structure">
+    **Work that splits.** A lead agent delegates bounded pieces to sub-agents — across different harnesses.
+
+    *When the task has independent parts.*
+  </Card>
+  <Card title="Workflow pipeline" icon="ph:flow-arrow">
+    **Work that must be reviewed.** Fixed `plan → implement → review ⇄ fix` stages, driven by the daemon.
+
+    *When you want an independent reviewer, repeatably.*
+  </Card>
+</CardGrid>
+
+---
+
+## Start with a single session
+
+A regular task is one agent in one conversation. It still gets the [runtime tools](/reference/mcp-tools/#runtime--see-and-drive-the-running-app), [memory](/concepts/memory/), and `create_task` — so "single" is not "limited," it's *undivided*.
+
+**Reach for it when:**
+
+- The work is one coherent change, however large — a feature, a refactor, a bug hunt.
+- You want to steer as it goes. A conversation you're watching beats a pipeline you're waiting on.
+- You don't yet know the shape of the problem. Exploration is a conversation, not a plan.
+
+**This is the right answer far more often than it feels like it should be.** Delegation has real overhead: the lead has to describe the work well enough for an agent with none of its context to do it. For a change one agent could have made directly, that description costs more than it saves.
+
+---
+
+## Use an orchestrator when the work genuinely splits
+
+Enabling **Orchestrator** turns the agent into a lead with [11 extra tools](/reference/mcp-tools/#orchestrator-only--delegation): it can `spawn_agent`, follow up with `message_agent`, and drain results with `read_inbox` — while you keep talking to it.
+
+**Reach for it when at least one is true:**
+
+- **The parts are independent.** Three endpoints, three files, three services — work that won't collide.
+- **Different pieces want different harnesses.** This is the one thing nothing else does: a Claude Code lead can put a Codex sub-agent on one piece and an opencode sub-agent on another, in the same task, and reconcile their results.
+- **The task is bigger than one context window.** The lead spends its context coordinating; each sub-agent gets a fresh one for its own slice.
+
+**Don't reach for it when:**
+
+- The parts touch the same code. Parallel agents editing one file is a merge conflict you asked for.
+- You could have described the whole thing to one agent in a sentence. If the delegation prompt is longer than the change, delegate nothing.
+
+<Aside type="tip" title="Orchestration stays a conversation">
+  Sub-agents show up as normal Warpforge tasks linked to the parent — you can open any of them, see what it changed, and answer its permission prompts. Delegation doesn't mean losing sight of the work.
+</Aside>
+
+---
+
+## Use a workflow pipeline when review is the point
+
+A [pipeline](/concepts/orchestration/#workflow-pipelines) runs fixed stages — `plan? → implement → review ⇄ fix` — and the **daemon** drives the transitions, not a manager model deciding what to do next. Each stage is its own agent session with its own model, and review rounds repeat until approval or a configured limit.
+
+**Reach for it when:**
+
+- **You want a second opinion by construction.** The reviewer is a different session — often a different model — that did not write the code and is told not to edit files.
+- **The work is repeatable.** Pipelines are versioned YAML in `.warpforge/workflows/`, so the process travels with the repo instead of living in one person's habits. Two ship with Warpforge; [writing your own](/reference/workflow-files/) is a file, not a fork.
+- **The change is risky enough to be worth several times the cost.** Which brings us to the tradeoff.
+
+<Aside type="caution" title="A pipeline is expensive">
+  Several sessions, several review rounds, several times the tokens of a single agent. Warpforge tells its own orchestrator this in the `spawn_workflow` tool description: for straightforward tasks, prefer a single sub-agent. Reserve pipelines for changes where an independent review pass genuinely earns its cost.
+</Aside>
+
+**Two things a pipeline will never do:** commit on its own — a finished pipeline lands in **Needs review** with its chats, timeline, and diff intact — or loop forever. When it exhausts its review rounds with findings open, it stops and asks.
+
+---
+
+## Combining them
+
+These aren't exclusive. An orchestrator can `spawn_workflow`, so a lead handling a large feature can send the one risky piece through a full review pipeline while dispatching the routine parts as plain sub-agents.
+
+That's usually the shape of a big task done well: **one lead, mostly single sub-agents, a pipeline where it matters.**
+
+---
+
+## A decision table
+
+| If… | Use |
+| --- | --- |
+| One coherent change | Single session |
+| You want to steer turn by turn | Single session |
+| You're still exploring the problem | Single session |
+| Independent parts that won't collide | Orchestrator |
+| You want different harnesses on different pieces | Orchestrator |
+| Bigger than one context window | Orchestrator |
+| An independent reviewer is the point | Workflow pipeline |
+| The process should repeat across the team | Workflow pipeline |
+| Large feature, one risky piece | Orchestrator + `spawn_workflow` |
+
+## See also
+
+- [Agent tools (MCP)](/reference/mcp-tools/) — exactly which tools each mode gets
+- [Orchestration and workflows](/concepts/orchestration/) — how delegation and pipelines work
+- [Tasks and backlog](/guides/tasks-and-backlog/) — where the work comes from in the first place

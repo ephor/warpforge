@@ -1,0 +1,71 @@
+---
+title: Install
+description: Install the signed Warpforge desktop app on macOS Apple Silicon.
+sidebar:
+  order: 1
+  label: Install
+---
+
+## macOS Apple Silicon
+
+<Tabs syncKey="install">
+<TabItem label="Homebrew">
+
+```bash
+brew install --cask ephor/tap/warpforge
+```
+
+The cask installs the same signed, notarized build as the DMG. Homebrew handles the initial install; the built-in updater takes over from there (the cask declares `auto_updates`, so `brew upgrade` never fights it).
+
+</TabItem>
+<TabItem label="Download">
+
+<Steps>
+
+1. Open the [latest Warpforge release](https://github.com/warpforgehq/warpforge/releases/latest).
+2. Download `Warpforge_<version>_aarch64.dmg`.
+3. Open the DMG and drag **Warpforge** into **Applications**.
+4. Launch it and select the coding agents you want enabled.
+
+</Steps>
+
+</TabItem>
+</Tabs>
+
+The build is signed with a Developer ID certificate and notarized by Apple, so it opens without Gatekeeper workarounds. It needs macOS 11 or newer on an Apple Silicon Mac and ships its own daemon — no Rust toolchain or source checkout required.
+
+**Updates are built in and signed.** When a new version is available a button appears in the top bar naming it — one click downloads, a second restarts to finish, and progress or failure stays on that same button rather than stalling out of sight. Nothing installs in the background. An update carries both the desktop UI and its matching daemon, verifies an exact version and protocol handshake, and is refused with a clear list of blockers while agent tasks or runtime transitions are still active rather than interrupting work.
+
+<Aside type="caution" title="Platform support">
+  macOS on Apple Silicon is the validated desktop target. Windows and Linux packaging exists as an opt-in release preview, but those platforms have not been tested on real machines and are not claimed as publicly supported.
+</Aside>
+
+## Requirements beyond the app itself
+
+The signed app needs no Rust toolchain or source checkout, but two features shell out to CLIs it does not bundle — install them separately if you want those features:
+
+- **Node.js and `npm` on `PATH`.** Powers the one-click install/update for most agents (see the [agent table](/concepts/agents/)) and for editor language servers. Without it, you can still point Warpforge at an agent binary you installed yourself.
+- **[GitHub CLI](https://cli.github.com/) (`gh`), authenticated.** Needed for **Open pull request** in the changes rail, and for the [GitHub backlog](/guides/tasks-and-backlog/) — Warpforge reads issues through the `gh` session you already have rather than asking for a token of its own, and uses it again to fetch attachments on private issues. Commit, push, and the rest of the git workflow go through `git` directly and don't need it.
+
+  ```bash
+  brew install gh
+  gh auth login
+  ```
+
+<Aside type="note">
+  Both are checked at the point of use — you'll get a clear error telling you what's missing and how to fix it, not a broken button.
+</Aside>
+
+## Reuse your existing agent login
+
+Warpforge adds no model account or API-key layer. It looks for supported agent binaries on your `PATH`, speaks the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) to them over stdio, and stores your enabled-agent selection locally. If Claude Code, Codex, or OpenCode is already installed and authenticated, that setup is reused as-is — the CLI keeps owning authentication, model access, and the coding itself.
+
+See [Bring your own agents](/concepts/agents/) for the full list of supported agents and how to add a custom one.
+
+## Next steps
+
+- [Why Warpforge?](/concepts/why-warpforge/) — the coordination problem it solves.
+- [Choosing your mode](/guides/choosing-your-mode/) — single agent, orchestrator, or a review pipeline.
+- [Projects and their runtime](/guides/projects-and-runtime/) — register a project and bring services online.
+- [Cross-harness memory](/concepts/memory/) — one memory your agents share.
+- [Building from source](/getting-started/build-from-source/) — only needed to develop Warpforge itself.

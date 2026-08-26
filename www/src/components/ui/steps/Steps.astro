@@ -1,0 +1,116 @@
+---
+/**
+ * Steps — ordered list with numbered circles and connecting lines.
+ * Wrap a markdown ordered list. Set `start` to offset the counter.
+ */
+import { cn } from "@/lib/cn";
+import type { HTMLAttributes } from "astro/types";
+
+interface Props extends HTMLAttributes<"div"> {
+  start?: number;
+}
+
+const { start, class: className, ...attrs } = Astro.props;
+---
+
+<div
+  data-steps
+  class={cn("steps", className)}
+  style={start !== undefined ? `--steps-start: ${start};` : undefined}
+  {...attrs}
+>
+  <slot />
+</div>
+
+<script>
+  import "./steps.client";
+</script>
+
+<style>
+  .steps {
+    --_start: var(--steps-start, 1);
+    --_size: 1.75rem;
+    --_gap: 0.75rem;
+    margin: 1.5rem 0;
+    counter-reset: step calc(var(--_start) - 1);
+  }
+
+  .steps :global(ol) {
+    counter-reset: step calc(var(--_start) - 1);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  /* Markdown mode (ol > li) AND component mode ([data-step]) share styling.
+
+     Block layout with an absolutely-placed marker, deliberately not a grid.
+     A grid makes every child a grid item — including bare text nodes, which
+     no selector can reach — so a tight markdown list (`1. **Bold** then some
+     prose`, no blank lines between items) put its unwrapped text in the
+     marker's 1.75rem column and rendered it one character per line. Padding
+     reserves the same gutter without the content having to be elements. */
+  .steps :global(ol > li),
+  .steps :global([data-step]) {
+    position: relative;
+    counter-increment: step;
+    min-height: var(--_size);
+    /* Cancel the prose li margin — step rhythm comes from the padding below. */
+    margin: 0;
+    padding: 0 0 1.5rem calc(var(--_size) + var(--_gap));
+  }
+
+  .steps :global(ol > li:last-child),
+  .steps :global([data-step]:last-child) {
+    padding-bottom: 0;
+  }
+
+  /* Number marker — pinned to the top-left gutter. The circle and the first
+     line of text are within a pixel of each other in height, so no vertical
+     nudge is needed. */
+  .steps :global(ol > li)::before,
+  .steps :global([data-step])::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: var(--_size);
+    height: var(--_size);
+    border-radius: 0.5rem;
+    background: var(--nb-accent);
+    color: var(--nb-foreground);
+    border: 1px solid var(--nb-border-strong);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    display: grid;
+    place-items: center;
+    z-index: 1;
+  }
+
+  /* Connecting line — runs from below the circle to the bottom of the step. */
+  .steps :global(ol > li:not(:last-child))::after,
+  .steps :global([data-step]:not(:last-child))::after {
+    content: "";
+    position: absolute;
+    left: calc(var(--_size) / 2 - 0.75px);
+    top: var(--_size);
+    bottom: 0;
+    width: 1.5px;
+    background: var(--nb-border);
+  }
+
+  .steps :global(ol > li > p:first-child > strong:only-child) {
+    color: var(--nb-foreground);
+  }
+
+  /* Vertical rhythm between a step's own blocks, now that no grid gap
+     supplies it. */
+  .steps :global(ol > li > p) {
+    margin: 0;
+  }
+
+  .steps :global(ol > li > * + *),
+  .steps :global([data-step] > * + *) {
+    margin-top: 0.5rem;
+  }
+</style>

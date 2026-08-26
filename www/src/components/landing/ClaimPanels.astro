@@ -1,0 +1,109 @@
+---
+/**
+ * The three claims the page argues, each paired with the surface that backs
+ * it. The fragments are not decoration: they reuse the app's own tokens and
+ * conventions — scope chips from Settings, a service URL in primary with
+ * tabular numerals from ProjectRuntimeSurface, a current-branch row marked
+ * with a check and `bg-accent` from BranchList — so a reader recognises them
+ * when they open the app.
+ */
+import Icon from "@cloudflare/nimbus-docs/components/Icon.astro";
+import "./claim-panels.css";
+---
+
+<section class="claim">
+  <div class="shell claim-in">
+    <div class="copy">
+      <span class="kicker"><i class="idx">01</i>Memory</span>
+      <h2>They stop forgetting what you told the other one.</h2>
+      <p>
+        Claude Code reads <code>CLAUDE.md</code>. Codex reads <code>AGENTS.md</code>. Warpforge gives
+        them one store instead — decisions, gotchas, preferences — shared across every harness, on
+        your disk. A dreaming pass checks it against the code and <em>proposes</em> cleanups; it never
+        rewrites what your agents believe on its own.
+      </p>
+      <a href="/concepts/memory/" class="more">How memory works<Icon name="ph:arrow-right" size={14} /></a>
+    </div>
+
+    <div class="frag" aria-hidden="true">
+      <div class="frag-head">
+        <span>Memory</span>
+        <span class="chips"><i class="chip chip-on">global</i><i class="chip chip-on">project</i></span>
+      </div>
+      <div class="mrow"><i class="kind">decision</i><span>Ports start at 4000 — 3000 and 5173 collide with everything.</span></div>
+      <div class="mrow"><i class="kind">gotcha</i><span>Port-forwards drop on VPN reconnect; the watcher retries with backoff.</span></div>
+      <div class="frag-sep"></div>
+      <div class="mrow mrow-dream">
+        <i class="kind kind-warn">dreaming</i><span>1 proposal — two notes say the same thing</span>
+        <span class="votes"><i class="ok">approve</i><i>reject</i></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="claim">
+  <div class="shell claim-in">
+    <div class="copy">
+      <span class="kicker"><i class="idx">02</i>Runtime</span>
+      <h2>The agent can read the log it just broke.</h2>
+      <p>
+        Services start in dependency order on ports that never collide, and the agent gets them as
+        tools: list what's running, grep a service log, restart it, watch it come back. It fixes its
+        own mistake before the diff reaches you.
+      </p>
+      <a href="/reference/mcp-tools/" class="more">All 31 tools<Icon name="ph:arrow-right" size={14} /></a>
+    </div>
+
+    <div class="frag" aria-hidden="true">
+      <div class="frag-head"><span>Chat</span><span class="count">Warpforge · MCP</span></div>
+      <div class="chat">
+        <div class="bubble">api crashed after migration — what happened?</div>
+        <div class="call"><span>read_service_logs</span><span>api · filter: "ERR" · after: 0 · limit: 5</span></div>
+        <div class="result">
+          <div class="log">12:04:29Z  INFO  POST /api/users 500 12ms</div>
+          <div class="log log-err">12:04:31Z  ERR  connect ECONNREFUSED 127.0.0.1:5432</div>
+          <div class="log">12:04:31Z  WARN  db pool exhausted — 10/10</div>
+          <div class="log" style="color:hsl(var(--muted-foreground)/0.5)">→ 1 match · nextSeq: 47 · filter over full buffer</div>
+        </div>
+        <div class="bubble">DB pool down — restarting…</div>
+        <div class="call"><span>service_restart</span><span>db</span></div>
+        <div class="result">
+          <div class="log">12:04:36Z  INFO database ready to accept connections</div>
+          <div class="log">12:04:36Z  INFO api retry succeeded 200</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="claim">
+  <div class="shell claim-in">
+    <div class="copy">
+      <span class="kicker"><i class="idx">03</i>Review</span>
+      <h2>An IDE's git, not a commit box.</h2>
+      <p>
+        A real branch tree with native context menus. Rebase onto a branch without checking it out.
+        Hunk-level accept and reject, inline edits, amend that prefills. Every operation runs in the
+        task's own worktree — the diff you reviewed is the diff you committed.
+      </p>
+      <a href="/guides/git-in-warpforge/" class="more">Git in Warpforge<Icon name="ph:arrow-right" size={14} /></a>
+    </div>
+
+    <div class="frag" aria-hidden="true">
+      <div class="frag-head"><span>Branches</span></div>
+      <div class="glabel">Local</div>
+      <div class="brow brow-on">
+        <svg class="tick" viewBox="0 0 12 12"><path d="M2 6.4 4.7 9 10 3.2"></path></svg>
+        feat/rate-limit
+      </div>
+      <div class="brow"><span class="tick-sp"></span>main</div>
+      <div class="glabel">Remote</div>
+      <div class="brow"><span class="tick-sp"></span>origin/main</div>
+      <div class="menu">
+        <div class="mitem">Rebase 'feat/rate-limit' onto 'origin/main'</div>
+        <div class="mitem">Merge 'origin/main' into current</div>
+        <div class="mitem">Pull with rebase</div>
+      </div>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,85 @@
+---
+title: Warpforge
+description: Run parallel coding agents without losing the workspace.
+sidebar:
+  order: 0
+  label: Overview
+---
+
+Warpforge is an **agentic development environment (ADE)**: the operating layer around your coding agents. Agent conversations, project runtime, isolated worktrees, live services, configurable multi-agent workflows, a shared memory, and human review live in one place — so running several agents does not turn into managing several terminals.
+
+It does not replace Claude Code, Codex, or OpenCode; those tools still do the coding. Warpforge gives them shared project context, parallel execution, runtime visibility, and a reviewable path from prompt to commit. Everything runs on your machine: there is no separate Warpforge account or API key, and your existing agent authentication stays with the underlying CLI.
+
+## Start here
+
+<CardGrid>
+  <Card title="Install" icon="ph:download-simple">
+    One Homebrew command, or the signed DMG.
+
+    [Install Warpforge →](/getting-started/install/)
+  </Card>
+  <Card title="Choosing your mode" icon="ph:git-fork">
+    One agent, a lead delegating to sub-agents, or a full review pipeline — and when each is worth it.
+
+    [Pick a mode →](/guides/choosing-your-mode/)
+  </Card>
+</CardGrid>
+
+## What makes it different
+
+<CardGrid>
+  <Card title="Cross-harness memory" icon="ph:brain">
+    One memory Claude Code, Codex, and opencode all share — plus a dreaming pass that proposes cleanups instead of silently rewriting what your agents believe.
+
+    [How memory works →](/concepts/memory/)
+  </Card>
+  <Card title="Agents that can drive the app" icon="ph:terminal-window">
+    31 tools: read a service's logs, restart it, file a task, remember a decision, dispatch a sub-agent.
+
+    [Tool reference →](/reference/mcp-tools/)
+  </Card>
+  <Card title="One task, several harnesses" icon="ph:tree-structure">
+    An orchestrator can put a Codex sub-agent and an opencode sub-agent on the same task and reconcile both.
+
+    [Orchestration →](/concepts/orchestration/)
+  </Card>
+  <Card title="Backlog fed by your tracker" icon="ph:list-checks">
+    GitHub via the `gh` session you already have, Linear via a key in your keychain, or purely local items.
+
+    [Tasks and backlog →](/guides/tasks-and-backlog/)
+  </Card>
+  <Card title="Context without copy-paste" icon="ph:cursor-text">
+    Drag a file into the chat, send a diff, or select lines and press ⌘L. Go to definition, hover docs, rename, and generated commits and PRs.
+
+    [Working in a task →](/guides/working-in-a-task/)
+  </Card>
+  <Card title="Git that feels like an IDE" icon="ph:git-branch">
+    A real branch tree, native context menus, rebase-onto without checking out, amend that prefills — and every operation runs in the task's own worktree.
+
+    [Git in Warpforge →](/guides/git-in-warpforge/)
+  </Card>
+</CardGrid>
+
+## Reference
+
+<CardGrid>
+  <Card title="Bring your own agents" icon="ph:robot">
+    Eight supported harnesses, your existing login, no new API key — and several logins per agent when you need personal and work side by side.
+
+    [Agent setup →](/concepts/agents/)
+  </Card>
+  <Card title="Configuration" icon="ph:file-code">
+    The full `.warpforge/workspace.yaml` schema: services, ports, port-forwards, agent templates.
+
+    [Reference →](/reference/configuration/)
+  </Card>
+  <Card title="Settings" icon="ph:sliders-horizontal">
+    Eight themes, font scaling, language servers, trackers, memory and dreaming, and which agent drafts your commit messages.
+
+    [Every setting →](/reference/settings/)
+  </Card>
+</CardGrid>
+
+<Aside type="note">
+  Warpforge is young software, shipped and built in the open. See [Current scope](/reference/architecture/#current-scope) for what's validated today.
+</Aside>

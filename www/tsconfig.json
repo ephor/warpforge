@@ -1,0 +1,18 @@
+{
+  "extends": "astro/tsconfigs/strict",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": ["src/*"],
+      // The landing page's demo renders the desktop app's own components; the
+      // build resolves this in `astro.config.ts`, and this teaches the type
+      // checker the same route. `@app/` only ever points into the app, so the
+      // `@/` the app spells internally still resolves against `src/` here —
+      // the mapping below is what keeps those two meanings apart.
+      "@app/*": ["../desktop/src/*"]
+    }
+  },
+  "include": [".astro/types.d.ts", "**/*"],
+  "exclude": ["dist"]
+}

@@ -1,0 +1,29 @@
+---
+title: CLI reference
+description: The warpforge command-line binary — project registry and the daemon it runs on.
+sidebar:
+  order: 2
+  label: CLI
+---
+
+The Rust binary installed as `wf` (via `install.sh`, from published archives — macOS Apple Silicon only for now) manages the project registry and can run the daemon by hand. It does not install the desktop app.
+
+```bash
+warpforge add <path>        # register a project
+warpforge remove <name>     # unregister it
+warpforge list               # list projects and port ranges
+warpforge init [path]        # create workspace config (--add also registers it)
+warpforge bootstrap [path]   # generate a config interactively with an agent
+warpforge daemon              # run the local daemon explicitly
+```
+
+| Command | Flags | Description |
+| --- | --- | --- |
+| `warpforge add <path>` | `-n, --name <name>` | Register a project directory. |
+| `warpforge remove <name>` | — | Unregister a project. The directory and its config are left untouched. |
+| `warpforge list` | — | List registered projects and their allocated port ranges. |
+| `warpforge init [path]` | `-a, --add` | Generate `.warpforge/workspace.yaml` in the current (or given) directory, auto-detected from `package.json`/Docker Compose where possible. `--add` also registers the project. |
+| `warpforge bootstrap [path]` | — | Register the project if needed, ask the daemon to run a bootstrap task, and let an agent generate a workspace config you can accept, edit, or discard. |
+| `warpforge daemon` | — | Run the local daemon that owns projects, services, agents, and task state behind a WebSocket API. The desktop app bundles and starts this automatically — running it by hand is for development. |
+
+See the [configuration reference](/reference/configuration/) for everything `init` and `bootstrap` can produce.

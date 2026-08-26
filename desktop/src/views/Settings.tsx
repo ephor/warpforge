@@ -316,7 +316,7 @@ export default function SettingsView({ open, onOpenChange }: Props) {
           <Section title="Backlog storage">
             <SettingRow
               title="Storage format"
-              description="Backlog is owned by daemon. YAML lives in .workforge/backlog; SQLite stays in Warpforge data."
+              description="Backlog is owned by daemon. YAML lives in .warpforge/backlog; SQLite stays in Warpforge data."
               control={
                 <select
                   aria-label="Backlog storage format"
