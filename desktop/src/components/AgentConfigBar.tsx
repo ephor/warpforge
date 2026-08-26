@@ -1,5 +1,5 @@
 import { Check, ChevronDown, Loader2, Search, Settings2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { configRole } from "@/lib/configRole";
@@ -45,8 +45,23 @@ export function AgentConfigBar({
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement | null>(null);
   const valueFor = (opt: ConfigOption): string | undefined =>
     picks ? picks[opt.id] : opt.currentValue;
+
+  // Treat the "More" panel like a picker: a press anywhere outside it closes
+  // it (and, since its inline selectors live inside the panel, leaves their
+  // own state to their pointerdown handler). Uses pointerdown so clicks that
+  // don't move focus (textarea, editor) still dismiss it.
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (moreRef.current?.contains(event.target as Node | null)) return;
+      setMoreOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [moreOpen]);
 
   if (loading) {
     return (
@@ -80,7 +95,7 @@ export function AgentConfigBar({
         />
       ))}
       {overflow.length > 0 && (
-        <div className="relative">
+        <div className="relative" ref={moreRef}>
           <button
             type="button"
             aria-label="More agent settings"
@@ -172,6 +187,23 @@ function AgentConfigSelect({
   };
 
   const [searchQuery, setSearchQuery] = useState("");
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  // Close the menu on any outside pointerdown — the browser's focus model
+  // won't reliably move focus when the click lands in a code editor or the
+  // composer textarea, so a blur-only close leaves the menu stuck open. This
+  // fires on every press outside the picker (including the textarea) and
+  // closes it, restoring the "click elsewhere to dismiss" behavior.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (containerRef.current?.contains(event.target as Node | null)) return;
+      onClose();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open, onClose]);
 
   // Clear search query when the dropdown closes.
   useEffect(() => {
@@ -187,16 +219,22 @@ function AgentConfigSelect({
     ? opt.options.filter((o) => o.name.toLowerCase().includes(query))
     : opt.options;
 
+  // Keep focus in the picker's search box on open instead of letting it fall
+  // back to the composer textarea. `autoFocus` fires before the input is
+  // mounted in some flows, so re-focus on the next frame once it is.
+  useEffect(() => {
+    if (!open || !searchable) return;
+    const id = requestAnimationFrame(() => searchRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [open, searchable]);
+
   return (
     // Close on focus leaving the whole picker, not the trigger alone: the search
     // box takes focus away from the trigger the moment the menu opens, and a
     // trigger-level blur would shut the menu the user just opened.
     <div
+      ref={containerRef}
       className="relative"
-      onBlur={(e) => {
-        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-        onClose();
-      }}
     >
       <button
         type="button"
@@ -218,7 +256,7 @@ function AgentConfigSelect({
               <div className="relative mt-1">
                 <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
                 <input
-                  autoFocus
+                  ref={searchRef}
                   type="text"
                   placeholder={`Search ${opt.name.toLowerCase()}…`}
                   value={searchQuery}
