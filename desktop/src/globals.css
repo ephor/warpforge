@@ -109,33 +109,38 @@
   to { height: 0; }
 }
 
-/* Animation utilities for enter/exit states (replaces tailwindcss-animate) */
+/* Animation utilities for enter/exit states (replaces tailwindcss-animate).
+ *
+ * These MUST stay scoped to the floating layer itself. Radix puts
+ * `data-state="open|closed"` on the *trigger* as well as the content (Select,
+ * DropdownMenu, Tooltip, Dialog), so an unscoped `[data-state]` rule fades
+ * every trigger in on open and out on close — reading as a blink on each
+ * click, and on every tooltip hover-out. Match popper content only as a direct
+ * child of its wrapper, so nested open triggers inside a menu are untouched. */
 
-[data-state="open"] {
+[data-radix-popper-content-wrapper] > [data-state="open"],
+[role="dialog"][data-state="open"],
+[data-wf-overlay][data-state="open"] {
   animation: fade-in 150ms linear;
 }
-[data-state="closed"] {
+[data-radix-popper-content-wrapper] > [data-state="closed"],
+[role="dialog"][data-state="closed"],
+[data-wf-overlay][data-state="closed"] {
   animation: fade-out 150ms linear;
 }
 
-/* Dropdown/tooltip specific: zoom + directional slide */
-[data-side="bottom"] {
+/* Dropdown/tooltip specific: directional slide */
+[data-radix-popper-content-wrapper] > [data-side="bottom"] {
   animation: slide-in-from-top-2 150ms ease-out;
 }
-[data-side="left"] {
+[data-radix-popper-content-wrapper] > [data-side="left"] {
   animation: slide-in-from-right-2 150ms ease-out;
 }
-[data-side="right"] {
+[data-radix-popper-content-wrapper] > [data-side="right"] {
   animation: slide-in-from-left-2 150ms ease-out;
 }
-[data-side="top"] {
+[data-radix-popper-content-wrapper] > [data-side="top"] {
   animation: slide-in-from-bottom-2 150ms ease-out;
-}
-
-/* Dialog: overlay + content have different animations */
-.fixed[data-state="open"],
-.fixed[data-state="closed"] {
-  /* Override the general data-state rule for dialog overlays */
 }
 
 /* ============================================================
