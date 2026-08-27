@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.0
+
+### Minor Changes
+
+- [`4d7cf06`](https://github.com/warpforgehq/warpforge/commit/4d7cf0676cc8e7acb3be1a580524c183f1beea1b) Thanks [@ephor](https://github.com/ephor)! - Add Elixir syntax highlighting and IntelliSense in the editor, backed by elixir-ls/Lexical
+
+### Patch Changes
+
+- [`0cb5adb`](https://github.com/warpforgehq/warpforge/commit/0cb5adbb68f93d87c302b9fdf7c33ffcdc1c2832) Thanks [@ephor](https://github.com/ephor)! - Move line number next to filename in Go to Definition popup
+
+- [`dbd03fd`](https://github.com/warpforgehq/warpforge/commit/dbd03fd0574eaa3f934e1d5a840d615889a535ce) Thanks [@ephor](https://github.com/ephor)! - Improve Go to Definition accuracy, ranking, and popup behavior
+
+- [`e85401b`](https://github.com/warpforgehq/warpforge/commit/e85401ba13b45db814196f46f762c5a1ed69e9e4) Thanks [@ephor](https://github.com/ephor)! - Enable IntelliSense when browsing project files, not just task workspaces
+
 ## 0.11.1
 
 ### Patch Changes
