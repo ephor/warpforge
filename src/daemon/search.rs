@@ -21,6 +21,17 @@ const MAX_THREADS: usize = 8;
 /// a megabyte on its own.
 const MAX_LINE_CHARS: usize = 400;
 
+/// Case-sensitive exact-word search for Go-to-Definition. Matches `\bquery\b`
+/// (word boundary = `is_word_char` flip) so `Sidebar` hits `<Sidebar` but not
+/// `SIDEBAR_WIDTH_MAX`. Case-sensitive.
+pub fn search_symbols(repo: &str, query: &str, limit: u32) -> Result<Vec<wire::SymbolMatch>> {
+    let query = query.trim();
+    if query.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+    search_with(repo, query, limit, true, true)
+}
+
 /// Case-insensitive substring search across the project working tree. Stops
 /// once `limit` matches accumulate. Returns path + 1-based line/column + the
 /// matched line.
@@ -36,6 +47,31 @@ pub fn search_files(repo: &str, query: &str, limit: u32) -> Result<Vec<wire::Sym
         return Ok(Vec::new());
     }
 
+    search_with_inner(repo, &needle, limit, false, false)
+}
+
+fn search_with(
+    repo: &str,
+    query: &str,
+    limit: u32,
+    case_sensitive: bool,
+    word: bool,
+) -> Result<Vec<wire::SymbolMatch>> {
+    search_with_inner(repo, query, limit, case_sensitive, word)
+}
+
+fn search_with_inner(
+    repo: &str,
+    needle: &str,
+    limit: u32,
+    case_sensitive: bool,
+    word: bool,
+) -> Result<Vec<wire::SymbolMatch>> {
+    let root = Path::new(repo);
+    let files = candidates(root)?;
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
     let found = AtomicU32::new(0);
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -44,12 +80,11 @@ pub fn search_files(repo: &str, query: &str, limit: u32) -> Result<Vec<wire::Sym
         .min(files.len());
     let chunk = files.len().div_ceil(threads);
     let mut out: Vec<wire::SymbolMatch> = Vec::new();
-
     std::thread::scope(|scope| {
         let handles: Vec<_> = files
             .chunks(chunk)
             .map(|slice| {
-                let needle = needle.as_str();
+                let needle = needle.to_string();
                 let found = &found;
                 scope.spawn(move || {
                     let mut local = Vec::new();
@@ -57,21 +92,35 @@ pub fn search_files(repo: &str, query: &str, limit: u32) -> Result<Vec<wire::Sym
                         if found.load(Ordering::Relaxed) >= limit {
                             break;
                         }
-                        scan_file(root, rel, needle, limit, found, &mut local);
+                        if word || case_sensitive {
+                            scan_file_exact(
+                                root,
+                                rel,
+                                &needle,
+                                limit,
+                                found,
+                                &mut local,
+                                case_sensitive,
+                                word,
+                            );
+                        } else {
+                            scan_file(root, rel, &needle, limit, found, &mut local);
+                        }
                     }
                     local
                 })
             })
             .collect();
-        // Joined in chunk order, so the merged result keeps the candidate order
-        // a single-threaded walk would have produced.
         for handle in handles {
             if let Ok(mut local) = handle.join() {
                 out.append(&mut local);
             }
         }
     });
-
+    // Heuristic ranking: definitions first, usages second, comments last;
+    // filename matching query ranks highest.
+    let needle_lower = needle.to_lowercase();
+    out.sort_by(|a, b| score_match(b, &needle_lower).cmp(&score_match(a, &needle_lower)));
     out.truncate(limit as usize);
     Ok(out)
 }
@@ -199,6 +248,152 @@ fn find_ci(hay: &str, needle: &str) -> Option<usize> {
                 .zip(needle)
                 .all(|(h, n)| h.to_ascii_lowercase() == *n)
     })
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+fn find_exact(hay: &str, needle: &str, word: bool) -> Option<usize> {
+    let mut start = 0;
+    while let Some(pos) = hay[start..].find(needle) {
+        let at = start + pos;
+        if !word {
+            return Some(at);
+        }
+        let before = at == 0
+            || !hay[..at]
+                .chars()
+                .next_back()
+                .map(is_word_char)
+                .unwrap_or(false);
+        let after_at = at + needle.len();
+        let after = after_at >= hay.len()
+            || !hay[after_at..]
+                .chars()
+                .next()
+                .map(is_word_char)
+                .unwrap_or(false);
+        if before && after {
+            return Some(at);
+        }
+        start = at + 1;
+        if start >= hay.len() {
+            break;
+        }
+    }
+    None
+}
+
+fn scan_file_exact(
+    root: &Path,
+    rel: &str,
+    needle: &str,
+    limit: u32,
+    found: &AtomicU32,
+    out: &mut Vec<wire::SymbolMatch>,
+    _case_sensitive: bool,
+    word: bool,
+) {
+    let path = root.join(rel);
+    match std::fs::metadata(&path) {
+        Ok(meta) if meta.is_file() && meta.len() <= MAX_FILE_BYTES => {}
+        _ => return,
+    }
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+    if bytes.iter().take(8000).any(|&b| b == 0) {
+        return;
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    if find_exact(&text, needle, word).is_none() {
+        return;
+    }
+    for (number, line) in (1u32..).zip(text.split('\n')) {
+        if found.load(Ordering::Relaxed) >= limit {
+            return;
+        }
+        let Some(at) = find_exact(line, needle, word) else {
+            continue;
+        };
+        out.push(wire::SymbolMatch {
+            path: rel.to_string(),
+            line: number,
+            column: at as u32 + 1,
+            text: clip(line.trim_end_matches('\r')),
+        });
+        found.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn score_match(m: &wire::SymbolMatch, needle_lower: &str) -> i32 {
+    let mut score: i32 = 0;
+    let path_lower = m.path.to_lowercase();
+    let file_name = path_lower.rsplit('/').next().unwrap_or(&path_lower);
+    // Filename contains query (e.g. Sidebar.tsx for Sidebar)
+    if file_name.contains(needle_lower) {
+        score += 100;
+        // Exact basename without extension match is even stronger
+        let stem = file_name.split('.').next().unwrap_or(file_name);
+        if stem == needle_lower {
+            score += 50;
+        }
+    } else if path_lower.contains(needle_lower) {
+        score += 20;
+    }
+    let trimmed = m.text.trim_start();
+    let is_comment = trimmed.starts_with("//")
+        || trimmed.starts_with('*')
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("<!--");
+    if is_comment {
+        score -= 80;
+    }
+    // Definition indicators
+    let lower_text = m.text.to_lowercase();
+    // Check for definition keywords near needle
+    let needle_in_lower = needle_lower;
+    // Simple heuristic: line contains export/function/class/interface/const/let/type + needle
+    let has_export = lower_text.contains("export");
+    let has_def_kw = lower_text.contains("function")
+        || lower_text.contains("class ")
+        || lower_text.contains("interface ")
+        || lower_text.contains("const ")
+        || lower_text.contains("let ")
+        || lower_text.contains("type ")
+        || lower_text.contains("struct ")
+        || lower_text.contains("enum ");
+    if has_export && lower_text.contains(needle_in_lower) {
+        score += 60;
+    } else if has_def_kw && lower_text.contains(needle_in_lower) {
+        score += 40;
+    }
+    // JSX usage like <Sidebar
+    if m.text.contains(&format!("<{}", needle_lower))
+        || m.text
+            .contains(&format!("<{}", capitalize_first(needle_lower)))
+        || m.text.contains(&format!("<{}", needle_lower.to_string()))
+    {
+        // generic check: contains "<Needle" case-sensitive original is better but we have lower
+        // fallback: check raw text for "<" + needle case-insensitive
+        let raw_lower = m.text.to_lowercase();
+        if raw_lower.contains(&format!("<{}", needle_lower)) {
+            score += 10;
+        }
+    }
+    // Prefer shorter paths / earlier definitions? slight bonus for shallower depth
+    // (already covered by filename boost)
+    score
+}
+
+fn capitalize_first(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+    }
 }
 
 fn clip(line: &str) -> String {

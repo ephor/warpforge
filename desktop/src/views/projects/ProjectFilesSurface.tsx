@@ -38,11 +38,13 @@ export function ProjectFilesSurface({ project, rootPath }: ProjectFilesSurfacePr
     queryKey: ["projectFileContents", project, open.active ?? ""],
   });
 
-  const openFile = useCallback((path: string) => {
+  const [gotoLocation, setGotoLocation] = useState<{ path: string; line: number; column: number } | null>(null);
+  const openFile = useCallback((path: string, location?: { line: number; column: number }) => {
     setOpen(({ tabs }) => ({
       active: path,
       tabs: tabs.includes(path) ? tabs : [...tabs, path],
     }));
+    setGotoLocation(location ? { path, ...location } : null);
   }, []);
 
   // Closing the active tab falls back to the one opened before it, so the
@@ -74,6 +76,19 @@ export function ProjectFilesSurface({ project, rootPath }: ProjectFilesSurfacePr
     [open.active, project],
   );
 
+  const searchSymbol = useCallback(
+    (query: string) =>
+      daemon.request("file.search", { limit: 50, query, task_id: "", project }) as Promise<
+        import("@/protocol").SymbolMatch[]
+      >,
+    [project],
+  );
+
+  const openSymbol = useCallback(
+    (path: string, line: number, column: number) => openFile(path, { line, column }),
+    [openFile],
+  );
+
   return (
     <FilesSurface
       projectFiles={files}
@@ -86,11 +101,15 @@ export function ProjectFilesSurface({ project, rootPath }: ProjectFilesSurfacePr
       fileDoc={docQuery.data ?? null}
       fileDocError={docQuery.error?.message ?? null}
       editable={true}
-      taskId={project}
+      taskId=""
       project={project}
       onSave={handleSave}
       rootPath={rootPath}
       onRefresh={() => void filesQuery.refetch()}
+      onGotoDefinition={searchSymbol}
+      onOpenSymbol={openSymbol}
+      gotoLocation={gotoLocation}
+      onGotoLocationHandled={() => setGotoLocation(null)}
     />
   );
 }

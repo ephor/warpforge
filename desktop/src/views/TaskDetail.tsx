@@ -189,9 +189,10 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
         limit: 50,
         query,
         task_id: task.id,
+        project: task.project,
       }) as Promise<import("../protocol").SymbolMatch[]>;
     },
-    [task.id],
+    [task.id, task.project],
   );
   const openSymbol = useCallback(
     (path: string, line: number, column: number) => openFileTab(path, { line, column }),
@@ -453,7 +454,7 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
                       activeFilePath={activeFilePath}
                       onSelectTreeFile={openFileTab}
                       openTabs={openTabs}
-                      onSelectTab={setActiveFilePath}
+                      onSelectTab={(p) => { setActiveFilePath(p); setGotoLocation((cur) => cur?.path === p ? cur : null); }}
                       onCloseTab={closeFileTab}
                       fileDoc={fileDoc}
                       editable={editable}

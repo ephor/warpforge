@@ -32,6 +32,7 @@ import {
 } from "@/lib/codemirrorLanguages";
 import { cmChromeForMode } from "@/lib/codemirrorTheme";
 import { acquireLspClient, releaseLspClient } from "@/lib/lspClients";
+import { filterByFiletype } from "@/lib/filterSymbolMatches";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
@@ -52,6 +53,7 @@ const LSP_LABELS: Record<string, string> = {
   css: "CSS",
   html: "HTML",
   yaml: "YAML",
+  elixir: "Elixir",
 };
 const isSvgPath = (path: string) => /\.svg$/i.test(path);
 const isBinaryImagePath = (path: string) => /\.(png|jpg|jpeg|gif|webp|ico|bmp)$/i.test(path);
@@ -126,6 +128,7 @@ export function CodeEditor({
   const [gotoActive, setGotoActive] = useState(0);
   const [gotoPending, setGotoPending] = useState(false);
   const [gotoQuery, setGotoQuery] = useState("");
+  const [gotoPos, setGotoPos] = useState<{ x: number; y: number } | null>(null);
   const [selectionMenu, setSelectionMenu] = useState<{
     from: number;
     to: number;
@@ -307,47 +310,127 @@ export function CodeEditor({
     [doc.oldText],
   );
 
-  const runGoto = useCallback((): boolean => {
-    const view = viewRef.current;
-    const save = onGotoRef.current;
-    if (!view) {
-      return false;
-    }
-    if (jumpToDefinition(view)) {
-      setGotoResults([]);
-      setGotoPending(false);
-      setGotoQuery("");
-      return true;
-    }
-    if (!save) {
-      return false;
-    }
-    const head = view.state.selection.main.head;
-    const word = view.state.wordAt(head) ?? (head > 0 ? view.state.wordAt(head - 1) : null);
-    if (!word) {
-      return false;
-    }
-    const query = view.state.sliceDoc(word.from, word.to).trim();
-    if (!query) {
-      return false;
-    }
+  const triggerSymbolSearch = useCallback(
+    (mouseCoords?: { x: number; y: number } | null): boolean => {
+      const view = viewRef.current;
+      const save = onGotoRef.current;
+      if (!view || !save) return false;
+      const head = view.state.selection.main.head;
+      const word = view.state.wordAt(head) ?? (head > 0 ? view.state.wordAt(head - 1) : null);
+      if (!word) return false;
+      const query = view.state.sliceDoc(word.from, word.to).trim();
+      if (!query) return false;
+      const hostRect = host.current?.getBoundingClientRect();
+      // For mouse triggers use event client coords; for keyboard use coordsAtPos
+      let rawX: number | null = null;
+      let rawY: number | null = null;
+      let coordsForFlip: { top: number; bottom: number } | null = null;
+      if (mouseCoords && hostRect) {
+        rawX = mouseCoords.x - hostRect.left;
+        rawY = mouseCoords.y - hostRect.top + 4;
+      } else {
+        const coords = view.coordsAtPos(head);
+        if (coords && hostRect) {
+          rawX = coords.left - hostRect.left;
+          rawY = coords.bottom - hostRect.top + 4;
+          coordsForFlip = coords;
+        }
+      }
+      if (rawX !== null && rawY !== null && hostRect) {
+        const POPUP_W = 384;
+        const POPUP_H = 300;
+        const maxX = hostRect.width - POPUP_W - 8;
+        const hostH = host.current?.clientHeight ?? Infinity;
+        let x = Math.min(rawX, maxX > 8 ? maxX : rawX);
+        let y = rawY;
+        if (x < 8) x = 8;
+        if (y + POPUP_H > hostH - 8) {
+          const flipTop = coordsForFlip
+            ? coordsForFlip.top - hostRect.top - POPUP_H - 4
+            : y - POPUP_H - 20;
+          if (flipTop >= 0) y = flipTop;
+        }
+        setGotoPos({ x, y });
+      } else {
+        setGotoPos({ x: 8, y: 8 });
+      }
     setGotoResults([]);
     setGotoQuery(query);
     setGotoPending(true);
     void save(query)
       .then((results) => {
         setGotoPending(false);
-        if (!results.length) {
-          return;
-        }
-        setGotoResults(results.slice(0, 12));
+        const isWordChar = (c: string) => /[A-Za-z0-9_]/.test(c);
+        const wordHit = (line: string, q: string) => {
+          let idx = line.indexOf(q);
+          while (idx !== -1) {
+            const before = idx === 0 || !isWordChar(line[idx - 1]);
+            const after = idx + q.length >= line.length || !isWordChar(line[idx + q.length]);
+            if (before && after) return true;
+            idx = line.indexOf(q, idx + 1);
+          }
+          return false;
+        };
+        const wordFiltered = results.filter((m) => wordHit(m.text, query));
+        const filtered = filterByFiletype(wordFiltered.length ? wordFiltered : results.filter((m) => m.text.includes(query)), doc.path);
+        if (!filtered.length) return;
+        const qLower = query.toLowerCase();
+        const score = (m: SymbolMatch) => {
+          let s = 0;
+          const pLower = m.path.toLowerCase();
+          const fileName = pLower.split("/").pop() ?? pLower;
+          if (fileName.includes(qLower)) {
+            s += 100;
+            const stem = fileName.split(".")[0];
+            if (stem === qLower) s += 50;
+          } else if (pLower.includes(qLower)) s += 20;
+          const trimmed = m.text.trimStart();
+          if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*") || trimmed.startsWith("#")) s -= 80;
+          const lower = m.text.toLowerCase();
+          if (lower.includes("export") && lower.includes(qLower)) s += 60;
+          else if (/(function|class |interface |const |let |type |struct |enum )/.test(lower) && lower.includes(qLower)) s += 40;
+          if (lower.includes(`<${qLower}`)) s += 10;
+          return s;
+        };
+        filtered.sort((a, b) => score(b) - score(a));
+        setGotoResults(filtered.slice(0, 12));
         setGotoActive(0);
       })
-      .catch(() => {
-        setGotoPending(false);
-      });
+      .catch(() => setGotoPending(false));
     return true;
   }, []);
+
+  const runGoto = useCallback((): boolean => {
+    const view = viewRef.current;
+    if (!view) return false;
+    // Try LSP first (handles same-file definitions).
+    const lspHandled = jumpToDefinition(view);
+    if (!lspHandled) {
+      // No LSP definition — fall back to cross-file symbol search.
+      return triggerSymbolSearch();
+    }
+    // LSP claimed the request (async). It may still resolve to no cross-file
+    // result. Schedule symbol search as fallback if navigation didn't happen.
+    const anchorBefore = view.state.selection.main.head;
+    window.setTimeout(() => {
+      const v = viewRef.current;
+      if (!v) return;
+      // If selection didn't move and no goto popup already showing, offer cross-file results.
+      const anchorNow = v.state.selection.main.head;
+      if (anchorNow === anchorBefore) {
+        triggerSymbolSearch();
+      }
+    }, 450);
+    // Clear any stale popup state; LSP navigation will move cursor.
+    setGotoResults([]);
+    setGotoPending(false);
+    setGotoQuery("");
+    setGotoPos(null);
+    return true;
+  }, [triggerSymbolSearch]);
+
+  // Always-symbol path — Mod+Shift+B bypasses LSP entirely for cross-file nav.
+  const runSymbolGoto = useCallback((): boolean => triggerSymbolSearch(), [triggerSymbolSearch]);
 
   const pickGoto = useCallback(
     (index: number) => {
@@ -358,6 +441,7 @@ export function CodeEditor({
       const open = onOpenSymbolRef.current;
       setGotoResults([]);
       setGotoQuery("");
+      setGotoPos(null);
       open?.(hit.path, hit.line, hit.column);
     },
     [gotoResults],
@@ -444,6 +528,32 @@ export function CodeEditor({
     };
   }, [activeChange]);
 
+  // Dismiss goto popup on outside click / Escape, mirroring activeChange popup
+  const dismissGoto = useCallback(() => {
+    setGotoResults([]);
+    setGotoQuery("");
+    setGotoPos(null);
+    setGotoPending(false);
+  }, []);
+  useEffect(() => {
+    const visible = gotoResults.length > 0 || gotoPending || !!gotoQuery;
+    if (!visible) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("[data-goto-popup]")) return;
+      dismissGoto();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") dismissGoto();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [gotoResults.length, gotoPending, gotoQuery, dismissGoto]);
+
   // Dismiss popup on scroll (otherwise it floats at stale coords)
   useEffect(() => {
     if (!activeChange || !viewRef.current) return;
@@ -497,7 +607,12 @@ export function CodeEditor({
               : []),
             keymap.of([
               { key: "Mod-s", run: flushSave },
-              ...(onGotoDefinition ? [{ key: "Mod-b", run: runGoto, preventDefault: true }] : []),
+              ...(onGotoDefinition
+                ? [
+                    { key: "Mod-b", run: runGoto, preventDefault: true },
+                    { key: "Mod-Shift-b", run: runSymbolGoto, preventDefault: true },
+                  ]
+                : []),
               ...(onAskFile
                 ? [
                     {
@@ -524,7 +639,24 @@ export function CodeEditor({
                         return false;
                       }
                       cv.dispatch({ selection: { anchor: pos } });
-                      runGoto();
+                      const clickCoords = { x: event.clientX, y: event.clientY };
+                      const lspHandled = jumpToDefinition(cv);
+                      if (!lspHandled) {
+                        triggerSymbolSearch(clickCoords);
+                      } else {
+                        const anchorBefore = pos;
+                        window.setTimeout(() => {
+                          const v = viewRef.current;
+                          if (!v) return;
+                          if (v.state.selection.main.head === anchorBefore) {
+                            triggerSymbolSearch(clickCoords);
+                          }
+                        }, 450);
+                        setGotoResults([]);
+                        setGotoPending(false);
+                        setGotoQuery("");
+                        setGotoPos(null);
+                      }
                       return true;
                     },
                   }),
@@ -610,9 +742,15 @@ export function CodeEditor({
       setLspMissing(null);
       return;
     }
+    // Need either a task workspace or a project root for LSP
+    const canLsp = !!taskId || !!project;
+    if (!canLsp) {
+      setLspMissing(null);
+      return;
+    }
     let cancelled = false;
     let detach: (() => void) | null = null;
-    void acquireLspClient(taskId, language).then((acquired) => {
+    void acquireLspClient(taskId, language, project).then((acquired) => {
       if (!acquired) {
         if (!cancelled) setLspMissing(language);
         return;
@@ -781,7 +919,11 @@ export function CodeEditor({
             />
             {(gotoResults.length > 0 || gotoPending || (gotoQuery && !gotoPending)) &&
               !showPreview && (
-                <div className="absolute left-6 top-2 z-20 w-96 overflow-hidden rounded-md border bg-popover shadow-lg">
+                <div
+                  data-goto-popup
+                  className="absolute z-20 w-[640px] max-w-[80vw] overflow-hidden rounded-md border bg-popover shadow-lg"
+                  style={{ left: gotoPos?.x ?? 8, top: gotoPos?.y ?? 8 }}
+                >
                   <div className="border-b px-3 py-1.5 text-xs font-semibold">Go to definition</div>
                   {gotoPending ? (
                     <div className="px-3 py-2 text-xs text-muted-foreground">
@@ -792,29 +934,49 @@ export function CodeEditor({
                       No definition found for {gotoQuery}
                     </div>
                   ) : (
-                    <div className="max-h-64 overflow-y-auto py-1">
-                      {gotoResults.map((hit, index) => (
-                        <button
-                          key={`${hit.path}:${hit.line}`}
-                          type="button"
-                          onMouseEnter={() => setGotoActive(index)}
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            pickGoto(index);
-                          }}
-                          className={cn(
-                            "flex w-full items-baseline gap-2 px-3 py-1 text-left font-mono text-xs",
-                            index === gotoActive
-                              ? "bg-accent text-accent-foreground"
-                              : "text-foreground",
-                          )}
-                        >
-                          <span className="shrink-0 text-muted-foreground">
-                            {hit.path}:{hit.line}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate">{hit.text.trim()}</span>
-                        </button>
-                      ))}
+                    <div className="max-h-80 overflow-y-auto py-1">
+                      {gotoResults.map((hit, index) => {
+                        const slash = hit.path.lastIndexOf("/");
+                        const dir = slash >= 0 ? hit.path.slice(0, slash + 1) : "";
+                        const file = slash >= 0 ? hit.path.slice(slash + 1) : hit.path;
+                        return (
+                          <button
+                            key={`${hit.path}:${hit.line}`}
+                            type="button"
+                            onMouseEnter={() => setGotoActive(index)}
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              pickGoto(index);
+                            }}
+                            className={cn(
+                              "flex w-full flex-col gap-0.5 px-3 py-2 text-left",
+                              index === gotoActive
+                                ? "bg-accent text-accent-foreground"
+                                : "text-foreground",
+                            )}
+                          >
+                            <span className="flex w-full items-baseline gap-1 overflow-hidden text-[11px] leading-4">
+                              <span
+                                className="min-w-0 flex-1 truncate text-muted-foreground"
+                                dir="auto"
+                                style={{ direction: "rtl", textAlign: "left" } as React.CSSProperties}
+                                title={hit.path}
+                              >
+                                <span style={{ direction: "ltr", unicodeBidi: "plaintext" } as React.CSSProperties}>
+                                  {dir}
+                                  <span className="font-semibold text-foreground/80">{file}</span>
+                                </span>
+                              </span>
+                              <span className="shrink-0 tabular-nums text-muted-foreground">
+                                :{hit.line}
+                              </span>
+                            </span>
+                            <span className="w-full truncate font-mono text-xs leading-4">
+                              {hit.text.trim() || <span className="text-muted-foreground">(empty line)</span>}
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
