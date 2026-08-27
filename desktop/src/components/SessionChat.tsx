@@ -67,8 +67,7 @@ const CHAT_FOLLOW_THRESHOLD = 0.2;
  * by the drift times the unmeasured row count — thousands of pixels in a long
  * transcript. Without it the view silently slides into old messages.
  */
-const CHAT_MVCP_FOLLOWING = { data: false, size: true } as const;
-const CHAT_MVCP_PAUSED = { data: true, size: true } as const;
+const CHAT_MVCP = { data: true, size: true } as const;
 const CHAT_LIST_HEADER = <div className="h-4" />;
 const CHAT_LIST_FOOTER = <div className="h-14" />;
 const CHAT_LIST_EMPTY = <p className="px-2 py-4 text-muted-foreground">No session activity yet.</p>;
@@ -377,14 +376,45 @@ export function SessionChat({
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const toggleWorkGroup = useCallback((id: string) => {
-    setExpandedWorkGroups((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  const disclosureAnchorKey = useRef<string | null>(null);
+  const [disclosureSettling, setDisclosureSettling] = useState(false);
+  const disclosureFrames = useRef<number[]>([]);
+  const suspendForDisclosure = useCallback((anchorKey: string) => {
+    disclosureAnchorKey.current = anchorKey;
+    setDisclosureSettling(true);
+    // Cancel any in-flight settle from a prior rapid toggle before starting a
+    // new one; otherwise an old frame's clear wins and the new toggle settles
+    // early, re-enabling end-pin while content is still resizing.
+    disclosureFrames.current.forEach(cancelAnimationFrame);
+    disclosureFrames.current = [
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          disclosureAnchorKey.current = null;
+          setDisclosureSettling(false);
+          disclosureFrames.current = [];
+        });
+      }),
+    ];
   }, []);
+  useEffect(() => {
+    return () => disclosureFrames.current.forEach(cancelAnimationFrame);
+  }, []);
+  const toggleWorkGroup = useCallback(
+    (id: string) => {
+      // Anchor compensation to the toggled row's own id so the trigger stays
+      // under the pointer instead of the viewport chasing the end. The toggle
+      // row's id is `work-toggle:${groupId}` (sessionStream.ts:127), and
+      // `shouldRestorePosition` compares against row.id.
+      suspendForDisclosure(`work-toggle:${id}`);
+      setExpandedWorkGroups((current) => {
+        const next = new Set(current);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    },
+    [suspendForDisclosure],
+  );
   const transcriptRows = useMemo(
     () => deriveTranscriptRows(merged, expandedWorkGroups, thinkingIndex, streamingTextIndex),
     [expandedWorkGroups, merged, streamingTextIndex, thinkingIndex],
@@ -435,12 +465,6 @@ export function SessionChat({
     previousScrollRef.current = node.scrollTop;
   }, []);
 
-  useEffect(() => {
-    if (!active || !following) return;
-    const frame = requestAnimationFrame(pinToLatest);
-    return () => cancelAnimationFrame(frame);
-  }, [active, following, pinToLatest, transcriptRows]);
-
   const onTranscriptScroll = useCallback(() => {
     const state = listRef.current?.getState();
     if (!state) return;
@@ -460,6 +484,16 @@ export function SessionChat({
     setFollowing(true);
     pinToLatest();
   }, [pinToLatest]);
+
+  // On a session switch (task.id change) while the transcript is the active
+  // tab and the user is still following, re-pin to the live edge. Keyed on
+  // `task.id` — not `transcriptRows` — so streaming deltas never re-enter
+  // here to race maintainScrollAtEnd.
+  useEffect(() => {
+    if (!active || !following) return;
+    const frame = requestAnimationFrame(pinToLatest);
+    return () => cancelAnimationFrame(frame);
+  }, [active, following, pinToLatest, task.id]);
   const cancelLiveFollow = useCallback(() => {
     setFollowing(false);
   }, []);
@@ -540,9 +574,22 @@ export function SessionChat({
             drawDistance={CHAT_DRAW_DISTANCE_PX}
             estimatedItemSize={90}
             initialScrollAtEnd
-            maintainScrollAtEnd={following ? CHAT_MAINTAIN_SCROLL_AT_END : false}
+            maintainScrollAtEnd={
+              following && !disclosureSettling ? CHAT_MAINTAIN_SCROLL_AT_END : false
+            }
             maintainScrollAtEndThreshold={CHAT_FOLLOW_THRESHOLD}
-            maintainVisibleContentPosition={following ? CHAT_MVCP_FOLLOWING : CHAT_MVCP_PAUSED}
+            maintainVisibleContentPosition={useMemo(
+              () => ({
+                ...CHAT_MVCP,
+                shouldRestorePosition: (row: TranscriptListRow) =>
+                  disclosureAnchorKey.current === null || row.id === disclosureAnchorKey.current,
+              }),
+              // `disclosureSettling` flips when anchor is set/cleared; the callback
+              // reads `.current` directly so this is the dependency that stabilizes
+              // the MVCP object per the approved plan (useMemo + anchor-gated).
+              // eslint-disable-next-line react-hooks/exhaustive-deps
+              [disclosureSettling],
+            )}
             onScroll={onTranscriptScroll}
             onKeyDown={pauseFollowingOnNavigationKey}
             tabIndex={0}
