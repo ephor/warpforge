@@ -34,7 +34,7 @@ export const daemonQuery =
 
 /** Project file list for a task, shared with the editor tree's query key so
  *  the quick-open palette and FilesSurface stay in the same cache. */
-export function useProjectFileListQuery(taskId: string | null, includeIgnored = true) {
+export function useProjectFileListQuery(taskId: string | null, includeIgnored = false) {
   return useQuery({
     enabled: Boolean(taskId),
     placeholderData: (prev: ProjectFile[] | undefined) => prev,
@@ -48,7 +48,7 @@ export function useProjectFileListQuery(taskId: string | null, includeIgnored = 
 
 /** The same listing for a project with no task attached — the project page's
  *  Files surface reads the registered checkout directly. */
-export function useProjectFilesQuery(project: string | null, includeIgnored = true) {
+export function useProjectFilesQuery(project: string | null, includeIgnored = false) {
   return useQuery({
     enabled: Boolean(project),
     placeholderData: (prev: ProjectFile[] | undefined) => prev,

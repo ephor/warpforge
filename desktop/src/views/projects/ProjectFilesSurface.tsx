@@ -26,7 +26,7 @@ export function ProjectFilesSurface({ project, rootPath }: ProjectFilesSurfacePr
     tabs: [],
     active: null,
   });
-  const filesQuery = useProjectFilesQuery(project);
+  const filesQuery = useProjectFilesQuery(project, false);
   const files = useMemo(
     () => (Array.isArray(filesQuery.data) ? filesQuery.data : []),
     [filesQuery.data],

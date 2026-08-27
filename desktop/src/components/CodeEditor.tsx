@@ -398,7 +398,7 @@ export function CodeEditor({
       })
       .catch(() => setGotoPending(false));
     return true;
-  }, []);
+  }, [doc.path]);
 
   const runGoto = useCallback((): boolean => {
     const view = viewRef.current;
@@ -955,20 +955,14 @@ export function CodeEditor({
                                 : "text-foreground",
                             )}
                           >
-                            <span className="flex w-full items-baseline gap-1 overflow-hidden text-[11px] leading-4">
-                              <span
-                                className="min-w-0 flex-1 truncate text-muted-foreground"
-                                dir="auto"
-                                style={{ direction: "rtl", textAlign: "left" } as React.CSSProperties}
-                                title={hit.path}
-                              >
-                                <span style={{ direction: "ltr", unicodeBidi: "plaintext" } as React.CSSProperties}>
-                                  {dir}
-                                  <span className="font-semibold text-foreground/80">{file}</span>
-                                </span>
-                              </span>
-                              <span className="shrink-0 tabular-nums text-muted-foreground">
-                                :{hit.line}
+                            <span
+                              className="w-full truncate text-[11px] leading-4 text-muted-foreground"
+                              title={`${hit.path}:${hit.line}`}
+                            >
+                              <span style={{ direction: "ltr", unicodeBidi: "plaintext" } as React.CSSProperties}>
+                                {dir}
+                                <span className="font-semibold text-foreground/80">{file}</span>
+                                <span className="tabular-nums">:{hit.line}</span>
                               </span>
                             </span>
                             <span className="w-full truncate font-mono text-xs leading-4">

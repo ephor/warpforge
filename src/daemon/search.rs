@@ -120,7 +120,7 @@ fn search_with_inner(
     // Heuristic ranking: definitions first, usages second, comments last;
     // filename matching query ranks highest.
     let needle_lower = needle.to_lowercase();
-    out.sort_by(|a, b| score_match(b, &needle_lower).cmp(&score_match(a, &needle_lower)));
+    out.sort_by_key(|a| std::cmp::Reverse(score_match(a, &needle_lower)));
     out.truncate(limit as usize);
     Ok(out)
 }
@@ -285,6 +285,7 @@ fn find_exact(hay: &str, needle: &str, word: bool) -> Option<usize> {
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scan_file_exact(
     root: &Path,
     rel: &str,
@@ -374,7 +375,6 @@ fn score_match(m: &wire::SymbolMatch, needle_lower: &str) -> i32 {
     if m.text.contains(&format!("<{}", needle_lower))
         || m.text
             .contains(&format!("<{}", capitalize_first(needle_lower)))
-        || m.text.contains(&format!("<{}", needle_lower.to_string()))
     {
         // generic check: contains "<Needle" case-sensitive original is better but we have lower
         // fallback: check raw text for "<" + needle case-insensitive
