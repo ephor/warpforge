@@ -161,7 +161,7 @@ export function StreamLine({
       return (
         <div
           className={cn(
-            "rounded-md border border-primary/20 bg-primary/10 px-3.5 py-2.5 text-foreground shadow-sm my-2",
+            "rounded-md border border-primary/20 bg-primary/10 px-3.5 py-2.5 text-foreground shadow-sm my-3",
             compact && "text-xs px-2.5 py-1.5",
           )}
         >
