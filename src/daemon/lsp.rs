@@ -31,6 +31,7 @@ fn server_command(language: &str, root: &str) -> Option<(String, Vec<String>)> {
         "css" => Some(command("vscode-css-language-server", &["--stdio"])),
         "html" => Some(command("vscode-html-language-server", &["--stdio"])),
         "yaml" => Some(command("yaml-language-server", &["--stdio"])),
+        "elixir" => Some(elixir_server_command()),
         _ => None,
     }
 }
@@ -93,6 +94,31 @@ fn typescript_major(version: &str) -> Option<u32> {
     version
         .split_whitespace()
         .find_map(|part| part.split('.').next()?.parse().ok())
+}
+
+fn elixir_server_command() -> (String, Vec<String>) {
+    // Prefer elixir-ls (homebrew/core: `brew install elixir-ls` -> binary `elixir-ls`).
+    // lexical has no homebrew/core formula (must build from source), nextls is
+    // deprecated and requires tap `elixir-tools/tap/next-ls`.
+    for (bin, args) in [
+        ("elixir-ls", &[] as &[&str]),
+        ("lexical", &[]),
+        ("nextls", &["--stdio"]),
+    ] {
+        if binary_exists(bin) {
+            return command(bin, args);
+        }
+    }
+    command("elixir-ls", &[])
+}
+
+fn binary_exists(bin: &str) -> bool {
+    std::process::Command::new(bin)
+        .arg("--help")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .is_ok()
 }
 
 struct ServerHandle {

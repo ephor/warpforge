@@ -104,6 +104,15 @@ pub static KNOWN_LSP_SERVERS: &[KnownLspServer] = &[
         homebrew_formula: Some("yaml-language-server"),
         install_hint: "npm install -g yaml-language-server",
     },
+    KnownLspServer {
+        id: "elixir",
+        language: "Elixir",
+        binary: "elixir-ls",
+        alt_binary: Some("lexical"),
+        npm_package: None,
+        homebrew_formula: Some("elixir-ls"),
+        install_hint: "brew install elixir-ls",
+    },
 ];
 
 pub fn known_lsp_server(id: &str) -> Option<&'static KnownLspServer> {
@@ -141,20 +150,20 @@ fn update_command(server: &KnownLspServer, resolved_path: Option<&str>) -> Optio
 }
 
 /// Installed version of a server: its global npm package version, or the
-/// binary's `--version` output as a fallback (covers TS7's `tsc`).
+/// binary's `--version` output as a fallback (covers TS7's `tsc` and
+/// Elixir's `lexical`/`nextls`/`elixir-ls` chain).
 async fn installed_version(server: &KnownLspServer) -> Option<String> {
     if let Some(pkg) = server.npm_package {
         if let Some(v) = agents::npm_global_version(pkg).await {
             return Some(v);
         }
     }
-    if let Some(v) = binary_version(server.binary).await {
-        return Some(v);
+    for bin in elixir_candidates(server).iter().copied() {
+        if let Some(v) = binary_version(bin).await {
+            return Some(v);
+        }
     }
-    match server.alt_binary {
-        Some(bin) => binary_version(bin).await,
-        None => None,
-    }
+    None
 }
 
 async fn binary_version(bin: &str) -> Option<String> {
@@ -206,15 +215,40 @@ async fn latest_npm_version(pkg: &str) -> Option<String> {
     version
 }
 
-/// First reachable binary for a server (primary, then alternative).
-async fn resolve_binary(server: &KnownLspServer) -> Option<String> {
-    match agents::which(server.binary).await {
-        Some(path) => Some(path),
-        None => match server.alt_binary {
-            Some(bin) => agents::which(bin).await,
-            None => None,
-        },
+fn elixir_candidates(server: &KnownLspServer) -> Vec<&'static str> {
+    if server.id == "elixir" {
+        // Keep in sync with `elixir_server_command` in `lsp.rs`: lexical is
+        // primary, nextls and elixir-ls are fallbacks.
+        let mut out = Vec::with_capacity(3);
+        out.push(server.binary);
+        if let Some(alt) = server.alt_binary {
+            out.push(alt);
+        }
+        // `alt_binary` only holds one slot; Elixir needs two fallbacks.
+        for bin in ["nextls", "elixir-ls"] {
+            if bin != server.binary && Some(bin) != server.alt_binary {
+                out.push(bin);
+            }
+        }
+        out
+    } else {
+        let mut out = Vec::with_capacity(2);
+        out.push(server.binary);
+        if let Some(alt) = server.alt_binary {
+            out.push(alt);
+        }
+        out
     }
+}
+
+/// First reachable binary for a server (primary, then alternative(s)).
+async fn resolve_binary(server: &KnownLspServer) -> Option<String> {
+    for bin in elixir_candidates(server) {
+        if let Some(path) = agents::which(bin).await {
+            return Some(path);
+        }
+    }
+    None
 }
 
 async fn detect_one(

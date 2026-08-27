@@ -340,12 +340,62 @@ pub(crate) async fn npm_global_version(pkg: &str) -> Option<String> {
 }
 
 pub(crate) fn first_version_token(text: &str) -> Option<String> {
-    text.split_whitespace()
-        .find(|tok| {
-            let t = tok.trim_start_matches('v');
-            t.split('.').count() >= 2 && t.chars().next().is_some_and(|c| c.is_ascii_digit())
-        })
-        .map(|tok| tok.trim_start_matches('v').to_string())
+    // Scan for first substring matching semver-like \d+\.\d+\.\d+ (with optional
+    // trailing .digits and -/+ prerelease). Handles polluted output where
+    // elixir-ls --version emits LSP framing: `v0.31.1","type":3}}Content-Length:`.
+    let bytes = text.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        // allow optional leading 'v'
+        let start = if bytes[i] == b'v' || bytes[i] == b'V' {
+            if i + 1 < n && bytes[i + 1].is_ascii_digit() {
+                i + 1
+            } else {
+                i += 1;
+                continue;
+            }
+        } else if bytes[i].is_ascii_digit() {
+            i
+        } else {
+            i += 1;
+            continue;
+        };
+        // parse \d+(\.\d+){2,}
+        let mut j = start;
+        let mut dots = 0;
+        while j < n {
+            if bytes[j].is_ascii_digit() {
+                j += 1;
+            } else if bytes[j] == b'.' && j + 1 < n && bytes[j + 1].is_ascii_digit() {
+                dots += 1;
+                j += 1; // consume '.'
+            } else {
+                break;
+            }
+        }
+        if dots >= 2 {
+            // include optional prerelease/build suffix like -rc1 / +build
+            while j < n && (bytes[j] == b'-' || bytes[j] == b'+') {
+                let k = j + 1;
+                let mut end = k;
+                while end < n
+                    && (bytes[end].is_ascii_alphanumeric()
+                        || bytes[end] == b'.'
+                        || bytes[end] == b'-')
+                {
+                    end += 1;
+                }
+                if end == k {
+                    break;
+                }
+                j = end;
+            }
+            return Some(text[start..j].to_string());
+        }
+        i = j.max(i + 1);
+    }
+    None
 }
 
 /// -1 / 0 / 1 comparison of dotted numeric versions, ignoring any pre-release

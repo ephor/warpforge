@@ -22,6 +22,11 @@ export function lspLanguageForPath(path: string): string | null {
     case "pyi":
     case "pyw":
       return "python";
+    case "ex":
+    case "exs":
+    case "heex":
+    case "eex":
+      return "elixir";
     case "json":
       return "json";
     case "yaml":
@@ -114,6 +119,13 @@ export async function codemirrorLanguageForPath(path: string): Promise<Extension
     case "htm": {
       const { html } = await import("@codemirror/lang-html");
       return [html()];
+    }
+    case "ex":
+    case "exs":
+    case "heex":
+    case "eex": {
+      const { elixir } = await import("codemirror-lang-elixir");
+      return [elixir()];
     }
     default:
       return [];
