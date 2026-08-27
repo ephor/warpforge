@@ -1,9 +1,8 @@
 name: Homebrew tap
 
-# Fires when a draft release is published on GitHub and syncs the
-# ephor/homebrew-tap cask to the published version: bumps `version` and the
-# DMG `sha256` (taken from the release SHA256SUMS) straight on the tap's
-# default branch. Manual dispatch re-syncs an already-published tag.
+# Syncs ephor/homebrew-tap cask for desktop app.
+# macOS: DMG, Linux: AppImage via linuxbrew. rpm/deb stay as direct
+# downloads from Releases (dnf/dpkg) — both channels valid.
 on:
   release:
     types: [published]
@@ -23,15 +22,12 @@ concurrency:
 
 jobs:
   cask:
-    name: Sync ephor/homebrew-tap cask
+    name: Sync ephor/homebrew-tap cask (macOS + Linux AppImage)
     runs-on: blacksmith-4vcpu-ubuntu-2204
     timeout-minutes: 10
     env:
       VERSION: ${{ inputs.version || github.event.release.tag_name }}
     steps:
-      # GITHUB_TOKEN cannot push to another repository, so pushes to the tap
-      # are authorized by this fine-grained personal access token (repo
-      # ephor/homebrew-tap, Contents: read/write).
       - name: Require the token that authorizes pushes to the tap
         env:
           TOKEN: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
@@ -45,26 +41,53 @@ jobs:
             --pattern 'SHA256SUMS' --dir .
           cat SHA256SUMS
 
-      - name: Extract the macOS arm64 DMG checksum
+      - name: Extract checksums
         id: sha
         run: |
-          sha="$(awk -v pat="Warpforge_${VERSION#v}_aarch64.dmg" '$2 == pat {print $1}' SHA256SUMS)"
-          test -n "$sha" || { echo "No Warpforge_${VERSION#v}_aarch64.dmg entry in SHA256SUMS" >&2; exit 1; }
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          dmg_sha="$(awk -v pat="Warpforge_${VERSION#v}_aarch64.dmg" '$2 == pat {print $1}' SHA256SUMS)"
+          test -n "$dmg_sha" || { echo "No Warpforge_${VERSION#v}_aarch64.dmg in SHA256SUMS" >&2; exit 1; }
+          appimage_sha="$(awk '$2 ~ /^Warpforge_.*_amd64\.AppImage$/ {print $1}' SHA256SUMS | head -n1)"
+          test -n "$appimage_sha" || { echo "No AppImage in SHA256SUMS (expected Warpforge_*_amd64.AppImage)" >&2; exit 1; }
+          echo "dmg_sha=$dmg_sha" >> "$GITHUB_OUTPUT"
+          echo "appimage_sha=$appimage_sha" >> "$GITHUB_OUTPUT"
 
       - name: Bump the cask and push
         env:
-          SHA: ${{ steps.sha.outputs.sha }}
+          SHA_DMG: ${{ steps.sha.outputs.dmg_sha }}
+          SHA_APPIMAGE: ${{ steps.sha.outputs.appimage_sha }}
           TOKEN: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
         run: |
           git clone -q "https://x-access-token:${TOKEN}@github.com/ephor/homebrew-tap" tap
           cd tap
-          sed -i \
-            -e "s/^  version .*/  version \"${VERSION#v}\"/" \
-            -e "s/^  sha256 .*/  sha256 \"${SHA}\"/" \
-            Casks/warpforge.rb
+          cat > Casks/warpforge.rb <<RUBY
+          cask "warpforge" do
+            version "${VERSION#v}"
+
+            on_macos do
+              sha256 "${SHA_DMG}"
+              url "https://github.com/warpforgehq/warpforge/releases/download/v#{version}/Warpforge_#{version}_aarch64.dmg"
+            end
+            on_linux do
+              sha256 "${SHA_APPIMAGE}"
+              url "https://github.com/warpforgehq/warpforge/releases/download/v#{version}/Warpforge_${version}_amd64.AppImage"
+            end
+
+            name "Warpforge"
+            desc "Workspace orchestrator with embedded agent terminals"
+            homepage "https://github.com/warpforgehq/warpforge"
+
+            livecheck do
+              url :stable
+              strategy :github_latest
+            end
+
+            auto_updates true
+            app "Warpforge.app" if OS.mac?
+            binary "Warpforge_\#{version}_amd64.AppImage", target: "warpforge" if OS.linux?
+          end
+          RUBY
           if git diff --exit-code --quiet; then
-            echo "Cask is already at ${VERSION}"
+            echo "Cask already at ${VERSION}"
             exit 0
           fi
           git config user.name "warpforge-ci"

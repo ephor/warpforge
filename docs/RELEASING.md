@@ -7,9 +7,7 @@ GitHub Release draft with the desktop bundles, updater metadata, signatures, CLI
 archives, and checksums. Neither workflow ever publishes the release: you
 smoke-test the draft and publish it yourself.
 
-macOS Apple Silicon is the primary release target. Windows x64 and Linux x64
-desktop builds are opt-in preview artifacts; a successful CI build does not
-mean those platforms have been validated for public support.
+macOS Apple Silicon and Linux x64 (rpm/deb/AppImage) are the primary release targets and are built on every tag. Windows x64 remains an opt-in preview (`include_windows_x64`).
 
 ## One-time repository setup
 
@@ -136,17 +134,16 @@ not match it.
 ## Build the draft
 
 **Draft release** starts by itself from the tag that **Version release** pushed,
-building only the normal macOS Apple Silicon release. Nothing to do but approve
+building macOS Apple Silicon and Linux x64 (AppImage + deb + rpm + CLI) by default. Nothing to do but approve
 the `release` environment when it asks.
 
 Dispatch it manually when you need something the tag push cannot select: an
-unpublished draft rebuilt after a flaky notarization, or the preview platforms.
-It then takes the `vX.Y.Z` tag as its `version` input, plus two toggles that a
+unpublished draft rebuilt after a flaky notarization, or the Windows preview.
+It then takes the `vX.Y.Z` tag as its `version` input, plus one toggle that a
 tag push always leaves off:
 
 - `include_windows_x64` adds Windows x64 NSIS desktop and CLI artifacts.
-- `include_linux_x64` adds Linux x64 AppImage, Debian package, and CLI
-  artifacts, plus the Linux arm64 CLI archive.
+- `include_linux_x64` is kept for backwards-compat but Linux is now built by default.
 
 The release environment approval gates access to signing credentials. After
 approval, the workflow:

@@ -132,19 +132,13 @@ jobs:
           INCLUDE_WINDOWS: ${{ inputs.include_windows_x64 }}
           INCLUDE_LINUX: ${{ inputs.include_linux_x64 }}
         run: |
-          desktop='{"include":[{"label":"macOS arm64","os":"macos-14","target":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin","macos":true}]}'
-          cli='{"include":[{"os":"macos-14","target":"aarch64-apple-darwin","cross":false}]}'
+          desktop='{"include":[{"label":"macOS arm64","os":"macos-14","target":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin","macos":true},{"label":"Linux x64","os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","args":"--target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage","macos":false}]}'
+          cli='{"include":[{"os":"macos-14","target":"aarch64-apple-darwin","cross":false},{"os":"ubuntu-22.04","target":"aarch64-unknown-linux-gnu","cross":true},{"os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","cross":false}]}'
           if [ "$INCLUDE_WINDOWS" = true ]; then
             desktop="$(jq -c '.include += [{"label":"Windows x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","args":"--target x86_64-pc-windows-msvc --bundles nsis","macos":false}]' <<<"$desktop")"
             cli="$(jq -c '.include += [{"os":"windows-latest","target":"x86_64-pc-windows-msvc","cross":false}]' <<<"$cli")"
           fi
-          if [ "$INCLUDE_LINUX" = true ]; then
-            desktop="$(jq -c '.include += [{"label":"Linux x64","os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","args":"--target x86_64-unknown-linux-gnu --bundles appimage,deb","macos":false}]' <<<"$desktop")"
-            cli="$(jq -c '.include += [
-              {"os":"ubuntu-22.04","target":"aarch64-unknown-linux-gnu","cross":true},
-              {"os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","cross":false}
-            ]' <<<"$cli")"
-          fi
+          # include_linux_x64 kept for backwards-compat with manual dispatch; Linux is now default.
           echo "desktop_matrix=$desktop" >> "$GITHUB_OUTPUT"
           echo "cli_matrix=$cli" >> "$GITHUB_OUTPUT"
 
@@ -470,10 +464,8 @@ jobs:
           if [ "$INCLUDE_WINDOWS" = true ]; then
             test -f release-assets/warpforge-x86_64-pc-windows-msvc.tar.gz
           fi
-          if [ "$INCLUDE_LINUX" = true ]; then
-            test -f release-assets/warpforge-aarch64-unknown-linux-gnu.tar.gz
-            test -f release-assets/warpforge-x86_64-unknown-linux-gnu.tar.gz
-          fi
+          test -f release-assets/warpforge-aarch64-unknown-linux-gnu.tar.gz
+          test -f release-assets/warpforge-x86_64-unknown-linux-gnu.tar.gz
           jq -e --arg version "${RELEASE_TAG#v}" '.version == $version' release-assets/latest.json
           jq -e '
             .platforms
@@ -488,11 +480,7 @@ jobs:
           else
             jq -e '.platforms | keys | all(.[]; startswith("windows-x86_64") | not)' release-assets/latest.json
           fi
-          if [ "$INCLUDE_LINUX" = true ]; then
-            jq -e '.platforms | keys | any(.[]; startswith("linux-x86_64"))' release-assets/latest.json
-          else
-            jq -e '.platforms | keys | all(.[]; startswith("linux-x86_64") | not)' release-assets/latest.json
-          fi
+          jq -e '.platforms | keys | any(.[]; startswith("linux-x86_64"))' release-assets/latest.json
           jq -er '.platforms[].url' release-assets/latest.json | while IFS= read -r url; do
             case "$url" in
               *"/releases/download/$RELEASE_TAG/"*) ;;

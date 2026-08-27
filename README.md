@@ -50,10 +50,33 @@ brew install --cask ephor/tap/warpforge
 
 The build is signed with a Developer ID certificate and notarized by Apple, so it opens without Gatekeeper workarounds. It needs macOS 11 or newer on an Apple Silicon Mac and ships its own daemon — no Rust toolchain or source checkout required.
 
+### Linux (Fedora / Debian / Ubuntu)
+
+Every release ships `rpm`, `deb`, and `AppImage` alongside the macOS DMG.
+
+**Via Homebrew (linuxbrew, AppImage):**
+
+```bash
+brew install --cask ephor/tap/warpforge
+```
+
+**Or natively (rpm / deb):**
+
+```bash
+# Fedora / RHEL / openSUSE
+sudo dnf install ./Warpforge_<version>_amd64.rpm
+# Debian / Ubuntu
+sudo dpkg -i ./Warpforge_<version>_amd64.deb
+# Any distro (AppImage)
+chmod +x ./Warpforge_<version>_amd64.AppImage && ./Warpforge_<version>_amd64.AppImage
+```
+
+Download the assets from the [latest release](https://github.com/warpforgehq/warpforge/releases/latest) — `SHA256SUMS` is published alongside them.
+
 **Updates are built in and signed.** The in-app updater is the primary update channel for both install methods — Homebrew performs the initial install, and Warpforge keeps itself current afterwards (`auto_updates` is declared in the cask, so `brew upgrade` never fights the built-in updater). Warpforge checks the release feed shortly after its daemon comes up, and on demand from the app. Downloading and installing are always explicit actions — nothing installs in the background. An update carries both the desktop UI and its matching daemon, verifies an exact version and protocol handshake, and is refused with a clear list of blockers while agent tasks or runtime transitions are still active rather than interrupting work.
 
 > [!NOTE]
-> macOS on Apple Silicon is the validated desktop target. Windows and Linux packaging exists as an opt-in release preview, but those platforms have not been tested on real machines and are not claimed as publicly supported.
+> macOS Apple Silicon and Linux x64 (Fedora 46+, Debian/Ubuntu via rpm/deb/AppImage) are validated desktop targets. Windows remains an opt-in preview.
 
 Two features shell out to CLIs the app doesn't bundle: **Node.js/`npm`** for one-click agent install/update, and the **[GitHub CLI](https://cli.github.com/)** (`gh`, authenticated via `gh auth login`) for **Open pull request** — commit and push don't need it. See **[Install → Requirements](https://warpforge.app/getting-started/install/#requirements-beyond-the-app-itself)** for details.
 
@@ -130,7 +153,7 @@ warpforge bootstrap [path]  # generate a config interactively with an agent
 
 ## Current scope
 
-Warpforge is young software, shipped and built in the open: macOS Apple Silicon is validated, Windows and Linux remain unvalidated previews, and runtime state is local to one machine. See **[Architecture and current scope](https://warpforge.app/reference/architecture/)** for the full picture.
+Warpforge is young software, shipped and built in the open: macOS Apple Silicon and Linux x64 are validated, Windows remains an unvalidated preview, and runtime state is local to one machine. See **[Architecture and current scope](https://warpforge.app/reference/architecture/)** for the full picture.
 
 Bug reports, design feedback, and focused pull requests are welcome. If you use Warpforge on a real multi-agent workflow, sharing what felt smooth — and what still sent you back to terminal juggling — is especially useful. Release notes live in [CHANGELOG.md](CHANGELOG.md).
 
