@@ -45,7 +45,6 @@ jobs:
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
     outputs:
       desktop_matrix: ${{ steps.matrix.outputs.desktop_matrix }}
-      cli_matrix: ${{ steps.matrix.outputs.cli_matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -133,14 +132,11 @@ jobs:
           INCLUDE_LINUX: ${{ inputs.include_linux_x64 }}
         run: |
           desktop='{"include":[{"label":"macOS arm64","os":"macos-14","target":"aarch64-apple-darwin","args":"--target aarch64-apple-darwin","macos":true},{"label":"Linux x64","os":"ubuntu-22.04","target":"x86_64-unknown-linux-gnu","args":"--target x86_64-unknown-linux-gnu --bundles deb,rpm,appimage","macos":false}]}'
-           cli='{"include":[{"os":"macos-14","target":"aarch64-apple-darwin","cross":false}]}'
           if [ "$INCLUDE_WINDOWS" = true ]; then
             desktop="$(jq -c '.include += [{"label":"Windows x64","os":"windows-latest","target":"x86_64-pc-windows-msvc","args":"--target x86_64-pc-windows-msvc --bundles nsis","macos":false}]' <<<"$desktop")"
-            cli="$(jq -c '.include += [{"os":"windows-latest","target":"x86_64-pc-windows-msvc","cross":false}]' <<<"$cli")"
           fi
           # include_linux_x64 kept for backwards-compat with manual dispatch; Linux is now default.
           echo "desktop_matrix=$desktop" >> "$GITHUB_OUTPUT"
-          echo "cli_matrix=$cli" >> "$GITHUB_OUTPUT"
 
   release-gate:
     name: Approve signed release
@@ -373,48 +369,10 @@ jobs:
         shell: bash
         run: rm -f "$RUNNER_TEMP/AuthKey.p8"
 
-  cli:
-    name: CLI ${{ matrix.target }}
-    needs: [preflight, prepare-release]
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.preflight.outputs.cli_matrix) }}
-    runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.version || github.ref_name }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: cli-release-${{ matrix.target }}
-      - name: Install cross
-        if: matrix.cross
-        run: cargo install cross --version 0.2.5 --locked
-      - name: Build archive
-        shell: bash
-        run: |
-          if [ "${{ matrix.cross }}" = true ]; then
-            cross build --locked --release --target "${{ matrix.target }}"
-          else
-            cargo build --locked --release --target "${{ matrix.target }}"
-          fi
-          binary="target/${{ matrix.target }}/release/warpforge"
-          if [ "${{ runner.os }}" = Windows ]; then binary="${binary}.exe"; fi
-          tar -czf "warpforge-${{ matrix.target }}.tar.gz" -C "$(dirname "$binary")" "$(basename "$binary")"
-          gh release upload "$RELEASE_TAG" "warpforge-${{ matrix.target }}.tar.gz" --clobber
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.version || github.ref_name }}
-
   verify-draft:
     name: Verify draft assets
-    needs: [prepare-release, desktop, cli]
-    if: ${{ always() && needs.prepare-release.result == 'success' && needs.desktop.result == 'success' && needs.cli.result == 'success' }}
+    needs: [prepare-release, desktop]
+    if: ${{ always() && needs.prepare-release.result == 'success' && needs.desktop.result == 'success' }}
     runs-on: blacksmith-4vcpu-ubuntu-2204
     permissions:
       contents: write
@@ -460,10 +418,6 @@ jobs:
           mv release-assets/latest.normalized.json release-assets/latest.json
 
           test -f release-assets/latest.json
-           test -f release-assets/warpforge-aarch64-apple-darwin.tar.gz
-           if [ "$INCLUDE_WINDOWS" = true ]; then
-             test -f release-assets/warpforge-x86_64-pc-windows-msvc.tar.gz
-           fi
           jq -e --arg version "${RELEASE_TAG#v}" '.version == $version' release-assets/latest.json
           jq -e '
             .platforms
