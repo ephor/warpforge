@@ -54,13 +54,8 @@ const CHAT_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: { dataChange: true, itemLayout: true, layout: true },
 } as const;
-/**
- * The follow zone, as a fraction of the viewport. One number for both the
- * `following` flag and the list's own end-pinning threshold: if they differ,
- * the band between them is a window where we believe we are following but the
- * list has stopped pinning, and nothing stabilises the scroll position.
- */
-const CHAT_FOLLOW_THRESHOLD = 0.2;
+const CHAT_FOLLOW_REARM_PX = 40;
+const CHAT_LIST_FOOTER_HEIGHT = 56;
 /**
  * `size` stabilisation stays on in both modes. Unmeasured rows are sized from a
  * running per-type average, so every measurement shifts the total content size
@@ -288,8 +283,16 @@ const TranscriptListItem = memo(
 );
 
 function renderTranscriptItem({ item }: { item: TranscriptListRow }) {
+  const isUser =
+    item.kind === "update" && item.entry.update.kind === "user_message";
   return (
-    <div key={item.id} className="mx-auto w-full min-w-0 overflow-x-clip pb-3">
+    <div
+      key={item.id}
+      className={cn(
+        "min-w-0 overflow-x-clip pb-3",
+        isUser ? "ml-auto max-w-[85%] w-full" : "mx-auto w-full",
+      )}
+    >
       <TranscriptListItem row={item} />
     </div>
   );
@@ -468,16 +471,15 @@ export function SessionChat({
   const onTranscriptScroll = useCallback(() => {
     const state = listRef.current?.getState();
     if (!state) return;
-    const previousScroll = previousScrollRef.current;
+    const prev = previousScrollRef.current;
     previousScrollRef.current = state.scroll;
-    if (state.isWithinMaintainScrollAtEndThreshold) {
+    const distanceFromEnd =
+      state.contentLength - state.scroll - state.scrollLength - CHAT_LIST_FOOTER_HEIGHT;
+    if (state.isAtEnd || distanceFromEnd <= CHAT_FOLLOW_REARM_PX) {
       setFollowing(true);
       return;
     }
-    // Content growing above us does not move `scroll` — it only pushes the end
-    // further away — so a drifting size estimate can no longer detach
-    // following. Only a real upward move does.
-    if (state.scroll < previousScroll - 1) setFollowing(false);
+    if (state.scroll < prev - 1) setFollowing(false);
   }, []);
 
   const resumeLatest = useCallback(() => {
@@ -577,7 +579,7 @@ export function SessionChat({
             maintainScrollAtEnd={
               following && !disclosureSettling ? CHAT_MAINTAIN_SCROLL_AT_END : false
             }
-            maintainScrollAtEndThreshold={CHAT_FOLLOW_THRESHOLD}
+            maintainScrollAtEndThreshold={0.05}
             maintainVisibleContentPosition={useMemo(
               () => ({
                 ...CHAT_MVCP,
