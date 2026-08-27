@@ -501,6 +501,8 @@ pub enum Method {
         /// Cap on the number of matches returned (cheap safety valve).
         #[serde(default = "default_search_limit")]
         limit: u32,
+        #[serde(default)]
+        project: Option<String>,
     },
     /// Stage files and commit them in the task's repo. `files=None` stages all
     /// changes; `amend` rewrites the previous commit.
@@ -739,7 +741,12 @@ pub enum Method {
     /// Reuses an existing server for the same (workspace, language). Returns
     /// [`LspStartResult`]; `available: false` when no server binary is on PATH.
     #[serde(rename = "lsp.start")]
-    LspStart { task_id: String, language: String },
+    LspStart {
+        task_id: String,
+        language: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+    },
     /// Forward an opaque LSP JSON-RPC message to a running server's stdin.
     #[serde(rename = "lsp.send")]
     LspSend {

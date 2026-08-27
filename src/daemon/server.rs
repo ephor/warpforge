@@ -460,12 +460,17 @@ async fn dispatch(
             handle.send(Command::StopRuntime).await;
             Ok(json!(null))
         }
-        LspStart { task_id, language } => {
+        LspStart {
+            task_id,
+            language,
+            project,
+        } => {
             let (tx, rx) = oneshot::channel();
             handle
                 .send(Command::LspStart {
                     task_id,
                     language,
+                    project,
                     reply: tx,
                 })
                 .await;
@@ -848,8 +853,9 @@ async fn dispatch(
             task_id,
             query,
             limit,
+            project,
         } => {
-            let matches = handle.search_files(&task_id, &query, limit).await;
+            let matches = handle.search_files(&task_id, &query, limit, project).await;
             serde_json::to_value(matches).map_err(|e| wire::RpcError {
                 code: wire::ErrorCode::Internal,
                 message: e.to_string(),

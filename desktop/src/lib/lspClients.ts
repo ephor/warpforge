@@ -121,9 +121,9 @@ const pullDiagnosticsExtension: LSPClientExtension = {
   ),
 };
 
-async function startClient(taskId: string, language: string): Promise<Resolved | null> {
+async function startClient(taskId: string, language: string, project?: string): Promise<Resolved | null> {
   const res = (await daemon
-    .request("lsp.start", { language, task_id: taskId })
+    .request("lsp.start", { language, task_id: taskId, ...(project ? { project } : {}) })
     .catch(() => null)) as LspStartResult | null;
   if (!res?.available || !res.serverId) {
     return null;
@@ -176,11 +176,13 @@ async function startClient(taskId: string, language: string): Promise<Resolved |
 export async function acquireLspClient(
   taskId: string,
   language: string,
+  project?: string,
 ): Promise<{ key: string; client: LSPClient; rootPath: string } | null> {
-  const key = `${taskId}:${language}`;
+  const effectiveKey = project && !taskId ? `project:${project}:${language}` : `${taskId}:${language}`;
+  const key = effectiveKey;
   let entry = entries.get(key);
   if (!entry) {
-    entry = { ready: startClient(taskId, language), refs: 0 };
+    entry = { ready: startClient(taskId, language, project), refs: 0 };
     entries.set(key, entry);
   }
   entry.refs += 1;

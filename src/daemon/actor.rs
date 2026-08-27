@@ -924,6 +924,7 @@ pub enum Command {
         task_id: String,
         query: String,
         limit: u32,
+        project: Option<String>,
         reply: oneshot::Sender<Vec<wire::SymbolMatch>>,
     },
     /// Accept (keep) or reject (revert) a single hunk in the working tree.
@@ -1220,6 +1221,7 @@ pub enum Command {
     LspStart {
         task_id: String,
         language: String,
+        project: Option<String>,
         reply: oneshot::Sender<wire::LspStartResult>,
     },
     /// Forward an opaque LSP message to a running server's stdin.
@@ -1856,12 +1858,14 @@ impl DaemonHandle {
         task_id: &str,
         query: &str,
         limit: u32,
+        project: Option<String>,
     ) -> Vec<wire::SymbolMatch> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::SearchFiles {
             task_id: task_id.to_string(),
             query: query.to_string(),
             limit,
+            project,
             reply: tx,
         })
         .await;
@@ -3564,13 +3568,18 @@ impl Daemon {
             Command::LspStart {
                 task_id,
                 language,
+                project,
                 reply,
             } => {
-                let root = self.tasks.get(&task_id).and_then(|task| {
-                    task.worktree
-                        .clone()
-                        .or_else(|| self.project_path(&task.project))
-                });
+                let root = self
+                    .tasks
+                    .get(&task_id)
+                    .and_then(|task| {
+                        task.worktree
+                            .clone()
+                            .or_else(|| self.project_path(&task.project))
+                    })
+                    .or_else(|| project.as_deref().and_then(|p| self.project_path(p)));
                 let result = match root {
                     Some(root) => {
                         let (server_id, available) = self.lsp.start(root.clone(), language);
@@ -4071,12 +4080,14 @@ impl Daemon {
                 task_id,
                 query,
                 limit,
+                project,
                 reply,
             } => {
                 let repo = self
                     .tasks
                     .get(&task_id)
-                    .and_then(|t| self.project_path(&t.project));
+                    .and_then(|t| self.project_path(&t.project))
+                    .or_else(|| project.as_deref().and_then(|name| self.project_path(name)));
                 match repo {
                     // A synchronous walk that reads every file in the project.
                     // Run inline it freezes the whole daemon for the length of
