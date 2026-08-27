@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.11.1
+
+### Patch Changes
+
+- [`b653d60`](https://github.com/warpforgehq/warpforge/commit/b653d60cfe3c74d4244030c6ae937841a80c2458) Thanks [@ephor](https://github.com/ephor)! - Long chats no longer shimmer while an agent streams. The transcript used to
+  slide and fidget as messages grew, especially in sessions with hundreds of
+  rows: unmeasured rows drifted, and expanding or collapsing a group of tool
+  results would yank the viewport off what you were reading.
+
+  The transcript list now keeps its visible position anchored to the conversation
+  edge instead of re-measuring everything on every token. Streaming text settles
+  in place, and folding a work group keeps the toggle under your cursor instead
+  of chasing the latest message. We also ported the upstream LegendList anchoring
+  patch (and bumped `@legendapp/list` to 3.3.5) so the scroll engine can actually
+  hold the end steady while content streams in.
+
+- [`b399131`](https://github.com/warpforgehq/warpforge/commit/b399131728868edf7f6f7f4e1447cbc9a067cba4) Thanks [@ephor](https://github.com/ephor)! - Long chats no longer pin you to the bottom. Following the live edge used to
+  re-engage across a huge window in a long session, so the instant you tried to
+  scroll up it snapped you back down — you had to flick hard to break free. It
+  now only follows when you are genuinely at the last message (a small pixel
+  band), so reading back through a long transcript feels free again.
+
+  Your own messages are also easier to spot. User bubbles are now rounder,
+  pillowed, and right-aligned, so they read as you speaking instead of blending
+  in with the flat tool-activity cards sitting beside them.
+
 ## 0.11.0
 
 ### Minor Changes
