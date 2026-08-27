@@ -54,7 +54,7 @@ const CHAT_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: { dataChange: true, itemLayout: true, layout: true },
 } as const;
-const CHAT_FOLLOW_REARM_PX = 40;
+const CHAT_FOLLOW_REARM_PX = 16;
 const CHAT_LIST_FOOTER_HEIGHT = 56;
 /**
  * `size` stabilisation stays on in both modes. Unmeasured rows are sized from a
@@ -290,7 +290,7 @@ function renderTranscriptItem({ item }: { item: TranscriptListRow }) {
       key={item.id}
       className={cn(
         "min-w-0 overflow-x-clip pb-3",
-        isUser ? "ml-auto max-w-[85%] w-full" : "mx-auto w-full",
+        isUser ? "ml-auto max-w-[90%] w-full" : "mx-auto w-full",
       )}
     >
       <TranscriptListItem row={item} />
