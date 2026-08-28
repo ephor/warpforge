@@ -22,6 +22,7 @@ import { ChatTranscript } from "../components/ChatTranscript";
 import type { ComposerHandle } from "../components/Composer";
 import { TerminalWorkspaceView } from "../components/runtime/TerminalWorkspace";
 import { RuntimePanel } from "../components/RuntimePanel";
+import { SessionLostBanner } from "../components/SessionLostBanner";
 import { TaskAgentSwitcher } from "../components/TaskAgentSwitcher";
 import { daemon } from "../daemon";
 import { mentionToken } from "../lib/composerMentions";
@@ -411,6 +412,7 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
                     onClick={() => setShowDiff(!showDiff)}
                   />
                 </div>
+                <SessionLostBanner task={task} onOpenTask={onOpenTask} />
                 <TaskConversation
                   active={showChat}
                   agents={enabledAgents}

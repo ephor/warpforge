@@ -214,6 +214,12 @@ export interface TaskInfo {
   updatedAt: number;
   filesChanged: number;
   blockedReason: string | null;
+  /**
+   * Why the task is blocked, when the daemon could classify it. `session_lost`
+   * means the agent no longer has the saved session and never will — the stored
+   * conversation is intact, so the work continues in a fresh session.
+   */
+  blockedKind?: "session_lost" | null;
   /** Session selectors (model/mode/…) reported by the live ACP session. */
   configOptions?: ConfigOption[];
   /** Path to the git worktree for this task, if isolated. */

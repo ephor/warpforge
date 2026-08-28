@@ -84,6 +84,13 @@ export interface SettingsState {
   newTaskWorktree: boolean;
   setNewTaskWorktree: (v: boolean) => void;
   /**
+   * Whether continuing a conversation in a new task puts it in an isolated git
+   * worktree. On by default — a fork usually explores an alternative — but
+   * persisted so continuing in the current checkout stays a one-time choice.
+   */
+  branchWorktree: boolean;
+  setBranchWorktree: (v: boolean) => void;
+  /**
    * Whether the New Work Item dialog opens expanded (tall prompt) or compact.
    * Persisted so the choice survives across creates instead of resetting.
    */
@@ -212,6 +219,7 @@ export const useUi = create<UiState>()(
       textGenModel: null,
       autoNameTasks: true,
       newTaskWorktree: false,
+      branchWorktree: true,
       newWorkItemExpanded: false,
       theoMod: false,
       lspEnabled: true,
@@ -325,6 +333,7 @@ export const useUi = create<UiState>()(
       setTextGenModel: (textGenModel) => set({ textGenModel }),
       setAutoNameTasks: (autoNameTasks) => set({ autoNameTasks }),
       setNewTaskWorktree: (newTaskWorktree) => set({ newTaskWorktree }),
+      setBranchWorktree: (branchWorktree) => set({ branchWorktree }),
       setNewWorkItemExpanded: (newWorkItemExpanded) => set({ newWorkItemExpanded }),
       setTheoMod: (theoMod) => set({ theoMod }),
       toggleLsp: () => set((s) => ({ lspEnabled: !s.lspEnabled })),

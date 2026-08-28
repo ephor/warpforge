@@ -12,10 +12,10 @@ import {
   type MouseEvent,
 } from "react";
 
+import { ContinueSessionDialog } from "@/components/ContinueSessionDialog";
 import type { FileLinkResolver } from "@/components/Markdown";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { buildConversationBranchPrompt } from "@/lib/conversationBranch";
 import type { SessionActivity } from "@/lib/sessionActivity";
 import { resolvedPermissions } from "@/lib/sessionPermissions";
 import {
@@ -40,7 +40,6 @@ import type {
   SessionUpdate,
   TaskInfo,
 } from "../protocol";
-import { useUi } from "../store/ui";
 import { StreamLine } from "../views/mission-control/StreamLine";
 import { AgentActivityIndicator } from "./AgentActivityIndicator";
 import { AgentConfigBar } from "./AgentConfigBar";
@@ -69,15 +68,14 @@ const CHAT_LIST_EMPTY = <p className="px-2 py-4 text-muted-foreground">No sessio
 
 interface TranscriptRowContextValue {
   agents: AgentConfig[];
-  getBranchPrompt: (throughIndex: number) => string;
   onOpenFile: (path: string) => void;
   onOpenFileDiff: (path: string, hunks?: EditHunk[]) => void;
   onOpenTask: (id: string) => void;
+  onRequestBranch: (agent: string, throughIndex: number) => void;
   onToggleWorkGroup: (id: string) => void;
   project: string;
   resolveFilePath: FileLinkResolver;
   resolved: Record<string, string>;
-  sourceTaskId: string;
   taskId: string;
 }
 
@@ -116,10 +114,9 @@ const TranscriptRow = memo(function TranscriptRow({
   onOpenFileDiff,
   agents,
   branchIndex,
-  getBranchPrompt,
   onOpenTask,
+  onRequestBranch,
   project,
-  sourceTaskId,
 }: {
   update: SessionUpdate;
   thinkingActive: boolean;
@@ -131,49 +128,12 @@ const TranscriptRow = memo(function TranscriptRow({
   onOpenFileDiff: (path: string, hunks?: EditHunk[]) => void;
   agents: AgentConfig[];
   branchIndex: number;
-  getBranchPrompt: (throughIndex: number) => string;
   onOpenTask: (id: string) => void;
+  onRequestBranch: (agent: string, throughIndex: number) => void;
   project: string;
-  sourceTaskId: string;
 }) {
   const continueConversation = async (agent: string) => {
-    const branchPrompt = getBranchPrompt(branchIndex);
-    if (!branchPrompt) return;
-    const result = await daemon.request("task.create", {
-      agent,
-      attachments: [],
-      config_overrides: {},
-      include_runtime_context: true,
-      project,
-      prompt: branchPrompt,
-      tags: ["conversation-branch", `branched-from:${sourceTaskId}`],
-      worktree: true,
-    });
-    const createdTaskId = (result as { taskId?: string })?.taskId;
-    if (!createdTaskId) throw new Error("Warpforge did not return the new task id");
-    const {
-      autoNameTasks: autoName,
-      textGenAgentId: genAgent,
-      textGenModel: genModel,
-    } = useUi.getState();
-    if (autoName && genAgent) {
-      void (async () => {
-        try {
-          const generated = await daemon.generateText(
-            createdTaskId,
-            genAgent,
-            "task_title",
-            genModel ?? undefined,
-          );
-          if (generated?.trim()) {
-            await daemon.setTaskTitle(createdTaskId, generated.trim().slice(0, 80));
-          }
-        } catch {
-          // Silent.
-        }
-      })();
-    }
-    onOpenTask(createdTaskId);
+    onRequestBranch(agent, branchIndex);
   };
   const messageText =
     update.kind === "user_message" || update.kind === "agent_text" ? update.text : null;
@@ -242,10 +202,9 @@ const TranscriptListItem = memo(
         onOpenFileDiff={shared.onOpenFileDiff}
         agents={shared.agents}
         branchIndex={entry.mergedIndex}
-        getBranchPrompt={shared.getBranchPrompt}
         onOpenTask={shared.onOpenTask}
+        onRequestBranch={shared.onRequestBranch}
         project={shared.project}
-        sourceTaskId={shared.sourceTaskId}
       />
     );
 
@@ -368,13 +327,14 @@ export function SessionChat({
     return null;
   }, [merged, task.status]);
   const resolved = useStableResolved(updates);
-  const branchSourceRef = useRef({ merged, task });
-  useEffect(() => {
-    branchSourceRef.current = { merged, task };
-  }, [merged, task]);
-  const getBranchPrompt = useCallback((throughIndex: number) => {
-    const source = branchSourceRef.current;
-    return buildConversationBranchPrompt(source.task, source.merged, throughIndex);
+  // Which message the developer asked to continue from, and with what. The
+  // dialog it opens decides how much of the conversation travels.
+  const [branchRequest, setBranchRequest] = useState<{
+    agent: string;
+    throughIndex: number;
+  } | null>(null);
+  const requestBranch = useCallback((agent: string, throughIndex: number) => {
+    setBranchRequest({ agent, throughIndex });
   }, []);
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -425,20 +385,19 @@ export function SessionChat({
   const rowContext = useMemo<TranscriptRowContextValue>(
     () => ({
       agents,
-      getBranchPrompt,
       onOpenFile,
       onOpenFileDiff,
       onOpenTask,
+      onRequestBranch: requestBranch,
       onToggleWorkGroup: toggleWorkGroup,
       project: task.project,
       resolveFilePath,
       resolved,
-      sourceTaskId: task.id,
       taskId: task.id,
     }),
     [
       agents,
-      getBranchPrompt,
+      requestBranch,
       onOpenFile,
       onOpenFileDiff,
       onOpenTask,
@@ -563,6 +522,19 @@ export function SessionChat({
 
   return (
     <>
+      {branchRequest && (
+        <ContinueSessionDialog
+          open
+          onOpenChange={(next) => {
+            if (!next) setBranchRequest(null);
+          }}
+          task={task}
+          updates={merged}
+          throughIndex={branchRequest.throughIndex}
+          targetAgent={branchRequest.agent}
+          onOpenTask={onOpenTask}
+        />
+      )}
       <div className="relative min-h-0 flex-1">
         <TranscriptRowContext.Provider value={rowContext}>
           <LegendList<TranscriptListRow>

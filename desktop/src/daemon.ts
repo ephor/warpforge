@@ -1019,11 +1019,14 @@ export class DaemonClient {
   async generateText(
     taskId: string,
     agentId: string,
-    kind: "commit_message" | "pr_description" | "task_title",
+    kind: "commit_message" | "pr_description" | "task_title" | "handoff",
     model?: string,
+    options?: { accountId?: string; input?: string },
   ): Promise<string> {
     const result = (await this.request("text.generate", {
+      account_id: options?.accountId,
       agent_id: agentId,
+      input: options?.input,
       kind,
       model,
       task_id: taskId,

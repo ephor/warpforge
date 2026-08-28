@@ -4,6 +4,25 @@ import { describe, expect, it, vi } from "vitest";
 
 import { MessageActions } from "./MessageActions";
 
+const AGENTS = [
+  {
+    acpCommand: "codex-acp",
+    displayName: "Codex",
+    enabled: true,
+    id: "codex",
+    models: [],
+    lastModel: undefined,
+  },
+  {
+    acpCommand: "claude-acp",
+    displayName: "Claude",
+    enabled: true,
+    id: "claude",
+    models: [],
+    lastModel: undefined,
+  },
+];
+
 describe("MessageActions", () => {
   it("copies the exact message text", async () => {
     const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
@@ -27,30 +46,7 @@ describe("MessageActions", () => {
   it("lists every enabled harness supplied by the transcript", async () => {
     const user = userEvent.setup();
     const onContinue = vi.fn<(agent: string) => Promise<void>>().mockResolvedValue(undefined);
-    render(
-      <MessageActions
-        agents={[
-          {
-            acpCommand: "codex-acp",
-            displayName: "Codex",
-            enabled: true,
-            id: "codex",
-            models: [],
-            lastModel: undefined,
-          },
-          {
-            acpCommand: "claude-acp",
-            displayName: "Claude",
-            enabled: true,
-            id: "claude",
-            models: [],
-            lastModel: undefined,
-          },
-        ]}
-        text="Branch here"
-        onContinue={onContinue}
-      />,
-    );
+    render(<MessageActions agents={AGENTS} text="Branch here" onContinue={onContinue} />);
 
     await user.click(screen.getByRole("button", { name: "Continue with another agent" }));
 
@@ -59,4 +55,5 @@ describe("MessageActions", () => {
     await user.click(screen.getByText("Codex"));
     expect(onContinue).toHaveBeenCalledWith("codex");
   });
+
 });
