@@ -1141,6 +1141,16 @@ pub enum Command {
         value: String,
         reply: oneshot::Sender<Result<(), String>>,
     },
+    /// The verdict of a `SessionSetConfigOption` round-trip, routed back so
+    /// the actor (which owns task state) can record it: an accepted model
+    /// selector change is the task's model intent; a rejected one is a
+    /// durable `ModelMismatch`.
+    SessionConfigOptionResult {
+        task_id: String,
+        config_id: String,
+        value: String,
+        result: Result<(), String>,
+    },
     /// Detect installed ACP-capable agents (runs which/where, returns list).
     DetectAgents {
         reply: oneshot::Sender<Vec<wire::DetectedAgent>>,
@@ -1182,10 +1192,12 @@ pub enum Command {
         reply: Option<oneshot::Sender<Result<(), String>>>,
     },
     /// A probe finished — persist the discovered models and re-emit agents.
+    /// Deliberately does not carry `last_model`: writing the pre-probe value
+    /// back would revert an explicit pick made while the probe (up to ~15s)
+    /// was in flight.
     AgentProbed {
         id: String,
         models: Vec<wire::ConfigOption>,
-        last_model: Option<String>,
     },
     /// Start an orchestration plan (planner→worker→reviewer pipeline).
     StartOrchestration {
@@ -2698,6 +2710,9 @@ struct PendingResume {
     text: String,
     session_id: String,
     attachments: Vec<wire::PromptAttachment>,
+    /// The task's model intent, re-applied to the loaded session. `None`
+    /// keeps the resumed session's own model state, as before.
+    default_model: Option<String>,
 }
 
 /// De-duplicates the ACP updates an agent replays on `session/load` against the
@@ -3795,6 +3810,10 @@ impl Daemon {
                 let mut task = Task::new(&project, &prompt, &agent, tags);
                 task.parent_task_id = parent_task_id;
                 task.backlog_item_id = backlog_item_id;
+                // Durable model intent: only an explicit pick counts. The
+                // last_model fallback below is a default, not something the
+                // user asked this task to run on, so it must not land here.
+                task.model = default_model.clone();
                 // Resolve the model the session should start with: an explicit
                 // UI pick wins; otherwise fall back to the user's last choice
                 // for this agent (so orchestrator-spawned sub-agents inherit it
@@ -3938,7 +3957,7 @@ impl Daemon {
                         false,
                         Some(pending.session_id),
                         pending.attachments,
-                        None,
+                        pending.default_model,
                         std::collections::HashMap::new(),
                     );
                 }
@@ -5602,6 +5621,10 @@ impl Daemon {
                 };
                 let task = Task::new(&project, &prompt, &agent, vec!["resumed".into()]);
                 let id = task.id.clone();
+                // A freshly resumed external session carries no model intent
+                // yet; threaded so the resume path reads the task, not a
+                // hardcoded None.
+                let default_model = task.model.clone();
                 self.tasks.insert(id.clone(), task.clone());
                 self.persist(&task);
                 self.emit(Event::TaskCreated(task));
@@ -5615,7 +5638,7 @@ impl Daemon {
                     false,
                     Some(session_id),
                     vec![],
-                    None,
+                    default_model,
                     std::collections::HashMap::new(),
                 );
             }
@@ -5675,11 +5698,16 @@ impl Daemon {
                         self.sessions.remove(&task_id);
                         let resume = self.tasks.get(&task_id).and_then(|task| {
                             task.session_id.as_ref().map(|session_id| {
-                                (task.project.clone(), task.agent.clone(), session_id.clone())
+                                (
+                                    task.project.clone(),
+                                    task.agent.clone(),
+                                    session_id.clone(),
+                                    task.model.clone(),
+                                )
                             })
                         });
 
-                        if let Some((project, agent, session_id)) = resume {
+                        if let Some((project, agent, session_id, default_model)) = resume {
                             self.mark_task_running(&task_id);
                             self.emit_session(
                                 &task_id,
@@ -5702,6 +5730,7 @@ impl Daemon {
                                     text: text.clone(),
                                     session_id,
                                     attachments,
+                                    default_model,
                                 },
                             );
                             self.request_resume_replay_guard(&task_id);
@@ -5736,12 +5765,25 @@ impl Daemon {
                 value,
                 reply,
             } => {
+                let cmd_tx = self.cmd_tx.clone();
                 match self.sessions.get(&task_id).cloned() {
                     Some(handle) => {
                         // The agent round-trip can take seconds; don't hold the
-                        // actor loop hostage waiting for it.
+                        // actor loop hostage waiting for it. The verdict is
+                        // routed back as a command so the actor can record it.
                         tokio::spawn(async move {
-                            let _ = reply.send(handle.set_config_option(config_id, value).await);
+                            let result = handle
+                                .set_config_option(config_id.clone(), value.clone())
+                                .await;
+                            let _ = reply.send(result.clone());
+                            let _ = cmd_tx
+                                .send(Command::SessionConfigOptionResult {
+                                    task_id,
+                                    config_id,
+                                    value,
+                                    result,
+                                })
+                                .await;
                         });
                     }
                     None => {
@@ -5749,6 +5791,50 @@ impl Daemon {
                             "this task has no running agent session to configure".into(),
                         ));
                     }
+                }
+            }
+            Command::SessionConfigOptionResult {
+                task_id,
+                config_id,
+                value,
+                result,
+            } => {
+                let is_model = self.tasks.get(&task_id).is_some_and(|task| {
+                    task.config_options
+                        .iter()
+                        .find(|o| o.id == config_id)
+                        .is_some_and(super::acp::is_model_selector)
+                });
+                let Some(task) = self.tasks.get_mut(&task_id) else {
+                    return;
+                };
+                match (&result, is_model) {
+                    (Ok(()), true) => {
+                        // The agent accepted the switch to the model selector:
+                        // that is the task's durable model intent, and any
+                        // earlier mismatch no longer describes reality.
+                        if task.model.as_deref() != Some(value.as_str()) {
+                            task.model = Some(value);
+                        }
+                        task.blocked_reason = None;
+                        task.blocked_kind = None;
+                        let updated = task.clone();
+                        self.persist(&updated);
+                        self.emit(Event::TaskUpdated(updated));
+                    }
+                    (Err(error), true) => {
+                        // The user asked for a model and the agent said no (or
+                        // never answered). Record it durably — the session
+                        // keeps running on the old model, and the user must be
+                        // able to see that later, not just in the toast.
+                        task.blocked_reason =
+                            Some(format!("Model '{value}' was not applied: {error}"));
+                        task.blocked_kind = Some(wire::TaskBlockedKind::ModelMismatch);
+                        let updated = task.clone();
+                        self.persist(&updated);
+                        self.emit(Event::TaskUpdated(updated));
+                    }
+                    _ => {}
                 }
             }
             Command::DetectAgents { reply } => {
@@ -5831,18 +5917,31 @@ impl Daemon {
                 };
                 let acp_command = agent.acp_command.clone();
                 let agent_id = agent.id.clone();
-                let last_model = agent.last_model.clone();
                 let cmd_tx = self.cmd_tx.clone();
-                let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                // Probe mirrors real session cwd/env. Cache is global per agent, so first project is representative.
+                let cwd = self
+                    .projects
+                    .first()
+                    .map(|p| std::path::PathBuf::from(&p.path))
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                    });
+                let agent_env =
+                    self.resolve_agent_env(&agent_id, super::accounts::SpawnAccount::Active);
                 tokio::spawn(async move {
-                    let res = super::agent_probe::probe_models(&acp_command, &cwd).await;
+                    let res = super::agent_probe::probe_models(
+                        &acp_command,
+                        &cwd,
+                        &agent_env.set,
+                        &agent_env.remove,
+                    )
+                    .await;
                     let outcome = match res {
                         Ok(models) => {
                             let _ = cmd_tx
                                 .send(Command::AgentProbed {
                                     id: agent_id,
                                     models,
-                                    last_model,
                                 })
                                 .await;
                             Ok(())
@@ -5857,11 +5956,7 @@ impl Daemon {
                     }
                 });
             }
-            Command::AgentProbed {
-                id,
-                models,
-                last_model,
-            } => {
+            Command::AgentProbed { id, models } => {
                 // A probe that came back with nothing means the agent answered
                 // without advertising selectors — treat it as "no news" rather
                 // than truth, or one flaky probe would wipe a working list and
@@ -5871,11 +5966,12 @@ impl Daemon {
                 }
                 if let Some(agent) = self.configured_agents.iter_mut().find(|a| a.id == id) {
                     agent.models = models.clone();
-                    agent.last_model = last_model.clone();
+                    // last_model is deliberately untouched: it may have been
+                    // picked explicitly while the probe was in flight.
                     self.persist.write(PersistWrite::AgentModels {
                         id: id.clone(),
                         models: models.clone(),
-                        last_model: last_model.clone(),
+                        last_model: agent.last_model.clone(),
                     });
                 }
                 self.emit(Event::AgentsUpdated {
@@ -6968,6 +7064,19 @@ impl Daemon {
             ),
             AcpUpdate::ConfigOptions { options } => {
                 if let Some(task) = self.tasks.get_mut(&task_id) {
+                    // A stale mismatch that the live session has since
+                    // resolved (e.g. the agent applied the model late) must
+                    // not linger.
+                    let model_now_matches = task.model.as_ref().is_some_and(|intent| {
+                        options
+                            .iter()
+                            .find(|o| super::acp::is_model_selector(o))
+                            .is_some_and(|o| &o.current_value == intent)
+                    });
+                    if model_now_matches {
+                        task.blocked_reason = None;
+                        task.blocked_kind = None;
+                    }
                     task.config_options = options;
                     let updated = task.clone();
                     self.persist(&updated);
@@ -7081,6 +7190,18 @@ impl Daemon {
                 // change saves for disk it never needed to touch.
                 if self.turn_output_has_consumer(&task_id, workflow_child) {
                     self.request_task_output(&task_id, success, workflow_child);
+                }
+            }
+            AcpUpdate::ModelMismatch { message } => {
+                // Non-fatal: the session keeps running, so no handle removal
+                // and no status change — but the user must be able to see
+                // later that the task is not on the model they asked for.
+                if let Some(task) = self.tasks.get_mut(&task_id) {
+                    task.blocked_reason = Some(message);
+                    task.blocked_kind = Some(wire::TaskBlockedKind::ModelMismatch);
+                    let updated = task.clone();
+                    self.persist(&updated);
+                    self.emit(Event::TaskUpdated(updated));
                 }
             }
             AcpUpdate::Error {
@@ -7741,6 +7862,8 @@ impl Daemon {
         tags.push(format!("workflow:{workflow_id}"));
         let mut task = Task::new(&project, &prompt, &agent, tags);
         task.parent_task_id = parent_task_id;
+        // An explicit lead model from the dialog is the task's model intent.
+        task.model = default_model.clone();
         if use_worktree {
             let wt_mgr = self
                 .worktrees
@@ -8071,6 +8194,8 @@ impl Daemon {
         task.parent_task_id = Some(parent_id.to_string());
         task.worktree = worktree;
         task.title = title;
+        // The stage pin (or inherited lead model) is the child's model intent.
+        task.model = model.clone();
         let child_id = task.id.clone();
         self.tasks.insert(child_id.clone(), task.clone());
         self.persist(&task);

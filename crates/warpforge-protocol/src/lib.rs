@@ -385,6 +385,9 @@ pub enum Method {
     /// `agents.updated`.
     #[serde(rename = "agents.probe")]
     AgentsProbe { id: String },
+    /// List configured agents with cached model options. Returns `{ agents: AgentConfig[] }`.
+    #[serde(rename = "agents.list")]
+    AgentsList {},
 
     // ── Agent accounts (several logins per agent, one active) ──
     /// All registered accounts. Returns `{ accounts: AccountInfo[] }`.
@@ -1623,6 +1626,8 @@ pub struct TaskInfo {
     /// keep the board's backlog item and its agent task linked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backlog_item_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// A task's lifecycle. Deliberately **not** an axis for derived facts: whether
@@ -1959,6 +1964,7 @@ pub enum TaskBlockedKind {
     /// its native history was deleted or expired. The conversation Warpforge
     /// stored is unaffected, so the work can continue in a fresh session.
     SessionLost,
+    ModelMismatch,
 }
 
 /// Which kind of git prose `text.generate` should produce.

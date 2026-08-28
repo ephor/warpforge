@@ -81,6 +81,13 @@ pub enum AcpUpdate {
     TurnEnded {
         stop_reason: String,
     },
+    /// A model the user (or task creation) asked for could not be applied to
+    /// the session — rejected, transport gone, or timed out. Non-fatal: the
+    /// session keeps running on the agent's current model, and the actor
+    /// records the mismatch as durable task state so the user still sees it.
+    ModelMismatch {
+        message: String,
+    },
     Error {
         run_id: u64,
         message: String,
@@ -565,8 +572,9 @@ pub fn spawn_acp_session(
     mcp_servers: Vec<Value>,
     updates: mpsc::UnboundedSender<(String, AcpUpdate)>,
     policy_tx: Option<mpsc::UnboundedSender<PolicyCheck>>,
-    // Model id to apply to the session before the first prompt (fresh
-    // `session/new` only; ignored when resuming). None = no override.
+    // Model id to apply to the session before the first prompt — fresh
+    // `session/new` and, when set, resume too. None = no override: a fresh
+    // session keeps the agent default and a resumed one keeps its own state.
     default_model: Option<String>,
     // Non-model config overrides (reasoning effort, mode, etc.) keyed by
     // config-option id; applied via `session/setConfigOption` after model.
@@ -993,6 +1001,18 @@ pub fn spawn_acp_session(
                 replaying.store(false, Ordering::Release);
                 match loaded {
                     Ok(RpcOutcome::Response(response)) if response.get("error").is_none() => {
+                        // The load reply carries the session's current selectors.
+                        // Emit them so the UI stops showing pre-reconnect values.
+                        if let Some(result) = response.get("result") {
+                            let opts = parse_config_options(result.get("configOptions"));
+                            if !opts.is_empty() {
+                                fresh_config_options = opts.clone();
+                                let _ = updates.send((
+                                    task_id.clone(),
+                                    AcpUpdate::ConfigOptions { options: opts },
+                                ));
+                            }
+                        }
                         sid.clone()
                     }
                     Ok(RpcOutcome::Response(response)) => {
@@ -1096,49 +1116,80 @@ pub fn spawn_acp_session(
                 }
             };
 
-            // Apply the user-selected model before the first prompt. Only for
-            // fresh sessions — resume must keep the loaded session's existing
-            // model state. We pick the option id whose category is "model" or
-            // whose id/name contains "model" (mirrors AgentConfigBar.tsx).
-            if resume.is_none() {
-                if let Some(ref model_value) = driver_default_model {
-                    if let Some(model_opt) = fresh_config_options.iter().find(|o| {
-                        let identity = format!(
-                            "{} {} {}",
-                            o.category.as_deref().unwrap_or(""),
-                            o.id,
-                            o.name
-                        )
-                        .to_lowercase();
-                        identity.contains("model")
-                    }) {
-                        if model_opt.current_value != *model_value {
-                            let set_res = tokio::time::timeout(
-                                RPC_TIMEOUT,
-                                rpc(
-                                    &out_tx,
-                                    &pending,
-                                    &next_id,
-                                    "session/set_config_option",
-                                    json!({
-                                        "sessionId": session_id,
-                                        "configId": model_opt.id,
-                                        "value": model_value,
-                                    }),
-                                ),
-                            )
-                            .await;
-                            if let Ok(Some(resp)) = set_res {
-                                if let Some(result) = resp.get("result") {
-                                    let opts = parse_config_options(result.get("configOptions"));
-                                    if !opts.is_empty() {
-                                        let _ = updates.send((
-                                            task_id.clone(),
-                                            AcpUpdate::ConfigOptions { options: opts },
-                                        ));
-                                    }
+            // Apply the user's model intent before the first prompt — on a
+            // fresh session and, when the task carries an explicit intent, on
+            // resume too (a daemon restart lands here invisibly, and the agent
+            // would otherwise silently keep whatever model it loaded with).
+            // With no intent a resume keeps the loaded session's model state,
+            // exactly as before. See resolve_model_apply for the decision.
+            match resolve_model_apply(driver_default_model.as_deref(), &fresh_config_options) {
+                ModelApply::Keep => {}
+                ModelApply::UnknownSelector => {
+                    eprintln!(
+                        "[daemon] requested model '{}': no model selector advertised yet, \
+                         leaving the session's own model untouched",
+                        driver_default_model.as_deref().unwrap_or("")
+                    );
+                }
+                ModelApply::Set {
+                    ref config_id,
+                    ref value,
+                } => {
+                    let set_res = tokio::time::timeout(
+                        RPC_TIMEOUT,
+                        rpc(
+                            &out_tx,
+                            &pending,
+                            &next_id,
+                            "session/set_config_option",
+                            json!({
+                                "sessionId": session_id,
+                                "configId": config_id,
+                                "value": value,
+                            }),
+                        ),
+                    )
+                    .await;
+                    match set_res {
+                        Ok(Some(resp)) if resp.get("error").is_none() => {
+                            if let Some(result) = resp.get("result") {
+                                let opts = parse_config_options(result.get("configOptions"));
+                                if !opts.is_empty() {
+                                    let _ = updates.send((
+                                        task_id.clone(),
+                                        AcpUpdate::ConfigOptions { options: opts },
+                                    ));
                                 }
                             }
+                        }
+                        Ok(Some(resp)) => {
+                            let message = format!(
+                                "Requested model '{value}' was not applied: the agent \
+                                 rejected it.{}",
+                                acp_error_detail(&resp)
+                            );
+                            eprintln!("[daemon] {message}");
+                            let _ = updates
+                                .send((task_id.clone(), AcpUpdate::ModelMismatch { message }));
+                        }
+                        Ok(None) => {
+                            let message = format!(
+                                "Requested model '{value}' was not applied: the agent \
+                                 connection closed."
+                            );
+                            eprintln!("[daemon] {message}");
+                            let _ = updates
+                                .send((task_id.clone(), AcpUpdate::ModelMismatch { message }));
+                        }
+                        Err(_) => {
+                            let message = format!(
+                                "Requested model '{value}' was not applied: the agent \
+                                 did not answer within {}s.",
+                                RPC_TIMEOUT.as_secs()
+                            );
+                            eprintln!("[daemon] {message}");
+                            let _ = updates
+                                .send((task_id.clone(), AcpUpdate::ModelMismatch { message }));
                         }
                     }
                 }
@@ -1614,6 +1665,57 @@ fn parse_update(params: &Value) -> Option<AcpUpdate> {
             Some(AcpUpdate::Usage { used, size, cost })
         }
         _ => None, // user_message_chunk (our own echo), current_mode_update, etc.
+    }
+}
+
+/// Whether a config option is the model selector. The heuristic mirrors
+/// AgentConfigBar.tsx: the first option whose lowercased
+/// category/id/name contains "model". CAUTION: `model_config` is a real
+/// category of on/off toggles (claude's `{id: "fast", name: "Fast mode"}`),
+/// so an option whose *category* is exactly `model_config` is never the
+/// selector even though its identity string contains "model".
+pub(crate) fn is_model_selector(o: &wire::ConfigOption) -> bool {
+    if o.category.as_deref().map(|c| c.to_lowercase()).as_deref() == Some("model_config") {
+        return false;
+    }
+    let identity = format!(
+        "{} {} {}",
+        o.category.as_deref().unwrap_or(""),
+        o.id,
+        o.name
+    )
+    .to_lowercase();
+    identity.contains("model")
+}
+
+/// What the session driver should do with a task's model intent at session
+/// start (fresh or resume).
+enum ModelApply {
+    /// No explicit intent, or the session is already on the requested model.
+    /// Behaviour is exactly the pre-intent one: fresh keeps the agent default,
+    /// resume keeps the loaded session's model state.
+    Keep,
+    /// Intent exists but no known selector looks like a model picker. Log
+    /// only — some harnesses announce selectors later via a
+    /// `config_option_update` instead of the session/new or session/load
+    /// reply, so an absent selector is not proof of a mismatch and flagging
+    /// it would be a false alarm that never clears.
+    UnknownSelector,
+    /// Set this config option to this value.
+    Set { config_id: String, value: String },
+}
+
+fn resolve_model_apply(intent: Option<&str>, options: &[wire::ConfigOption]) -> ModelApply {
+    let Some(value) = intent else {
+        return ModelApply::Keep;
+    };
+    match options.iter().find(|o| is_model_selector(o)) {
+        Some(opt) if opt.current_value != value => ModelApply::Set {
+            config_id: opt.id.clone(),
+            value: value.to_string(),
+        },
+        Some(_) => ModelApply::Keep,
+        None => ModelApply::UnknownSelector,
     }
 }
 
@@ -2223,6 +2325,81 @@ fn parse_permission(params: &Value) -> (String, Vec<String>, HashMap<String, Str
 mod tests {
     use super::*;
     use crate::daemon::prompt::{PreparedPrompt, PromptContent};
+
+    fn option(
+        id: &str,
+        name: &str,
+        category: Option<&str>,
+        current_value: &str,
+    ) -> wire::ConfigOption {
+        wire::ConfigOption {
+            id: id.into(),
+            name: name.into(),
+            category: category.map(String::from),
+            current_value: current_value.into(),
+            options: Vec::new(),
+        }
+    }
+
+    /// The picker heuristic must survive claude's `model_config` category:
+    /// `Fast mode` is an on/off toggle, never the model selector.
+    #[test]
+    fn model_config_toggle_is_never_the_model_selector() {
+        // What claude-agent-acp advertises.
+        let fast = option("fast", "Fast mode", Some("model_config"), "off");
+        assert!(!is_model_selector(&fast));
+
+        // The real selector, in the shapes agents actually use.
+        assert!(is_model_selector(&option(
+            "model",
+            "Model",
+            Some("model"),
+            "sonnet"
+        )));
+        assert!(is_model_selector(&option(
+            "modelId", "Model", None, "sonnet"
+        )));
+        // The degenerate case: the ONLY model-ish option is a model_config
+        // toggle. We must not set it; the intent stays unapplied (log only).
+        let options = vec![fast];
+        assert!(matches!(
+            resolve_model_apply(Some("opus"), &options),
+            ModelApply::UnknownSelector
+        ));
+    }
+
+    #[test]
+    fn model_apply_decision() {
+        let selector = option("model", "Model", Some("model"), "sonnet");
+        let mode = option("mode", "Permission mode", Some("mode"), "ask");
+        let options = vec![mode.clone(), selector.clone()];
+
+        // No intent: hands-off on fresh and resume alike.
+        assert!(matches!(
+            resolve_model_apply(None, &options),
+            ModelApply::Keep
+        ));
+        // Intent matching the live value: nothing to set.
+        assert!(matches!(
+            resolve_model_apply(Some("sonnet"), &options),
+            ModelApply::Keep
+        ));
+        // Intent differing: target the model selector's id, not the mode's.
+        match resolve_model_apply(Some("opus"), &options) {
+            ModelApply::Set { config_id, value } => {
+                assert_eq!(config_id, "model");
+                assert_eq!(value, "opus");
+            }
+            _ => panic!("expected Set"),
+        }
+        // Selector not advertised yet (late config_option_update): never a
+        // mismatch, just leave the session alone.
+        let no_selector = vec![mode];
+        assert!(matches!(
+            resolve_model_apply(Some("opus"), &no_selector),
+            ModelApply::UnknownSelector
+        ));
+    }
 
     /// A "session gone" verdict throws the saved session id away, so it must
     /// fire only when the agent really has forgotten *that* session.

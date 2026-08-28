@@ -214,12 +214,16 @@ export interface TaskInfo {
   updatedAt: number;
   filesChanged: number;
   blockedReason: string | null;
+  /** The model the user explicitly asked for on this task, if they ever did. */
+  model?: string | null;
   /**
    * Why the task is blocked, when the daemon could classify it. `session_lost`
    * means the agent no longer has the saved session and never will — the stored
    * conversation is intact, so the work continues in a fresh session.
+   * `model_mismatch` means the session is alive but running on a model other
+   * than the requested one; the status is deliberately left unchanged.
    */
-  blockedKind?: "session_lost" | null;
+  blockedKind?: "session_lost" | "model_mismatch" | null;
   /** Session selectors (model/mode/…) reported by the live ACP session. */
   configOptions?: ConfigOption[];
   /** Path to the git worktree for this task, if isolated. */

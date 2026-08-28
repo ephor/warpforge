@@ -86,6 +86,14 @@ export function buildAttentionQueue(
       items.push({ priority: 2, reason: task.blockedReason ?? "blocked", task });
     } else if (task.status === "interrupted") {
       items.push({ priority: 3, reason: "session lost on daemon restart", task });
+    } else if (task.blockedKind === "model_mismatch") {
+      // Informational, not halting: the session works, it is just not on the
+      // requested model. Ranks below everything that actually stops work.
+      items.push({
+        priority: 4,
+        reason: task.blockedReason ?? "requested model was not applied",
+        task,
+      });
     }
   }
   return items.sort(

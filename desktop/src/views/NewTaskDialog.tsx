@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { agentDisplayName } from "@/lib/agentNames";
+import { configRole } from "@/lib/configRole";
 import { cn } from "@/lib/utils";
 
 import { AgentConfigBar } from "../components/AgentConfigBar";
@@ -362,7 +363,11 @@ export default function NewTaskDialog({
                   />
                   <ChipDivider />
                   <AgentConfigBar
-                    options={agentOptions}
+                    options={agentOptions.map((opt) =>
+                      configRole(opt) === "model" && currentAgent?.lastModel
+                        ? { ...opt, inheritedValue: currentAgent.lastModel } as typeof opt & { inheritedValue: string }
+                        : opt,
+                    )}
                     picks={configPicks}
                     loading={probeLoading}
                     onSelect={(option, value) =>

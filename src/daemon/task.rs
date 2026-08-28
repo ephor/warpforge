@@ -90,6 +90,8 @@ pub struct Task {
     pub account_id: Option<String>,
     /// Id of the backlog item this task was started from, if any.
     pub backlog_item_id: Option<String>,
+    /// Last explicit model intent the user expressed for this task.
+    pub model: Option<String>,
 }
 
 impl Task {
@@ -121,6 +123,7 @@ impl Task {
             snoozed_at: None,
             account_id: None,
             backlog_item_id: None,
+            model: None,
         }
     }
 

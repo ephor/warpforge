@@ -120,6 +120,20 @@ describe("NewTaskDialog", () => {
     const prompt = screen.getByPlaceholderText("What should the agent do?");
     expect(modes.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByRole("button", { name: "Model: Default" })).toBeInTheDocument();
+  });
+
+  it("shows inherited model when agent has a remembered lastModel", () => {
+    const withLastModel: Snapshot = {
+      ...snapshot,
+      agents: [{ ...agent, lastModel: "sonnet" }, codex],
+    };
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { container } = render(
+      <QueryClientProvider client={queryClient}>
+        <NewTaskDialog defaultProject="warpforge" onOpenChange={vi.fn<(open: boolean) => void>()} open snapshot={withLastModel} />
+      </QueryClientProvider>,
+    );
+    expect(container.textContent).toContain("Sonnet (inherited)");
     expect(screen.getByRole("button", { name: "Reasoning effort: Default" })).toBeInTheDocument();
   });
 

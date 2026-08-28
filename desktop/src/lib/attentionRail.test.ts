@@ -111,6 +111,45 @@ describe("buildAttentionQueue", () => {
   it("returns an empty array for empty input", () => {
     expect(buildAttentionQueue([], {})).toStrictEqual([]);
   });
+
+  it("queues a model mismatch regardless of status, below halting work", () => {
+    const tasks = [
+      task("perm", { status: "running" }),
+      task("blocked", { status: "blocked" }),
+      task("mismatch-running", {
+        status: "running",
+        blockedKind: "model_mismatch",
+        blockedReason: "Requested model 'opus[1m]' was not applied: the agent rejected it.",
+      }),
+      task("mismatch-waiting", {
+        status: "waiting",
+        blockedKind: "model_mismatch",
+        blockedReason: "Requested model 'opus[1m]' timed out.",
+      }),
+    ];
+    const updates: Record<string, SessionUpdate[]> = {
+      perm: [permUpdate("p1", "Approve deploy")],
+    };
+    const queue = buildAttentionQueue(tasks, updates);
+    expect(queue.map((item) => item.task.id)).toStrictEqual([
+      "perm",
+      "blocked",
+      "mismatch-running",
+      "mismatch-waiting",
+    ]);
+    expect(queue[2]?.priority).toBeGreaterThan(queue.find((i) => i.task.id === "blocked")!.priority);
+    expect(queue[2]?.reason).toContain("opus[1m]");
+    expect(queue[3]?.reason).toContain("timed out");
+  });
+
+  it("leaves a task without a mismatch out of the queue", () => {
+    const tasks = [
+      task("plain", { status: "running" }),
+      task("mismatch", { status: "running", blockedKind: "model_mismatch" }),
+    ];
+    const queue = buildAttentionQueue(tasks, {});
+    expect(queue.map((item) => item.task.id)).toStrictEqual(["mismatch"]);
+  });
 });
 
 describe("buildAttentionQueue — workflow pipelines", () => {

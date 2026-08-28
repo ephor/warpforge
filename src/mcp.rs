@@ -726,9 +726,26 @@ fn orchestrator_tool_defs() -> Value {
                     "task": {
                         "type": "string",
                         "description": "The full instruction/prompt for the sub-agent."
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Optional model id for this agent session. When omitted, the agent's last-used model is reused. Use list_agent_models to discover valid ids."
                     }
                 },
                 "required": ["agent", "task"]
+            }
+        },
+        {
+            "name": "list_agent_models",
+            "description": "List cached model options per configured+enabled agent. Without agent, returns compact index (id + model count); pass agent to get that agent's ids. Use before spawn_agent with model.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "agent": {
+                        "type": "string",
+                        "description": "Agent id to list models for. When omitted, returns compact per-agent counts."
+                    }
+                }
             }
         },
         {
@@ -1187,6 +1204,58 @@ async fn ensure_portforward(client: &mut DaemonClient, project: &str, name: &str
     }
 }
 
+fn is_model_selector(o: &Value) -> bool {
+    let cat = o.get("category").and_then(Value::as_str).unwrap_or("");
+    let id = o.get("id").and_then(Value::as_str).unwrap_or("");
+    let name = o.get("name").and_then(Value::as_str).unwrap_or("");
+    format!("{cat} {id} {name}")
+        .to_lowercase()
+        .contains("model")
+}
+
+fn model_ids(models: &[Value]) -> Vec<String> {
+    let Some(first) = models.iter().find(|o| is_model_selector(o)) else {
+        return Vec::new();
+    };
+    first
+        .get("options")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|c| c.get("value").and_then(Value::as_str).map(String::from))
+        .collect()
+}
+
+fn format_valid_list(valid: &[String], agent: &str) -> String {
+    const CAP: usize = 30;
+    if valid.len() <= CAP {
+        return valid.join(", ");
+    }
+    let head = valid[..CAP].join(", ");
+    format!(
+        "{head} … and {} more (call list_agent_models with agent=\"{agent}\" for the full list)",
+        valid.len() - CAP
+    )
+}
+
+fn validate_model(models: &[Value], requested: &str, agent: &str) -> Result<()> {
+    let valid = model_ids(models);
+    if valid.is_empty() {
+        return Ok(());
+    }
+    if valid.contains(&requested.to_string()) {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "model '{}' is not valid for agent '{}'; valid ids: [{}]",
+            requested,
+            agent,
+            format_valid_list(&valid, agent)
+        ))
+    }
+}
+
 async fn list_owned_agents(
     client: &mut DaemonClient,
     parent_task: &str,
@@ -1245,6 +1314,137 @@ async fn ensure_owned(
             "task {task_id} is not a pipeline owned by this orchestrator"
         ))
     }
+}
+
+/// Short identifier for what a task is about: the title when set, else the
+/// first line of the prompt. Capped hard — the full prompt is often several
+/// kilobytes and the caller only needs to tell children apart.
+fn short_label(agent: &Value) -> String {
+    let raw = agent
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            agent
+                .get("prompt")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        });
+    let first_line = raw.lines().next().unwrap_or_default().trim();
+    truncate_chars(first_line, 80)
+}
+
+fn truncate_chars(s: &str, cap: usize) -> String {
+    if s.chars().count() <= cap {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(cap).collect();
+    format!("{cut}…")
+}
+
+/// One line per child task, pipe-separated. The daemon's `orchestrator.listAgents`
+/// reply carries each task's full `configOptions` model selector (100–400
+/// entries) and the entire prompt — dumping it raw blew the tool-result limit
+/// with four children. Projection keeps only what the caller needs to decide
+/// what to do next: id, agent, status, last activity, a short label, changed
+/// file count, blockage, and for pipelines the stage/round/waiting state.
+fn render_agents_listing(agents: &[Value]) -> String {
+    if agents.is_empty() {
+        return "No sub-agent sessions — nothing spawned yet.".into();
+    }
+    let mut out = String::from("id | agent | status | updated | label [| extras]\n");
+    for agent in agents {
+        out.push_str(&render_agent_line(agent));
+        out.push('\n');
+    }
+    out
+}
+
+fn render_agent_line(agent: &Value) -> String {
+    let id = agent.get("id").and_then(Value::as_str).unwrap_or("?");
+    let name = agent.get("agent").and_then(Value::as_str).unwrap_or("?");
+    let status = agent.get("status").and_then(Value::as_str).unwrap_or("?");
+    let updated = agent
+        .get("updatedAt")
+        .and_then(Value::as_u64)
+        // TaskInfo timestamps are Unix seconds; fmt_utc wants millis.
+        .map(|secs| fmt_utc(secs.saturating_mul(1000)))
+        .unwrap_or_else(|| "?".into());
+    let mut line = format!("{id} | {name} | {status} | {updated}");
+    let label = short_label(agent);
+    if !label.is_empty() {
+        line.push_str(&format!(" | {label}"));
+    }
+    let files = agent.get("filesChanged").and_then(Value::as_u64);
+    if let Some(files) = files.filter(|f| *f > 0) {
+        line.push_str(&format!(" | files={files}"));
+    }
+    if let Some(reason) = agent
+        .get("blockedReason")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        let kind = agent
+            .get("blockedKind")
+            .and_then(Value::as_str)
+            .unwrap_or("blocked");
+        line.push_str(&format!(" | {kind}: {}", truncate_chars(reason, 120)));
+    }
+    if let Some(wf) = agent.get("workflowRun").filter(|v| !v.is_null()) {
+        line.push_str(&render_workflow_run(wf));
+    }
+    if let Some(graph) = agent.get("orchestrationGraph").filter(|v| !v.is_null()) {
+        if let Some(summary) = graph_node_summary(graph) {
+            line.push_str(&format!(" | graph: {summary}"));
+        }
+    }
+    line
+}
+
+/// Pipeline progress: stage, review round, and — crucially — when the pipeline
+/// is waiting on the caller (a question to answer via `answer_workflow`, or a
+/// round limit to decide on via `decide_workflow`).
+fn render_workflow_run(wf: &Value) -> String {
+    let stage = wf.get("stage").and_then(Value::as_str).unwrap_or("?");
+    let mut out = format!(" | wf stage={stage}");
+    if let (Some(round), Some(max)) = (
+        wf.get("round").and_then(Value::as_u64),
+        wf.get("maxRounds").and_then(Value::as_u64),
+    ) {
+        out.push_str(&format!(" round={round}/{max}"));
+    }
+    if let Some(waiting) = wf.get("waiting").filter(|v| !v.is_null()) {
+        let kind = waiting.get("kind").and_then(Value::as_str).unwrap_or("?");
+        out.push_str(&format!(" waiting={kind}"));
+        if let Some(q) = waiting
+            .get("question")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            out.push_str(&format!(": {}", truncate_chars(q, 120)));
+        }
+    }
+    out
+}
+
+/// Compact `plan:complete implement:running review:pending` style summary of an
+/// orchestration graph. Returns None when the graph carries no nodes — a full
+/// node dump would be far too large to be worth keeping.
+fn graph_node_summary(graph: &Value) -> Option<String> {
+    let nodes = graph.get("nodes").and_then(Value::as_array)?;
+    if nodes.is_empty() {
+        return None;
+    }
+    let summary = nodes
+        .iter()
+        .map(|n| {
+            let kind = n.get("kind").and_then(Value::as_str).unwrap_or("?");
+            let status = n.get("status").and_then(Value::as_str).unwrap_or("?");
+            format!("{kind}:{status}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(truncate_chars(&summary, 160))
 }
 
 fn json_text(value: &Value) -> Result<String> {
@@ -1611,6 +1811,61 @@ async fn handle_tool_call(
         _ if !is_orchestrator => Err(anyhow!(
             "tool '{name}' is only available in an orchestrator session"
         )),
+        "list_agent_models" => {
+            let filter_agent = args
+                .get("agent")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.to_string());
+            let result = client.request("agents.list", json!({})).await?;
+            let agents = result
+                .get("agents")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let enabled: Vec<&Value> = agents
+                .iter()
+                .filter(|a| a.get("enabled").and_then(Value::as_bool).unwrap_or(true))
+                .collect();
+            if let Some(ref fa) = filter_agent {
+                let Some(entry) = enabled
+                    .iter()
+                    .find(|a| a.get("id").and_then(Value::as_str) == Some(fa))
+                else {
+                    return Err(anyhow!("unknown agent '{fa}'"));
+                };
+                let models = entry
+                    .get("models")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                // Ids only — the id is what spawn_agent takes, and labels are
+                // mostly a re-cased restatement of it (openrouter lists 368).
+                let ids = model_ids(&models);
+                if ids.is_empty() {
+                    return Ok(format!("agent {fa}: no cached model list"));
+                }
+                return Ok(format!(
+                    "agent {fa} ({} models):\n{}",
+                    ids.len(),
+                    ids.join("\n")
+                ));
+            }
+            // no filter: compact index
+            let mut out = String::new();
+            for a in &enabled {
+                let id = a.get("id").and_then(Value::as_str).unwrap_or("?");
+                let models = a
+                    .get("models")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let cnt = model_ids(&models).len();
+                out.push_str(&format!("{id}: {cnt} models\n"));
+            }
+            out.push_str("call list_agent_models with agent=\"<id>\" for ids");
+            Ok(out)
+        }
         "spawn_agent" => {
             let agent = args
                 .get("agent")
@@ -1620,28 +1875,63 @@ async fn handle_tool_call(
                 .get("task")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow!("'task' is required"))?;
-            let result = client
-                .request(
-                    "task.create",
-                    json!({
-                        "project": project,
-                        "prompt": task,
-                        "agent": agent,
-                        "tags": ["orchestrator", "subagent"],
-                        "include_runtime_context": true,
-                        "worktree": false,
-                        "parent_task_id": parent_task,
-                    }),
-                )
-                .await?;
+            let model = args
+                .get("model")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .map(str::to_string);
+            let mut unvalidated = false;
+            if let Some(ref m) = model {
+                let agents_res = client.request("agents.list", json!({})).await?;
+                if let Some(arr) = agents_res.get("agents").and_then(Value::as_array) {
+                    if let Some(entry) = arr
+                        .iter()
+                        .find(|a| a.get("id").and_then(Value::as_str) == Some(agent))
+                    {
+                        let opts = entry
+                            .get("models")
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
+                        let valid = model_ids(&opts);
+                        if valid.is_empty() {
+                            unvalidated = true;
+                        } else {
+                            validate_model(&opts, m, agent)?;
+                        }
+                    } else {
+                        unvalidated = true;
+                    }
+                }
+            }
+            let mut params = json!({
+                "project": project,
+                "prompt": task,
+                "agent": agent,
+                "tags": ["orchestrator", "subagent"],
+                "include_runtime_context": true,
+                "worktree": false,
+                "parent_task_id": parent_task,
+            });
+            if let Some(ref m) = model {
+                params["default_model"] = json!(m);
+            }
+            let result = client.request("task.create", params).await?;
             let child = result
                 .get("taskId")
                 .and_then(Value::as_str)
                 .unwrap_or("(unknown)");
-            Ok(format!(
-                "Dispatched sub-agent '{agent}' as task {child}. It runs asynchronously; \
-                 you will be notified when its result is waiting — then call read_inbox."
-            ))
+            if unvalidated {
+                Ok(format!(
+                    "Dispatched sub-agent '{agent}' as task {child} (model '{m}' could not be validated — no cached model list for this agent). It runs asynchronously; you will be notified when its result is waiting — then call read_inbox.",
+                    m = model.as_deref().unwrap_or("")
+                ))
+            } else {
+                Ok(format!(
+                    "Dispatched sub-agent '{agent}' as task {child}. It runs asynchronously; \
+                     you will be notified when its result is waiting — then call read_inbox."
+                ))
+            }
         }
         "read_inbox" => {
             let result = client
@@ -1700,7 +1990,8 @@ async fn handle_tool_call(
         "list_agents" => {
             let scoped = scoped_project(&args, project)?;
             let result = list_owned_agents(client, parent_task, scoped.as_deref()).await?;
-            json_text(&result)
+            let agents = agent_values(&result)?;
+            Ok(render_agents_listing(&agents))
         }
         "stop_agent" => {
             let task_id = args
@@ -2167,5 +2458,135 @@ mod tests {
     fn fmt_utc_renders_epoch() {
         assert_eq!(fmt_utc(0), "1970-01-01 00:00:00Z");
         assert_eq!(fmt_utc(86_400_000), "1970-01-02 00:00:00Z");
+    }
+
+    #[test]
+    fn model_ids_extract_and_validate() {
+        let models = json!([
+            {"id":"model","name":"Model","category":"model","current_value":"a","options":[{"value":"gpt-4","name":"GPT-4"},{"value":"codex-mini","name":"Mini"}]},
+            {"id":"mode","name":"Mode","category":"mode","current_value":"x","options":[{"value":"plan","name":"Plan"}]}
+        ]);
+        let arr = models.as_array().unwrap().clone();
+        let ids = model_ids(&arr);
+        assert_eq!(ids, vec!["gpt-4", "codex-mini"]);
+        assert!(validate_model(&arr, "gpt-4", "claude").is_ok());
+        let err = validate_model(&arr, "latest", "claude")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("valid ids: [gpt-4, codex-mini]"), "got: {err}");
+        assert!(!ids.contains(&"plan".to_string()));
+        assert!(validate_model(&[], "anything", "claude").is_ok());
+        // model_config toggle must NOT leak into ids (DEFECT 1)
+        let with_toggle = json!([
+            {"id":"model","name":"Model","category":"model","current_value":"a","options":[{"value":"sonnet","name":"Sonnet"},{"value":"haiku","name":"Haiku"}]},
+            {"id":"fast","name":"Fast mode","category":"model_config","current_value":"off","options":[{"value":"on","name":"On"},{"value":"off","name":"Off"}]}
+        ]);
+        let arr2 = with_toggle.as_array().unwrap().clone();
+        let ids2 = model_ids(&arr2);
+        assert_eq!(ids2, vec!["sonnet", "haiku"]);
+        assert!(validate_model(&arr2, "on", "claude").is_err());
+        assert!(validate_model(&arr2, "sonnet", "claude").is_ok());
+    }
+
+    #[test]
+    fn agents_listing_projection_is_compact_and_keeps_decision_critical_fields() {
+        let fat_model_selector: Vec<Value> = (0..368)
+            .map(|i| json!({"value": format!("vendor/model-{}", i), "name": format!("Model {i}")}))
+            .collect();
+        let agents = json!([
+            {
+                "id": "t_1",
+                "agent": "opencode",
+                "status": "running",
+                "prompt": "Fix the auth middleware so expired refresh tokens are rejected\n\nAnd here are several more kilobytes of detail\nthat must never appear in the output.",
+                "title": "Fix auth middleware refresh handling",
+                "createdAt": 1_756_000_000u64,
+                "updatedAt": 1_756_369_500u64,
+                "filesChanged": 3,
+                "configOptions": [{"id":"model","category":"model","options": fat_model_selector}],
+                "tags": ["orchestrator", "subagent"],
+            },
+            {
+                "id": "t_2",
+                "agent": "claude",
+                "status": "running",
+                "prompt": "Implement the multi-stage pipeline goal",
+                "updatedAt": 1_756_369_500u64,
+                "workflowRun": {
+                    "workflowId": "dev-flow",
+                    "stage": "review",
+                    "round": 2,
+                    "maxRounds": 3,
+                    "waiting": {
+                        "kind": "question",
+                        "stage": "review",
+                        "question": "Should the fix stage also update the changelog?"
+                    }
+                },
+                "orchestrationGraph": {
+                    "id": "g",
+                    "goal": "goal text",
+                    "nodes": [
+                        {"id":"n1","kind":"plan","agent":"claude","status":"complete"},
+                        {"id":"n2","kind":"implement","agent":"claude","status":"complete"},
+                        {"id":"n3","kind":"review","agent":"codex","status":"running"}
+                    ]
+                },
+            }
+        ]);
+        let out = render_agents_listing(agents.as_array().unwrap());
+
+        // Compact: no model ids from the fat configOptions leak through.
+        assert!(!out.contains("vendor/model-"), "got: {out}");
+        assert!(!out.contains("configOptions"));
+        // Prompt is truncated to a short label — full multi-line prompt never leaks.
+        assert!(!out.contains("kilobytes"), "got: {out}");
+        assert_eq!(
+            out.lines()
+                .find(|l| l.starts_with("t_1"))
+                .expect("t_1 line"),
+            "t_1 | opencode | running | 2025-08-28 08:25:00Z | Fix auth middleware refresh handling | files=3"
+        );
+        // Workflow stage/round/waiting survive the projection.
+        let t2 = out.lines().find(|l| l.starts_with("t_2")).unwrap();
+        assert!(t2.contains("wf stage=review"), "got: {t2}");
+        assert!(t2.contains("round=2/3"), "got: {t2}");
+        assert!(t2.contains("waiting=question"), "got: {t2}");
+        assert!(t2.contains("changelog"), "got: {t2}");
+        // Graph reduced to one compact status line.
+        assert!(
+            t2.contains("graph: plan:complete implement:complete review:running"),
+            "got: {t2}"
+        );
+        // Output stays tiny per task (well under any tool-result limit).
+        for line in out.lines() {
+            assert!(line.len() < 500, "line too long: {line}");
+        }
+    }
+
+    #[test]
+    fn agents_listing_handles_blocked_and_truncates_long_prompts() {
+        let agents = json!([
+            {
+                "id": "t_3",
+                "agent": "codex",
+                "status": "blocked",
+                "prompt": "x".repeat(300),
+                "blockedKind": "session_lost",
+                "blockedReason": "the saved native session no longer exists and cannot be resumed",
+                "updatedAt": 1_756_369_500u64,
+                "filesChanged": 0,
+            }
+        ]);
+        let out = render_agents_listing(agents.as_array().unwrap());
+        let line = out.lines().find(|l| l.starts_with("t_3")).unwrap();
+        // No title set -> truncated first (only) line of the prompt, hard-capped.
+        assert!(line.contains(&"x".repeat(80)), "got: {line}");
+        assert!(!line.contains(&"x".repeat(81)), "got: {line}");
+        // blockedKind/reason kept; zero filesChanged omitted.
+        assert!(line.contains("session_lost:"), "got: {line}");
+        assert!(line.contains("no longer exists"), "got: {line}");
+        assert!(!line.contains("files="), "got: {line}");
+        assert!(render_agents_listing(&[]).contains("No sub-agent sessions"));
     }
 }

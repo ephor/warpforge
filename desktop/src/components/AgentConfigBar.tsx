@@ -158,10 +158,16 @@ function AgentConfigSelect({
     if (pendingValue !== null && currentValue === pendingValue) setPendingValue(null);
   }, [currentValue, pendingValue]);
 
+  const inheritedLabel = !shownValue ? (opt as unknown as { inheritedValue?: string }).inheritedValue : undefined;
+  const inheritedName = inheritedLabel
+    ? (opt.options.find((o) => o.value === inheritedLabel)?.name ?? inheritedLabel)
+    : undefined;
   const cur =
     shownValue !== undefined
       ? (opt.options.find((o) => o.value === shownValue)?.name ?? shownValue)
-      : "Default";
+      : inheritedName
+        ? `${inheritedName} (inherited)`
+        : "Default";
 
   const pick = (value: string | undefined) => {
     if (onSelect) {

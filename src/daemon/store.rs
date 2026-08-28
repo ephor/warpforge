@@ -299,6 +299,10 @@ impl Store {
         // Migration: link a task back to the backlog item it was started from.
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN backlog_item_id TEXT", []);
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN blocked_kind TEXT", []);
+        // Migration: last explicit model intent the user expressed for a task
+        // (creation default or an accepted mid-session switch), so resume
+        // reconciles the live session to it after a daemon restart.
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN model TEXT", []);
         // Migration: mark links minted by an import, so unmapping a tracker can
         // drop its mirrored rows without touching items written here and pushed
         // out. Existing rows default to 0 — not provably imported, never purged.
@@ -338,8 +342,8 @@ impl Store {
                 (id, session_id, project, prompt, agent, status, tags, title,
                  created_at, updated_at, files_changed, blocked_reason, config_options, worktree,
                  parent_task_id, settled_override, settled_at, snoozed_until, snoozed_at,
-                 account_id, backlog_item_id, blocked_kind)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
+                 account_id, backlog_item_id, blocked_kind, model)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23)
             ON CONFLICT(id) DO UPDATE SET
                 session_id=excluded.session_id,
                 status=excluded.status,
@@ -356,7 +360,8 @@ impl Store {
                 snoozed_at=excluded.snoozed_at,
                 account_id=excluded.account_id,
                 backlog_item_id=excluded.backlog_item_id,
-                blocked_kind=excluded.blocked_kind
+                blocked_kind=excluded.blocked_kind,
+                model=excluded.model
             "#,
             rusqlite::params![
                 task.id,
@@ -381,6 +386,7 @@ impl Store {
                 task.account_id,
                 task.backlog_item_id,
                 blocked_kind_str(task.blocked_kind),
+                task.model,
             ],
         )?;
         Ok(())
@@ -395,7 +401,7 @@ impl Store {
             "SELECT id, session_id, project, prompt, agent, status, tags, \
              created_at, updated_at, files_changed, blocked_reason, config_options, worktree, \
              parent_task_id, title, settled_override, settled_at, snoozed_until, snoozed_at, \
-             account_id, backlog_item_id, blocked_kind \
+             account_id, backlog_item_id, blocked_kind, model \
              FROM tasks",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -431,6 +437,7 @@ impl Store {
                 snoozed_at: row.get::<_, Option<u64>>(18)?,
                 account_id: row.get(19)?,
                 backlog_item_id: row.get(20)?,
+                model: row.get(22)?,
             })
         })?;
         Ok(rows.filter_map(|r| r.ok()).collect())
@@ -1031,6 +1038,7 @@ pub fn fold_for_snapshot(updates: &[wire::SessionUpdate]) -> Vec<wire::SessionUp
 fn blocked_kind_str(kind: Option<wire::TaskBlockedKind>) -> Option<&'static str> {
     match kind {
         Some(wire::TaskBlockedKind::SessionLost) => Some("session_lost"),
+        Some(wire::TaskBlockedKind::ModelMismatch) => Some("model_mismatch"),
         None => None,
     }
 }
@@ -1040,6 +1048,7 @@ fn blocked_kind_str(kind: Option<wire::TaskBlockedKind>) -> Option<&'static str>
 fn parse_blocked_kind(s: Option<String>) -> Option<wire::TaskBlockedKind> {
     match s.as_deref() {
         Some("session_lost") => Some(wire::TaskBlockedKind::SessionLost),
+        Some("model_mismatch") => Some(wire::TaskBlockedKind::ModelMismatch),
         _ => None,
     }
 }
@@ -1292,6 +1301,87 @@ mod tests {
         assert_eq!(loaded[0].session_id.as_deref(), Some("sess-1"));
         assert_eq!(loaded[0].tags, vec!["x".to_string()]);
         assert_eq!(loaded[0].config_options, task.config_options);
+    }
+
+    /// The task's model intent must survive a restart: it is what resume
+    /// reconciles the reloaded session against.
+    #[test]
+    fn task_model_roundtrips_and_defaults_to_none() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).unwrap();
+
+        // No intent expressed -> stays None.
+        let plain = Task::new("demo", "p", "claude", vec![]);
+        store.upsert_task(&plain).unwrap();
+
+        let mut picked = Task::new("demo", "p", "claude", vec![]);
+        picked.model = Some("claude-opus-5".into());
+        store.upsert_task(&picked).unwrap();
+
+        // An update must overwrite, not just insert.
+        let mut switched = picked.clone();
+        switched.model = Some("claude-sonnet-4".into());
+        store.upsert_task(&switched).unwrap();
+
+        let loaded = store.load_tasks().unwrap();
+        let by_id = |id: &str| {
+            loaded
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap_or_else(|| panic!("task {id} missing"))
+                .clone()
+        };
+        assert_eq!(by_id(&plain.id).model, None);
+        // The switch (same task id) overwrote the original pick.
+        assert_eq!(by_id(&picked.id).model, Some("claude-sonnet-4".into()));
+    }
+
+    /// An existing database without the `model` column must still load.
+    #[test]
+    fn task_model_survives_upgrade_from_pre_model_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("warpforge.db");
+        {
+            let pre = Connection::open(&db_path).unwrap();
+            pre.execute_batch(
+                r#"
+                CREATE TABLE tasks (
+                    id              TEXT PRIMARY KEY,
+                    session_id      TEXT,
+                    project         TEXT NOT NULL,
+                    prompt          TEXT NOT NULL,
+                    agent           TEXT NOT NULL,
+                    status          TEXT NOT NULL,
+                    tags            TEXT NOT NULL,
+                    title           TEXT NOT NULL DEFAULT '',
+                    created_at      INTEGER NOT NULL,
+                    updated_at      INTEGER NOT NULL,
+                    files_changed   INTEGER NOT NULL,
+                    blocked_reason  TEXT,
+                    config_options  TEXT NOT NULL DEFAULT '[]',
+                    worktree        TEXT,
+                    parent_task_id  TEXT
+                );
+                INSERT INTO tasks (id, session_id, project, prompt, agent, status, tags, title,
+                                   created_at, updated_at, files_changed, blocked_reason, config_options)
+                VALUES ('pre-model', NULL, 'proj', 'p', 'claude', 'waiting', '[]', 'Old task',
+                        1700000000, 1700000001, 0, NULL, '[]');
+                "#,
+            )
+            .unwrap();
+        }
+
+        let store = Store::open_at(&db_path).unwrap();
+        let loaded = store.load_tasks().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].model, None);
+        // And an intent written into the upgraded schema reads back.
+        let mut task = loaded[0].clone();
+        task.model = Some("claude-opus-5".into());
+        store.upsert_task(&task).unwrap();
+        assert_eq!(
+            store.load_tasks().unwrap()[0].model,
+            Some("claude-opus-5".into())
+        );
     }
 
     fn account(id: &str, agent: &str, label: &str) -> StoredAccount {

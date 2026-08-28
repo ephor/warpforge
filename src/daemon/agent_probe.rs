@@ -27,9 +27,14 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 /// Spawn the agent's ACP command, do the initialize + session/new handshake
 /// (no prompt), read `result.configOptions`, then cancel and kill.
 ///
-/// `cwd` should be a real path the agent can chdir into; for a probe there's
-/// no project context, so callers pass a tempdir or the daemon's cwd.
-pub async fn probe_models(acp_command: &str, cwd: &Path) -> Result<Vec<wire::ConfigOption>> {
+/// `cwd` is a project path (representative when cache is global per agent) and
+/// `extra_env`/`remove_env` mirror the account env a real session would use.
+pub async fn probe_models(
+    acp_command: &str,
+    cwd: &Path,
+    extra_env: &std::collections::HashMap<String, String>,
+    remove_env: &[String],
+) -> Result<Vec<wire::ConfigOption>> {
     let mut cmd = Command::new("sh");
     cmd.args(["-c", acp_command])
         .current_dir(cwd)
@@ -37,6 +42,12 @@ pub async fn probe_models(acp_command: &str, cwd: &Path) -> Result<Vec<wire::Con
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    for k in remove_env {
+        cmd.env_remove(k);
+    }
     #[cfg(unix)]
     cmd.process_group(0);
     let mut child = cmd

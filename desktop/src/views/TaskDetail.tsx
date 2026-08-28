@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 
 import { ChatTranscript } from "../components/ChatTranscript";
 import type { ComposerHandle } from "../components/Composer";
+import { ModelMismatchBanner } from "../components/ModelMismatchBanner";
 import { TerminalWorkspaceView } from "../components/runtime/TerminalWorkspace";
 import { RuntimePanel } from "../components/RuntimePanel";
 import { SessionLostBanner } from "../components/SessionLostBanner";
@@ -413,6 +414,7 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
                   />
                 </div>
                 <SessionLostBanner task={task} onOpenTask={onOpenTask} />
+                <ModelMismatchBanner task={task} />
                 <TaskConversation
                   active={showChat}
                   agents={enabledAgents}

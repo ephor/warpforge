@@ -1276,6 +1276,10 @@ async fn dispatch(
                     message,
                 })
         }
+        AgentsList {} => {
+            let snapshot = handle.snapshot().await;
+            Ok(json!({ "agents": snapshot.agents }))
+        }
         // ── Agent accounts ──
         AccountsList {} => Ok(json!({ "accounts": handle.list_accounts().await })),
         AccountsImport { agent_id, label } => {
@@ -2057,6 +2061,7 @@ fn method_runs_concurrently(method: &wire::Method) -> bool {
             | SessionsList { .. }
             | OrchestratorListAgents { .. }
             | AgentsDetect {}
+            | AgentsList {}
             | AccountsList {}
             | OrchestrateList {}
             | OrchestrateGetConfig {}
@@ -2078,6 +2083,7 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | SessionsList { .. }
             | OrchestratorListAgents { .. }
             | AgentsDetect {}
+            | AgentsList {}
             | AccountsList {}
             | DiffGet { .. }
             | FileContents { .. }
