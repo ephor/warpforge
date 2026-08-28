@@ -20,6 +20,7 @@ import type { SessionActivity } from "@/lib/sessionActivity";
 import { resolvedPermissions } from "@/lib/sessionPermissions";
 import {
   deriveTranscriptRows,
+  hasReconnectingTransient,
   type TranscriptEntry,
   type TranscriptListRow,
   transcriptRowsAreEqual,
@@ -591,6 +592,12 @@ export function SessionChat({
           </Tooltip>
         )}
       </div>
+      {hasReconnectingTransient(updates) && (
+        <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+          <span className="size-3 animate-spin rounded-full border border-muted-foreground border-t-transparent" />
+          Reconnecting to the saved agent session…
+        </div>
+      )}
       {activity && (
         <div className="shrink-0 px-2 py-1.5">
           <AgentActivityIndicator activity={activity} compact />

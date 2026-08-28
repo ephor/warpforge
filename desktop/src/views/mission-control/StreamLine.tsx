@@ -358,13 +358,6 @@ export function StreamLine({
       // Metadata for the composer's slash menu — not shown inline.
       return null;
     case "turn_ended":
-      if (compact) {
-        return null;
-      }
-      return (
-        <p className="text-center text-xs text-muted-foreground">
-          Agent is waiting for the next instruction.
-        </p>
-      );
+      return null;
   }
 }

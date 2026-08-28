@@ -50,10 +50,22 @@ export function sessionUpdateKey(update: SessionUpdate, index: number): string {
   return `i:${index}`;
 }
 
+export const RECONNECTING_TEXT = "Reconnecting to the saved agent session…";
+
 export function isRenderableTranscriptUpdate(update: SessionUpdate): boolean {
+  if (update.kind === "turn_ended") return false;
+  if (update.kind === "agent_text" && update.text === RECONNECTING_TEXT) return false;
   return !["available_commands", "permission_resolved", "prompt_capabilities", "usage"].includes(
     update.kind,
   );
+}
+
+export function hasReconnectingTransient(updates: SessionUpdate[]): boolean {
+  // Proper long-term fix would be a dedicated status update kind in the protocol.
+  // For now the daemon sends this as agent_text; treat it as transient status.
+  if (updates.length === 0) return false;
+  const last = updates[updates.length - 1];
+  return last.kind === "agent_text" && last.text === RECONNECTING_TEXT;
 }
 
 export interface TranscriptEntry {
