@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.12.1
+
+### Patch Changes
+
+- [`ef18638`](https://github.com/warpforgehq/warpforge/commit/ef186383d8df36c518bcdc9cbd6c6bd1a66d4379) Thanks [@ephor](https://github.com/ephor)! - Pick up a conversation an agent can no longer resume. When an agent forgets its
+  session — its own history expired or was cleaned up — the task used to sit
+  blocked on a protocol error with nowhere to go. Warpforge keeps its own
+  transcript, so now a banner offers to carry on: either hand the new session the
+  whole conversation, or have it summarised into a handoff document first, with an
+  estimate of what each option costs in context. You choose which harness and
+  account writes that summary, which helps when the one you were using is out of
+  quota.
+
+  The same choice is available from "Continue with…" on any message, and handing a
+  conversation to another agent no longer forces a separate worktree — keep it in
+  the checkout you are already working in, and Warpforge remembers the choice.
+
+- [`f1ec44e`](https://github.com/warpforgehq/warpforge/commit/f1ec44e3a18e517d9f0955da9ec6495f53e7819a) Thanks [@ephor](https://github.com/ephor)! - The model you pick for a task is now the model that runs it. Warpforge remembers
+  your choice for the whole task, re-applies it whenever a session reconnects, and
+  tells you when an agent refuses it instead of quietly falling back to its own
+  default — a banner in the session and an entry in the "Needs you" rail name the
+  model that was requested and why it did not take.
+
+  The New Task picker no longer says "Default" when it will actually reuse the
+  model you last chose; it shows which one you will inherit. And when you ask an
+  agent to start a sub-agent on a specific model, it can look up the models that
+  agent really offers and pick a valid one, instead of guessing a name that
+  silently does nothing.
+
+- [`24239db`](https://github.com/warpforgehq/warpforge/commit/24239db182ac63fcf31d0de33dac211b49d05b0f) Thanks [@ephor](https://github.com/ephor)! - Show nested git repositories properly in the Files tree. Folders containing
+  their own git repo (or newly created, still-untracked folders) used to render
+  as plain file rows and could not be expanded; their contents are now listed.
+
+- [`0350a31`](https://github.com/warpforgehq/warpforge/commit/0350a3118dfacf2d5fa1002d48e359d496e81d6c) Thanks [@ephor](https://github.com/ephor)! - Reconnect notices no longer clutter the conversation. "Reconnecting to the saved
+  agent session" now appears as a passing status with a spinner and disappears
+  once the agent replies, rather than staying in the transcript forever, and the
+  "Agent is waiting for the next instruction" line is gone — the composer already
+  tells you that.
+
+- [`408d20a`](https://github.com/warpforgehq/warpforge/commit/408d20ad78edeb3f55e141b64bd58bee622178a9) Thanks [@ephor](https://github.com/ephor)! - Session cost now reads as money. It is shown to the cent with a decimal point,
+  so a few dollars no longer looks like a few thousand on machines where the
+  comma is the decimal separator.
+
 ## 0.12.0
 
 ### Minor Changes
