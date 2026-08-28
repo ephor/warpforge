@@ -53,19 +53,28 @@ pub async fn list_files(repo: &str, include_ignored: bool) -> Result<Vec<wire::P
             .map(|f| f.path)
             .collect::<std::collections::HashSet<_>>();
         return tokio::task::spawn_blocking(move || {
-            let mut files = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter_map(|line| {
-                    let path = line.trim();
-                    let exists = std::path::Path::new(&repo).join(path).exists();
-                    (!path.is_empty() && exists && !is_ignored_path(path)).then(|| {
-                        wire::ProjectFile {
-                            path: path.to_string(),
-                            changed: changed.contains(path),
-                        }
-                    })
-                })
-                .collect::<Vec<_>>();
+            let mut files = Vec::new();
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                let path = line.trim();
+                if path.is_empty() {
+                    continue;
+                }
+                let full = std::path::Path::new(&repo).join(path);
+                if path.ends_with('/') || full.is_dir() {
+                    // `git ls-files` collapses untracked directories to a
+                    // "dir/" entry and never descends into nested git repos
+                    // (submodule gitlinks). Walk them on the filesystem so
+                    // their contents appear in the tree.
+                    let _ = walk_files(std::path::Path::new(&repo), &full, &mut files);
+                    continue;
+                }
+                if full.exists() && !is_ignored_path(path) {
+                    files.push(wire::ProjectFile {
+                        path: path.to_string(),
+                        changed: changed.contains(path),
+                    });
+                }
+            }
             files.sort_by(|a, b| a.path.cmp(&b.path));
             files
         })
@@ -124,10 +133,13 @@ fn walk_files(
             walk_files(root, &path, out)?;
         } else if path.is_file() {
             if let Ok(rel) = path.strip_prefix(root) {
-                out.push(wire::ProjectFile {
-                    path: rel.to_string_lossy().replace('\\', "/"),
-                    changed: false,
-                });
+                let rel = rel.to_string_lossy().replace('\\', "/");
+                if !is_ignored_path(&rel) {
+                    out.push(wire::ProjectFile {
+                        path: rel,
+                        changed: false,
+                    });
+                }
             }
         }
     }

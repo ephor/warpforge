@@ -33,7 +33,11 @@ export interface ProjectTreeNode {
 export function buildProjectTree(files: ProjectFile[]): ProjectTreeNode {
   const root: ProjectTreeNode = { children: new Map(), name: "" };
   for (const f of files) {
-    const parts = f.path.split("/").filter(Boolean);
+    // `git ls-files --others` collapses untracked directories (including
+    // nested git repos it won't descend into) to a single "dir/" entry. Strip
+    // the trailing slash and keep the node path-less so it renders as a folder.
+    const isDir = f.path.endsWith("/");
+    const parts = f.path.replace(/\/+$/, "").split("/").filter(Boolean);
     let node = root;
     parts.forEach((part, i) => {
       let child = node.children.get(part);
@@ -41,7 +45,7 @@ export function buildProjectTree(files: ProjectFile[]): ProjectTreeNode {
         child = { children: new Map(), name: part };
         node.children.set(part, child);
       }
-      if (i === parts.length - 1) {
+      if (i === parts.length - 1 && !isDir) {
         child.path = f.path;
         child.changed = f.changed;
       }
