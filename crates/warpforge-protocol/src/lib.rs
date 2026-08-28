@@ -613,6 +613,17 @@ pub enum Method {
         kind: TextGenKind,
         #[serde(default)]
         model: Option<String>,
+        /// Run against this account instead of the agent's active one. Lets a
+        /// generation continue on a second account when the active one has hit
+        /// a usage limit.
+        #[serde(default)]
+        account_id: Option<String>,
+        /// Text to work from, for kinds that summarise the conversation rather
+        /// than the repository. Required by `Handoff`: the client decides where
+        /// the transcript is cut, since a fork continues from one message
+        /// rather than from the end.
+        #[serde(default)]
+        input: Option<String>,
     },
     /// Polish a task prompt (title/description written by the user) using the
     /// configured text-generation agent one-shot. Returns `{ text }`. Unlike
@@ -1570,6 +1581,10 @@ pub struct TaskInfo {
     pub files_changed: u32,
     /// Set when status == Blocked or Failed.
     pub blocked_reason: Option<String>,
+    /// Classification of `blocked_reason`, when the daemon recognised the
+    /// failure well enough for the client to offer a way out.
+    #[serde(default)]
+    pub blocked_kind: Option<TaskBlockedKind>,
     /// Session selectors (model/mode/…) reported by the agent. The daemon
     /// persists the last known set so resumed/interrupted tasks can still show
     /// their controls after a restart.
@@ -1935,6 +1950,17 @@ pub struct GitPushCommit {
     pub files: Vec<GitPushFile>,
 }
 
+/// A machine-readable reason a task is blocked, for the cases where the client
+/// can offer a way out instead of only showing the agent's message.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskBlockedKind {
+    /// The agent no longer has the saved session, so it can never be resumed —
+    /// its native history was deleted or expired. The conversation Warpforge
+    /// stored is unaffected, so the work can continue in a fresh session.
+    SessionLost,
+}
+
 /// Which kind of git prose `text.generate` should produce.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1947,6 +1973,10 @@ pub enum TextGenKind {
     TaskTitle,
     /// A polished, well-structured rewrite of a user-written task prompt.
     EnhancePrompt,
+    /// A handoff document compacted from a task's stored transcript, for
+    /// continuing the work in a fresh session. Unlike the other kinds this one
+    /// reads the session history rather than the repository.
+    Handoff,
 }
 
 /// Preview returned by `git.pushInfo`.

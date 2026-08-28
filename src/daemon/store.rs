@@ -298,6 +298,7 @@ impl Store {
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN account_id TEXT", []);
         // Migration: link a task back to the backlog item it was started from.
         let _ = conn.execute("ALTER TABLE tasks ADD COLUMN backlog_item_id TEXT", []);
+        let _ = conn.execute("ALTER TABLE tasks ADD COLUMN blocked_kind TEXT", []);
         // Migration: mark links minted by an import, so unmapping a tracker can
         // drop its mirrored rows without touching items written here and pushed
         // out. Existing rows default to 0 — not provably imported, never purged.
@@ -337,8 +338,8 @@ impl Store {
                 (id, session_id, project, prompt, agent, status, tags, title,
                  created_at, updated_at, files_changed, blocked_reason, config_options, worktree,
                  parent_task_id, settled_override, settled_at, snoozed_until, snoozed_at,
-                 account_id, backlog_item_id)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
+                 account_id, backlog_item_id, blocked_kind)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
             ON CONFLICT(id) DO UPDATE SET
                 session_id=excluded.session_id,
                 status=excluded.status,
@@ -354,7 +355,8 @@ impl Store {
                 snoozed_until=excluded.snoozed_until,
                 snoozed_at=excluded.snoozed_at,
                 account_id=excluded.account_id,
-                backlog_item_id=excluded.backlog_item_id
+                backlog_item_id=excluded.backlog_item_id,
+                blocked_kind=excluded.blocked_kind
             "#,
             rusqlite::params![
                 task.id,
@@ -378,6 +380,7 @@ impl Store {
                 task.snoozed_at,
                 task.account_id,
                 task.backlog_item_id,
+                blocked_kind_str(task.blocked_kind),
             ],
         )?;
         Ok(())
@@ -392,7 +395,7 @@ impl Store {
             "SELECT id, session_id, project, prompt, agent, status, tags, \
              created_at, updated_at, files_changed, blocked_reason, config_options, worktree, \
              parent_task_id, title, settled_override, settled_at, snoozed_until, snoozed_at, \
-             account_id, backlog_item_id \
+             account_id, backlog_item_id, blocked_kind \
              FROM tasks",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -416,6 +419,7 @@ impl Store {
                 updated_at: row.get(8)?,
                 files_changed: row.get::<_, i64>(9)? as u32,
                 blocked_reason: row.get(10)?,
+                blocked_kind: parse_blocked_kind(row.get(21)?),
                 config_options: serde_json::from_str(&config_options_json).unwrap_or_default(),
                 worktree: row.get(12)?,
                 orchestration_graph: None,
@@ -1024,6 +1028,22 @@ pub fn fold_for_snapshot(updates: &[wire::SessionUpdate]) -> Vec<wire::SessionUp
 /// `"idle"` and `"needs_review"` are the pre-merge spellings of `Waiting`. Rows
 /// written by older daemons are still on disk in every existing install, so both
 /// must keep loading — this arm is load-bearing, not tidy-up.
+fn blocked_kind_str(kind: Option<wire::TaskBlockedKind>) -> Option<&'static str> {
+    match kind {
+        Some(wire::TaskBlockedKind::SessionLost) => Some("session_lost"),
+        None => None,
+    }
+}
+
+/// An unknown value — written by a newer daemon sharing this store — reads back
+/// as `None`, leaving the client with the plain `blocked_reason` it always had.
+fn parse_blocked_kind(s: Option<String>) -> Option<wire::TaskBlockedKind> {
+    match s.as_deref() {
+        Some("session_lost") => Some(wire::TaskBlockedKind::SessionLost),
+        _ => None,
+    }
+}
+
 fn parse_status(s: &str) -> TaskStatus {
     match s {
         "queued" => TaskStatus::Queued,

@@ -84,6 +84,9 @@ pub enum AcpUpdate {
     Error {
         run_id: u64,
         message: String,
+        /// Set when the daemon recognised the failure well enough for a client
+        /// to offer a way out of it.
+        kind: Option<wire::TaskBlockedKind>,
     },
 }
 
@@ -243,6 +246,10 @@ struct FailureReporter {
 
 impl FailureReporter {
     fn report(&self, message: String) {
+        self.report_kind(message, None);
+    }
+
+    fn report_kind(&self, message: String, kind: Option<wire::TaskBlockedKind>) {
         if self
             .reported
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -253,10 +260,36 @@ impl FailureReporter {
                 AcpUpdate::Error {
                     run_id: self.run_id,
                     message,
+                    kind,
                 },
             ));
         }
     }
+}
+
+/// Whether a rejected `session/load` means the session is gone for good rather
+/// than temporarily unavailable. Agents report it as JSON-RPC "resource not
+/// found" — a durable answer, unlike a transport or startup failure, so the
+/// client can stop offering resume and offer a fresh session instead.
+///
+/// The verdict discards the saved session id, so it has to be narrow. A bare
+/// "not found" is not enough: a load can also fail because the *cwd* is gone,
+/// which is recoverable and must keep the id. The message therefore has to name
+/// the session we asked about.
+fn is_session_gone(response: &Value, session_id: &str) -> bool {
+    let Some(err) = response.get("error") else {
+        return false;
+    };
+    if err.get("code").and_then(Value::as_i64) == Some(-32002) {
+        return true;
+    }
+    let message = err.get("message").and_then(Value::as_str).unwrap_or("");
+    let names_session = message.contains(session_id)
+        || err
+            .get("data")
+            .map(|data| data.to_string().contains(session_id))
+            .unwrap_or(false);
+    names_session && message.to_ascii_lowercase().contains("not found")
 }
 
 /// How long a caller waits for a killed ACP child to be reaped before giving
@@ -964,10 +997,15 @@ pub fn spawn_acp_session(
                     }
                     Ok(RpcOutcome::Response(response)) => {
                         let detail = acp_error_detail(&response);
-                        reporter.report(format!(
-                            "Agent command '{agent_name}' rejected ACP session/load for saved \
-                             session '{sid}'.{detail}"
-                        ));
+                        let kind = is_session_gone(&response, sid)
+                            .then_some(wire::TaskBlockedKind::SessionLost);
+                        reporter.report_kind(
+                            format!(
+                                "Agent command '{agent_name}' rejected ACP session/load for saved \
+                                 session '{sid}'.{detail}"
+                            ),
+                            kind,
+                        );
                         let _ = driver_kill_tx.send(());
                         return;
                     }
@@ -2185,6 +2223,36 @@ fn parse_permission(params: &Value) -> (String, Vec<String>, HashMap<String, Str
 mod tests {
     use super::*;
     use crate::daemon::prompt::{PreparedPrompt, PromptContent};
+
+    /// A "session gone" verdict throws the saved session id away, so it must
+    /// fire only when the agent really has forgotten *that* session.
+    #[test]
+    fn only_a_missing_session_counts_as_gone() {
+        let sid = "aac83a02-3541-4dfd-8257-730dd547476a";
+
+        // What claude-agent-acp actually returns.
+        assert!(is_session_gone(
+            &json!({"error": {"code": -32002, "message": format!("Resource not found: {sid}"),
+                              "data": {"uri": sid}}}),
+            sid
+        ));
+        // No code, but the message names the session.
+        assert!(is_session_gone(
+            &json!({"error": {"message": format!("session {sid} not found")}}),
+            sid
+        ));
+        // A missing working directory is recoverable — keep the id.
+        assert!(!is_session_gone(
+            &json!({"error": {"message": "cwd not found: /gone/worktree"}}),
+            sid
+        ));
+        // Any other rejection leaves the session alone.
+        assert!(!is_session_gone(
+            &json!({"error": {"code": -32603, "message": "internal error"}}),
+            sid
+        ));
+        assert!(!is_session_gone(&json!({"result": {}}), sid));
+    }
 
     #[test]
     fn mcp_tool_titles_render_as_human_labels() {

@@ -57,6 +57,9 @@ pub struct Task {
     pub updated_at: u64,
     pub files_changed: u32,
     pub blocked_reason: Option<String>,
+    /// Why the task is blocked, when the daemon can say something more useful
+    /// than the raw message. `None` = no classification; read `blocked_reason`.
+    pub blocked_kind: Option<warpforge_protocol::TaskBlockedKind>,
     /// Latest session selectors (model/mode/…) from the ACP session. Persisted
     /// so resumed/interrupted tasks keep the last known controls after restart.
     pub config_options: Vec<warpforge_protocol::ConfigOption>,
@@ -106,6 +109,7 @@ impl Task {
             updated_at: ts,
             files_changed: 0,
             blocked_reason: None,
+            blocked_kind: None,
             config_options: Vec::new(),
             worktree: None,
             orchestration_graph: None,

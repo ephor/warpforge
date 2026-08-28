@@ -606,6 +606,9 @@ async fn build_textgen_prompt(
                 "{ENHANCE_PROMPT_INSTRUCTION}\n\n----- task prompt -----\n{prompt}"
             ))
         }
+        // The caller renders the transcript, since reading it is a store hit
+        // rather than the git work the other kinds do here.
+        wire::TextGenKind::Handoff => super::handoff::cold_prompt(message.unwrap_or("")),
     }
 }
 
@@ -1022,6 +1025,10 @@ pub enum Command {
         agent_id: String,
         kind: wire::TextGenKind,
         model: Option<String>,
+        /// Account to run against; `None` uses the agent's active one.
+        account_id: Option<String>,
+        /// Client-supplied text for kinds that summarise the conversation.
+        input: Option<String>,
         reply: oneshot::Sender<Result<String, String>>,
     },
     EnhanceText {
@@ -2081,6 +2088,8 @@ impl DaemonHandle {
         agent_id: &str,
         kind: wire::TextGenKind,
         model: Option<String>,
+        account_id: Option<String>,
+        input: Option<String>,
     ) -> Result<String, String> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::GenerateText {
@@ -2088,6 +2097,8 @@ impl DaemonHandle {
             agent_id: agent_id.to_string(),
             kind,
             model,
+            account_id,
+            input,
             reply: tx,
         })
         .await;
@@ -4659,10 +4670,16 @@ impl Daemon {
                 agent_id,
                 kind,
                 model,
+                account_id,
+                input,
                 reply,
             } => {
                 // Resolve everything that needs actor state up front, then run
                 // the (slow) git + agent work off the actor loop.
+                let account = match account_id.as_deref() {
+                    Some(id) => super::accounts::SpawnAccount::Pinned(id),
+                    None => super::accounts::SpawnAccount::Active,
+                };
                 let resolved = self.tasks.get(&task_id).map(|task| {
                     let repo = task
                         .worktree
@@ -4670,8 +4687,7 @@ impl Daemon {
                         .or_else(|| self.project_path(&task.project))
                         .unwrap_or_else(|| ".".to_string());
                     let command = self.resolve_agent_command(&task.project, &agent_id);
-                    let env =
-                        self.resolve_agent_env(&agent_id, super::accounts::SpawnAccount::Active);
+                    let env = self.resolve_agent_env(&agent_id, account);
                     let prompt = task.prompt.clone();
                     (repo, command, prompt, env)
                 });
@@ -4680,6 +4696,9 @@ impl Daemon {
                         tokio::spawn(async move {
                             let message = match kind {
                                 wire::TextGenKind::TaskTitle => Some(prompt.as_str()),
+                                // A handoff summarises the conversation, and
+                                // the client is what knows where to cut it.
+                                wire::TextGenKind::Handoff => input.as_deref(),
                                 _ => None,
                             };
                             let result = match build_textgen_prompt(&repo, kind, message).await {
@@ -7064,7 +7083,11 @@ impl Daemon {
                     self.request_task_output(&task_id, success, workflow_child);
                 }
             }
-            AcpUpdate::Error { run_id, message } => {
+            AcpUpdate::Error {
+                run_id,
+                message,
+                kind,
+            } => {
                 if self
                     .sessions
                     .get(&task_id)
@@ -7078,6 +7101,14 @@ impl Daemon {
                 self.pending_permissions.cleanup_task(&task_id);
                 if let Some(task) = self.tasks.get_mut(&task_id) {
                     task.blocked_reason = Some(message);
+                    task.blocked_kind = kind;
+                    // A lost session id refers to nothing, so keeping it would
+                    // retry session/load and fail identically on every later
+                    // prompt. Dropping it lets the next one start fresh; the
+                    // conversation Warpforge stored is untouched either way.
+                    if matches!(kind, Some(wire::TaskBlockedKind::SessionLost)) {
+                        task.session_id = None;
+                    }
                     task.set_status(TaskStatus::Blocked);
                     let updated = task.clone();
                     self.persist(&updated);
@@ -7112,6 +7143,7 @@ impl Daemon {
         if let Some(task) = self.tasks.get_mut(task_id) {
             if task.status != TaskStatus::Done {
                 task.blocked_reason = None;
+                task.blocked_kind = None;
                 task.set_status(TaskStatus::Running);
                 // Reactivate lifecycle: clear settle/snooze when task starts running
                 task.settled_override = None;
@@ -8951,6 +8983,7 @@ impl Daemon {
                 // executing or the runner is parked at a barrier.
                 if let Some(task) = self.tasks.get_mut(&task_id) {
                     task.blocked_reason = None;
+                    task.blocked_kind = None;
                     let status = match run.state {
                         RunState::Running { .. } => TaskStatus::Running,
                         RunState::AwaitingReply { .. }

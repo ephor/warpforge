@@ -18,6 +18,7 @@ pub mod attachment;
 pub mod backlog;
 pub mod claude_auth;
 pub mod diff;
+pub mod handoff;
 pub mod lsp;
 pub mod lsp_servers;
 pub mod memory;
@@ -1747,5 +1748,68 @@ mod tests {
             .filter(|update| matches!(update, warpforge_protocol::SessionUpdate::UserMessage { text, .. } if text == "follow up after recovery"))
             .count();
         assert_eq!(user_messages, 1, "reconnect must persist the prompt once");
+    }
+
+    /// An agent that has forgotten a saved session can never resume it. The
+    /// daemon must say so in a form the client can act on, and must drop the
+    /// dead id — keeping it made every later prompt fail the same way.
+    #[tokio::test]
+    async fn a_forgotten_session_is_marked_lost_and_its_id_dropped() {
+        use warpforge_protocol as wire;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("warpforge.db");
+        let log_path = dir.path().join("acp.log");
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/mock-acp-session-lost.mjs"
+        );
+        let agent = format!("node {} {}", fixture, log_path.display());
+        let store = Store::open_at(&db_path).unwrap();
+        let mut persisted = Task::new("demo", "original prompt", &agent, vec![]);
+        persisted.attach_session("gone-session".into());
+        persisted.set_status(TaskStatus::Interrupted);
+        let task_id = persisted.id.clone();
+        store.upsert_task(&persisted).unwrap();
+
+        let daemon = Daemon::spawn(test_projects(), Some(store));
+        let mut events = daemon.subscribe();
+        daemon
+            .session_prompt(&task_id, "follow up", vec![])
+            .await
+            .unwrap();
+        let blocked = timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(Event::TaskUpdated(task)) = events.recv().await {
+                    if task.id == task_id && task.status == TaskStatus::Blocked {
+                        break task;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("a rejected load should block the task");
+
+        assert_eq!(
+            blocked.blocked_kind,
+            Some(wire::TaskBlockedKind::SessionLost)
+        );
+        assert_eq!(blocked.session_id, None, "the dead id must not be kept");
+
+        // The classification has to survive a restart: the task stays blocked
+        // across daemon lifetimes, so the client needs it again on reload.
+        daemon.shutdown().await;
+        let store = Store::open_at(&db_path).unwrap();
+        let reloaded = store
+            .load_tasks()
+            .unwrap()
+            .into_iter()
+            .find(|task| task.id == task_id)
+            .expect("task should still be stored");
+        assert_eq!(
+            reloaded.blocked_kind,
+            Some(wire::TaskBlockedKind::SessionLost)
+        );
+        assert_eq!(reloaded.session_id, None);
     }
 }

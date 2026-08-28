@@ -1001,9 +1001,11 @@ async fn dispatch(
             agent_id,
             kind,
             model,
+            account_id,
+            input,
         } => {
             let text = handle
-                .generate_text(&task_id, &agent_id, kind, model)
+                .generate_text(&task_id, &agent_id, kind, model, account_id, input)
                 .await
                 .map_err(|message| wire::RpcError {
                     code: wire::ErrorCode::Internal,
@@ -2161,6 +2163,8 @@ mod tests {
                 agent_id: "claude".into(),
                 kind: wire::TextGenKind::TaskTitle,
                 model: None,
+                account_id: None,
+                input: None,
             },
             AgentsInstall {
                 id: "claude".into(),
