@@ -28,8 +28,8 @@ review:
   context: [prompt, implementer_summary, diff]
   reviewers:
     # Each reviewer may use a different agent/model. Omitted values use Lead.
-    - agent: codex
-      model: gpt-5.6-sol
+    - agent: opencode
+      model: opencode-go/glm-5.3-flash
       # focus: correctness and edge cases
       prompt: |
         You are a code reviewer in workflow round {{round}}/{{max_rounds}}.
