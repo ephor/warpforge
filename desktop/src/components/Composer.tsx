@@ -601,8 +601,9 @@ const ContextUsageIndicator = memo(function ContextUsageIndicator({
         {usage.cost && (
           <p className="tnum border-t pt-3 text-xs text-muted-foreground">
             Session cost ·{" "}
-            {usage.cost.amount.toLocaleString(undefined, {
-              maximumFractionDigits: 4,
+            {usage.cost.amount.toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
             })}{" "}
             {usage.cost.currency}
           </p>
