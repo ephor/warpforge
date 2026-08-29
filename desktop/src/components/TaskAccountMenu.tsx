@@ -80,14 +80,32 @@ export function TaskAccountMenu({
     );
   }
 
-  const label = activeCard ? activeCard.label : "Select account";
+  // Name the login only when there is a choice to name. A harness with one
+  // login has nothing to disambiguate, and its label is often a placeholder the
+  // daemon invented ("Signed in") — so the button reads "OpenCode", not
+  // "OpenCode · Signed in". Same rule the cards use for their own labels.
+  // "Select account" is only an instruction when there is something to select.
+  // A harness warpforge holds no accounts for (Pi) has nothing to offer, so the
+  // button is just its name — and one login needs no naming either, since its
+  // label is often a placeholder the daemon invented ("Signed in").
+  const ownCards = cards.filter((card) => card.agentId === agentId).length;
+  const label = activeCard
+    ? ownCards > 1
+      ? activeCard.label
+      : displayName
+    : ownCards > 0
+      ? "Select account"
+      : displayName;
+  // Don't repeat the harness back at itself ("Claude Code: Claude Code") when
+  // the label already is the harness name.
+  const titleHead = label === displayName ? displayName : `${displayName}: ${label}`;
   return (
     <div className="flex min-w-0 items-center gap-1.5">
       <DropdownMenu>
         <DropdownMenuTrigger
           className="flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
           aria-label={`${displayName} account`}
-          title={`${displayName}: ${label}${shown.map((w) => ` · ${w.label}: ${quotaSentence(w)}`).join("")}`}
+          title={`${titleHead}${shown.map((w) => ` · ${w.label}: ${quotaSentence(w)}`).join("")}`}
         >
           <AgentLogo agentId={agentId} displayName={displayName} />
           <span className="max-w-28 truncate">

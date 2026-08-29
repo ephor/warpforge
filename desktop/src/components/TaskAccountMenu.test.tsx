@@ -135,7 +135,9 @@ describe("TaskAccountMenu trigger", () => {
 
     const trigger = await screen.findByRole("button", { name: "Claude Code account" });
     expect(trigger).toHaveTextContent("60%");
-    expect(trigger).toHaveAttribute("title", "Claude Code: Personal · Weekly: 60% left");
+    // One login for this harness, so the button names the harness, not the
+    // account — and the title does not repeat it back at itself.
+    expect(trigger).toHaveAttribute("title", "Claude Code · Weekly: 60% left");
   });
 
   it("shows the active account's quota, not a busier idle account's", async () => {
@@ -164,7 +166,7 @@ describe("TaskAccountMenu trigger", () => {
     renderMenu("claude", [account("claude", "personal", { active: true, label: "Personal" })]);
 
     const trigger = await screen.findByRole("button", { name: "Claude Code account" });
-    expect(trigger).toHaveTextContent("Personal");
+    expect(trigger).toHaveTextContent("Claude Code");
     // The trigger is also the harness identity, so it stays — minus the numbers.
     expect(trigger).not.toHaveTextContent("%");
   });
