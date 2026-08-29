@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.0
+
+### Minor Changes
+
+- [`5f5464a`](https://github.com/warpforgehq/warpforge/commit/5f5464ad12bec27b286853db98385c5dede7f0db) Thanks [@ephor](https://github.com/ephor)! - Faster cold start and automatic history cleanup. The app now loads only a small recent slice of each task's chat on connect, so starting after a while no longer hangs on a large database. Closed tasks keep their chat for 30 days, waiting tasks with no changes settle themselves after 2 weeks, and untouched closed tasks are removed after 90 days. Each step is visible with a notice, and all three windows are adjustable in Settings → Task history.
+
 ## 0.12.1
 
 ### Patch Changes
