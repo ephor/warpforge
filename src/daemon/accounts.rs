@@ -74,7 +74,12 @@ pub fn create_vault(agent_id: &str, slug: &str, id: &str) -> Result<PathBuf> {
 
 /// `create_vault` against an explicit root, so the checks can be exercised
 /// without writing into the real home directory.
-fn create_vault_under(root: &Path, agent_id: &str, slug: &str, id: &str) -> Result<PathBuf> {
+pub(crate) fn create_vault_under(
+    root: &Path,
+    agent_id: &str,
+    slug: &str,
+    id: &str,
+) -> Result<PathBuf> {
     let path = root.join(agent_id).join(slug);
     if !path.exists() {
         std::fs::create_dir_all(&path)
@@ -105,7 +110,7 @@ pub fn verify_vault(path: &Path, id: &str) -> Result<PathBuf> {
 
 /// `verify_vault` against an explicit root, so the checks can be exercised
 /// without writing into the real home directory.
-fn verify_vault_under(root: &Path, path: &Path, id: &str) -> Result<PathBuf> {
+pub(crate) fn verify_vault_under(root: &Path, path: &Path, id: &str) -> Result<PathBuf> {
     let root = root.to_path_buf();
     if !path.exists() {
         bail!("account vault {} does not exist", path.display());
@@ -522,37 +527,16 @@ fn claude_config_json(home: &Path) -> Result<String> {
 /// discards the only valid token that account has, and it is silently logged
 /// out. So: read live → store under the outgoing account → write the target.
 ///
-/// An unusable read-back (the empty blob a CLI writes when it loses a refresh
-/// race) is dropped rather than persisted, which would log the account out for
-/// good.
+/// The read-back itself lives in `credential_capture`: a switch is only one of
+/// the moments a rotation has to be caught, and all of them must apply the same
+/// rules about what may be written into a vault.
 pub fn activate_claude_account(
+    capture: &mut super::credential_capture::CredentialCapture,
     runtime: &super::claude_auth::ClaudeRuntime,
     outgoing: Option<&StoredAccount>,
     target: &StoredAccount,
 ) -> Result<()> {
-    activate_claude_account_under(&accounts_root(), runtime, outgoing, target)
-}
-
-/// Whether the credentials currently live really belong to `account`.
-///
-/// Write-back assumes the live login is the outgoing account's. That breaks if
-/// the user signed into a *different* account from a terminal since the last
-/// switch: capturing those credentials under the outgoing account's id would
-/// mean "switch to personal" later logs you into whatever that terminal login
-/// was. The credentials blob carries no identity, so compare Claude's own
-/// account metadata instead, and only skip when it clearly disagrees — an
-/// unknown identity keeps the token-preserving behavior.
-fn live_belongs_to(runtime: &super::claude_auth::ClaudeRuntime, account: &StoredAccount) -> bool {
-    let Some(expected) = account.email.as_deref() else {
-        return true;
-    };
-    let live_email = runtime
-        .read_live_oauth_account()
-        .and_then(|account| claude_identity(&account.to_string()).email);
-    match live_email {
-        Some(live) => live.eq_ignore_ascii_case(expected),
-        None => true,
-    }
+    activate_claude_account_under(&accounts_root(), capture, runtime, outgoing, target)
 }
 
 /// The `oauthAccount` block out of a stored identity file.
@@ -570,23 +554,18 @@ fn stored_oauth_account(stored: serde_json::Value) -> serde_json::Value {
 
 fn activate_claude_account_under(
     root: &Path,
+    capture: &mut super::credential_capture::CredentialCapture,
     runtime: &super::claude_auth::ClaudeRuntime,
     outgoing: Option<&StoredAccount>,
     target: &StoredAccount,
 ) -> Result<()> {
-    if let Some(outgoing) = outgoing {
-        if outgoing.id != target.id && live_belongs_to(runtime, outgoing) {
-            if let Some(live) = runtime.read_live_credentials()? {
-                if super::claude_auth::credentials_are_usable(&live) {
-                    runtime.write_managed_credentials(&outgoing.id, &live)?;
-                    if let Ok(vault) =
-                        verify_vault_under(root, Path::new(&outgoing.home_dir), &outgoing.id)
-                    {
-                        write_vault_file(&vault, super::claude_auth::CREDENTIALS_FILE, &live)?;
-                    }
-                }
-            }
-        }
+    if let Some(outgoing) = outgoing.filter(|outgoing| outgoing.id != target.id) {
+        capture.capture_claude_under(
+            root,
+            runtime,
+            std::slice::from_ref(outgoing),
+            Some(outgoing),
+        );
     }
 
     let vault = verify_vault_under(root, Path::new(&target.home_dir), &target.id)?;
@@ -618,7 +597,12 @@ fn activate_claude_account_under(
     {
         runtime.write_live_oauth_account(&oauth_account)?;
     }
-    runtime.write_live_credentials(&credentials)
+    runtime.write_live_credentials(&credentials)?;
+    // Remember what we made live: without it the next capture sees credentials
+    // it did not write, cannot tell our own switch from the CLI's rotation, and
+    // has to fall back to the stricter rule that needs proof of freshness.
+    capture.note_live_claude(&credentials);
+    Ok(())
 }
 
 /// Environment changes an agent process needs: variables to set, and variables
@@ -659,6 +643,12 @@ pub enum SpawnAccount<'a> {
 
 /// Resolve a `SpawnAccount` to a stored account.
 ///
+/// An account only ever applies to the agent it belongs to, pin included. A
+/// task pinned to `claude:personal` but spawning Codex resolves to nothing, not
+/// to the Claude account and not to whichever Codex account happens to be
+/// active: `env_for` would otherwise hand Codex a Claude vault as its
+/// `CODEX_HOME`, where it finds no `auth.json` and writes its own state.
+///
 /// A vault that no longer verifies — deleted, or replaced by a symlink — is
 /// dropped rather than handed to a child process. The agent then falls back to
 /// its own home, which is wrong-but-working; pointing it at a directory we
@@ -680,7 +670,9 @@ fn select_for_spawn_under<'a>(
     choice: SpawnAccount<'_>,
 ) -> Option<&'a StoredAccount> {
     match choice {
-        SpawnAccount::Pinned(id) => accounts.iter().find(|a| a.id == id),
+        SpawnAccount::Pinned(id) => accounts
+            .iter()
+            .find(|a| a.id == id && a.agent_id == agent_id),
         SpawnAccount::SharedHome => None,
         SpawnAccount::Active => accounts.iter().find(|a| a.agent_id == agent_id && a.active),
     }
@@ -895,6 +887,7 @@ mod tests {
     fn activation_captures_the_outgoing_account_before_overwriting_it() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, mut personal, work) = claude_fixture(root.path());
+        let mut capture = super::super::credential_capture::CredentialCapture::default();
         personal.active = true;
 
         // Both accounts were imported at some point.
@@ -915,7 +908,8 @@ mod tests {
             .write_live_credentials(r#"{"accessToken":"personal-v2"}"#)
             .unwrap();
 
-        activate_claude_account_under(root.path(), &runtime, Some(&personal), &work).unwrap();
+        activate_claude_account_under(root.path(), &mut capture, &runtime, Some(&personal), &work)
+            .unwrap();
 
         // The rotated token was captured, not thrown away…
         assert_eq!(
@@ -929,7 +923,8 @@ mod tests {
         );
 
         // Switching back restores the captured token, not the stale one.
-        activate_claude_account_under(root.path(), &runtime, Some(&work), &personal).unwrap();
+        activate_claude_account_under(root.path(), &mut capture, &runtime, Some(&work), &personal)
+            .unwrap();
         assert_eq!(
             runtime.read_live_credentials().unwrap(),
             Some(r#"{"accessToken":"personal-v2"}"#.to_string())
@@ -941,6 +936,7 @@ mod tests {
     fn activation_moves_identity_and_credentials_together() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, personal, work) = claude_fixture(root.path());
+        let mut capture = super::super::credential_capture::CredentialCapture::default();
         for (account, email) in [(&personal, "me@example.com"), (&work, "me@corp.com")] {
             runtime
                 .write_managed_credentials(&account.id, r#"{"accessToken":"t"}"#)
@@ -959,7 +955,8 @@ mod tests {
         )
         .unwrap();
 
-        activate_claude_account_under(root.path(), &runtime, Some(&work), &personal).unwrap();
+        activate_claude_account_under(root.path(), &mut capture, &runtime, Some(&work), &personal)
+            .unwrap();
 
         // Leaving the config on the previous account is what produced
         // "OAuth session expired and could not be refreshed" in the field: the
@@ -992,6 +989,7 @@ mod tests {
     fn write_back_is_skipped_when_the_live_login_is_a_different_account() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, mut personal, work) = claude_fixture(root.path());
+        let mut capture = super::super::credential_capture::CredentialCapture::default();
         personal.email = Some("personal@example.com".into());
         personal.active = true;
         runtime
@@ -1013,7 +1011,8 @@ mod tests {
             .write_live_credentials(r#"{"accessToken":"stranger-token"}"#)
             .unwrap();
 
-        activate_claude_account_under(root.path(), &runtime, Some(&personal), &work).unwrap();
+        activate_claude_account_under(root.path(), &mut capture, &runtime, Some(&personal), &work)
+            .unwrap();
 
         // `personal` keeps its own credentials instead of adopting the
         // stranger's session under its label.
@@ -1028,6 +1027,7 @@ mod tests {
     fn activation_discards_an_empty_read_back_and_refuses_a_broken_target() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, personal, work) = claude_fixture(root.path());
+        let mut capture = super::super::credential_capture::CredentialCapture::default();
         runtime
             .write_managed_credentials(&personal.id, r#"{"accessToken":"personal-v1"}"#)
             .unwrap();
@@ -1040,7 +1040,8 @@ mod tests {
         runtime
             .write_live_credentials(r#"{"accessToken":""}"#)
             .unwrap();
-        activate_claude_account_under(root.path(), &runtime, Some(&personal), &work).unwrap();
+        activate_claude_account_under(root.path(), &mut capture, &runtime, Some(&personal), &work)
+            .unwrap();
         assert_eq!(
             runtime.read_managed_credentials(&personal.id).unwrap(),
             Some(r#"{"accessToken":"personal-v1"}"#.to_string()),
@@ -1056,7 +1057,8 @@ mod tests {
         )
         .ok();
         let err =
-            activate_claude_account_under(root.path(), &runtime2, None, &unknown).unwrap_err();
+            activate_claude_account_under(root.path(), &mut capture, &runtime2, None, &unknown)
+                .unwrap_err();
         assert!(err.to_string().contains("re-import"), "{err}");
     }
 
@@ -1287,6 +1289,26 @@ mod tests {
                 .is_none()
         );
 
+        // A pin naming *another harness's* account is not this agent's account.
+        // Resolving it would give Codex a Claude vault as its `CODEX_HOME` —
+        // no `auth.json` to read, and its own state written into it — so the
+        // pin simply does not apply here. Falling back to the active Codex
+        // account would be just as wrong: the task asked for a specific login.
+        assert!(select_for_spawn_under(
+            root.path(),
+            &accounts,
+            "codex",
+            SpawnAccount::Pinned("claude:personal")
+        )
+        .is_none());
+        assert!(select_for_spawn_under(
+            root.path(),
+            &accounts,
+            "claude",
+            SpawnAccount::Pinned("codex:work")
+        )
+        .is_none());
+
         // An id that no longer exists selects nothing rather than falling back
         // to the active account: a task pinned elsewhere must not silently run
         // under someone else's login.
@@ -1303,6 +1325,51 @@ mod tests {
             select_for_spawn_under(root.path(), &accounts, "gemini", SpawnAccount::Active)
                 .is_none()
         );
+    }
+
+    /// A task records whatever agent string the client sent — the registry id
+    /// (`codex`) or the display name (`Codex`) — while accounts and the env
+    /// rules are keyed by id alone. The spawn path normalises first; matching
+    /// the raw field found no account and produced no `CODEX_HOME` at all,
+    /// silently running the task in the shared home.
+    #[test]
+    fn a_display_name_agent_field_resolves_the_same_account_as_the_id() {
+        use crate::daemon::actor::Daemon;
+        use warpforge_protocol as wire;
+
+        let root = tempfile::tempdir().unwrap();
+        let vault = create_vault_under(root.path(), "codex", "personal", "codex:personal").unwrap();
+        let accounts = vec![account("codex:personal", &vault)];
+        let configured = vec![wire::AgentConfig {
+            id: "codex".to_string(),
+            display_name: "Codex".to_string(),
+            acp_command: "codex acp".to_string(),
+            enabled: true,
+            models: Vec::new(),
+            last_model: None,
+        }];
+
+        let pick = |agent: &str| {
+            let agent_id = Daemon::agent_id_in(&configured, agent);
+            let selected =
+                select_for_spawn_under(root.path(), &accounts, agent_id, SpawnAccount::Active);
+            (
+                selected.map(|a| a.id.clone()),
+                env_for(agent_id, selected).set.get("CODEX_HOME").cloned(),
+            )
+        };
+        assert_eq!(pick("Codex"), pick("codex"));
+        assert_eq!(pick("codex").0.as_deref(), Some("codex:personal"));
+        assert!(
+            pick("Codex").1.is_some(),
+            "the display name must set a home"
+        );
+
+        // What the unnormalised field did: no account, and an empty env.
+        assert!(
+            select_for_spawn_under(root.path(), &accounts, "Codex", SpawnAccount::Active).is_none()
+        );
+        assert!(env_for("Codex", accounts.first()).is_empty());
     }
 
     #[test]

@@ -2985,6 +2985,14 @@ pub struct Daemon {
     workflow_runs: HashMap<String, WorkflowRun>,
     /// Registered agent accounts, mirroring the `agent_accounts` table.
     accounts: Vec<super::store::StoredAccount>,
+    /// Filing cabinet for the token rotations the agent CLIs perform. Shared
+    /// because unattended captures run off the actor loop (file reads, and a
+    /// keychain subprocess on macOS) while an account switch drives the same
+    /// state from on it.
+    credential_capture: Arc<Mutex<super::credential_capture::CredentialCapture>>,
+    /// When credentials were last looked at, so the per-turn trigger does not
+    /// re-read the keychain for every task that finishes a turn.
+    last_credential_capture: Option<std::time::Instant>,
     /// Shared memory store (separate `~/.warpforge/memory.db`), owned here so
     /// all memory ops run on the actor thread against one connection.
     memory: super::memory::MemoryStore,
@@ -3120,6 +3128,8 @@ impl Daemon {
             pending_resume: HashMap::new(),
             workflow_runs: HashMap::new(),
             accounts,
+            credential_capture: Arc::new(Mutex::new(Default::default())),
+            last_credential_capture: None,
             memory,
             last_memory_activity: Arc::new(Mutex::new(std::time::Instant::now())),
             spend_cache: None,
@@ -3505,6 +3515,7 @@ impl Daemon {
         let shutdown_reply = loop {
             tokio::select! {
                 _ = limits_poll.tick() => {
+                    self.capture_credentials();
                     let accounts = self.accounts.clone();
                     let cmd_tx = self.cmd_tx.clone();
                     tokio::spawn(async move {
@@ -6852,11 +6863,17 @@ impl Daemon {
     ///
     /// Codex selects its account by `CODEX_HOME`; Claude does not (its account
     /// is swapped in place) but still needs conflicting auth env stripped.
+    ///
+    /// `agent` is whatever the caller recorded — a registry id or a display
+    /// name — while accounts and the env rules are both keyed by id. Matching
+    /// the raw field means a task recorded as `"Codex"` finds no account and
+    /// gets no environment at all, silently running in the shared home.
     fn resolve_agent_env(
         &self,
         agent: &str,
         choice: super::accounts::SpawnAccount<'_>,
     ) -> super::accounts::AgentEnv {
+        let agent = self.agent_id_of(agent);
         let selected = super::accounts::select_for_spawn(&self.accounts, agent, choice);
         // Re-link the shared home before every spawn, not just at import: the
         // agent's own home grows entries over time, and a vault that missed
@@ -6879,6 +6896,36 @@ impl Daemon {
     /// How the daemon reaches the Claude CLI's credential storage.
     fn claude_runtime(&self) -> super::claude_auth::ClaudeRuntime {
         super::claude_auth::ClaudeRuntime::detect()
+    }
+
+    /// File whatever the agent CLIs rotated since the last look.
+    ///
+    /// Called when a turn ends — the CLI that could have refreshed has just
+    /// finished, so anything it rotated has settled — and again on the quota
+    /// poll's timer, which is what catches a `codex` or `claude` the user ran
+    /// in their own terminal. Both are edges the daemon already has; there is
+    /// no loop watching credential files.
+    ///
+    /// Off the actor loop, because it reads credential files and shells out to
+    /// the keychain, and rate-limited because a busy board ends turns far more
+    /// often than a token rotates.
+    fn capture_credentials(&mut self) {
+        const MIN_INTERVAL: Duration = Duration::from_secs(30);
+        if self
+            .last_credential_capture
+            .is_some_and(|at| at.elapsed() < MIN_INTERVAL)
+        {
+            return;
+        }
+        self.last_credential_capture = Some(std::time::Instant::now());
+        let capture = self.credential_capture.clone();
+        let accounts = self.accounts.clone();
+        let runtime = self.claude_runtime();
+        tokio::task::spawn_blocking(move || {
+            if let Ok(mut capture) = capture.lock() {
+                capture.run(&runtime, &accounts);
+            }
+        });
     }
 
     /// Wire view of the account list.
@@ -6990,7 +7037,10 @@ impl Daemon {
                 .iter()
                 .find(|a| a.agent_id == agent_id && a.active)
                 .cloned();
+            let capture = self.credential_capture.clone();
+            let mut capture = capture.lock().map_err(|_| "credential state poisoned")?;
             super::accounts::activate_claude_account(
+                &mut capture,
                 &self.claude_runtime(),
                 outgoing.as_ref(),
                 &target,
@@ -7044,7 +7094,13 @@ impl Daemon {
 
     /// Resolve a task's agent field (an id or a display name) to a registry id.
     fn agent_id_of<'a>(&'a self, agent: &'a str) -> &'a str {
-        self.configured_agents
+        Self::agent_id_in(&self.configured_agents, agent)
+    }
+
+    /// `agent_id_of` against an explicit agent list, so the normalisation can
+    /// be exercised without a live daemon.
+    pub(super) fn agent_id_in<'a>(agents: &'a [wire::AgentConfig], agent: &'a str) -> &'a str {
+        agents
             .iter()
             .find(|a| a.id == agent || a.display_name == agent)
             .map(|a| a.id.as_str())
@@ -7193,9 +7249,12 @@ impl Daemon {
         // back to the same home even after the active account changed. Recorded
         // before the session exists, because that is the only moment the answer
         // is unambiguous.
-        if let Some(account) =
-            super::accounts::select_for_spawn(&self.accounts, agent, self.spawn_account(task_id))
-                .map(|account| account.id.clone())
+        if let Some(account) = super::accounts::select_for_spawn(
+            &self.accounts,
+            self.agent_id_of(agent),
+            self.spawn_account(task_id),
+        )
+        .map(|account| account.id.clone())
         {
             if let Some(task) = self.tasks.get_mut(task_id) {
                 if task.account_id.as_deref() != Some(account.as_str()) {
@@ -7435,6 +7494,11 @@ impl Daemon {
                 )
             }
             AcpUpdate::TurnEnded { stop_reason } => {
+                // The CLI that just stopped working may have refreshed its
+                // token; if it did so in the shared home, the vault that owns
+                // that login is now stale. Ask before any of the early returns
+                // below — a replayed or workflow turn rotates tokens too.
+                self.capture_credentials();
                 // A clean turn end completes the node; a "disconnected" stop is
                 // the agent process dying, which we treat as a failure.
                 let success = stop_reason != "disconnected";

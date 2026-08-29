@@ -17,6 +17,7 @@ pub mod agents;
 pub mod attachment;
 pub mod backlog;
 pub mod claude_auth;
+pub mod credential_capture;
 pub mod diff;
 pub mod handoff;
 pub mod history_config;
