@@ -13,12 +13,13 @@ import {
 import { Card } from "@/components/ui/card";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { DEFAULT_SURFACE_TABS, FocusButton, type SurfaceTab } from "@/components/workspace";
-import { useTaskSessionUpdates } from "@/hooks/useTaskSessionUpdates";
 import { useSessionHistory } from "@/hooks/useSessionHistory";
+import { useTaskSessionUpdates } from "@/hooks/useTaskSessionUpdates";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { buildTaskGroupIndex } from "@/lib/taskGroups";
 import { cn } from "@/lib/utils";
 
+import { AgentLimitsExhaustedBanner } from "../components/AgentLimitsExhaustedBanner";
 import { ChatTranscript } from "../components/ChatTranscript";
 import type { ComposerHandle } from "../components/Composer";
 import { ModelMismatchBanner } from "../components/ModelMismatchBanner";
@@ -416,6 +417,7 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
                     onClick={() => setShowDiff(!showDiff)}
                   />
                 </div>
+                <AgentLimitsExhaustedBanner agentId={task.agent} />
                 <SessionLostBanner task={task} onOpenTask={onOpenTask} />
                 <ModelMismatchBanner task={task} />
                 <TaskConversation
@@ -461,7 +463,10 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
                       activeFilePath={activeFilePath}
                       onSelectTreeFile={openFileTab}
                       openTabs={openTabs}
-                      onSelectTab={(p) => { setActiveFilePath(p); setGotoLocation((cur) => cur?.path === p ? cur : null); }}
+                      onSelectTab={(p) => {
+                        setActiveFilePath(p);
+                        setGotoLocation((cur) => (cur?.path === p ? cur : null));
+                      }}
                       onCloseTab={closeFileTab}
                       fileDoc={fileDoc}
                       editable={editable}

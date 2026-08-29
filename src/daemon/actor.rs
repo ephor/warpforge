@@ -1347,6 +1347,20 @@ pub enum Command {
     Shutdown {
         reply: oneshot::Sender<()>,
     },
+    ListAgentLimits {
+        reply: oneshot::Sender<Vec<wire::AgentAccountLimits>>,
+        refresh: bool,
+    },
+    ListAgentSpend {
+        reply: oneshot::Sender<Vec<wire::AgentSpend>>,
+    },
+    AgentSpendUpdated {
+        agents: Vec<wire::AgentSpend>,
+        at: std::time::Instant,
+    },
+    AgentLimitsUpdated {
+        accounts: Vec<wire::AgentAccountLimits>,
+    },
 }
 
 /// State deltas broadcast to every subscribed client.
@@ -1454,6 +1468,9 @@ pub enum Event {
     LspExit {
         server_id: String,
         code: Option<i32>,
+    },
+    AgentLimitsUpdated {
+        accounts: Vec<wire::AgentAccountLimits>,
     },
 }
 
@@ -2585,6 +2602,19 @@ impl DaemonHandle {
         rx.await.unwrap_or_default()
     }
 
+    pub async fn list_agent_limits(&self, refresh: bool) -> Vec<wire::AgentAccountLimits> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::ListAgentLimits { reply: tx, refresh })
+            .await;
+        rx.await.unwrap_or_default()
+    }
+
+    pub async fn list_agent_spend(&self) -> Vec<wire::AgentSpend> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::ListAgentSpend { reply: tx }).await;
+        rx.await.unwrap_or_default()
+    }
+
     pub async fn import_account(
         &self,
         agent_id: String,
@@ -2880,6 +2910,7 @@ pub struct Daemon {
     projects: Vec<ProjectEntry>,
     config_observer: ConfigObserver,
     tasks: HashMap<String, Task>,
+    agent_limits: Vec<warpforge_protocol::AgentAccountLimits>,
     /// Enabled ACP agent configurations (from SQLite, user-managed).
     configured_agents: Vec<wire::AgentConfig>,
     /// Live agent sessions keyed by task id. One per task in v1; the map (not a
@@ -2958,6 +2989,7 @@ pub struct Daemon {
     /// all memory ops run on the actor thread against one connection.
     memory: super::memory::MemoryStore,
     last_memory_activity: Arc<Mutex<std::time::Instant>>,
+    spend_cache: Option<(Vec<wire::AgentSpend>, std::time::Instant)>,
 }
 
 impl Daemon {
@@ -3039,6 +3071,11 @@ impl Daemon {
             .and_then(|s| s.load_accounts().ok())
             .unwrap_or_default();
 
+        // Last known quota numbers, so the cards are populated before the first
+        // poll answers. Entries whose login we cannot re-confirm are dropped by
+        // the loader; the startup fetch below runs either way.
+        let agent_limits = crate::daemon::limits::cache::load(&accounts);
+
         // Open (or disable) the shared-memory store. `load` never fails: an
         // unopenable memory.db yields a disabled store whose tools report
         // "memory disabled" rather than crashing the daemon.
@@ -3051,6 +3088,7 @@ impl Daemon {
 
         let config_observer = ConfigObserver::new(&projects);
         let daemon = Daemon {
+            agent_limits,
             projects,
             config_observer,
             tasks,
@@ -3084,6 +3122,7 @@ impl Daemon {
             accounts,
             memory,
             last_memory_activity: Arc::new(Mutex::new(std::time::Instant::now())),
+            spend_cache: None,
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -3176,6 +3215,16 @@ impl Daemon {
                 }
                 tokio::time::sleep(HISTORY_PRUNE_INTERVAL).await;
             }
+        });
+
+        // Initial limits refresh (off-actor) — accounts are known at spawn.
+        let init_accounts = daemon.accounts.clone();
+        let init_tx = handle.cmd_tx.clone();
+        tokio::spawn(async move {
+            let fetched = crate::daemon::limits::poll::fetch_all(init_accounts).await;
+            let _ = init_tx
+                .send(Command::AgentLimitsUpdated { accounts: fetched })
+                .await;
         });
 
         tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx, acp_rx, policy_rx));
@@ -3444,9 +3493,25 @@ impl Daemon {
 
         let mut config_poll = tokio::time::interval(CONFIG_POLL_INTERVAL);
         config_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Quota windows are hours to days wide, so there is nothing to learn from
+        // polling every few minutes — and the usage endpoints answer 429 when we
+        // do. 20 minutes keeps the numbers fresh enough to act on.
+        const LIMITS_INTERVAL: Duration = Duration::from_secs(1200);
+        let mut limits_poll = tokio::time::interval(LIMITS_INTERVAL);
+        limits_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // first tick completes immediately; skip it so initial fetch is explicit via spawned task in Daemon::spawn
+        limits_poll.tick().await;
 
         let shutdown_reply = loop {
             tokio::select! {
+                _ = limits_poll.tick() => {
+                    let accounts = self.accounts.clone();
+                    let cmd_tx = self.cmd_tx.clone();
+                    tokio::spawn(async move {
+                        let fetched = crate::daemon::limits::poll::fetch_all(accounts).await;
+                        let _ = cmd_tx.send(Command::AgentLimitsUpdated { accounts: fetched }).await;
+                    });
+                }
                 maybe_cmd = cmd_rx.recv() => {
                     match maybe_cmd {
                         Some(Command::Shutdown { reply }) => break Some(ShutdownReply::Requested(reply)),
@@ -6025,6 +6090,67 @@ impl Daemon {
             Command::ListAccounts { reply } => {
                 let _ = reply.send(self.account_infos());
             }
+            Command::ListAgentLimits { reply, refresh } => {
+                if refresh {
+                    let accounts = self.accounts.clone();
+                    let cmd_tx = self.cmd_tx.clone();
+                    tokio::spawn(async move {
+                        // Deliberately not `fetch_all_force`: a manual Refresh while
+                        // an endpoint is throttling us would just earn another 429.
+                        let fetched = crate::daemon::limits::poll::fetch_all(accounts).await;
+                        let _ = cmd_tx
+                            .send(Command::AgentLimitsUpdated {
+                                accounts: fetched.clone(),
+                            })
+                            .await;
+                        let _ = reply.send(fetched);
+                    });
+                } else {
+                    let _ = reply.send(self.agent_limits.clone());
+                }
+            }
+            Command::AgentLimitsUpdated { accounts } => {
+                let merged =
+                    crate::daemon::limits::poll::merge_snapshots(&self.agent_limits, accounts);
+                self.agent_limits = merged.clone();
+                // Persist off-actor: reading each account's identity touches
+                // the filesystem and this loop is the whole daemon.
+                let snapshot = merged.clone();
+                let known = self.accounts.clone();
+                tokio::task::spawn_blocking(move || {
+                    crate::daemon::limits::cache::save(&snapshot, &known)
+                });
+                self.emit(Event::AgentLimitsUpdated { accounts: merged });
+            }
+            Command::ListAgentSpend { reply } => {
+                if let Some((cached, at)) = &self.spend_cache {
+                    if at.elapsed() < std::time::Duration::from_secs(300) {
+                        let _ = reply.send(cached.clone());
+                        return;
+                    }
+                }
+                let store = self.store.clone();
+                let tasks: Vec<wire::TaskInfo> =
+                    self.tasks.values().map(wireconv::task_info).collect();
+                let tx = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    let rows = super::runtime::store_read(store, |s| s.load_spend_rows().ok())
+                        .await
+                        .unwrap_or(None)
+                        .unwrap_or_default();
+                    let agents = crate::daemon::spend::compute_agent_spend(rows, &tasks);
+                    let _ = tx
+                        .send(Command::AgentSpendUpdated {
+                            agents: agents.clone(),
+                            at: std::time::Instant::now(),
+                        })
+                        .await;
+                    let _ = reply.send(agents);
+                });
+            }
+            Command::AgentSpendUpdated { agents, at } => {
+                self.spend_cache = Some((agents, at));
+            }
             Command::ImportAccount {
                 agent_id,
                 label,
@@ -6059,6 +6185,20 @@ impl Daemon {
                 reply,
             } => {
                 let result = self.set_active_account(&agent_id, &account_id).await;
+                if result.is_ok() {
+                    // Restamp which account is live without refetching: the quota
+                    // numbers did not change, only which login they belong to.
+                    // Waiting for the next 20-minute poll left the header showing
+                    // the previous account's percentage after a switch.
+                    for entry in &mut self.agent_limits {
+                        if entry.agent_id == agent_id {
+                            entry.active = entry.account_id == account_id;
+                        }
+                    }
+                    self.emit(Event::AgentLimitsUpdated {
+                        accounts: self.agent_limits.clone(),
+                    });
+                }
                 let _ = reply.send(result);
             }
             Command::ProbeAgent { id, reply } => {

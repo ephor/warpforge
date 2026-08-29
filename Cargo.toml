@@ -41,6 +41,8 @@ sqlite-vec = "0.1.9"
 fastembed = { version = "5", default-features = false, features = ["hf-hub-native-tls", "ort-load-dynamic"] }
 warpforge-protocol = { path = "crates/warpforge-protocol" }
 base64 = "0.22"
+chrono = "0.4"
+walkdir = "2"
 sha2 = "0.10"
 async-trait = "0.1"
 rfd = "0.15"

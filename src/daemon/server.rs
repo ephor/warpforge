@@ -1289,6 +1289,14 @@ async fn dispatch(
             accounts_result(handle.rename_account(account_id, label).await)
         }
         AccountsRemove { account_id } => accounts_result(handle.remove_account(account_id).await),
+        ListAgentLimits { refresh } => {
+            let accounts = handle.list_agent_limits(refresh.unwrap_or(false)).await;
+            Ok(json!({ "accounts": accounts }))
+        }
+        ListAgentSpend {} => {
+            let agents = handle.list_agent_spend().await;
+            Ok(json!({ "agents": agents }))
+        }
         AccountsSetActive {
             agent_id,
             account_id,

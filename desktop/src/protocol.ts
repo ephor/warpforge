@@ -68,6 +68,7 @@ export type DaemonEvent =
   | { event: "agents.setup_needed"; data: { detected: DetectedAgent[] } }
   | { event: "agents.updated"; data: { agents: AgentConfig[] } }
   | { event: "accounts.updated"; data: { accounts: AccountInfo[] } }
+  | { event: "agentLimits.updated"; data: { accounts: AgentAccountLimits[] } }
   | {
       event: "terminal.screen";
       data: { terminal_id: string; screen: TerminalScreen };
@@ -634,6 +635,74 @@ export interface AccountInfo {
   plan?: string;
   /** Whether new sessions for this agent use this account. */
   active: boolean;
+}
+
+// ── Agent rate limits ───────────────────────────────────────────────────────
+
+/** One usage window (session, weekly, …) on an agent account. */
+export interface AgentLimitWindow {
+  /** "five_hour" | "seven_day" | "seven_day_opus" | "seven_day_sonnet" | "primary" | "secondary"
+   *  — plus the synthetic "rate_limited" (usedPercent 100, resetsAt from the
+   *  server's Retry-After) when the harness has hard-stopped the account. */
+  id: string;
+  /** Human label, e.g. "Session" | "Weekly" | "Weekly (Opus)". */
+  label: string;
+  /** 0..100 */
+  usedPercent: number;
+  /** Unix SECONDS when the window resets. */
+  resetsAt?: number;
+  windowMinutes?: number;
+}
+
+/** Rate-limit state for one registered agent account. */
+export interface AgentAccountLimits {
+  /** "<agent>:<slug>", e.g. "claude:personal" */
+  accountId: string;
+  /** "claude" | "codex" | "opencode" */
+  agentId: string;
+  label: string;
+  /** Currently-active account for that agent. */
+  active: boolean;
+  /** "plus", "max20", … */
+  plan?: string;
+  windows: AgentLimitWindow[];
+  /** Any window is at 100%. */
+  exhausted: boolean;
+  /** Unix SECONDS when this snapshot was taken. */
+  fetchedAt: number;
+  /** "api" | "local" | "unknown" */
+  source: string;
+  /** Per-account failure, e.g. "not logged in". */
+  error?: string;
+}
+
+/** Response of the `listAgentLimits` RPC. */
+export interface ListAgentLimitsResult {
+  accounts: AgentAccountLimits[];
+}
+
+/**
+ * API-equivalent spend for one harness: what the usage *would* cost at API
+ * rates, never an amount charged to the user. A Max/Plus/Team subscription is
+ * billed nothing of the sort. Reported per harness, not per account — the cost
+ * stream carries no account id.
+ */
+export interface AgentSpend {
+  /** "claude" | "codex" | "opencode" */
+  agentId: string;
+  /** Accrued in the last 24h; null when unknown. */
+  todayUsd: number | null;
+  /** All-time total we can account for; null when unknown. */
+  totalUsd: number | null;
+  /** Tasks that contributed spend. */
+  tasks: number;
+  /** False when this harness never reports cost at all. */
+  reported: boolean;
+}
+
+/** Response of the `listAgentSpend` RPC. */
+export interface ListAgentSpendResult {
+  agents: AgentSpend[];
 }
 
 /** An agent session discovered on disk (claude/codex), resumable via task.resume. */

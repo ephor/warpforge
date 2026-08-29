@@ -2,6 +2,7 @@ import { Check, ChevronDown, FolderGit2 } from "lucide-react";
 import { useMemo, useSyncExternalStore } from "react";
 
 import AccountSwitcher from "@/components/AccountSwitcher";
+import { TaskAccountMenu } from "@/components/TaskAccountMenu";
 import { TaskMenu } from "@/components/TaskMenu";
 import { TaskTitleEditor } from "@/components/TaskTitleEditor";
 import {
@@ -121,16 +122,15 @@ export default function AppHeader({ view, openTask, onAddProject, onCloseTask }:
 
       {openTask && (
         <>
-          {/* This task's harness, in place of the old static badge — same
-              interactive account chip the global cluster renders, just scoped
-              to this one agent and shown even with a single account. Note it
-              still switches the agent's *global* active account (there is no
-              per-task binding yet): see memory/per_task_account_switch. */}
-          <AccountSwitcher
+          {/* This task's harness, its account and its quota in one control:
+              the account you switch to is chosen on the numbers, so both live
+              in the same menu. Note it still switches the agent's *global*
+              active account (there is no per-task binding yet): see
+              memory/per_task_account_switch. */}
+          <TaskAccountMenu
+            agentId={openTask.agent}
             agents={snapshot.agents ?? []}
             accounts={snapshot.accounts ?? []}
-            agentFilter={openTask.agent}
-            alwaysShow
           />
           <TaskMenu
             task={openTask}

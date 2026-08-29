@@ -404,6 +404,14 @@ pub enum Method {
     #[serde(rename = "accounts.remove")]
     AccountsRemove { account_id: String },
     /// Make an account the one new sessions use. Returns `{ accounts: AccountInfo[] }`.
+    #[serde(rename = "listAgentLimits")]
+    ListAgentLimits {
+        #[serde(default)]
+        refresh: Option<bool>,
+    },
+    #[serde(rename = "listAgentSpend")]
+    ListAgentSpend {},
+
     #[serde(rename = "accounts.setActive")]
     AccountsSetActive {
         agent_id: String,
@@ -1357,6 +1365,44 @@ pub enum HunkResolution {
     Reject,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLimitWindow {
+    pub id: String,
+    pub label: String,
+    pub used_percent: f64,
+    pub resets_at: Option<i64>,
+    pub window_minutes: Option<u64>,
+}
+
+/// API-equivalent spend reported by the harness (what the usage *would* cost
+/// at API rates), not an amount charged to the user. On a Max/Plus/Team
+/// subscription nothing of the sort is billed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSpend {
+    pub agent_id: String,
+    pub today_usd: Option<f64>,
+    pub total_usd: Option<f64>,
+    pub tasks: u32,
+    pub reported: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAccountLimits {
+    pub account_id: String,
+    pub agent_id: String,
+    pub label: String,
+    pub active: bool,
+    pub plan: Option<String>,
+    pub windows: Vec<AgentLimitWindow>,
+    pub exhausted: bool,
+    pub fetched_at: i64,
+    pub source: String,
+    pub error: Option<String>,
+}
+
 // ─── Events (daemon → client) ────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1375,6 +1421,9 @@ pub enum Event {
     /// config-derived slice of client state; task/session history is untouched.
     #[serde(rename = "project.configChanged")]
     ProjectConfigChanged(ProjectConfigState),
+
+    #[serde(rename = "agentLimits.updated")]
+    AgentLimitsUpdated { accounts: Vec<AgentAccountLimits> },
 
     #[serde(rename = "service.status")]
     ServiceStatus {

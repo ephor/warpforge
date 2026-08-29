@@ -1,5 +1,4 @@
 import { Check, LoaderCircle } from "lucide-react";
-import { useState } from "react";
 
 import { AgentLogo } from "@/components/AgentLogo";
 import EmailBlur from "@/components/EmailBlur";
@@ -11,22 +10,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { daemon } from "@/daemon";
+import { useAccountSwitch } from "@/hooks/useAccountSwitch";
+import { accountLabel, SWITCH_NOTE } from "@/lib/accounts";
 import { cn } from "@/lib/utils";
 import type { AccountInfo, AgentConfig } from "@/protocol";
-
-/**
- * A running agent process cannot change account: Codex reads CODEX_HOME once at
- * spawn, and Claude caches the credentials it authenticated with. The daemon
- * therefore retires live sessions on a switch and resumes them in a fresh
- * process on the next message — which is worth saying, because the alternative
- * reading ("my task just died") is the wrong one.
- */
-const SWITCH_NOTE = "Open sessions resume on the new account with your next message.";
-
-function accountLabel(account: AccountInfo): string {
-  return account.label || account.email || account.id;
-}
 
 export default function AccountSwitcher({
   agents,
@@ -45,8 +32,7 @@ export default function AccountSwitcher({
       and there's a natural place to add a second account later. */
   alwaysShow?: boolean;
 }) {
-  const [pending, setPending] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { pending, error, select } = useAccountSwitch();
 
   const relevantAgents = agentFilter ? agents.filter((a) => a.id === agentFilter) : agents;
   const switchable = relevantAgents
@@ -58,18 +44,6 @@ export default function AccountSwitcher({
     .filter((entry) => alwaysShow || entry.accounts.length > 1);
 
   if (switchable.length === 0) return null;
-
-  async function select(agentId: string, accountId: string) {
-    setPending(accountId);
-    setError(null);
-    try {
-      await daemon.setActiveAccount(agentId, accountId);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setPending(null);
-    }
-  }
 
   return (
     <div className="flex items-center gap-1.5">

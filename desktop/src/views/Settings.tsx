@@ -4,15 +4,16 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import AccountsPanel from "@/components/AccountsPanel";
+import { AgentLimitsSection } from "@/components/AgentLimitsSection";
 import AgentSetupPanel from "@/components/AgentSetupPanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import LanguageServersPanel from "@/components/LanguageServersPanel";
 import TrackersPanel from "@/components/TrackersPanel";
 import { Button } from "@/components/ui/button";
 import { daemon } from "@/daemon";
-import type { HistorySettings } from "@/protocol";
 import { configRole } from "@/lib/configRole";
 import { THEMES } from "@/lib/themes";
+import type { HistorySettings } from "@/protocol";
 import { useUi } from "@/store/ui";
 
 // ── Helpers ──
@@ -127,8 +128,7 @@ export default function SettingsView({ open, onOpenChange }: Props) {
         ...patch,
       }),
     onSuccess: (settings) => queryClient.setQueryData(["history", "settings"], settings),
-    onError: (error) =>
-      toast.error(error instanceof Error ? error.message : String(error)),
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
   const memoryStats = useQuery({
     queryKey: ["memory", "stats"],
@@ -317,6 +317,11 @@ export default function SettingsView({ open, onOpenChange }: Props) {
             <div className="p-4">
               <AccountsPanel />
             </div>
+          </Section>
+
+          {/* ── Rate limits ── */}
+          <Section title="Rate limits">
+            <AgentLimitsSection />
           </Section>
 
           {/* ── Language servers ── */}

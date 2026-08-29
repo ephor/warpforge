@@ -310,6 +310,10 @@ impl Store {
             "ALTER TABLE tracker_links ADD COLUMN imported INTEGER NOT NULL DEFAULT 0",
             [],
         );
+        let _ = conn.execute(
+            "ALTER TABLE session_updates ADD COLUMN created_at INTEGER",
+            [],
+        );
         Ok(Self { conn })
     }
 
@@ -657,10 +661,21 @@ impl Store {
 
     pub fn save_session_update(&self, task_id: &str, update: &wire::SessionUpdate) -> Result<()> {
         let json = serde_json::to_string(update)?;
-        self.conn.execute(
-            "INSERT INTO session_updates (task_id, update_json) VALUES (?1, ?2)",
-            rusqlite::params![task_id, json],
-        )?;
+        let now = super::task::now_secs() as i64;
+        // created_at column may not exist on very old DBs if migration failed; fallback without it
+        if self
+            .conn
+            .execute(
+                "INSERT INTO session_updates (task_id, update_json, created_at) VALUES (?1, ?2, ?3)",
+                rusqlite::params![task_id, json, now],
+            )
+            .is_err()
+        {
+            self.conn.execute(
+                "INSERT INTO session_updates (task_id, update_json) VALUES (?1, ?2)",
+                rusqlite::params![task_id, json],
+            )?;
+        }
         Ok(())
     }
 
@@ -1255,6 +1270,23 @@ impl Store {
             })
         })?;
         rows.next().transpose().map_err(Into::into)
+    }
+
+    pub fn load_spend_rows(&self) -> Result<Vec<(String, String, Option<i64>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT task_id, update_json, created_at FROM session_updates ORDER BY id")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
     }
 
     pub fn load_all_tracker_links(&self) -> Result<Vec<TrackerLink>> {

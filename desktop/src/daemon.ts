@@ -12,6 +12,8 @@ import { stampSessionHistoryStartTimes } from "./lib/sessionTiming";
 import type {
   AccountInfo,
   AgentConfig,
+  AgentAccountLimits,
+  AgentSpend,
   CreateExternalResult,
   DaemonEndpoint,
   DaemonEvent,
@@ -60,6 +62,10 @@ export interface DaemonState {
   portforwardLogs: Record<string, string[]>;
   /** Non-null when daemon signals first-run setup is needed. */
   pendingAgentSetup: DetectedAgent[] | null;
+  /** Latest per-account harness rate limits, or null until first known. */
+  agentLimits?: AgentAccountLimits[] | null;
+  /** Latest per-harness API-equivalent spend, or null until first known. */
+  agentSpend?: AgentSpend[] | null;
 }
 
 const MAX_SERVICE_LOGS = 1000;
@@ -99,6 +105,8 @@ export class DaemonClient {
     connection: "disconnected",
     connectionError: null,
     pendingAgentSetup: null,
+    agentLimits: null,
+    agentSpend: null,
     serviceLogs: {},
     portforwardLogs: {},
     sessionUpdates: {},
@@ -890,6 +898,9 @@ export class DaemonClient {
       case "accounts.updated":
         this.setState({ snapshot: { ...snap, accounts: ev.data.accounts } });
         break;
+      case "agentLimits.updated":
+        this.setState({ agentLimits: ev.data.accounts });
+        break;
       // Screen snapshots consumed by TUI clients; desktop uses terminal.data.
       case "terminal.screen":
         break;
@@ -1044,6 +1055,31 @@ export class DaemonClient {
       accounts?: AccountInfo[];
     };
     return result?.accounts ?? [];
+  }
+
+  /** Latest per-account harness rate limits. `refresh` forces the daemon to
+   *  re-query its harnesses; without it a cached copy may answer. Rejects
+   *  when the daemon does not support the call — the UI degrades to "no data". */
+  async listAgentLimits(refresh = false): Promise<AgentAccountLimits[]> {
+    const result = (await this.request("listAgentLimits", { refresh })) as {
+      accounts?: AgentAccountLimits[];
+    };
+    const accounts = Array.isArray(result?.accounts) ? result.accounts : [];
+    this.setState({ agentLimits: accounts });
+    return accounts;
+  }
+
+  /** API-equivalent spend per harness — what the usage would cost at API
+   *  rates, not an amount billed. Request-only: the daemon pushes no spend
+   *  event, so callers ask when they mount. Rejects when the daemon does not
+   *  support the call — the UI degrades to "no data". */
+  async listAgentSpend(): Promise<AgentSpend[]> {
+    const result = (await this.request("listAgentSpend", {})) as {
+      agents?: AgentSpend[];
+    };
+    const agents = Array.isArray(result?.agents) ? result.agents : [];
+    this.setState({ agentSpend: agents });
+    return agents;
   }
 
   /** Install or update an agent's global package. Resolves with the command's
