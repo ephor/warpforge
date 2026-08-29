@@ -55,5 +55,4 @@ describe("MessageActions", () => {
     await user.click(screen.getByText("Codex"));
     expect(onContinue).toHaveBeenCalledWith("codex");
   });
-
 });

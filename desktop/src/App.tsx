@@ -1,5 +1,14 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Loader2 } from "lucide-react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { toast } from "sonner";
 
 import AppHeader from "@/components/AppHeader";
@@ -10,8 +19,6 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import { FindInFiles, FIND_LIMIT } from "@/components/FindInFiles";
 import { QuickOpen } from "@/components/QuickOpen";
 import Sidebar from "@/components/Sidebar";
-import { Loader2 } from "lucide-react";
-
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { daemon } from "@/daemon";
 import { useMediaQuery } from "@/hooks/useMediaQuery";

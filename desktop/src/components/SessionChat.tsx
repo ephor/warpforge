@@ -243,8 +243,7 @@ const TranscriptListItem = memo(
 );
 
 function renderTranscriptItem({ item }: { item: TranscriptListRow }) {
-  const isUser =
-    item.kind === "update" && item.entry.update.kind === "user_message";
+  const isUser = item.kind === "update" && item.entry.update.kind === "user_message";
   return (
     <div
       key={item.id}

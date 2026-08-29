@@ -365,7 +365,9 @@ export default function NewTaskDialog({
                   <AgentConfigBar
                     options={agentOptions.map((opt) =>
                       configRole(opt) === "model" && currentAgent?.lastModel
-                        ? { ...opt, inheritedValue: currentAgent.lastModel } as typeof opt & { inheritedValue: string }
+                        ? ({ ...opt, inheritedValue: currentAgent.lastModel } as typeof opt & {
+                            inheritedValue: string;
+                          })
                         : opt,
                     )}
                     picks={configPicks}

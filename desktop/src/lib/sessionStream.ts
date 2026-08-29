@@ -227,7 +227,9 @@ function sessionUpdatesSemanticallyEqual(a: SessionUpdate, b: SessionUpdate): bo
         a.tone === (b as typeof a).tone
       );
     case "prompt_capabilities":
-      return a.image === (b as typeof a).image && a.embedded_context === (b as typeof a).embedded_context;
+      return (
+        a.image === (b as typeof a).image && a.embedded_context === (b as typeof a).embedded_context
+      );
     case "available_commands":
       return a.commands === (b as typeof a).commands;
     default:

@@ -158,7 +158,9 @@ function AgentConfigSelect({
     if (pendingValue !== null && currentValue === pendingValue) setPendingValue(null);
   }, [currentValue, pendingValue]);
 
-  const inheritedLabel = !shownValue ? (opt as unknown as { inheritedValue?: string }).inheritedValue : undefined;
+  const inheritedLabel = !shownValue
+    ? (opt as unknown as { inheritedValue?: string }).inheritedValue
+    : undefined;
   const inheritedName = inheritedLabel
     ? (opt.options.find((o) => o.value === inheritedLabel)?.name ?? inheritedLabel)
     : undefined;

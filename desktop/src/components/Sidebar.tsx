@@ -120,9 +120,7 @@ function ProjectRow({
   onSettleHover?: (hovering: boolean) => void;
 }) {
   const settle = row.settleIds.length > 0;
-  const preview = row.settlePreview.some(Boolean)
-    ? ` — ${row.settlePreview.join(", ")}`
-    : "";
+  const preview = row.settlePreview.some(Boolean) ? ` — ${row.settlePreview.join(", ")}` : "";
   const settleTitle = `Settle ${row.settleIds.length} finished turn${
     row.settleIds.length === 1 ? "" : "s"
   } with no changes (reversible per task)${preview}`;

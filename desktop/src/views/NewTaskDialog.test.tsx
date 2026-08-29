@@ -130,7 +130,12 @@ describe("NewTaskDialog", () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const { container } = render(
       <QueryClientProvider client={queryClient}>
-        <NewTaskDialog defaultProject="warpforge" onOpenChange={vi.fn<(open: boolean) => void>()} open snapshot={withLastModel} />
+        <NewTaskDialog
+          defaultProject="warpforge"
+          onOpenChange={vi.fn<(open: boolean) => void>()}
+          open
+          snapshot={withLastModel}
+        />
       </QueryClientProvider>,
     );
     expect(container.textContent).toContain("Sonnet (inherited)");

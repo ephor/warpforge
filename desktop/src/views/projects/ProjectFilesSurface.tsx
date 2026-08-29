@@ -38,7 +38,11 @@ export function ProjectFilesSurface({ project, rootPath }: ProjectFilesSurfacePr
     queryKey: ["projectFileContents", project, open.active ?? ""],
   });
 
-  const [gotoLocation, setGotoLocation] = useState<{ path: string; line: number; column: number } | null>(null);
+  const [gotoLocation, setGotoLocation] = useState<{
+    path: string;
+    line: number;
+    column: number;
+  } | null>(null);
   const openFile = useCallback((path: string, location?: { line: number; column: number }) => {
     setOpen(({ tabs }) => ({
       active: path,

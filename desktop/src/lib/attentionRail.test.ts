@@ -137,7 +137,9 @@ describe("buildAttentionQueue", () => {
       "mismatch-running",
       "mismatch-waiting",
     ]);
-    expect(queue[2]?.priority).toBeGreaterThan(queue.find((i) => i.task.id === "blocked")!.priority);
+    expect(queue[2]?.priority).toBeGreaterThan(
+      queue.find((i) => i.task.id === "blocked")!.priority,
+    );
     expect(queue[2]?.reason).toContain("opus[1m]");
     expect(queue[3]?.reason).toContain("timed out");
   });

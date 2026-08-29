@@ -121,7 +121,11 @@ const pullDiagnosticsExtension: LSPClientExtension = {
   ),
 };
 
-async function startClient(taskId: string, language: string, project?: string): Promise<Resolved | null> {
+async function startClient(
+  taskId: string,
+  language: string,
+  project?: string,
+): Promise<Resolved | null> {
   const res = (await daemon
     .request("lsp.start", { language, task_id: taskId, ...(project ? { project } : {}) })
     .catch(() => null)) as LspStartResult | null;
@@ -178,7 +182,8 @@ export async function acquireLspClient(
   language: string,
   project?: string,
 ): Promise<{ key: string; client: LSPClient; rootPath: string } | null> {
-  const effectiveKey = project && !taskId ? `project:${project}:${language}` : `${taskId}:${language}`;
+  const effectiveKey =
+    project && !taskId ? `project:${project}:${language}` : `${taskId}:${language}`;
   const key = effectiveKey;
   let entry = entries.get(key);
   if (!entry) {

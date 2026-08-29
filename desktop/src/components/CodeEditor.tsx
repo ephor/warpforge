@@ -31,8 +31,8 @@ import {
   lspLanguageForPath,
 } from "@/lib/codemirrorLanguages";
 import { cmChromeForMode } from "@/lib/codemirrorTheme";
-import { acquireLspClient, releaseLspClient } from "@/lib/lspClients";
 import { filterByFiletype } from "@/lib/filterSymbolMatches";
+import { acquireLspClient, releaseLspClient } from "@/lib/lspClients";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
@@ -354,51 +354,66 @@ export function CodeEditor({
       } else {
         setGotoPos({ x: 8, y: 8 });
       }
-    setGotoResults([]);
-    setGotoQuery(query);
-    setGotoPending(true);
-    void save(query)
-      .then((results) => {
-        setGotoPending(false);
-        const isWordChar = (c: string) => /[A-Za-z0-9_]/.test(c);
-        const wordHit = (line: string, q: string) => {
-          let idx = line.indexOf(q);
-          while (idx !== -1) {
-            const before = idx === 0 || !isWordChar(line[idx - 1]);
-            const after = idx + q.length >= line.length || !isWordChar(line[idx + q.length]);
-            if (before && after) return true;
-            idx = line.indexOf(q, idx + 1);
-          }
-          return false;
-        };
-        const wordFiltered = results.filter((m) => wordHit(m.text, query));
-        const filtered = filterByFiletype(wordFiltered.length ? wordFiltered : results.filter((m) => m.text.includes(query)), doc.path);
-        if (!filtered.length) return;
-        const qLower = query.toLowerCase();
-        const score = (m: SymbolMatch) => {
-          let s = 0;
-          const pLower = m.path.toLowerCase();
-          const fileName = pLower.split("/").pop() ?? pLower;
-          if (fileName.includes(qLower)) {
-            s += 100;
-            const stem = fileName.split(".")[0];
-            if (stem === qLower) s += 50;
-          } else if (pLower.includes(qLower)) s += 20;
-          const trimmed = m.text.trimStart();
-          if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*") || trimmed.startsWith("#")) s -= 80;
-          const lower = m.text.toLowerCase();
-          if (lower.includes("export") && lower.includes(qLower)) s += 60;
-          else if (/(function|class |interface |const |let |type |struct |enum )/.test(lower) && lower.includes(qLower)) s += 40;
-          if (lower.includes(`<${qLower}`)) s += 10;
-          return s;
-        };
-        filtered.sort((a, b) => score(b) - score(a));
-        setGotoResults(filtered.slice(0, 12));
-        setGotoActive(0);
-      })
-      .catch(() => setGotoPending(false));
-    return true;
-  }, [doc.path]);
+      setGotoResults([]);
+      setGotoQuery(query);
+      setGotoPending(true);
+      void save(query)
+        .then((results) => {
+          setGotoPending(false);
+          const isWordChar = (c: string) => /[A-Za-z0-9_]/.test(c);
+          const wordHit = (line: string, q: string) => {
+            let idx = line.indexOf(q);
+            while (idx !== -1) {
+              const before = idx === 0 || !isWordChar(line[idx - 1]);
+              const after = idx + q.length >= line.length || !isWordChar(line[idx + q.length]);
+              if (before && after) return true;
+              idx = line.indexOf(q, idx + 1);
+            }
+            return false;
+          };
+          const wordFiltered = results.filter((m) => wordHit(m.text, query));
+          const filtered = filterByFiletype(
+            wordFiltered.length ? wordFiltered : results.filter((m) => m.text.includes(query)),
+            doc.path,
+          );
+          if (!filtered.length) return;
+          const qLower = query.toLowerCase();
+          const score = (m: SymbolMatch) => {
+            let s = 0;
+            const pLower = m.path.toLowerCase();
+            const fileName = pLower.split("/").pop() ?? pLower;
+            if (fileName.includes(qLower)) {
+              s += 100;
+              const stem = fileName.split(".")[0];
+              if (stem === qLower) s += 50;
+            } else if (pLower.includes(qLower)) s += 20;
+            const trimmed = m.text.trimStart();
+            if (
+              trimmed.startsWith("//") ||
+              trimmed.startsWith("*") ||
+              trimmed.startsWith("/*") ||
+              trimmed.startsWith("#")
+            )
+              s -= 80;
+            const lower = m.text.toLowerCase();
+            if (lower.includes("export") && lower.includes(qLower)) s += 60;
+            else if (
+              /(function|class |interface |const |let |type |struct |enum )/.test(lower) &&
+              lower.includes(qLower)
+            )
+              s += 40;
+            if (lower.includes(`<${qLower}`)) s += 10;
+            return s;
+          };
+          filtered.sort((a, b) => score(b) - score(a));
+          setGotoResults(filtered.slice(0, 12));
+          setGotoActive(0);
+        })
+        .catch(() => setGotoPending(false));
+      return true;
+    },
+    [doc.path],
+  );
 
   const runGoto = useCallback((): boolean => {
     const view = viewRef.current;
@@ -959,14 +974,23 @@ export function CodeEditor({
                               className="w-full truncate text-[11px] leading-4 text-muted-foreground"
                               title={`${hit.path}:${hit.line}`}
                             >
-                              <span style={{ direction: "ltr", unicodeBidi: "plaintext" } as React.CSSProperties}>
+                              <span
+                                style={
+                                  {
+                                    direction: "ltr",
+                                    unicodeBidi: "plaintext",
+                                  } as React.CSSProperties
+                                }
+                              >
                                 {dir}
                                 <span className="font-semibold text-foreground/80">{file}</span>
                                 <span className="tabular-nums">:{hit.line}</span>
                               </span>
                             </span>
                             <span className="w-full truncate font-mono text-xs leading-4">
-                              {hit.text.trim() || <span className="text-muted-foreground">(empty line)</span>}
+                              {hit.text.trim() || (
+                                <span className="text-muted-foreground">(empty line)</span>
+                              )}
                             </span>
                           </button>
                         );
