@@ -288,6 +288,27 @@ export function useDaemonEvents() {
         for (const status of ATTENTION_STATUS) {
           toast.dismiss(`attention:${event.data.id}:${status}`);
         }
+      } else if (event.event === "history.pruned") {
+        const { updates } = event.data;
+        toast.info("Old task history cleaned up", {
+          description: `Removed ${updates} stored message${updates === 1 ? "" : "s"} from finished tasks older than your retention window (Settings → Task history).`,
+        });
+      } else if (event.event === "history.swept") {
+        const { settled, expired, kept } = event.data;
+        const parts: string[] = [];
+        if (settled > 0)
+          parts.push(
+            `Settled ${settled} ignored task${settled === 1 ? "" : "s"} with no changes (reversible)`,
+          );
+        if (expired > 0)
+          parts.push(
+            `Deleted ${expired} closed task${expired === 1 ? "" : "s"} untouched past your retention window`,
+          );
+        if (kept > 0) parts.push(`Kept ${kept} with unmerged changes`);
+        if (parts.length > 0)
+          toast.info("Task cleanup ran", {
+            description: `${parts.join(". ")}. Tune this in Settings → Task history.`,
+          });
       }
     });
   }, []);

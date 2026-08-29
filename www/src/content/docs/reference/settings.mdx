@@ -71,6 +71,25 @@ Connect **GitHub** (through the `gh` CLI session you already have) or **Linear**
 
 See [Connect a tracker](/guides/tasks-and-backlog/#connect-a-tracker).
 
+## Task history
+
+Over time Warpforge collects a lot of finished work. Every agent turn ends as a task waiting for you, and keeping every chat forever made the app slower to start. History now cleans itself up in visible, reversible steps — you choose how long to keep things.
+
+```
+Waiting  ──(2 weeks, no changes)──▶  Closed  ──(30 days)──▶  chat removed
+   ▲                                     │
+   └────── tasks with changes never move on their own ─────┘
+                                         └─(90 days untouched)──▶  deleted
+```
+
+- **Keep transcripts for** — how long a closed task keeps its chat. After this the title, prompt, file changes and commits stay, but the chat disappears. Set to Forever to keep everything.
+- **Settle ignored tasks after** — a finished turn with no changes that nobody touched for this long moves to Closed on its own. Tasks with changes never move on their own. Set to Off to disable.
+- **Delete closed tasks after** — a closed task you have not touched for this long is deleted entirely. Commits are already in git, so they are not affected. Tasks that still have unmerged changes are kept. Set to Forever to keep them.
+
+Every cleanup shows a small notice. Nothing is deleted silently.
+
+Cleanups run when the app starts, once a day, and right after you change a setting.
+
 ## Backlog storage
 
 Where backlog items live. The daemon owns them either way:

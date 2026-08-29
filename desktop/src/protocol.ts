@@ -60,6 +60,11 @@ export type DaemonEvent =
   | { event: "task.updated"; data: TaskInfo }
   | { event: "task.removed"; data: { id: string } }
   | { event: "session.update"; data: { task_id: string; update: SessionUpdate } }
+  | { event: "history.pruned"; data: { updates: number } }
+  | {
+      event: "history.swept";
+      data: { settled: number; expired: number; kept: number };
+    }
   | { event: "agents.setup_needed"; data: { detected: DetectedAgent[] } }
   | { event: "agents.updated"; data: { agents: AgentConfig[] } }
   | { event: "accounts.updated"; data: { accounts: AccountInfo[] } }
@@ -138,12 +143,23 @@ export interface Snapshot {
   portforwards: PortForwardInfo[];
   tasks: TaskInfo[];
   terminals: TerminalInfo[];
-  /** Persisted conversation history keyed by task id — loaded on subscribe. */
+  /** Recent per-task conversation tail — loaded on subscribe. A transcript
+   *  needing more loads on demand via `session.history`. */
   sessionHistory?: Record<string, SessionUpdate[]>;
   /** Configured agents (empty until setup wizard is completed). */
   agents?: AgentConfig[];
   /** Registered agent accounts (empty until the user adds one). */
   accounts?: AccountInfo[];
+}
+
+/** How long finished tasks keep their data, per lifecycle stage (mirrors Rust). */
+export interface HistorySettings {
+  /** Days before a closed task's conversation is deleted. */
+  retentionDays: number;
+  /** Days before an ignored diff-less waiting task is settled. 0 = off. */
+  settleIgnoredAfterDays: number;
+  /** Days before an untouched closed task is deleted outright. 0 = off. */
+  deleteClosedAfterDays: number;
 }
 
 export const EMPTY_SNAPSHOT: Snapshot = {

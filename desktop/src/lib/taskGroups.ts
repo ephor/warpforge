@@ -20,6 +20,27 @@ export function awaitsReview(task: TaskInfo): boolean {
 }
 
 /**
+ * Finished turns with nothing to look at: the agent parked the task in
+ * `waiting`, no diff came out of it, and the user has not replied. These are
+ * what "Settle finished turns" bulk-settles in one click — the same reversible
+ * settle as the per-row button. Snoozed rows keep their wake countdown, and
+ * anything the user already settled is naturally out.
+ */
+export function settleableTasks(tasks: TaskInfo[], nowSec: number): TaskInfo[] {
+  const snoozed = (task: TaskInfo) =>
+    typeof task.snoozedAt === "number" &&
+    typeof task.snoozedUntil === "number" &&
+    task.snoozedUntil > nowSec;
+  return tasks.filter(
+    (task) =>
+      task.status === "waiting" &&
+      task.filesChanged === 0 &&
+      task.settledOverride !== true &&
+      !snoozed(task),
+  );
+}
+
+/**
  * A task the user is finished with: the agent completed it, or the user marked
  * it handled. These are archive material — they still resolve to a state and
  * stay reachable, but they do not belong in a live tree or a live count.

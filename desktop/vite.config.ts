@@ -24,4 +24,20 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
   },
+  build: {
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        advancedChunks: {
+          groups: [
+            { name: "vendor-react", test: /node_modules\/(react|react-dom|scheduler)/ },
+            { name: "vendor-query", test: /node_modules\/@tanstack/ },
+            { name: "vendor-radix", test: /node_modules\/@radix-ui/ },
+            { name: "vendor-codemirror", test: /node_modules\/@codemirror/ },
+            { name: "daemon", test: /src\/daemon\.ts/ },
+          ],
+        },
+      },
+    },
+  },
 });

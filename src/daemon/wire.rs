@@ -199,6 +199,16 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
             task_id: task_id.clone(),
             update: update.clone(),
         }),
+        Event::HistoryPruned { updates } => Some(wire::Event::HistoryPruned { updates: *updates }),
+        Event::HistorySwept {
+            settled,
+            expired,
+            kept,
+        } => Some(wire::Event::HistorySwept {
+            settled: *settled,
+            expired: *expired,
+            kept: *kept,
+        }),
         Event::TerminalScreen {
             terminal_id,
             screen,

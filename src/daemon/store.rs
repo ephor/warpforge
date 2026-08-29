@@ -719,6 +719,101 @@ impl Store {
         Ok(map)
     }
 
+    /// Last `limit` folded updates per task, read per task through the
+    /// `task_id` index. This is what a client needs on subscribe: the recent
+    /// tail for tiles, the attention rail and failure detection. Full
+    /// transcripts load per task via [`Store::load_session_updates`], which
+    /// touches only that task's rows — the whole-table scan that used to run
+    /// on every connect dominated start time on large databases.
+    pub fn load_session_update_tails(
+        &self,
+        limit: usize,
+    ) -> Result<HashMap<String, Vec<wire::SessionUpdate>>> {
+        let task_ids: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT DISTINCT task_id FROM session_updates")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        let mut map = HashMap::new();
+        for task_id in task_ids {
+            let mut stmt = self.conn.prepare(
+                "SELECT update_json FROM
+                   (SELECT id, update_json FROM session_updates
+                     WHERE task_id = ?1 ORDER BY id DESC LIMIT ?2)
+                  ORDER BY id ASC",
+            )?;
+            let updates: Vec<wire::SessionUpdate> = stmt
+                .query_map(rusqlite::params![task_id, limit as i64], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .filter_map(|r| r.ok())
+                .filter_map(|json| serde_json::from_str(&json).ok())
+                .collect();
+            map.insert(task_id, fold_for_snapshot(&updates));
+        }
+        Ok(map)
+    }
+
+    /// Delete the session history of every finished task (`status = 'done'`)
+    /// whose `updated_at` predates `cutoff` (epoch seconds). Returns the number
+    /// of rows removed. Live work is never touched.
+    pub fn prune_finished_session_updates(&self, cutoff: i64) -> Result<usize> {
+        let deleted = self.conn.execute(
+            "DELETE FROM session_updates
+              WHERE task_id IN (SELECT id FROM tasks WHERE status = 'done' AND updated_at < ?1)",
+            rusqlite::params![cutoff],
+        )?;
+        Ok(deleted)
+    }
+
+    /// Waiting tasks with nothing to review that nobody touched past `cutoff`
+    /// (epoch seconds). These are the auto-settle candidates: a task with a
+    /// diff is deliberately excluded, as is anything snoozed or already
+    /// settled. Timestamps come from the database so the caller can run this
+    /// fully off the actor loop.
+    pub fn find_ignored_waiting_tasks(&self, cutoff: i64) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM tasks
+              WHERE status = 'waiting'
+                AND files_changed = 0
+                AND (settled_override IS NULL OR settled_override = 0)
+                AND (snoozed_until IS NULL OR snoozed_until <= strftime('%s','now'))
+                AND updated_at < ?1",
+        )?;
+        let ids = stmt
+            .query_map(rusqlite::params![cutoff], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(ids)
+    }
+
+    /// Closed tasks untouched past `cutoff`, with their `files_changed` count
+    /// so the caller can keep the ones that still hold unmerged changes.
+    pub fn find_expired_closed_tasks(&self, cutoff: i64) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, files_changed FROM tasks
+              WHERE status = 'done' AND updated_at < ?1",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![cutoff], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Fold the write-ahead log back into the main database and truncate it.
+    /// Called after a prune actually deleted rows, so the space (and a WAL
+    /// that can otherwise grow to hundreds of megabytes) is returned.
+    pub fn checkpoint_wal(&self) -> Result<()> {
+        self.conn
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
     /// Load persisted histories as semantic rows. Raw ACP text chunks and
     /// repeated tool lifecycle frames remain in SQLite for replay fidelity but
     /// are folded before building the desktop snapshot.

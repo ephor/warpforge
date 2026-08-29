@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import AppHeader from "@/components/AppHeader";
@@ -10,6 +10,8 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import { FindInFiles, FIND_LIMIT } from "@/components/FindInFiles";
 import { QuickOpen } from "@/components/QuickOpen";
 import Sidebar from "@/components/Sidebar";
+import { Loader2 } from "lucide-react";
+
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { daemon } from "@/daemon";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -26,14 +28,14 @@ import { useTauriClose } from "./hooks/useTauriClose";
 import { useTheme } from "./hooks/useTheme";
 import type { FileDoc, SymbolMatch } from "./protocol";
 import { queryClient, useProjectFileListQuery } from "./query";
-import AddProjectDialog from "./views/AddProjectDialog";
-import AgentSetupDialog from "./views/AgentSetupDialog";
-import MissionControl from "./views/MissionControl";
-import NewTaskDialog from "./views/NewTaskDialog";
-import Projects from "./views/Projects";
-import PushDialog from "./views/PushDialog";
-import SettingsView from "./views/Settings";
-import TaskDetail from "./views/TaskDetail";
+const AddProjectDialog = lazy(() => import("./views/AddProjectDialog"));
+const AgentSetupDialog = lazy(() => import("./views/AgentSetupDialog"));
+const MissionControl = lazy(() => import("./views/MissionControl"));
+const NewTaskDialog = lazy(() => import("./views/NewTaskDialog"));
+const Projects = lazy(() => import("./views/Projects"));
+const PushDialog = lazy(() => import("./views/PushDialog"));
+const SettingsView = lazy(() => import("./views/Settings"));
+const TaskDetail = lazy(() => import("./views/TaskDetail"));
 
 function LiveMissionControl({
   onOpenTask,
@@ -264,6 +266,12 @@ export default function App() {
     setNewTaskOpen(true);
   }, []);
 
+  const settleFinishedTurns = useCallback((ids: string[]) => {
+    for (const id of ids) {
+      daemon.request("task.settle", { task_id: id }).catch(() => {});
+    }
+  }, []);
+
   const handleProjectAdded = useCallback(
     (name: string) => {
       openProject(name);
@@ -301,6 +309,7 @@ export default function App() {
     connectionError,
     onNewTask: () => startNewTask(),
     onOpenSettings: () => setSettingsOpen(true),
+    onSettleFinishedTurns: settleFinishedTurns,
     onOpenTask: handleOpenTask,
     onSelectView: handleSelectView,
     onOpenProject: handleOpenProject,
@@ -351,33 +360,51 @@ export default function App() {
               }
             >
               <ErrorBoundary>
-                {newTaskOpen ? (
-                  <NewTaskDialog
-                    open
-                    onOpenChange={setNewTaskOpen}
-                    snapshot={snapshot}
-                    defaultProject={newTaskProject}
-                    initialPrompt={newTaskPrompt}
-                    backlogItemId={newTaskBacklogItemId}
-                  />
-                ) : openTask ? (
-                  <TaskDetail
-                    key={openTask.id}
-                    task={openTask}
-                    snapshot={snapshot}
-                    onOpenTask={setOpenTaskId}
-                    onOpenPush={() => setPushOpen(true)}
-                  />
-                ) : view === "control" ? (
-                  <LiveMissionControl onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
-                ) : (
-                  <Projects
-                    snapshot={snapshot}
-                    onOpenTask={setOpenTaskId}
-                    onNewTask={startNewTask}
-                    onAddProject={() => setAddProjectOpen(true)}
-                  />
-                )}
+                <Suspense
+                  fallback={
+                    <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground/70">
+                      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                      <span>Loading…</span>
+                    </div>
+                  }
+                >
+                  {connection !== "connected" ? (
+                    <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground/70">
+                      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                      <span>
+                        {connectionError && !connectionError.includes("daemon.json")
+                          ? connectionError
+                          : "Connecting to daemon…"}
+                      </span>
+                    </div>
+                  ) : newTaskOpen ? (
+                    <NewTaskDialog
+                      open
+                      onOpenChange={setNewTaskOpen}
+                      snapshot={snapshot}
+                      defaultProject={newTaskProject}
+                      initialPrompt={newTaskPrompt}
+                      backlogItemId={newTaskBacklogItemId}
+                    />
+                  ) : openTask ? (
+                    <TaskDetail
+                      key={openTask.id}
+                      task={openTask}
+                      snapshot={snapshot}
+                      onOpenTask={setOpenTaskId}
+                      onOpenPush={() => setPushOpen(true)}
+                    />
+                  ) : view === "control" ? (
+                    <LiveMissionControl onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
+                  ) : (
+                    <Projects
+                      snapshot={snapshot}
+                      onOpenTask={setOpenTaskId}
+                      onNewTask={startNewTask}
+                      onAddProject={() => setAddProjectOpen(true)}
+                    />
+                  )}
+                </Suspense>
               </ErrorBoundary>
             </main>
           </div>

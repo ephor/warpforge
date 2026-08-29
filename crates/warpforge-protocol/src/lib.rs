@@ -903,6 +903,24 @@ pub enum Method {
     /// Select YAML-file or SQLite backlog persistence.
     #[serde(rename = "backlog.setStorage")]
     BacklogSetStorage { mode: BacklogStorageMode },
+    /// Read one task's full folded conversation history. Per-task and
+    /// index-backed, so this stays fast even on large databases.
+    #[serde(rename = "session.history")]
+    SessionHistory { task_id: String },
+    /// Read the task-history retention configuration.
+    #[serde(rename = "history.getSettings")]
+    HistoryGetSettings {},
+    /// Set how long finished tasks keep their data, in days. `0` disables a
+    /// stage. Applies (and sweeps) immediately.
+    #[serde(rename = "history.setSettings")]
+    HistorySetSettings {
+        /// Days before a closed task's conversation is deleted.
+        retention_days: u32,
+        /// Days before an ignored diff-less waiting task is settled. `0` = off.
+        settle_ignored_after_days: u32,
+        /// Days before an untouched closed task is deleted outright. `0` = off.
+        delete_closed_after_days: u32,
+    },
     /// Read one project-scoped backlog page from the configured backend.
     #[serde(rename = "backlog.list")]
     BacklogList {
@@ -1268,6 +1286,18 @@ pub struct BacklogSettings {
     pub mode: BacklogStorageMode,
 }
 
+/// How long finished tasks keep their data, per lifecycle stage.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistorySettings {
+    /// Days before a closed task's conversation is deleted.
+    pub retention_days: u32,
+    /// Days before an ignored diff-less waiting task is settled. `0` = off.
+    pub settle_ignored_after_days: u32,
+    /// Days before an untouched closed task is deleted outright. `0` = off.
+    pub delete_closed_after_days: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BacklogItem {
@@ -1393,6 +1423,23 @@ pub enum Event {
         update: SessionUpdate,
     },
 
+    /// Session transcripts of finished tasks older than the retention window
+    /// were removed. `updates` counts the deleted rows; emitted only when
+    /// something was actually deleted.
+    #[serde(rename = "history.pruned")]
+    HistoryPruned { updates: u64 },
+
+    /// The retention sweep settled and/or deleted tasks. `settled` counts
+    /// ignored diff-less waiting tasks moved to closed (reversible),
+    /// `expired` counts untouched closed tasks deleted outright, `kept`
+    /// counts closed tasks that still hold unmerged changes and were kept.
+    #[serde(rename = "history.swept")]
+    HistorySwept {
+        settled: u64,
+        expired: u64,
+        kept: u64,
+    },
+
     /// Daemon detected installed agents on first start; no agents configured
     /// yet. Frontend should show the setup wizard.
     #[serde(rename = "agents.setup_needed")]
@@ -1483,9 +1530,11 @@ pub struct Snapshot {
     pub portforwards: Vec<PortForwardInfo>,
     pub tasks: Vec<TaskInfo>,
     pub terminals: Vec<TerminalInfo>,
-    /// Persisted session conversation history keyed by task id. Sent on
-    /// `state.subscribe` so clients can reconstruct conversations without
-    /// polling. Omitted from the wire when empty.
+    /// Recent tail of the persisted session conversation history keyed by
+    /// task id, sent on `state.subscribe` so clients can render tiles, the
+    /// attention rail and previews without loading full transcripts. A
+    /// client needing a task's whole conversation asks `session.history`.
+    /// Omitted from the wire when empty.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub session_history: HashMap<String, Vec<SessionUpdate>>,
     /// All configured agents (enabled or not). Empty until the user completes

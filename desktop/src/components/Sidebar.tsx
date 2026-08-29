@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowUpRight,
+  CheckCheck,
   ChevronRight,
   FolderTree,
   Inbox,
@@ -107,11 +108,24 @@ function ProjectRow({
   row,
   onToggle,
   onOpenProject,
+  onSettle,
+  onSettleHover,
 }: {
   row: Extract<SidebarRow, { kind: "project" }>;
   onToggle: (name: string) => void;
   onOpenProject: (name: string) => void;
+  onSettle: (ids: string[]) => void;
+  /** True while the pointer (or focus) is on the bulk-settle button, so the
+   *  tree can highlight exactly the rows it would settle. */
+  onSettleHover?: (hovering: boolean) => void;
 }) {
+  const settle = row.settleIds.length > 0;
+  const preview = row.settlePreview.some(Boolean)
+    ? ` — ${row.settlePreview.join(", ")}`
+    : "";
+  const settleTitle = `Settle ${row.settleIds.length} finished turn${
+    row.settleIds.length === 1 ? "" : "s"
+  } with no changes (reversible per task)${preview}`;
   return (
     <div className="group/proj relative mt-1">
       <button
@@ -144,7 +158,10 @@ function ProjectRow({
           {row.name}
         </strong>
         {row.attentionCount > 0 && (
-          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-warn" />
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 rounded-full bg-warn transition-opacity group-hover/proj:opacity-0"
+          />
         )}
         <span
           title={`${row.count} active task${row.count === 1 ? "" : "s"}`}
@@ -162,6 +179,21 @@ function ProjectRow({
       >
         <ArrowUpRight className="size-3.5" />
       </button>
+      {settle && (
+        <button
+          type="button"
+          aria-label={settleTitle}
+          title={settleTitle}
+          onClick={() => onSettle(row.settleIds)}
+          onMouseEnter={() => onSettleHover?.(true)}
+          onMouseLeave={() => onSettleHover?.(false)}
+          onFocus={() => onSettleHover?.(true)}
+          onBlur={() => onSettleHover?.(false)}
+          className="pointer-events-none absolute right-[30px] top-1/2 grid size-[22px] -translate-y-1/2 place-items-center rounded text-muted-foreground/70 opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring group-hover/proj:pointer-events-auto group-hover/proj:opacity-100"
+        >
+          <CheckCheck className="size-3.5" />
+        </button>
+      )}
     </div>
   );
 }
@@ -271,6 +303,9 @@ interface SidebarProps {
   onNewTask: () => void;
   onOpenProject: (name: string) => void;
   onOpenSettings: () => void;
+  /** Bulk-settle every diff-less finished turn (the same reversible settle
+   *  as the per-row check button). */
+  onSettleFinishedTurns?: (ids: string[]) => void;
 }
 
 function Sidebar({
@@ -286,6 +321,7 @@ function Sidebar({
   onNewTask,
   onOpenProject,
   onOpenSettings,
+  onSettleFinishedTurns,
 }: SidebarProps) {
   const pinned = useUi((store) => store.pinnedTaskIds);
   const setPinnedTaskIds = useUi((store) => store.setPinnedTaskIds);
@@ -299,6 +335,10 @@ function Sidebar({
 
   const tasks = state.snapshot.tasks;
   const nowSec = Math.floor(Date.now() / 1000);
+
+  // While the pointer rests on a project's bulk-settle button, the tree dims
+  // exactly the rows that button would settle — the preview IS the list.
+  const [settlingProject, setSettlingProject] = useState<string | null>(null);
 
   const queue = useMemo(
     () => buildAttentionQueue(tasks, state.sessionUpdates),
@@ -386,6 +426,16 @@ function Sidebar({
       tasks,
     ],
   );
+
+  const settleMarkedIds = useMemo(() => {
+    if (!settlingProject) return null;
+    for (const row of rows) {
+      if (row.kind === "project" && row.name === settlingProject) {
+        return new Set(row.settleIds);
+      }
+    }
+    return null;
+  }, [rows, settlingProject]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -603,23 +653,36 @@ function Sidebar({
                       row={row}
                       onToggle={toggleProject}
                       onOpenProject={handleOpenProjects}
+                      onSettle={onSettleFinishedTurns ?? (() => {})}
+                      onSettleHover={
+                        onSettleFinishedTurns
+                          ? (hovering) => setSettlingProject(hovering ? row.name : null)
+                          : undefined
+                      }
                     />
                   ) : row.kind === "shelf" ? (
                     <ShelfRow row={row} onToggle={toggleShelf} />
                   ) : (
-                    <SidebarTaskRow
-                      task={row.task}
-                      state={row.state}
-                      depth={row.depth}
-                      active={openTaskId === row.task.id}
-                      childCount={row.childCount}
-                      expanded={row.expanded}
-                      pinned={isTaskGroupPinned(taskGroupIndex, pinned, row.task.id)}
-                      nowSec={nowSec}
-                      onOpen={onOpenTask}
-                      onToggle={toggleTask}
-                      onPin={handlePin}
-                    />
+                    <div
+                      className={cn(
+                        "transition-opacity",
+                        settleMarkedIds?.has(row.task.id) && "opacity-40",
+                      )}
+                    >
+                      <SidebarTaskRow
+                        task={row.task}
+                        state={row.state}
+                        depth={row.depth}
+                        active={openTaskId === row.task.id}
+                        childCount={row.childCount}
+                        expanded={row.expanded}
+                        pinned={isTaskGroupPinned(taskGroupIndex, pinned, row.task.id)}
+                        nowSec={nowSec}
+                        onOpen={onOpenTask}
+                        onToggle={toggleTask}
+                        onPin={handlePin}
+                      />
+                    </div>
                   )}
                 </div>
               );

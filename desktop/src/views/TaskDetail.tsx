@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { DEFAULT_SURFACE_TABS, FocusButton, type SurfaceTab } from "@/components/workspace";
 import { useTaskSessionUpdates } from "@/hooks/useTaskSessionUpdates";
+import { useSessionHistory } from "@/hooks/useSessionHistory";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { buildTaskGroupIndex } from "@/lib/taskGroups";
 import { cn } from "@/lib/utils";
@@ -66,6 +67,7 @@ type TaskConversationProps = Omit<
 
 const TaskConversation = memo(function TaskConversation(props: TaskConversationProps) {
   const updates = useTaskSessionUpdates(props.task.id);
+  useSessionHistory(props.task.id);
   useTaskFileEditCacheSync(props.task.id, updates);
   const activity = useMemo(() => sessionActivity(props.task, updates), [props.task, updates]);
   const commands = useMemo<CommandInfo[]>(() => {

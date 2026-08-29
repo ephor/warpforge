@@ -106,10 +106,11 @@ afterEach(() => {
 });
 
 describe("App sidebar layout", () => {
-  it("renders exactly one persistent sidebar on wide viewports", () => {
+  it("renders exactly one persistent sidebar on wide viewports", async () => {
     setWide(true);
 
     render(<App />);
+    await screen.findByTestId("mission-control");
 
     expect(screen.getByTestId("persistent-sidebar")).toBeInTheDocument();
     expect(screen.getByTestId("sidebar-resize-handle")).toBeInTheDocument();
@@ -127,11 +128,12 @@ describe("App sidebar layout", () => {
     expect(screen.queryByTestId("app-sidebar")).not.toBeInTheDocument();
   });
 
-  it("persistent sidebar uses store width", () => {
+  it("persistent sidebar uses store width", async () => {
     setWide(true);
     useUi.setState({ sidebarWidth: 400 });
 
     render(<App />);
+    await screen.findByTestId("mission-control");
 
     const sidebar = screen.getByTestId("persistent-sidebar");
     expect(sidebar.style.width).toBe("400px");
@@ -147,12 +149,13 @@ describe("App sidebar layout", () => {
     expect(screen.queryByTestId("sidebar-resize-handle")).not.toBeInTheDocument();
   });
 
-  it("⌘N opens the new task dialog", () => {
+  it("⌘N opens the new task dialog", async () => {
     render(<App />);
+    await screen.findByTestId("mission-control");
 
     expect(screen.queryByTestId("new-task-dialog")).not.toBeInTheDocument();
     fireEvent.keyDown(window, { key: "n", metaKey: true });
-    expect(screen.getByTestId("new-task-dialog")).toBeInTheDocument();
+    expect(await screen.findByTestId("new-task-dialog")).toBeInTheDocument();
   });
 });
 

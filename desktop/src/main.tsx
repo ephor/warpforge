@@ -4,7 +4,6 @@ import ReactDOM from "react-dom/client";
 import { Toaster } from "sonner";
 
 import App from "./App";
-import { daemon } from "./daemon";
 import { queryClient } from "./query";
 
 // CSS is loaded for its global side effect at the application boundary.
@@ -25,8 +24,14 @@ if (reactScanEnabled) {
   });
 }
 
-void daemon.connect().catch(() => {
-  /* Reconnect loop takes over */
+// Paint immediately; connect after the first frame so the daemon client's
+// heavy deps don't extend the white screen before React mounts.
+requestAnimationFrame(() => {
+  void import("./daemon").then(({ daemon }) => {
+    void daemon.connect().catch(() => {
+      /* Reconnect loop takes over */
+    });
+  });
 });
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

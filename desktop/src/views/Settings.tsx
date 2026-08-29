@@ -10,6 +10,7 @@ import LanguageServersPanel from "@/components/LanguageServersPanel";
 import TrackersPanel from "@/components/TrackersPanel";
 import { Button } from "@/components/ui/button";
 import { daemon } from "@/daemon";
+import type { HistorySettings } from "@/protocol";
 import { configRole } from "@/lib/configRole";
 import { THEMES } from "@/lib/themes";
 import { useUi } from "@/store/ui";
@@ -108,6 +109,26 @@ export default function SettingsView({ open, onOpenChange }: Props) {
   const backlogSettings = useQuery({
     queryKey: ["backlog", "settings"],
     queryFn: () => daemon.backlogSettings(),
+  });
+  const historySettings = useQuery({
+    queryKey: ["history", "settings"],
+    queryFn: () => daemon.historySettings(),
+  });
+  /** Change the retention windows. The daemon sweeps immediately on success;
+   *  deletions themselves are announced by the daemon's history.pruned and
+   *  history.swept toasts. */
+  const applyRetention = useMutation({
+    mutationFn: (patch: Partial<HistorySettings>) =>
+      daemon.setHistorySettings({
+        retentionDays: 30,
+        settleIgnoredAfterDays: 14,
+        deleteClosedAfterDays: 90,
+        ...historySettings.data,
+        ...patch,
+      }),
+    onSuccess: (settings) => queryClient.setQueryData(["history", "settings"], settings),
+    onError: (error) =>
+      toast.error(error instanceof Error ? error.message : String(error)),
   });
   const memoryStats = useQuery({
     queryKey: ["memory", "stats"],
@@ -310,6 +331,69 @@ export default function SettingsView({ open, onOpenChange }: Props) {
             <div className="p-4">
               <TrackersPanel />
             </div>
+          </Section>
+
+          <Section title="Task history">
+            <SettingRow
+              title="Keep transcripts for"
+              description="How long a closed task keeps its conversation. After this it still shows the title, prompt and diff, but the chat is gone. Pruning runs at daemon start, once a day, and right after you change this — with a notice each time it deletes something."
+              control={
+                <select
+                  aria-label="Transcript retention"
+                  value={historySettings.data?.retentionDays ?? 30}
+                  disabled={historySettings.isLoading || applyRetention.isPending}
+                  onChange={(event) =>
+                    applyRetention.mutate({ retentionDays: Number(event.target.value) })
+                  }
+                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                >
+                  <option value={15}>15 days</option>
+                  <option value={30}>30 days</option>
+                  <option value={60}>60 days</option>
+                  <option value={0}>Forever</option>
+                </select>
+              }
+            />
+            <SettingRow
+              title="Settle ignored tasks after"
+              description="A finished turn with no changes that nobody touched for this long moves to Closed on its own. Tasks with changes are never settled automatically. 0 turns this off."
+              control={
+                <select
+                  aria-label="Auto-settle ignored tasks"
+                  value={historySettings.data?.settleIgnoredAfterDays ?? 14}
+                  disabled={historySettings.isLoading || applyRetention.isPending}
+                  onChange={(event) =>
+                    applyRetention.mutate({ settleIgnoredAfterDays: Number(event.target.value) })
+                  }
+                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                >
+                  <option value={7}>7 days</option>
+                  <option value={14}>14 days</option>
+                  <option value={30}>30 days</option>
+                  <option value={0}>Off</option>
+                </select>
+              }
+            />
+            <SettingRow
+              title="Delete closed tasks after"
+              description="A closed task nobody touched for this long is deleted entirely — row, chat and worktree. Commits stay in git. Tasks with unmerged changes are kept. 0 turns this off."
+              control={
+                <select
+                  aria-label="Closed task expiry"
+                  value={historySettings.data?.deleteClosedAfterDays ?? 90}
+                  disabled={historySettings.isLoading || applyRetention.isPending}
+                  onChange={(event) =>
+                    applyRetention.mutate({ deleteClosedAfterDays: Number(event.target.value) })
+                  }
+                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                >
+                  <option value={60}>60 days</option>
+                  <option value={90}>90 days</option>
+                  <option value={180}>180 days</option>
+                  <option value={0}>Forever</option>
+                </select>
+              }
+            />
           </Section>
 
           <Section title="Backlog storage">

@@ -121,15 +121,6 @@ lib/                  — Utilities (38 files: sessionActivity, sessionTiming, e
   asks you at barriers (stage question, review limit), and supports
   pause/resume. See `docs/adr/0001-workflow-pipelines.md` before changing it.
 
-### Known Issues / TODO
-
-- **Agents killed on Esc (back to dashboard):** `handle_project_key` calls `agents.kill_project_agents()` + `services.stop_project()` when pressing Esc. Agents and services should persist across screen navigation.
-- **RPCs are serialized per connection:** `handle_conn` awaits `dispatch(...)` inline in its `select!` loop, so one slow request blocks every other request on the same socket. Observed: regenerating a task title while a task is spawning queues behind it, and the UI looks frozen. Desktop uses a single websocket, so this is app-wide. Fix is to spawn each request and keep responses correlated by id — mind mutation ordering and the `UpdatePrepareShutdown` handoff, which currently rely on serial dispatch. Separate from the tracker fix (see `docs/adr/0002`, invariant 1), which addressed the *actor* blocking, not this.
-- Process cleanup may not catch all orphans in edge cases
-- No `wf up/down/status/ports` CLI commands yet (only TUI + add/remove/list)
-- Config auto-detection limited to package.json `dev` script and docker-compose
-- No state persistence between separate warpforge processes
-
 ### Key Design Decisions
 
 **Read `docs/adr/` before changing a subsystem it covers.** Those records hold

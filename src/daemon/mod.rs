@@ -19,6 +19,7 @@ pub mod backlog;
 pub mod claude_auth;
 pub mod diff;
 pub mod handoff;
+pub mod history_config;
 pub mod lsp;
 pub mod lsp_servers;
 pub mod memory;

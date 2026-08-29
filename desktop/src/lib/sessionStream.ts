@@ -176,7 +176,7 @@ function hunksEqual(a?: EditHunk[], b?: EditHunk[]): boolean {
   });
 }
 
-function sessionUpdatesSemanticallyEqual(a: SessionUpdate, b: SessionUpdate): boolean {
+export function sessionUpdatesSemanticallyEqual(a: SessionUpdate, b: SessionUpdate): boolean {
   if (a === b) return true;
   if (a.kind !== b.kind) return false;
   // Value-aware comparison for streaming-prone fields; avoids remount churn

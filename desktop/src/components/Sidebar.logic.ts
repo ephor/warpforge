@@ -1,6 +1,12 @@
 import type { AttentionItem } from "@/lib/attentionRail";
 import { statusLabel } from "@/lib/statusMeta";
-import { awaitsReview, flattenTaskTree, isSettledTask, type TaskTree } from "@/lib/taskGroups";
+import {
+  awaitsReview,
+  flattenTaskTree,
+  isSettledTask,
+  settleableTasks,
+  type TaskTree,
+} from "@/lib/taskGroups";
 import type { TaskInfo } from "@/protocol";
 
 /**
@@ -267,6 +273,11 @@ export type SidebarRow =
       attentionCount: number;
       selected: boolean;
       expanded: boolean;
+      /** Diff-less finished turns in this project, for the per-project bulk
+       *  settle. Empty hides the button. */
+      settleIds: string[];
+      /** First few settle candidates' titles, for the button's tooltip. */
+      settlePreview: string[];
     }
   | {
       /** Quiet disclosure closing a project group: "12 done". */
@@ -484,6 +495,7 @@ export function buildSidebarRows(input: SidebarRowsInput): SidebarRow[] {
     const projectTasks = tasks.filter((task) => task.project === name);
     const live = projectTasks.filter((task) => !isSettledTask(task));
     const expanded = !collapsedProjects.has(name);
+    const settleCandidates = settleableTasks(projectTasks, nowSec);
     rows.push({
       attentionCount: live.filter((task) => needsHuman(stateOf(task))).length,
       count: live.length,
@@ -492,6 +504,8 @@ export function buildSidebarRows(input: SidebarRowsInput): SidebarRow[] {
       kind: "project",
       name,
       selected: openProject === name,
+      settleIds: settleCandidates.map((task) => task.id),
+      settlePreview: settleCandidates.slice(0, 3).map((task) => task.title),
     });
     if (!expanded) continue;
 

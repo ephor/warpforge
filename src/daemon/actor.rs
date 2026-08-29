@@ -58,6 +58,15 @@ type ConfigFingerprint = Option<(PathBuf, Vec<u8>)>;
 const CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CONFIG_CHANGE_DEBOUNCE: Duration = Duration::from_millis(200);
 
+/// Raw history rows shipped per task in a state snapshot. Covers the tiles'
+/// preview, the attention rail's pending permission and failure detection;
+/// a transcript needing more loads via `session.history`.
+const SNAPSHOT_HISTORY_TAIL: usize = 200;
+
+/// How often the daemon re-runs history pruning. The first sweep happens at
+/// start, so a shortened window applies without waiting a day.
+const HISTORY_PRUNE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
 fn config_fingerprint(project_path: &Path) -> ConfigFingerprint {
     let path = find_config_file(project_path);
     std::fs::read(&path).ok().map(|contents| (path, contents))
@@ -825,6 +834,25 @@ pub enum Command {
     ArchiveTask {
         id: String,
     },
+    /// Read one task's full folded conversation history (off the loop).
+    SessionHistory {
+        task_id: String,
+        reply: oneshot::Sender<Result<Vec<wire::SessionUpdate>, String>>,
+    },
+    /// Read the task-history retention setting from config.yaml.
+    HistoryGetSettings {
+        reply: oneshot::Sender<wire::HistorySettings>,
+    },
+    /// Change the retention windows, persist them, and sweep immediately.
+    HistorySetSettings {
+        retention_days: u32,
+        settle_ignored_after_days: u32,
+        delete_closed_after_days: u32,
+        reply: oneshot::Sender<Result<wire::HistorySettings, String>>,
+    },
+    /// Prune finished tasks' transcripts older than the retention window.
+    /// Fired at daemon start, daily, and after a settings change.
+    PruneHistory,
     /// Delete a task and its session history permanently.
     DeleteTask {
         id: String,
@@ -1384,6 +1412,18 @@ pub enum Event {
     SessionUpdate {
         task_id: String,
         update: wire::SessionUpdate,
+    },
+    /// Session transcripts of finished tasks older than the retention window
+    /// were removed; `updates` counts the deleted rows.
+    HistoryPruned {
+        updates: u64,
+    },
+    /// The retention sweep settled and/or deleted tasks (see HistorySwept's
+    /// wire doc for the counters' meaning).
+    HistorySwept {
+        settled: u64,
+        expired: u64,
+        kept: u64,
     },
     /// A PTY terminal's rendered screen changed (serialized, so clients need no
     /// terminal emulator — the daemon owns the one authoritative vt100 parser).
@@ -2246,6 +2286,56 @@ impl DaemonHandle {
             .unwrap_or_else(|_| Err("daemon dropped backlog settings request".into()))
     }
 
+    /// One task's full folded conversation history. Index-backed read, so it
+    /// stays fast on databases where the whole-table load used to take tens
+    /// of seconds.
+    pub async fn session_history(
+        &self,
+        task_id: String,
+    ) -> Result<Vec<wire::SessionUpdate>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::SessionHistory { task_id, reply: tx })
+            .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the session history request".into()))
+    }
+
+    pub async fn history_get_settings(&self) -> wire::HistorySettings {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::HistoryGetSettings { reply: tx }).await;
+        rx.await.unwrap_or_else(|_| {
+            let defaults = super::history_config::HistoryConfig::default();
+            wire::HistorySettings {
+                retention_days: defaults.retention_days,
+                settle_ignored_after_days: defaults.settle_ignored_after_days,
+                delete_closed_after_days: defaults.delete_closed_after_days,
+            }
+        })
+    }
+
+    pub async fn history_set_settings(
+        &self,
+        retention_days: u32,
+        settle_ignored_after_days: u32,
+        delete_closed_after_days: u32,
+    ) -> Result<wire::HistorySettings, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::HistorySetSettings {
+            retention_days,
+            settle_ignored_after_days,
+            delete_closed_after_days,
+            reply: tx,
+        })
+        .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the history settings request".into()))
+    }
+
+    /// Fire-and-forget history prune (start, daily, settings change).
+    pub async fn prune_history(&self) {
+        self.send(Command::PruneHistory).await;
+    }
+
     pub async fn backlog_set_storage(
         &self,
         mode: wire::BacklogStorageMode,
@@ -3076,6 +3166,18 @@ impl Daemon {
             });
         }
 
+        // History retention sweeps: once at start (so a shortened window
+        // applies without waiting a day), then daily.
+        let prune_tx = handle.cmd_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                if prune_tx.send(Command::PruneHistory).await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(HISTORY_PRUNE_INTERVAL).await;
+            }
+        });
+
         tokio::spawn(daemon.run(cmd_rx, agent_rx, service_rx, pf_rx, acp_rx, policy_rx));
 
         // Kick off background ACP probes so every enabled agent's model list is
@@ -3644,19 +3746,74 @@ impl Daemon {
                 // read here would miss whatever write-behind persistence still
                 // has queued, and it would block the actor (ADR 0002). Flush +
                 // read + fold happen on a worker; only the reply crosses back.
+                // Clients get a recent tail per task — full transcripts load
+                // per task through `session.history`, so a connect no longer
+                // depends on reading every transcript in the database.
                 let mut snapshot = self.build_snapshot_core();
                 let persist = self.persist.clone();
                 let store = self.store.clone();
                 tokio::spawn(async move {
                     persist.flush().await;
                     snapshot.session_history = super::runtime::store_read(store, |store| {
-                        store.load_all_session_updates().unwrap_or_default()
+                        store
+                            .load_session_update_tails(SNAPSHOT_HISTORY_TAIL)
+                            .unwrap_or_default()
                     })
                     .await
                     .unwrap_or_default();
                     let _ = reply.send(snapshot);
                 });
             }
+            Command::SessionHistory { task_id, reply } => {
+                // Same off-loop shape as Command::Snapshot: flush first so the
+                // read sees everything the write-behind queue still holds.
+                let persist = self.persist.clone();
+                let store = self.store.clone();
+                tokio::spawn(async move {
+                    persist.flush().await;
+                    let result = super::runtime::store_read(store, move |store| {
+                        store
+                            .load_session_updates(&task_id)
+                            .map(|updates| super::store::fold_for_snapshot(&updates))
+                            .map_err(|e| format!("{e:#}"))
+                    })
+                    .await
+                    .unwrap_or_else(|| Err("daemon has no persistent store".into()));
+                    let _ = reply.send(result);
+                });
+            }
+            Command::HistoryGetSettings { reply } => {
+                let config = super::history_config::HistoryConfig::load();
+                let _ = reply.send(wire::HistorySettings {
+                    retention_days: config.retention_days,
+                    settle_ignored_after_days: config.settle_ignored_after_days,
+                    delete_closed_after_days: config.delete_closed_after_days,
+                });
+            }
+            Command::HistorySetSettings {
+                retention_days,
+                settle_ignored_after_days,
+                delete_closed_after_days,
+                reply,
+            } => {
+                let config = super::history_config::HistoryConfig {
+                    retention_days,
+                    settle_ignored_after_days,
+                    delete_closed_after_days,
+                };
+                let result = super::history_config::save(&config)
+                    .map(|_| wire::HistorySettings {
+                        retention_days,
+                        settle_ignored_after_days,
+                        delete_closed_after_days,
+                    })
+                    .map_err(|e| format!("{e:#}"));
+                if result.is_ok() {
+                    self.history_sweep();
+                }
+                let _ = reply.send(result);
+            }
+            Command::PruneHistory => self.history_sweep(),
             Command::OpenProject { name } => self.open_project(&name).await,
             Command::StartService { project, service } => {
                 self.start_one_service(&project, &service).await;
@@ -7290,6 +7447,129 @@ impl Daemon {
             return;
         }
         self.emit_session(task_id, update);
+    }
+
+    /// Remove finished tasks' session transcripts older than the retention
+    /// window, then fold the WAL back. All on a worker; the actor only sends
+    /// the event. A `retention_days` of 0 (or a missing store) means "never".
+    fn prune_transcripts(&self, retention_days: u32) {
+        let persist = self.persist.clone();
+        let store = self.store.clone();
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            persist.flush().await;
+            let cutoff = super::task::now_secs() as i64 - (retention_days as i64) * 24 * 60 * 60;
+            let deleted = super::runtime::store_read(store, move |store| {
+                let deleted = store.prune_finished_session_updates(cutoff)?;
+                if deleted > 0 {
+                    store.checkpoint_wal()?;
+                }
+                Ok::<usize, anyhow::Error>(deleted)
+            })
+            .await
+            .map(|result| result.unwrap_or(0))
+            .unwrap_or(0);
+            if deleted > 0 {
+                let _ = event_tx.send(Event::HistoryPruned {
+                    updates: deleted as u64,
+                });
+            }
+        });
+    }
+
+    /// The full retention sweep, off the loop:
+    ///
+    /// 1. Delete closed tasks' transcripts past `retention_days`.
+    /// 2. Settle ignored diff-less waiting tasks past `settle_ignored_after_days`
+    ///    (through the same `SettleTask` path as the button, so it is
+    ///    reversible and permission-safe).
+    /// 3. Delete untouched closed tasks past `delete_closed_after_days` via the
+    ///    real `DeleteTask` path (worktree, backlog refs, workflow runs); a
+    ///    closed task that still holds unmerged changes is kept instead.
+    ///
+    /// Settling runs before expiry so a task settled by stage 2 gets a fresh
+    /// `updated_at` and cannot be expired by the same sweep.
+    fn history_sweep(&self) {
+        let config = super::history_config::HistoryConfig::load();
+        if config.retention_days > 0 {
+            self.prune_transcripts(config.retention_days);
+        }
+        let persist = self.persist.clone();
+        let store = self.store.clone();
+        let cmd_tx = self.cmd_tx.clone();
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            let now = super::task::now_secs() as i64;
+            let mut settled = 0u64;
+            let mut expired = 0u64;
+            let mut kept = 0u64;
+
+            if config.settle_ignored_after_days > 0 {
+                persist.flush().await;
+                let cutoff = now - (config.settle_ignored_after_days as i64) * 24 * 60 * 60;
+                let store_for_read = store.clone();
+                let ids = super::runtime::store_read(store_for_read, move |store| {
+                    store.find_ignored_waiting_tasks(cutoff).unwrap_or_default()
+                })
+                .await
+                .unwrap_or_default();
+                for task_id in ids {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    if cmd_tx
+                        .send(Command::SettleTask {
+                            task_id: task_id.clone(),
+                            reply: tx,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    if rx.await.map(|r| r.is_ok()).unwrap_or(false) {
+                        settled += 1;
+                    }
+                }
+            }
+
+            if config.delete_closed_after_days > 0 {
+                persist.flush().await;
+                let cutoff = now - (config.delete_closed_after_days as i64) * 24 * 60 * 60;
+                let store_for_read = store.clone();
+                let rows = super::runtime::store_read(store_for_read, move |store| {
+                    store.find_expired_closed_tasks(cutoff).unwrap_or_default()
+                })
+                .await
+                .unwrap_or_default();
+                for (task_id, files_changed) in rows {
+                    if files_changed > 0 {
+                        kept += 1;
+                        continue;
+                    }
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    if cmd_tx
+                        .send(Command::DeleteTask {
+                            id: task_id.clone(),
+                            reply: tx,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    if rx.await.map(|r| r.is_ok()).unwrap_or(false) {
+                        expired += 1;
+                    }
+                }
+            }
+
+            if settled + expired + kept > 0 {
+                let _ = event_tx.send(Event::HistorySwept {
+                    settled,
+                    expired,
+                    kept,
+                });
+            }
+        });
     }
 
     /// Ask a worker to read this task's persisted history off the loop and send
