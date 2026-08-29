@@ -140,6 +140,18 @@ fn load_from(path: &Path, accounts: &[StoredAccount]) -> Vec<AgentAccountLimits>
     entries
         .into_iter()
         .filter(|entry| {
+            // A `<agent>:live` row stands in for a login the user never
+            // registered. Once one IS registered and active, the poller stops
+            // emitting that row — but a cache written before the import still
+            // carries it, and it renders as a second card for the same login,
+            // doubling the quota and spend on screen until the next poll.
+            if entry.limits.account_id.ends_with(":live")
+                && accounts
+                    .iter()
+                    .any(|a| a.agent_id == entry.limits.agent_id && a.active)
+            {
+                return false;
+            }
             let cached = entry.identity.as_deref().and_then(normalize);
             let current =
                 current_identity(&entry.limits.agent_id, &entry.limits.account_id, accounts);
@@ -259,6 +271,29 @@ mod tests {
         save_snapshot(&path, &[limits("claude:personal")], &accounts);
 
         assert!(load_from(&path, &[]).is_empty());
+    }
+
+    /// Importing an account leaves a cache that still holds the unregistered
+    /// login it replaced. Serving both renders the same quota and spend twice.
+    #[test]
+    fn live_entry_is_dropped_once_that_agent_has_a_registered_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent-limits.json");
+        let live = account("claude:live", Some("me@example.com"), dir.path());
+        save_snapshot(&path, &[limits("claude:live")], &[live]);
+
+        // Before the import the row is the only thing describing that login.
+        assert_eq!(
+            load_from(&path, &[]).len(),
+            0,
+            "no accounts: nothing to confirm it"
+        );
+
+        let registered = account("claude:personal", Some("me@example.com"), dir.path());
+        assert!(
+            load_from(&path, std::slice::from_ref(&registered)).is_empty(),
+            "the registered account now covers this login"
+        );
     }
 
     #[test]
