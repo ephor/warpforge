@@ -7,7 +7,7 @@
  * daemon events onto the last snapshot.
  */
 
-import { appendCoalescedUpdate, coalesceUpdates, sessionUpdatesSemanticallyEqual } from "./lib/sessionStream";
+import { appendCoalescedUpdate, coalesceUpdates, mergeSessionHistory } from "./lib/sessionStream";
 import { stampSessionHistoryStartTimes } from "./lib/sessionTiming";
 import type {
   AccountInfo,
@@ -944,9 +944,9 @@ export class DaemonClient {
 
   /**
    * Fetch a task's full conversation once and merge it under whatever live
-   * tail the snapshot already delivered. The daemon-side snapshot tail is a
-   * prefix-preserving slice of the same folded history, so the leading run of
-   * the live copy that duplicates the fetched tail is skipped, not stacked.
+   * tail the snapshot already delivered. The daemon flushes its write-behind
+   * queue before the read, so everything the live copy already showed is in
+   * the fetch — only what arrived during the round trip is carried over.
    */
   async loadSessionHistory(taskId: string): Promise<void> {
     if (this.demoDiff || this.historyLoaded.has(taskId) || this.historyLoadInFlight.has(taskId)) {
@@ -956,26 +956,10 @@ export class DaemonClient {
     try {
       const fetched = coalesceUpdates(await this.sessionHistory(taskId));
       const existing = this.state.sessionUpdates[taskId] ?? [];
-      let live = 0;
-      if (existing.length > 0) {
-        for (let k = Math.min(existing.length, fetched.length); k > 0; k -= 1) {
-          let matches = true;
-          for (let i = 0; i < k; i += 1) {
-            if (!sessionUpdatesSemanticallyEqual(existing[i], fetched[fetched.length - k + i])) {
-              matches = false;
-              break;
-            }
-          }
-          if (matches) {
-            live = k;
-            break;
-          }
-        }
-      }
       this.setState({
         sessionUpdates: {
           ...this.state.sessionUpdates,
-          [taskId]: coalesceUpdates([...fetched, ...existing.slice(live)]),
+          [taskId]: mergeSessionHistory(fetched, existing),
         },
       });
       this.historyLoaded.add(taskId);

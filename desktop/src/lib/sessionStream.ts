@@ -176,7 +176,7 @@ function hunksEqual(a?: EditHunk[], b?: EditHunk[]): boolean {
   });
 }
 
-export function sessionUpdatesSemanticallyEqual(a: SessionUpdate, b: SessionUpdate): boolean {
+function sessionUpdatesSemanticallyEqual(a: SessionUpdate, b: SessionUpdate): boolean {
   if (a === b) return true;
   if (a.kind !== b.kind) return false;
   // Value-aware comparison for streaming-prone fields; avoids remount churn
@@ -294,6 +294,18 @@ export function appendCoalesced(
       toolIndexes.set(update.tool_call_id, output.length);
       output.push(truncateToolContent(update));
     }
+  } else if (update.kind === "permission_request") {
+    // A request can be re-emitted (resume replay, a reconnect retry). Its row
+    // key is the request id, so a second copy would collide in the transcript
+    // list — fold it onto the first instead.
+    const key = `perm:${update.request_id}`;
+    const index = toolIndexes.get(key);
+    if (index !== undefined && output[index].kind === "permission_request") {
+      output[index] = update;
+    } else {
+      toolIndexes.set(key, output.length);
+      output.push(update);
+    }
   } else if (update.kind === "file_edit" && update.tool_call_id) {
     const key = `edit:${update.tool_call_id}`;
     const index = toolIndexes.get(key);
@@ -342,7 +354,15 @@ export function appendCoalescedUpdate(
 
   const output = existing.slice();
   const indexes = new Map<string, number>();
-  if (update.kind === "tool_call") {
+  if (update.kind === "permission_request") {
+    for (let index = output.length - 1; index >= 0; index -= 1) {
+      const candidate = output[index];
+      if (candidate.kind === "permission_request" && candidate.request_id === update.request_id) {
+        indexes.set(`perm:${update.request_id}`, index);
+        break;
+      }
+    }
+  } else if (update.kind === "tool_call") {
     for (let index = output.length - 1; index >= 0; index -= 1) {
       const candidate = output[index];
       if (candidate.kind === "tool_call" && candidate.tool_call_id === update.tool_call_id) {
@@ -361,6 +381,37 @@ export function appendCoalescedUpdate(
   }
   appendCoalesced(output, indexes, update);
   return capSessionUpdates(output);
+}
+
+/**
+ * Merge a task's freshly fetched full history with the live copy the
+ * connection snapshot left behind.
+ *
+ * The snapshot tail is folded from a *raw row* window, so it is not a
+ * positional suffix of the folded full history: a tool call whose first frames
+ * fall before the window boundary folds into a later row in the tail than it
+ * does in the full fold, which shifts every row after it. Aligning by position
+ * therefore fails on real transcripts and stacks the whole tail a second time.
+ * Walk the live copy forward through the fetch instead and keep only what
+ * trails the last match — the updates that arrived while the fetch was in
+ * flight.
+ */
+export function mergeSessionHistory(
+  fetched: SessionUpdate[],
+  live: SessionUpdate[],
+): SessionUpdate[] {
+  let cursor = 0;
+  let lastMatched = -1;
+  for (let index = 0; index < live.length; index += 1) {
+    for (let candidate = cursor; candidate < fetched.length; candidate += 1) {
+      if (sessionUpdatesSemanticallyEqual(live[index], fetched[candidate])) {
+        cursor = candidate + 1;
+        lastMatched = index;
+        break;
+      }
+    }
+  }
+  return coalesceUpdates([...fetched, ...live.slice(lastMatched + 1)]);
 }
 
 /**
