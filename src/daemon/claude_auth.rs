@@ -3,8 +3,7 @@
 //! Claude is not switched by environment. Its config directory holds skills,
 //! plugins, settings, MCP config and project history, so giving each account its
 //! own `CLAUDE_CONFIG_DIR` would fragment all of that. Instead there is one
-//! config dir and the *credentials inside it* are swapped — the same choice Orca
-//! makes on the host (`runtime-auth-service.ts`).
+//! config dir and the *credentials inside it* are swapped.
 //!
 //! Two consequences follow, and both are load-bearing:
 //!
@@ -244,8 +243,8 @@ pub const CONFLICTING_AUTH_ENV: &[&str] = &[
     "AWS_BEARER_TOKEN_BEDROCK",
 ];
 
-/// Whether a custom-headers value smuggles credentials (Orca applies the same
-/// test before stripping it).
+/// Whether a custom-headers value smuggles credentials, in which case it is
+/// stripped rather than passed through to a spawned agent.
 pub fn headers_look_like_auth(value: &str) -> bool {
     let lowered = value.to_ascii_lowercase();
     ["authorization", "x-api-key", "api-key", "bearer"]

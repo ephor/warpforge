@@ -13,16 +13,16 @@ missing is the opposite: work that is **not** started yet, from wherever it is
 tracked. Teams keep that in GitHub Issues or Linear, and some of it never
 belongs in a tracker at all ("try this later").
 
-The obvious reference, Orca, keeps a separate UI per provider (`taskSource ===
-'github' ? … : 'linear' ? …`, one 13k-line page component). Its providers never
+The obvious approach keeps a separate UI per provider (`taskSource ===
+'github' ? … : 'linear' ? …`, one 13k-line page component). Providers never
 mix, and adding one means adding another branch of the page.
 
 ## Decisions
 
 **One normalized `WorkItem`, one table.** Sources are a *column*, not a
 sub-application. The table (`backlog/columns.tsx`) never learns what a provider
-is; adapters fill in the same shape. *Rejected:* Orca's per-provider surfaces —
-they multiply UI for a distinction the user does not care about, and a project
+is; adapters fill in the same shape. *Rejected:* per-provider surfaces — they
+multiply UI for a distinction the user does not care about, and a project
 almost always has exactly one tracker anyway.
 
 **The table is written for this table, not on a generic data-table kit.** Page,
