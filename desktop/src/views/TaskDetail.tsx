@@ -62,12 +62,12 @@ const EMPTY_TASK_COMMANDS: CommandInfo[] = [];
 
 type TaskConversationProps = Omit<
   ComponentProps<typeof ChatTranscript>,
-  "activity" | "commands" | "imageSupported" | "updates"
+  "activity" | "commands" | "historyBackfilled" | "imageSupported" | "updates"
 >;
 
 const TaskConversation = memo(function TaskConversation(props: TaskConversationProps) {
   const updates = useTaskSessionUpdates(props.task.id);
-  useSessionHistory(props.task.id);
+  const historyBackfilled = useSessionHistory(props.task.id);
   useTaskFileEditCacheSync(props.task.id, updates);
   const activity = useMemo(() => sessionActivity(props.task, updates), [props.task, updates]);
   const commands = useMemo<CommandInfo[]>(() => {
@@ -95,6 +95,7 @@ const TaskConversation = memo(function TaskConversation(props: TaskConversationP
       {...props}
       activity={activity}
       commands={commands}
+      historyBackfilled={historyBackfilled}
       imageSupported={imageSupported}
       updates={updates}
     />

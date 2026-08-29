@@ -27,6 +27,8 @@ interface Props {
   updates: SessionUpdate[];
   agents: AgentConfig[];
   onOpenTask: (id: string) => void;
+  /** True once the lazy history backfill has landed — see `SessionChatProps`. */
+  historyBackfilled?: boolean;
   /** Transcript only, no composer — see `SessionChatProps.readOnly`. */
   readOnly?: boolean;
 }

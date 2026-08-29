@@ -282,6 +282,12 @@ export interface SessionChatProps {
   agents: AgentConfig[];
   onOpenTask: (id: string) => void;
   /**
+   * True once the task's full conversation has been backfilled under the
+   * snapshot tail. The backfill prepends rows the list has never measured, so
+   * the scroll offset it was holding no longer points at the same message.
+   */
+  historyBackfilled?: boolean;
+  /**
    * Render the transcript without the composer. Used where a *different*
    * task's session is on show — the Pipeline surface watching a child agent —
    * so the reader can see what it is doing without being offered a reply box
@@ -305,6 +311,7 @@ export function SessionChat({
   updates,
   agents,
   onOpenTask,
+  historyBackfilled = false,
   readOnly = false,
 }: SessionChatProps) {
   const merged = updates;
@@ -456,6 +463,24 @@ export function SessionChat({
     const frame = requestAnimationFrame(pinToLatest);
     return () => cancelAnimationFrame(frame);
   }, [active, following, pinToLatest, task.id]);
+
+  // The history backfill prepends the rest of the conversation above the
+  // snapshot tail. Those rows are unmeasured, so the offset the list was
+  // holding drifts off the latest message while they take their real sizes —
+  // maintainVisibleContentPosition anchors the old content, not the end. Pin
+  // across two frames: the first lands before the prepended rows measure.
+  useEffect(() => {
+    if (!historyBackfilled || !active || !following) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      pinToLatest();
+      second = requestAnimationFrame(pinToLatest);
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [active, following, historyBackfilled, pinToLatest]);
   const cancelLiveFollow = useCallback(() => {
     setFollowing(false);
   }, []);
