@@ -184,25 +184,9 @@ async fn fetch_all_inner(accounts: Vec<StoredAccount>, force: bool) -> Vec<Agent
                 };
                 crate::daemon::limits::claude::fetch_for_account(&acc, tok, fetched_at).await
             }
-            "codex" => {
-                if acc.id.ends_with(":live") || acc.active {
-                    crate::daemon::limits::codex::fetch_for_account(&acc.id, &acc.label, fetched_at)
-                        .await
-                } else {
-                    AgentAccountLimits {
-                        account_id: acc.id.clone(),
-                        agent_id: "codex".into(),
-                        label: acc.label.clone(),
-                        active: false,
-                        plan: acc.plan.clone(),
-                        windows: vec![],
-                        exhausted: false,
-                        fetched_at,
-                        source: "local".into(),
-                        error: Some("only the active account has local rate-limit data".into()),
-                    }
-                }
-            }
+            // Every account holds its own credentials in its vault, so each one
+            // is asked on its own token — being active buys no special access.
+            "codex" => crate::daemon::limits::codex::fetch_for_account(&acc, fetched_at).await,
             "opencode" => {
                 crate::daemon::limits::opencode::fetch_for_account(&acc.id, &acc.label, fetched_at)
                     .await

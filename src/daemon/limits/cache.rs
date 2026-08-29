@@ -66,7 +66,7 @@ fn current_identity(
     }
     let raw = match (agent_id, stored) {
         ("claude", Some(account)) => {
-            super::claude::account_identity(account).and_then(|id| id.email)
+            super::claude_usage::account_identity(account).and_then(|id| id.email)
         }
         ("claude", None) => live_claude_email(),
         ("codex", Some(account)) => codex_account_email(account),
