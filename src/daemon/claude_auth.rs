@@ -191,6 +191,7 @@ impl ClaudeRuntime {
     }
 
     fn keychain_read(&self, service: &str, account: &str) -> Result<Option<String>> {
+        const ITEM_NOT_FOUND: i32 = 44;
         let Some(bin) = &self.security_bin else {
             return Ok(None);
         };
@@ -198,8 +199,20 @@ impl ClaudeRuntime {
             .args(["find-generic-password", "-s", service, "-a", account, "-w"])
             .output()
             .with_context(|| format!("running {}", bin.display()))?;
-        if !output.status.success() {
-            return Ok(None);
+        if let Some(code) = output.status.code() {
+            if code == ITEM_NOT_FOUND {
+                return Ok(None);
+            }
+            if !output.status.success() {
+                // A missing item is "not logged in", but anything else — an ACL
+                // that does not admit `security`, a locked keychain — means the
+                // login state is unknown. Callers must see the difference
+                // instead of reading a permission failure as "nothing there".
+                anyhow::bail!(
+                    "keychain read failed for {service}: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
         }
         let secret = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok((!secret.is_empty()).then_some(secret))

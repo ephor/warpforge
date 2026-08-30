@@ -48,6 +48,9 @@ pub enum Capture {
     Persisted(String),
     /// Something changed that could not be filed safely.
     Rejected(&'static str),
+    /// The live credential store could not be read, so the login state is
+    /// unknown — a keychain permission failure must not look like quiet.
+    Failed(String),
 }
 
 /// Where a captured credential would go, and what is stored there now.
@@ -104,7 +107,10 @@ impl CredentialCapture {
         accounts: &[StoredAccount],
     ) -> Capture {
         let Ok(contents) = std::fs::read_to_string(live) else {
-            return Capture::Unchanged;
+            // The path was chosen because it held a readable token moments
+            // ago; an unreadable file now is an environment failure, not a
+            // quiet "nothing happened".
+            return Capture::Failed(format!("could not read {}", live.display()));
         };
         // A blob with no token is a logged-out or half-written home. Filing it
         // would replace a working vault credential with nothing.
@@ -149,8 +155,13 @@ impl CredentialCapture {
         accounts: &[StoredAccount],
         expected: Option<&StoredAccount>,
     ) -> Capture {
-        let Ok(Some(contents)) = runtime.read_live_credentials() else {
-            return Capture::Unchanged;
+        let contents = match runtime.read_live_credentials() {
+            Ok(Some(contents)) => contents,
+            // Not logged in — the ordinary quiet case.
+            Ok(None) => return Capture::Unchanged,
+            // A read failure (keychain ACL, locked keychain) is not "nothing
+            // happened": the login state is unknown and must be reported.
+            Err(error) => return Capture::Failed(format!("{error:#}")),
         };
         // The empty blob a CLI writes when it loses a refresh race: storing it
         // logs the account out for good.
@@ -240,6 +251,9 @@ fn report(agent: &str, outcome: Capture) {
         }
         Capture::Rejected(reason) => {
             eprintln!("[accounts] not storing the rotated {agent} credential: {reason}");
+        }
+        Capture::Failed(error) => {
+            eprintln!("[accounts] could not check the {agent} login: {error}");
         }
         Capture::Unchanged => {}
     }

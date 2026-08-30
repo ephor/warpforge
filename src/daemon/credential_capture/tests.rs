@@ -239,6 +239,69 @@ fn a_symlinked_destination_is_refused() {
     assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep me");
 }
 
+/// A `security` stub whose `find-generic-password` always exits `code`, so a
+/// real keychain failure (ACL denial, locked keychain) can be exercised.
+#[cfg(unix)]
+fn failing_security(dir: &Path, code: i32) -> ClaudeRuntime {
+    let script = dir.join("security");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\n[ \"$1\" = find-generic-password ] && exit {code}\nexit 0\n"),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    ClaudeRuntime {
+        config_dir: dir.join("config"),
+        config_path: dir.join("config").join(".claude.json"),
+        security_bin: Some(script),
+        user: "tester".to_string(),
+    }
+}
+
+/// The defect this diagnosis exists for: a keychain read that fails must come
+/// back as a reported failure, not as the quiet "nothing happened" — the two
+/// are indistinguishable to whoever is staring at stale vaults.
+#[cfg(unix)]
+#[test]
+fn a_failing_live_read_is_reported_not_silenced() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = failing_security(dir.path(), 45);
+    let mut capture = CredentialCapture::default();
+    assert!(matches!(
+        capture.capture_claude_under(dir.path(), &runtime, &[], None),
+        Capture::Failed(_)
+    ));
+}
+
+/// Exit 44 is `security`'s "no such item": a logged-out machine is quiet, not
+/// an error.
+#[cfg(unix)]
+#[test]
+fn a_missing_live_credential_is_still_quiet() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = failing_security(dir.path(), 44);
+    let mut capture = CredentialCapture::default();
+    assert_eq!(
+        capture.capture_claude_under(dir.path(), &runtime, &[], None),
+        Capture::Unchanged
+    );
+}
+
+/// The Codex live file was readable when the path was picked; if it cannot be
+/// read by the time the capture looks, that is a failure to report.
+#[test]
+fn an_unreadable_codex_live_file_is_reported() {
+    let root = tempfile::tempdir().unwrap();
+    let unreadable = root.path().join("auth.json");
+    std::fs::create_dir_all(&unreadable).unwrap();
+    let mut capture = CredentialCapture::default();
+    assert!(matches!(
+        capture.capture_codex_at(root.path(), &unreadable, &[]),
+        Capture::Failed(_)
+    ));
+}
+
 // ---- Claude -------------------------------------------------------------
 
 #[cfg(unix)]
