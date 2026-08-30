@@ -60,15 +60,24 @@ unmeasured rows inflates it. A tight band (0.05 was tried) makes the list stop
 pinning while the app still believes it is following — at which point nothing
 stabilises the scroll at all.
 
-**The transcript arrives in one piece.** `state.subscribe` carries each task's
-whole folded history again (`Store::load_all_session_updates`). There is no
-per-task backfill and no `session.history` RPC. Cold start on a large database
-is a real problem and will be solved another way — by pruning what is stored,
-by loading later, or by not shipping tasks the client will not show — but not
-by splitting one task's transcript across two deliveries. *Kept from the
-cold-start work:* the whole retention lifecycle (transcript prune, auto-settle,
-task expiry, Settings UI, daily sweep), which is what actually bounds the
-database.
+**The transcript arrives in one piece.** A mounted transcript is only ever
+appended to — but *when* it mounts is the lever cold start pulls. The
+connection snapshot carries tasks and metadata only (zero transcripts), and a
+chat fetches its own task's whole folded history via `session.history`
+(`Command::SessionHistory`, `DaemonHandle::session_history`,
+`Store::load_session_updates`), mounting the list only once that fetch has
+resolved. Until it resolves — successfully or not — the chat shows a brief
+placeholder, so nothing can appear above the viewport of a mounted list. An
+earlier variant of this split the delivery: the snapshot carried a 200-row
+tail, the chat rendered it immediately and backfilled the rest above the
+viewport, and every prepended row was unmeasured (see Context). The mistake
+was one truncated payload serving two purposes — the sidebar's summaries and
+the chat's transcript — not lazy loading itself. Summaries now degrade instead:
+live events refill `state.sessionUpdates` as they arrive, and
+`TaskInfo.pending_permission` (computed daemon-side at snapshot time) keeps the
+"needs you" badge honest without any transcript. The whole retention lifecycle
+(transcript prune, auto-settle, task expiry, Settings UI, daily sweep) is what
+bounds the database.
 
 **Pinning goes through the scroller node, not `listRef.scrollToEnd()`.** The
 imperative method resolves an absolute target from frozen size estimates, so in
@@ -82,9 +91,10 @@ outside the follow zone, where nothing re-pins.
    is the whole content of `transcriptRestoreMode`; any new scroll behaviour
    goes through that function rather than beside it.
 2. **Nothing is prepended above the viewport after the list mounts.** A task's
-   rows may only be appended. Any future cold-start optimisation must keep this
-   — the alternative costs a scroll jump per prepend, which no amount of
-   re-pinning hides.
+   rows may only be appended. A transcript therefore mounts *after* its full
+   fetch resolves — a placeholder stands in until then. Any future cold-start
+   optimisation must keep this; the alternative costs a scroll jump per
+   prepend, which no amount of re-pinning hides.
 3. **`{data: true, size: true}` whenever MVCP is on.** `size` stabilisation
    keeps the total content size from moving by the estimate drift times the
    unmeasured row count; `data` keeps it stable across each streaming delta.
@@ -104,11 +114,13 @@ outside the follow zone, where nothing re-pins.
 
 ## Consequences
 
-- `session.history` (RPC, `Command::SessionHistory`, `DaemonHandle::session_history`,
-  `Store::load_session_update_tails`), the `useSessionHistory` hook,
-  `DaemonClient.loadSessionHistory`/`sessionHistory`/`forgetSessionHistory` and
-  `mergeSessionHistory` are all gone. The duplicate-merge logic existed only to
-  reconcile the two deliveries.
-- Connecting to a large database is slower again, in exchange for a transcript
-  that does not move under the reader. The retention lifecycle is the lever
-  that keeps that cost bounded until cold start is done properly.
+- `mergeSessionHistory` exists to reconcile a task's fetched transcript with
+  the live updates that arrived while the fetch was in flight — the live copy
+  folds raw frames, the fetch returns a folded history, so they are not
+  positional suffixes of each other.
+- `DaemonClient.loadSessionHistory` always resolves, even when the daemon
+  cannot answer; a chat then mounts on an empty transcript and refills from
+  live events. A failed fetch is retried on the next open of the task.
+- Connecting to a large database no longer reads the transcripts table at all:
+  the snapshot is tasks and metadata only, and each chat pays for exactly one
+  indexed per-task read.

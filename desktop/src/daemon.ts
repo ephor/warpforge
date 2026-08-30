@@ -7,7 +7,7 @@
  * daemon events onto the last snapshot.
  */
 
-import { appendCoalescedUpdate, coalesceUpdates } from "./lib/sessionStream";
+import { appendCoalescedUpdate, coalesceUpdates, mergeSessionHistory } from "./lib/sessionStream";
 import { stampSessionHistoryStartTimes } from "./lib/sessionTiming";
 import type {
   AccountInfo,
@@ -91,6 +91,8 @@ export class DaemonClient {
   private reconnectDelay = 500;
   private reconnectTimer: number | null = null;
   private reconnectSuspended = false;
+  /** Tasks whose full conversation was already fetched via session.history. */
+  private historyLoads = new Map<string, Promise<void>>();
   private handshake: DaemonHandshake | null = null;
   private toolCallStarts = new Map<string, number>();
   private terminalDataSubscribers = new Map<string, Set<TerminalDataListener>>();
@@ -728,11 +730,11 @@ export class DaemonClient {
     const snap = this.state.snapshot;
     switch (ev.event) {
       case "state.snapshot": {
-        const { sessionHistory, ...snapshotData } = ev.data;
-        this.setState({
-          snapshot: snapshotData as Snapshot,
-          ...(sessionHistory ? { sessionUpdates: this.stampSessionHistories(sessionHistory) } : {}),
-        });
+        // The snapshot carries no transcripts (docs/adr/0005); a fresh
+        // snapshot means a fresh connection, so transcripts must be fetched
+        // again for any chat opened from here on.
+        this.historyLoads.clear();
+        this.setState({ snapshot: ev.data });
         break;
       }
       case "project.added":
@@ -843,6 +845,7 @@ export class DaemonClient {
         break;
       case "task.removed": {
         const prefix = `${ev.data.id}\0`;
+        this.historyLoads.delete(ev.data.id);
         for (const key of this.toolCallStarts.keys()) {
           if (key.startsWith(prefix)) this.toolCallStarts.delete(key);
         }
@@ -935,6 +938,57 @@ export class DaemonClient {
 
   dismissAgentSetup() {
     this.setState({ pendingAgentSetup: null });
+  }
+
+  // ── Session history (lazy) ────────────────────────────────────────────────
+  // The connection snapshot carries no transcripts, so a connect never reads
+  // the whole transcripts table. A task's full conversation loads once, when
+  // a chat showing it is first opened, and the transcript mounts only after
+  // the fetch settles — nothing is ever prepended above the viewport of a
+  // mounted list (docs/adr/0005).
+
+  /** One task's full folded conversation history, straight from the daemon. */
+  async sessionHistory(taskId: string): Promise<SessionUpdate[]> {
+    const result = await this.request("session.history", { task_id: taskId });
+    const updates = (result as { updates?: SessionUpdate[] })?.updates;
+    return Array.isArray(updates) ? updates : [];
+  }
+
+  /**
+   * Fetch a task's full conversation once and merge it under whatever live
+   * updates arrived while the fetch was in flight. The daemon flushes its
+   * write-behind queue before the read, so everything the live copy already
+   * showed is in the fetch — only the in-flight tail is carried over.
+   *
+   * Always resolves, even when the daemon cannot answer: the chat then mounts
+   * on an empty transcript and refills from live events, rather than spinning
+   * forever. A later open retries a failed fetch.
+   */
+  loadSessionHistory(taskId: string): Promise<void> {
+    if (this.demoDiff) return Promise.resolve();
+    let pending = this.historyLoads.get(taskId);
+    if (!pending) {
+      pending = this.fetchSessionHistory(taskId).catch(() => {
+        this.historyLoads.delete(taskId);
+      });
+      this.historyLoads.set(taskId, pending);
+    }
+    return pending;
+  }
+
+  private async fetchSessionHistory(taskId: string): Promise<void> {
+    const fetched = coalesceUpdates(await this.sessionHistory(taskId));
+    const existing = this.state.sessionUpdates[taskId] ?? [];
+    this.setState({
+      sessionUpdates: {
+        ...this.state.sessionUpdates,
+        [taskId]: mergeSessionHistory(fetched, existing),
+      },
+    });
+  }
+
+  forgetSessionHistory(taskId: string) {
+    this.historyLoads.delete(taskId);
   }
 
   // ── History retention settings ────────────────────────────────────────────

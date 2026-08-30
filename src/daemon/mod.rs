@@ -90,19 +90,22 @@ mod tests {
 
         // The TaskCreated event carries a task whose session_id is None and
         // whose session identifier is NOT the task id — they are separate.
-        let ev = timeout(Duration::from_secs(1), events.recv())
-            .await
-            .expect("event within 1s")
-            .expect("event");
-        match ev {
-            Event::TaskCreated(task) => {
-                assert_eq!(task.id, id);
-                assert_eq!(task.session_id, None);
-                assert_eq!(task.status, TaskStatus::Queued);
-                assert_eq!(task.prompt, "fix the bug");
+        // Wait for TaskCreated specifically rather than the next event: startup
+        // work broadcasts too (the quota poller emits once even with no accounts
+        // configured), and whichever lands first is a race.
+        let task = loop {
+            let ev = timeout(Duration::from_secs(1), events.recv())
+                .await
+                .expect("TaskCreated within 1s")
+                .expect("event");
+            if let Event::TaskCreated(task) = ev {
+                break task;
             }
-            _ => panic!("expected TaskCreated"),
-        }
+        };
+        assert_eq!(task.id, id);
+        assert_eq!(task.session_id, None);
+        assert_eq!(task.status, TaskStatus::Queued);
+        assert_eq!(task.prompt, "fix the bug");
 
         let tasks = daemon.tasks().await;
         assert_eq!(tasks.len(), 1);
@@ -786,7 +789,11 @@ mod tests {
         // sequence of opaque/coalesced stage transitions. Agent cards and
         // results remain independent, ordered history entries.
         let snapshot = daemon.snapshot().await;
-        let workflow_events: Vec<_> = snapshot.session_history[&parent_id]
+        let history = daemon
+            .session_history(parent_id.clone())
+            .await
+            .unwrap_or_default();
+        let workflow_events: Vec<_> = history
             .iter()
             .filter(|update| matches!(update, wire::SessionUpdate::WorkflowEvent { .. }))
             .collect();
@@ -971,7 +978,11 @@ mod tests {
         );
 
         // The parent's timeline shows the same closing text as the stage result.
-        let events: Vec<_> = snapshot.session_history[&parent_id]
+        let history = daemon
+            .session_history(parent_id.clone())
+            .await
+            .unwrap_or_default();
+        let events: Vec<_> = history
             .iter()
             .filter_map(|update| match update {
                 wire::SessionUpdate::WorkflowEvent { detail, .. } => detail.clone(),

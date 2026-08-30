@@ -18,6 +18,24 @@ export type RailFilterMode = "attention" | "running" | "all";
 export type RailSortMode = "updated" | "created" | "status" | "project";
 
 /**
+ * Snapshot-time stand-in for a permission prompt the daemon has already
+ * reported on `TaskInfo.pendingPermission`. The transcript carrying the real
+ * request is not shipped at connect, so until that task streams anything this
+ * keeps the "needs you" badge honest. Options are empty on purpose: without
+ * the real request id no inline answer can be sent, so the row offers opening
+ * the task, where the live prompt renders with its real actions.
+ */
+function syntheticPendingPermission(task: TaskInfo): PermissionUpdate | null {
+  if (!task.pendingPermission) return null;
+  return {
+    kind: "permission_request",
+    request_id: `snapshot:${task.id}`,
+    title: "Permission needed",
+    options: [],
+  };
+}
+
+/**
  * Urgency order. `waiting` sits low because it is a resting state; a waiting
  * task that actually produced a diff is promoted by `taskStatusRank`, which is
  * where the old `needs_review` rank went.
@@ -66,7 +84,9 @@ export function buildAttentionQueue(
   const items: AttentionItem[] = [];
   prunePermissionCache(new Set(tasks.map((task) => task.id)));
   for (const task of tasks) {
-    const perm = latestPendingPermission(task.id, sessionUpdates[task.id]);
+    const perm =
+      latestPendingPermission(task.id, sessionUpdates[task.id]) ??
+      syntheticPendingPermission(task);
     const waiting = task.workflowRun?.waiting ?? null;
     if (perm) {
       items.push({ permission: perm, priority: 0, reason: perm.title, task });

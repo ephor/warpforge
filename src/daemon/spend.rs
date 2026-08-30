@@ -190,6 +190,7 @@ mod tests {
             snoozed_at: None,
             backlog_item_id: None,
             model: None,
+            pending_permission: false,
         }
     }
 

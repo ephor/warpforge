@@ -143,6 +143,7 @@ pub fn task_info(t: &Task) -> wire::TaskInfo {
         snoozed_at: t.snoozed_at,
         backlog_item_id: t.backlog_item_id.clone(),
         model: t.model.clone(),
+        pending_permission: false,
     }
 }
 

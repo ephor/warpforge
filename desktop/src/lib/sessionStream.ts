@@ -386,6 +386,35 @@ export function appendCoalescedUpdate(
 }
 
 /**
+ * Merge a task's freshly fetched full history with the live updates that
+ * arrived while the fetch was in flight.
+ *
+ * Live updates are folded from a raw stream while the fetch returns a folded
+ * full history, so the live copy is not a positional suffix of the fetch: a
+ * tool call whose first frames arrive during the flight folds into a later
+ * row in the live copy than it occupies in the fetch. Aligning by position
+ * would stack rows twice; walking the live copy forward through the fetch and
+ * keeping only what trails the last match keeps exactly the in-flight tail.
+ */
+export function mergeSessionHistory(
+  fetched: SessionUpdate[],
+  live: SessionUpdate[],
+): SessionUpdate[] {
+  let cursor = 0;
+  let lastMatched = -1;
+  for (let index = 0; index < live.length; index += 1) {
+    for (let candidate = cursor; candidate < fetched.length; candidate += 1) {
+      if (sessionUpdatesSemanticallyEqual(live[index], fetched[candidate])) {
+        cursor = candidate + 1;
+        lastMatched = index;
+        break;
+      }
+    }
+  }
+  return coalesceUpdates([...fetched, ...live.slice(lastMatched + 1)]);
+}
+
+/**
  * Coalesce only the tail of a session's raw updates. Used by Mission Control
  * tiles where the full history is not needed — only the last few renderable
  * items. A delta chain that starts before the window boundary is dropped

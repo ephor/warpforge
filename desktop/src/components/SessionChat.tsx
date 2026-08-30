@@ -16,6 +16,7 @@ import { ContinueSessionDialog } from "@/components/ContinueSessionDialog";
 import type { FileLinkResolver } from "@/components/Markdown";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useSessionHistory } from "@/hooks/useSessionHistory";
 import { transcriptRestoreMode } from "@/lib/chatScroll";
 import type { SessionActivity } from "@/lib/sessionActivity";
 import { resolvedPermissions } from "@/lib/sessionPermissions";
@@ -319,6 +320,10 @@ export function SessionChat({
   onOpenTask,
   readOnly = false,
 }: SessionChatProps) {
+  // The transcript is fetched per task on open and the list mounts only once
+  // it has resolved in full — a mounted transcript is only ever appended to
+  // (docs/adr/0005).
+  const historyResolved = useSessionHistory(task.id);
   const merged = updates;
   const contextUsage = useMemo(() => latestContextUsage(updates), [updates]);
   const thinkingIndex = useMemo(() => {
@@ -607,7 +612,8 @@ export function SessionChat({
       )}
       <div className="relative min-h-0 flex-1">
         <TranscriptRowContext.Provider value={rowContext}>
-          <LegendList<TranscriptListRow>
+          {historyResolved ? (
+            <LegendList<TranscriptListRow>
             ref={listRef}
             data={transcriptRows}
             keyExtractor={transcriptRowKey}
@@ -630,7 +636,17 @@ export function SessionChat({
             ListHeaderComponent={CHAT_LIST_HEADER}
             ListFooterComponent={CHAT_LIST_FOOTER}
             ListEmptyComponent={CHAT_LIST_EMPTY}
-          />
+            />
+          ) : (
+            <div
+              role="status"
+              aria-label="Loading conversation"
+              className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground"
+            >
+              <span className="size-3 animate-spin rounded-full border border-muted-foreground border-t-transparent" />
+              Loading conversation…
+            </div>
+          )}
         </TranscriptRowContext.Provider>
         {!following && (
           <Tooltip>

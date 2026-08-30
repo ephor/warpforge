@@ -911,6 +911,10 @@ pub enum Method {
     /// Select YAML-file or SQLite backlog persistence.
     #[serde(rename = "backlog.setStorage")]
     BacklogSetStorage { mode: BacklogStorageMode },
+    /// Read one task's full folded conversation history. Per-task and
+    /// index-backed, so this stays fast even on large databases.
+    #[serde(rename = "session.history")]
+    SessionHistory { task_id: String },
     /// Read the task-history retention configuration.
     #[serde(rename = "history.getSettings")]
     HistoryGetSettings {},
@@ -1575,10 +1579,10 @@ pub struct Snapshot {
     pub portforwards: Vec<PortForwardInfo>,
     pub tasks: Vec<TaskInfo>,
     pub terminals: Vec<TerminalInfo>,
-    /// Persisted session conversation history keyed by task id. Sent whole on
-    /// `state.subscribe` so clients can reconstruct conversations without
-    /// polling — a transcript that arrives in two pieces cannot hold its
-    /// scroll (see `docs/adr/0005`). Omitted from the wire when empty.
+    /// Always empty: the snapshot deliberately carries no transcripts. A
+    /// client that opens a chat fetches that task's whole conversation with
+    /// `session.history`, so a transcript still arrives in one piece (see
+    /// `docs/adr/0005`).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub session_history: HashMap<String, Vec<SessionUpdate>>,
     /// All configured agents (enabled or not). Empty until the user completes
@@ -1721,6 +1725,11 @@ pub struct TaskInfo {
     pub backlog_item_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// True while a permission prompt for this task is unanswered. Computed
+    /// daemon-side at snapshot time so clients can badge "needs you" without
+    /// holding any transcript (see `docs/adr/0005`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending_permission: bool,
 }
 
 /// A task's lifecycle. Deliberately **not** an axis for derived facts: whether

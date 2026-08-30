@@ -144,9 +144,8 @@ export interface Snapshot {
   portforwards: PortForwardInfo[];
   tasks: TaskInfo[];
   terminals: TerminalInfo[];
-  /** Persisted conversation history keyed by task id — loaded whole on
-   *  subscribe, because a transcript that arrives in two pieces cannot hold
-   *  its scroll (docs/adr/0005). */
+  /** Always absent: the snapshot carries no transcripts. A transcript is
+   *  fetched per task on open via `session.history` (docs/adr/0005). */
   sessionHistory?: Record<string, SessionUpdate[]>;
   /** Configured agents (empty until setup wizard is completed). */
   agents?: AgentConfig[];
@@ -260,6 +259,9 @@ export interface TaskInfo {
   snoozedUntil?: number | null;
   /** Unix seconds when the current snooze was set. */
   snoozedAt?: number | null;
+  /** True while a permission prompt for this task is unanswered. Computed
+   *  daemon-side so the "needs you" badge works without holding transcripts. */
+  pendingPermission?: boolean;
 }
 
 export interface ConfigChoice {

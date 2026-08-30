@@ -829,6 +829,11 @@ pub enum Command {
     ArchiveTask {
         id: String,
     },
+    /// Read one task's full folded conversation history (off the loop).
+    SessionHistory {
+        task_id: String,
+        reply: oneshot::Sender<Result<Vec<wire::SessionUpdate>, String>>,
+    },
     /// Read the task-history retention setting from config.yaml.
     HistoryGetSettings {
         reply: oneshot::Sender<wire::HistorySettings>,
@@ -2293,6 +2298,20 @@ impl DaemonHandle {
             .unwrap_or_else(|_| Err("daemon dropped backlog settings request".into()))
     }
 
+    /// One task's full folded conversation history. Index-backed read, so it
+    /// stays fast on databases where the whole-table load used to take tens
+    /// of seconds.
+    pub async fn session_history(
+        &self,
+        task_id: String,
+    ) -> Result<Vec<wire::SessionUpdate>, String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::SessionHistory { task_id, reply: tx })
+            .await;
+        rx.await
+            .unwrap_or_else(|_| Err("daemon dropped the session history request".into()))
+    }
+
     pub async fn history_get_settings(&self) -> wire::HistorySettings {
         let (tx, rx) = oneshot::channel();
         self.send(Command::HistoryGetSettings { reply: tx }).await;
@@ -3383,8 +3402,8 @@ impl Daemon {
 
     /// Build the serializable snapshot handed to a client on subscribe.
     ///
-    /// `session_history` is filled in by the caller (from the store, off the
-    /// loop) — the actor holds no in-memory transcript to fold here.
+    /// Carries tasks and metadata only; `session_history` stays empty — a
+    /// client needing a transcript asks `session.history` for that one task.
     fn build_snapshot_core(&self) -> wire::Snapshot {
         let mut projects = Vec::new();
         let mut services = Vec::new();
@@ -3398,6 +3417,9 @@ impl Daemon {
         }
 
         let mut tasks: Vec<wire::TaskInfo> = self.tasks.values().map(wireconv::task_info).collect();
+        for task in &mut tasks {
+            task.pending_permission = self.pending_permissions.has_pending(&task.id);
+        }
         tasks.sort_by_key(|task| std::cmp::Reverse(task.created_at));
 
         let terminals = self
@@ -3794,21 +3816,30 @@ impl Daemon {
                 let _ = reply.send(tasks);
             }
             Command::Snapshot(reply) => {
-                // The snapshot's history must not be read on the loop: a disk
-                // read here would miss whatever write-behind persistence still
-                // has queued, and it would block the actor (ADR 0002). Flush +
-                // read + fold happen on a worker; only the reply crosses back.
-                let mut snapshot = self.build_snapshot_core();
+                // The snapshot carries tasks and metadata only — never session
+                // transcripts. A client that opens a chat fetches that task's
+                // full transcript via `session.history`, so a cold connect
+                // never depends on reading every transcript in the database
+                // (see `docs/adr/0005`).
+                let _ = reply.send(self.build_snapshot_core());
+            }
+            Command::SessionHistory { task_id, reply } => {
+                // Same off-loop shape the snapshot used to have: flush first so
+                // the read sees everything the write-behind queue still holds,
+                // then read + fold on a worker; only the reply crosses back.
                 let persist = self.persist.clone();
                 let store = self.store.clone();
                 tokio::spawn(async move {
                     persist.flush().await;
-                    snapshot.session_history = super::runtime::store_read(store, |store| {
-                        store.load_all_session_updates().unwrap_or_default()
+                    let result = super::runtime::store_read(store, move |store| {
+                        store
+                            .load_session_updates(&task_id)
+                            .map(|updates| super::store::fold_for_snapshot(&updates))
+                            .map_err(|e| format!("{e:#}"))
                     })
                     .await
-                    .unwrap_or_default();
-                    let _ = reply.send(snapshot);
+                    .unwrap_or_else(|| Err("daemon has no persistent store".into()));
+                    let _ = reply.send(result);
                 });
             }
             Command::HistoryGetSettings { reply } => {
