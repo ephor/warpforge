@@ -193,5 +193,39 @@ behavior the product does not provide.
 Keep commits small and focused, not huge sweeping changes. Each commit should
 briefly describe the essence of what changed (one logical change per commit).
 
+### Module layout
+
 Keep source files small — at most 400–500 lines of code per file. That is the
 hard maximum; split larger files rather than growing past it.
+
+Enforce it on the way in, not later. `src/daemon/actor.rs` reached 10,504 lines
+because every change added "just one more arm" to a file that was already over
+the limit. Adding to a file that is already at the cap is the violation; split
+first, then add.
+
+When a module outgrows one file, turn it into a directory module — `foo.rs`
+becomes `foo/mod.rs` plus siblings — rather than inventing a `foo_extra.rs`
+next to it. Split by topic, not by line count: each file should be nameable
+after what it does. `mod.rs` keeps the type definition, its constructor, and a
+thin dispatcher; the behaviour lives in the topic files. Child modules can read
+private fields of a type defined in the parent, so splitting needs only method
+visibility bumps (`pub(super)` / `pub(crate)`), never public fields.
+
+The one acceptable exception is a single item that cannot be divided without
+rewriting it — a large `enum` with doc comments, for example. Do not split such
+an item just to satisfy the line count.
+
+When a large `match` moves out of one file, keep it exhaustive in one place —
+a dispatcher whose arms each call a `pub(crate)` method is the safe shape.
+Chaining topic handlers by falling through (`other => self.handle_next(other)`)
+with a terminal `_ => {}` compiles the same but turns a dropped arm into a
+silent no-op instead of a compile error. `src/daemon/actor/` currently uses that
+chained shape, so a new `Command` variant must be wired up by hand — the
+compiler will not remind you.
+
+### Clean up after yourself
+
+Write scratch files — scripts, dumps, logs, screenshots — under `$TMPDIR`,
+never into the repo. Delete the ones you created before reporting a task done.
+Leave files you did not create alone; that directory is shared with other
+sessions.
