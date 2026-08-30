@@ -58,11 +58,6 @@ type ConfigFingerprint = Option<(PathBuf, Vec<u8>)>;
 const CONFIG_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CONFIG_CHANGE_DEBOUNCE: Duration = Duration::from_millis(200);
 
-/// Raw history rows shipped per task in a state snapshot. Covers the tiles'
-/// preview, the attention rail's pending permission and failure detection;
-/// a transcript needing more loads via `session.history`.
-const SNAPSHOT_HISTORY_TAIL: usize = 200;
-
 /// How often the daemon re-runs history pruning. The first sweep happens at
 /// start, so a shortened window applies without waiting a day.
 const HISTORY_PRUNE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -833,11 +828,6 @@ pub enum Command {
     /// Archive a task (set status to Done, hide from live views).
     ArchiveTask {
         id: String,
-    },
-    /// Read one task's full folded conversation history (off the loop).
-    SessionHistory {
-        task_id: String,
-        reply: oneshot::Sender<Result<Vec<wire::SessionUpdate>, String>>,
     },
     /// Read the task-history retention setting from config.yaml.
     HistoryGetSettings {
@@ -2301,20 +2291,6 @@ impl DaemonHandle {
         self.send(Command::BacklogGetSettings { reply: tx }).await;
         rx.await
             .unwrap_or_else(|_| Err("daemon dropped backlog settings request".into()))
-    }
-
-    /// One task's full folded conversation history. Index-backed read, so it
-    /// stays fast on databases where the whole-table load used to take tens
-    /// of seconds.
-    pub async fn session_history(
-        &self,
-        task_id: String,
-    ) -> Result<Vec<wire::SessionUpdate>, String> {
-        let (tx, rx) = oneshot::channel();
-        self.send(Command::SessionHistory { task_id, reply: tx })
-            .await;
-        rx.await
-            .unwrap_or_else(|_| Err("daemon dropped the session history request".into()))
     }
 
     pub async fn history_get_settings(&self) -> wire::HistorySettings {
@@ -3822,40 +3798,17 @@ impl Daemon {
                 // read here would miss whatever write-behind persistence still
                 // has queued, and it would block the actor (ADR 0002). Flush +
                 // read + fold happen on a worker; only the reply crosses back.
-                // Clients get a recent tail per task — full transcripts load
-                // per task through `session.history`, so a connect no longer
-                // depends on reading every transcript in the database.
                 let mut snapshot = self.build_snapshot_core();
                 let persist = self.persist.clone();
                 let store = self.store.clone();
                 tokio::spawn(async move {
                     persist.flush().await;
                     snapshot.session_history = super::runtime::store_read(store, |store| {
-                        store
-                            .load_session_update_tails(SNAPSHOT_HISTORY_TAIL)
-                            .unwrap_or_default()
+                        store.load_all_session_updates().unwrap_or_default()
                     })
                     .await
                     .unwrap_or_default();
                     let _ = reply.send(snapshot);
-                });
-            }
-            Command::SessionHistory { task_id, reply } => {
-                // Same off-loop shape as Command::Snapshot: flush first so the
-                // read sees everything the write-behind queue still holds.
-                let persist = self.persist.clone();
-                let store = self.store.clone();
-                tokio::spawn(async move {
-                    persist.flush().await;
-                    let result = super::runtime::store_read(store, move |store| {
-                        store
-                            .load_session_updates(&task_id)
-                            .map(|updates| super::store::fold_for_snapshot(&updates))
-                            .map_err(|e| format!("{e:#}"))
-                    })
-                    .await
-                    .unwrap_or_else(|| Err("daemon has no persistent store".into()));
-                    let _ = reply.send(result);
                 });
             }
             Command::HistoryGetSettings { reply } => {

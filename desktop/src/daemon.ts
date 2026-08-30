@@ -7,7 +7,7 @@
  * daemon events onto the last snapshot.
  */
 
-import { appendCoalescedUpdate, coalesceUpdates, mergeSessionHistory } from "./lib/sessionStream";
+import { appendCoalescedUpdate, coalesceUpdates } from "./lib/sessionStream";
 import { stampSessionHistoryStartTimes } from "./lib/sessionTiming";
 import type {
   AccountInfo,
@@ -91,9 +91,6 @@ export class DaemonClient {
   private reconnectDelay = 500;
   private reconnectTimer: number | null = null;
   private reconnectSuspended = false;
-  /** Tasks whose full conversation was already fetched via session.history. */
-  private historyLoaded = new Set<string>();
-  private historyLoadInFlight = new Set<string>();
   private handshake: DaemonHandshake | null = null;
   private toolCallStarts = new Map<string, number>();
   private terminalDataSubscribers = new Map<string, Set<TerminalDataListener>>();
@@ -846,7 +843,6 @@ export class DaemonClient {
         break;
       case "task.removed": {
         const prefix = `${ev.data.id}\0`;
-        this.historyLoaded.delete(ev.data.id);
         for (const key of this.toolCallStarts.keys()) {
           if (key.startsWith(prefix)) this.toolCallStarts.delete(key);
         }
@@ -939,50 +935,6 @@ export class DaemonClient {
 
   dismissAgentSetup() {
     this.setState({ pendingAgentSetup: null });
-  }
-
-  // ── Session history (lazy) ────────────────────────────────────────────────
-  // The connection snapshot carries only a recent tail per task, so a connect
-  // never depends on reading every transcript in the database. A task's full
-  // conversation loads once, when it is first opened.
-
-  /** One task's full folded conversation history, straight from the daemon. */
-  async sessionHistory(taskId: string): Promise<SessionUpdate[]> {
-    const result = await this.request("session.history", { task_id: taskId });
-    const updates = (result as { updates?: SessionUpdate[] })?.updates;
-    return Array.isArray(updates) ? updates : [];
-  }
-
-  /**
-   * Fetch a task's full conversation once and merge it under whatever live
-   * tail the snapshot already delivered. The daemon flushes its write-behind
-   * queue before the read, so everything the live copy already showed is in
-   * the fetch — only what arrived during the round trip is carried over.
-   */
-  async loadSessionHistory(taskId: string): Promise<void> {
-    if (this.demoDiff || this.historyLoaded.has(taskId) || this.historyLoadInFlight.has(taskId)) {
-      return;
-    }
-    this.historyLoadInFlight.add(taskId);
-    try {
-      const fetched = coalesceUpdates(await this.sessionHistory(taskId));
-      const existing = this.state.sessionUpdates[taskId] ?? [];
-      this.setState({
-        sessionUpdates: {
-          ...this.state.sessionUpdates,
-          [taskId]: mergeSessionHistory(fetched, existing),
-        },
-      });
-      this.historyLoaded.add(taskId);
-    } catch {
-      // Not loaded — a later open retries.
-    } finally {
-      this.historyLoadInFlight.delete(taskId);
-    }
-  }
-
-  forgetSessionHistory(taskId: string) {
-    this.historyLoaded.delete(taskId);
   }
 
   // ── History retention settings ────────────────────────────────────────────

@@ -16,6 +16,7 @@ import { ContinueSessionDialog } from "@/components/ContinueSessionDialog";
 import type { FileLinkResolver } from "@/components/Markdown";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { transcriptRestoreMode } from "@/lib/chatScroll";
 import type { SessionActivity } from "@/lib/sessionActivity";
 import { resolvedPermissions } from "@/lib/sessionPermissions";
 import {
@@ -50,19 +51,31 @@ import { MessageActions } from "./MessageActions";
 import { WorkflowControls } from "./WorkflowControls";
 
 const CHAT_DRAW_DISTANCE_PX = 250;
+/**
+ * Measured mean row height. Only mounted rows are measured, so this decides
+ * almost the whole content height — and an estimate that is wrong in one
+ * direction makes the height drift that way as rows do measure, dragging the
+ * scroll with it. Sampled live: median 26, mean 66, max 591.
+ */
+const CHAT_ESTIMATED_ROW_PX = 65;
 const CHAT_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: { dataChange: true, itemLayout: true, layout: true },
 } as const;
 const CHAT_FOLLOW_REARM_PX = 16;
+/** How long a pointer press keeps counting as the cause of a scroll. */
+const GESTURE_WINDOW_MS = 300;
 const CHAT_LIST_FOOTER_HEIGHT = 56;
+/** Anchor rows only while reading, never while following — see `docs/adr/0005`. */
+const CHAT_MVCP_ANCHOR = { data: true, size: true } as const;
 /**
- * `size` stabilisation stays on in both modes. Unmeasured rows are sized from a
- * running per-type average, so every measurement shifts the total content size
- * by the drift times the unmeasured row count — thousands of pixels in a long
- * transcript. Without it the view silently slides into old messages.
+ * The list stops pinning once `distanceFromEnd > threshold * viewport`. One
+ * agent message can add several viewports at once, which outruns a tight band
+ * and leaves the pin disengaged while we still believe we are following —
+ * measured at ~2000px adrift. `following` is the real authority for when to
+ * stop, so this only has to be wider than any single burst.
  */
-const CHAT_MVCP = { data: true, size: true } as const;
+const CHAT_MAINTAIN_SCROLL_AT_END_THRESHOLD = 3;
 const CHAT_LIST_HEADER = <div className="h-4" />;
 const CHAT_LIST_FOOTER = <div className="h-14" />;
 const CHAT_LIST_EMPTY = <p className="px-2 py-4 text-muted-foreground">No session activity yet.</p>;
@@ -281,12 +294,6 @@ export interface SessionChatProps {
   agents: AgentConfig[];
   onOpenTask: (id: string) => void;
   /**
-   * True once the task's full conversation has been backfilled under the
-   * snapshot tail. The backfill prepends rows the list has never measured, so
-   * the scroll offset it was holding no longer points at the same message.
-   */
-  historyBackfilled?: boolean;
-  /**
    * Render the transcript without the composer. Used where a *different*
    * task's session is on show — the Pipeline surface watching a child agent —
    * so the reader can see what it is doing without being offered a reply box
@@ -310,7 +317,6 @@ export function SessionChat({
   updates,
   agents,
   onOpenTask,
-  historyBackfilled = false,
   readOnly = false,
 }: SessionChatProps) {
   const merged = updates;
@@ -418,6 +424,29 @@ export function SessionChat({
   const listRef = useRef<LegendListRef | null>(null);
   const previousScrollRef = useRef(0);
   const [following, setFollowing] = useState(true);
+  // Mirrors for the scroll tracer: its listener outlives any one render, so it
+  // needs the value at event time rather than the one captured at attach.
+  const lastPointerRef = useRef(0);
+  const followingRef = useRef(true);
+  const disclosureSettlingRef = useRef(false);
+  followingRef.current = following;
+  disclosureSettlingRef.current = disclosureSettling;
+
+  // Hoisted out of the JSX: a hook in a prop expression works only for as long
+  // as nothing wraps that element in a condition, and breaks silently when
+  // something does.
+  const maintainVisibleContentPosition = useMemo(() => {
+    const mode = transcriptRestoreMode(following, disclosureSettling, disclosureAnchorKey.current);
+    if (mode === "none") return undefined;
+    return {
+      ...CHAT_MVCP_ANCHOR,
+      shouldRestorePosition: (row: TranscriptListRow) =>
+        mode === "anchor" ? row.id === disclosureAnchorKey.current : true,
+    };
+    // `disclosureSettling` flips when the anchor is set/cleared; the callback
+    // reads `.current` directly, so these are the deps that stabilize it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [disclosureSettling, following]);
 
   /**
    * Pin through the DOM node rather than `listRef.scrollToEnd()`. The
@@ -445,7 +474,14 @@ export function SessionChat({
       setFollowing(true);
       return;
     }
-    if (state.scroll < prev - 1) setFollowing(false);
+    // Only a scroll the user actually drove detaches following. The list moves
+    // the scroller downward on its own while rows measure — thousands of pixels
+    // on a cold start — and reading that as "scrolled up" cancelled following
+    // without a gesture, which turned one measurement burst into a chat stuck
+    // far from the live edge. Wheel and touch cancel directly; this branch is
+    // for the scrollbar drag, which produces no such event.
+    const draggedRecently = performance.now() - lastPointerRef.current < GESTURE_WINDOW_MS;
+    if (draggedRecently && state.scroll < prev - 1) setFollowing(false);
   }, []);
 
   const resumeLatest = useCallback(() => {
@@ -463,23 +499,6 @@ export function SessionChat({
     return () => cancelAnimationFrame(frame);
   }, [active, following, pinToLatest, task.id]);
 
-  // The history backfill prepends the rest of the conversation above the
-  // snapshot tail. Those rows are unmeasured, so the offset the list was
-  // holding drifts off the latest message while they take their real sizes —
-  // maintainVisibleContentPosition anchors the old content, not the end. Pin
-  // across two frames: the first lands before the prepended rows measure.
-  useEffect(() => {
-    if (!historyBackfilled || !active || !following) return;
-    let second = 0;
-    const first = requestAnimationFrame(() => {
-      pinToLatest();
-      second = requestAnimationFrame(pinToLatest);
-    });
-    return () => {
-      cancelAnimationFrame(first);
-      cancelAnimationFrame(second);
-    };
-  }, [active, following, historyBackfilled, pinToLatest]);
   const cancelLiveFollow = useCallback(() => {
     setFollowing(false);
   }, []);
@@ -513,10 +532,36 @@ export function SessionChat({
         if (touchY !== null && nextY > touchY + 1) cancelLiveFollow();
         touchY = nextY;
       };
+      const onPointerDown = () => {
+        lastPointerRef.current = performance.now();
+      };
+      scrollNode.addEventListener("pointerdown", onPointerDown, { passive: true });
       scrollNode.addEventListener("wheel", onWheel, { passive: true });
       scrollNode.addEventListener("touchstart", onTouchStart, { passive: true });
       scrollNode.addEventListener("touchmove", onTouchMove, { passive: true });
+      // The list sizes unmeasured rows from a running average, so a handful of
+      // tall rows measuring can move the estimated total by tens of thousands
+      // of pixels at once — past any sane end-pin band, which then lets go of
+      // the end. Re-assert it here instead: a ResizeObserver runs before paint,
+      // so the corrected position is the first one drawn and the growth is
+      // never visible as a jump. This is deliberately on *size*, not on data —
+      // the two imperative pins removed before fought `maintainScrollAtEnd`
+      // over the same data change; this one covers the case it cannot.
+      const keepAtEnd = new ResizeObserver(() => {
+        if (!followingRef.current || disclosureSettlingRef.current) return;
+        scrollNode.scrollTop = scrollNode.scrollHeight;
+        previousScrollRef.current = scrollNode.scrollTop;
+      });
+      // Both boxes move the end. The content grows as rows measure; the
+      // scroller itself grows when the composer collapses back to one line on
+      // send — same distance from the end, different cause, and watching only
+      // the content missed the second one entirely.
+      keepAtEnd.observe(scrollNode);
+      const content = scrollNode.firstElementChild;
+      if (content) keepAtEnd.observe(content);
       removeListeners = () => {
+        keepAtEnd?.disconnect();
+        scrollNode.removeEventListener("pointerdown", onPointerDown);
         scrollNode.removeEventListener("wheel", onWheel);
         scrollNode.removeEventListener("touchstart", onTouchStart);
         scrollNode.removeEventListener("touchmove", onTouchMove);
@@ -571,24 +616,13 @@ export function SessionChat({
             renderItem={renderTranscriptItem}
             recycleItems
             drawDistance={CHAT_DRAW_DISTANCE_PX}
-            estimatedItemSize={90}
+            estimatedItemSize={CHAT_ESTIMATED_ROW_PX}
             initialScrollAtEnd
             maintainScrollAtEnd={
               following && !disclosureSettling ? CHAT_MAINTAIN_SCROLL_AT_END : false
             }
-            maintainScrollAtEndThreshold={0.05}
-            maintainVisibleContentPosition={useMemo(
-              () => ({
-                ...CHAT_MVCP,
-                shouldRestorePosition: (row: TranscriptListRow) =>
-                  disclosureAnchorKey.current === null || row.id === disclosureAnchorKey.current,
-              }),
-              // `disclosureSettling` flips when anchor is set/cleared; the callback
-              // reads `.current` directly so this is the dependency that stabilizes
-              // the MVCP object per the approved plan (useMemo + anchor-gated).
-              // eslint-disable-next-line react-hooks/exhaustive-deps
-              [disclosureSettling],
-            )}
+            maintainScrollAtEndThreshold={CHAT_MAINTAIN_SCROLL_AT_END_THRESHOLD}
+            maintainVisibleContentPosition={maintainVisibleContentPosition}
             onScroll={onTranscriptScroll}
             onKeyDown={pauseFollowingOnNavigationKey}
             tabIndex={0}

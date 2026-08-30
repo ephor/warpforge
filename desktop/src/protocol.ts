@@ -144,8 +144,9 @@ export interface Snapshot {
   portforwards: PortForwardInfo[];
   tasks: TaskInfo[];
   terminals: TerminalInfo[];
-  /** Recent per-task conversation tail — loaded on subscribe. A transcript
-   *  needing more loads on demand via `session.history`. */
+  /** Persisted conversation history keyed by task id — loaded whole on
+   *  subscribe, because a transcript that arrives in two pieces cannot hold
+   *  its scroll (docs/adr/0005). */
   sessionHistory?: Record<string, SessionUpdate[]>;
   /** Configured agents (empty until setup wizard is completed). */
   agents?: AgentConfig[];

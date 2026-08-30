@@ -5,7 +5,6 @@ import {
   appendCoalescedUpdate,
   coalesceUpdates,
   deriveTranscriptRows,
-  mergeSessionHistory,
   transcriptRowsAreEqual,
 } from "./sessionStream";
 
@@ -108,50 +107,5 @@ describe("session stream coalescing", () => {
 
     expect(new Set(ids).size).toBe(ids.length);
     expect(appendCoalescedUpdate([request], request)).toEqual([request]);
-  });
-});
-
-describe("session history merge", () => {
-  const tool = (status: "pending" | "completed"): SessionUpdate => ({
-    kind: "tool_call",
-    tool_call_id: "read-1",
-    title: "Read file",
-    status,
-    tool_kind: "read",
-  });
-
-  it("does not stack a tail that the fetch already folded differently", () => {
-    const fetched: SessionUpdate[] = [
-      { kind: "user_message", text: "Go" },
-      tool("completed"),
-      { kind: "agent_text", text: "Done" },
-    ];
-    // The snapshot tail lost the tool call's opening frames to the row window,
-    // so it folds into a different position than the full history does.
-    const live: SessionUpdate[] = [tool("completed"), { kind: "agent_text", text: "Done" }];
-
-    expect(mergeSessionHistory(fetched, live)).toEqual(fetched);
-  });
-
-  it("keeps updates that arrived while the fetch was in flight", () => {
-    const fetched: SessionUpdate[] = [
-      { kind: "user_message", text: "Go" },
-      { kind: "agent_text", text: "Done" },
-    ];
-    const live: SessionUpdate[] = [
-      { kind: "agent_text", text: "Done" },
-      { kind: "user_message", text: "And again" },
-    ];
-
-    expect(mergeSessionHistory(fetched, live)).toEqual([
-      ...fetched,
-      { kind: "user_message", text: "And again" },
-    ]);
-  });
-
-  it("keeps the live copy whole when nothing was persisted yet", () => {
-    const live: SessionUpdate[] = [{ kind: "user_message", text: "Go" }];
-
-    expect(mergeSessionHistory([], live)).toEqual(live);
   });
 });

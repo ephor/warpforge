@@ -13,7 +13,6 @@ import {
 import { Card } from "@/components/ui/card";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { DEFAULT_SURFACE_TABS, FocusButton, type SurfaceTab } from "@/components/workspace";
-import { useSessionHistory } from "@/hooks/useSessionHistory";
 import { useTaskSessionUpdates } from "@/hooks/useTaskSessionUpdates";
 import { sessionActivity } from "@/lib/sessionActivity";
 import { buildTaskGroupIndex } from "@/lib/taskGroups";
@@ -63,12 +62,11 @@ const EMPTY_TASK_COMMANDS: CommandInfo[] = [];
 
 type TaskConversationProps = Omit<
   ComponentProps<typeof ChatTranscript>,
-  "activity" | "commands" | "historyBackfilled" | "imageSupported" | "updates"
+  "activity" | "commands" | "imageSupported" | "updates"
 >;
 
 const TaskConversation = memo(function TaskConversation(props: TaskConversationProps) {
   const updates = useTaskSessionUpdates(props.task.id);
-  const historyBackfilled = useSessionHistory(props.task.id);
   useTaskFileEditCacheSync(props.task.id, updates);
   const activity = useMemo(() => sessionActivity(props.task, updates), [props.task, updates]);
   const commands = useMemo<CommandInfo[]>(() => {
@@ -96,7 +94,6 @@ const TaskConversation = memo(function TaskConversation(props: TaskConversationP
       {...props}
       activity={activity}
       commands={commands}
-      historyBackfilled={historyBackfilled}
       imageSupported={imageSupported}
       updates={updates}
     />

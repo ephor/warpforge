@@ -45,3 +45,25 @@ export function createChatFollowGate() {
     },
   };
 }
+
+/**
+ * Which rows the transcript list may restore (anchor) its scroll position to.
+ *
+ * - While following the live edge and not settling a disclosure, nothing: the
+ *   list's own end-pinning owns the scroll, and anchoring would race it on
+ *   per-type size estimates that churn over unmeasured history rows.
+ * - While settling a work-group disclosure, only the toggled row: the trigger
+ *   stays under the cursor instead of the viewport chasing the end.
+ * - While reading away from the end, every row: keeps the reading position
+ *   stable while new content streams in below.
+ */
+export type TranscriptRestoreMode = "none" | "anchor" | "all";
+
+export function transcriptRestoreMode(
+  following: boolean,
+  settling: boolean,
+  anchorKey: string | null,
+): TranscriptRestoreMode {
+  if (settling && anchorKey !== null) return "anchor";
+  return following ? "none" : "all";
+}

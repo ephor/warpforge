@@ -734,43 +734,6 @@ impl Store {
         Ok(map)
     }
 
-    /// Last `limit` folded updates per task, read per task through the
-    /// `task_id` index. This is what a client needs on subscribe: the recent
-    /// tail for tiles, the attention rail and failure detection. Full
-    /// transcripts load per task via [`Store::load_session_updates`], which
-    /// touches only that task's rows — the whole-table scan that used to run
-    /// on every connect dominated start time on large databases.
-    pub fn load_session_update_tails(
-        &self,
-        limit: usize,
-    ) -> Result<HashMap<String, Vec<wire::SessionUpdate>>> {
-        let task_ids: Vec<String> = {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT DISTINCT task_id FROM session_updates")?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-            rows.filter_map(|r| r.ok()).collect()
-        };
-        let mut map = HashMap::new();
-        for task_id in task_ids {
-            let mut stmt = self.conn.prepare(
-                "SELECT update_json FROM
-                   (SELECT id, update_json FROM session_updates
-                     WHERE task_id = ?1 ORDER BY id DESC LIMIT ?2)
-                  ORDER BY id ASC",
-            )?;
-            let updates: Vec<wire::SessionUpdate> = stmt
-                .query_map(rusqlite::params![task_id, limit as i64], |row| {
-                    row.get::<_, String>(0)
-                })?
-                .filter_map(|r| r.ok())
-                .filter_map(|json| serde_json::from_str(&json).ok())
-                .collect();
-            map.insert(task_id, fold_for_snapshot(&updates));
-        }
-        Ok(map)
-    }
-
     /// Delete the session history of every finished task (`status = 'done'`)
     /// whose `updated_at` predates `cutoff` (epoch seconds). Returns the number
     /// of rows removed. Live work is never touched.

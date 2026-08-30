@@ -1748,10 +1748,6 @@ async fn dispatch(
             let settings = handle.backlog_set_storage(mode).await.map_err(rpc_err)?;
             serde_json::to_value(settings).map_err(|e| rpc_err(e.to_string()))
         }
-        SessionHistory { task_id } => {
-            let updates = handle.session_history(task_id).await.map_err(rpc_err)?;
-            Ok(json!({ "updates": updates }))
-        }
         HistoryGetSettings {} => {
             let settings = handle.history_get_settings().await;
             serde_json::to_value(settings).map_err(|e| rpc_err(e.to_string()))
@@ -2090,7 +2086,6 @@ fn method_runs_concurrently(method: &wire::Method) -> bool {
             | RuntimeList { .. }
             | TaskListWorktrees { .. }
             | SessionsList { .. }
-            | SessionHistory { .. }
             | OrchestratorListAgents { .. }
             | AgentsDetect {}
             | AgentsList {}
@@ -2113,7 +2108,6 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | RuntimeList { .. }
             | TaskListWorktrees { .. }
             | SessionsList { .. }
-            | SessionHistory { .. }
             | HistoryGetSettings {}
             | OrchestratorListAgents { .. }
             | AgentsList {}

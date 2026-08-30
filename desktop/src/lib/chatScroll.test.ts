@@ -6,6 +6,7 @@ import {
   distanceFromBottom,
   isNearChatBottom,
   shouldFollowAfterScroll,
+  transcriptRestoreMode,
 } from "./chatScroll";
 
 describe("chat scroll following", () => {
@@ -40,5 +41,25 @@ describe("chat scroll following", () => {
     const queuedFollow = gate.issue();
     gate.cancel();
     expect(gate.isCurrent(queuedFollow)).toBe(false);
+  });
+});
+
+describe("transcript restore mode", () => {
+  it("restores nothing while following the live edge", () => {
+    expect(transcriptRestoreMode(true, false, null)).toBe("none");
+  });
+
+  it("anchors to the toggled row while a disclosure settles, even when following", () => {
+    expect(transcriptRestoreMode(true, true, "work-toggle:work:i4")).toBe("anchor");
+    expect(transcriptRestoreMode(false, true, "work-toggle:work:i4")).toBe("anchor");
+  });
+
+  it("cannot anchor without an anchor key", () => {
+    expect(transcriptRestoreMode(true, true, null)).toBe("none");
+  });
+
+  it("restores every row while reading away from the end", () => {
+    expect(transcriptRestoreMode(false, false, null)).toBe("all");
+    expect(transcriptRestoreMode(false, false, "work-toggle:work:i4")).toBe("all");
   });
 });

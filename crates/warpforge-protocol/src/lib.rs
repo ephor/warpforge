@@ -911,10 +911,6 @@ pub enum Method {
     /// Select YAML-file or SQLite backlog persistence.
     #[serde(rename = "backlog.setStorage")]
     BacklogSetStorage { mode: BacklogStorageMode },
-    /// Read one task's full folded conversation history. Per-task and
-    /// index-backed, so this stays fast even on large databases.
-    #[serde(rename = "session.history")]
-    SessionHistory { task_id: String },
     /// Read the task-history retention configuration.
     #[serde(rename = "history.getSettings")]
     HistoryGetSettings {},
@@ -1579,11 +1575,10 @@ pub struct Snapshot {
     pub portforwards: Vec<PortForwardInfo>,
     pub tasks: Vec<TaskInfo>,
     pub terminals: Vec<TerminalInfo>,
-    /// Recent tail of the persisted session conversation history keyed by
-    /// task id, sent on `state.subscribe` so clients can render tiles, the
-    /// attention rail and previews without loading full transcripts. A
-    /// client needing a task's whole conversation asks `session.history`.
-    /// Omitted from the wire when empty.
+    /// Persisted session conversation history keyed by task id. Sent whole on
+    /// `state.subscribe` so clients can reconstruct conversations without
+    /// polling — a transcript that arrives in two pieces cannot hold its
+    /// scroll (see `docs/adr/0005`). Omitted from the wire when empty.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub session_history: HashMap<String, Vec<SessionUpdate>>,
     /// All configured agents (enabled or not). Empty until the user completes
