@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0
+
+### Minor Changes
+
+- [`06c639a`](https://github.com/warpforgehq/warpforge/commit/06c639a2cb321ac71d90e571b9e09cefdc8cf429) Thanks [@ephor](https://github.com/ephor)! - See how much of each coding agent's quota is left before you run out mid-task. The task header now shows your session and weekly usage at a glance, and clicking it opens every agent you are signed into — Claude, Codex and OpenCode — with how much is left on each, when the limit resets, and what the work would have cost at API rates. When one login is spent you can see which of your others still has room and switch to it right there, without leaving the task. The same breakdown lives in Settings.
+
+### Patch Changes
+
+- [`873cd9f`](https://github.com/warpforgehq/warpforge/commit/873cd9ff4a1e8a4918ab39c72d33f1fd38db4f5d) Thanks [@ephor](https://github.com/ephor)! - Apps now start fast again on big workspaces. Connecting no longer loads every conversation up front; a chat loads its own full history the moment you open it, with a brief loading state until it appears in one piece. The "Needs you" badge now stays accurate right after startup, even before a conversation has streamed anything.
+
 ## 0.13.0
 
 ### Minor Changes
