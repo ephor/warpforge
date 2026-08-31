@@ -1,11 +1,8 @@
 //! The warpforge daemon: the source of truth for all runtime state, driven by
 //! commands and emitting events. See [`actor`] for the boundary rationale.
 //!
-//! Parts of this API surface are not yet called: the TUI still runs on the
-//! managers in-process (its cutover to consume the daemon is the next
-//! increment), and the WebSocket server that will drive most commands lands in
-//! Stage 2. The allow below keeps the build clean until then; remove it once
-//! the TUI and socket consume the actor.
+//! Parts of this API surface are consumed only by tests today; the blanket
+//! allow keeps the build clean for those.
 #![allow(dead_code)]
 
 pub mod accounts;
@@ -61,6 +58,8 @@ mod tests {
             name: "demo".to_string(),
             path: ".".to_string(),
             added_at: "0".to_string(),
+            port_range: None,
+            port_range_override: None,
         }]
     }
 
@@ -157,7 +156,7 @@ mod tests {
     async fn shutdown_does_not_kill_listeners_it_did_not_start() {
         // A stranger's server on a port inside the project's range. Spawned as
         // a child process so the sweep would kill it, not the test runner.
-        let (start, end) = crate::ports::port_range(0);
+        let (start, end) = (4000u16, 4099u16);
         let port = (start..=end)
             .find(|p| std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok())
             .expect("a free port in the project range");
@@ -440,6 +439,8 @@ mod tests {
             name: "demo".into(),
             path: dir.path().to_string_lossy().into(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }];
         let daemon = Daemon::spawn(
             projects,
@@ -528,6 +529,8 @@ mod tests {
             name: "demo".into(),
             path: dir.path().to_string_lossy().into(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }];
         let fixture = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -685,6 +688,8 @@ mod tests {
             name: "demo".into(),
             path: dir.path().to_string_lossy().into_owned(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }];
         (dir, projects)
     }

@@ -642,6 +642,10 @@ pub enum Command {
     AddProject {
         path: String,
         name: Option<String>,
+        /// Optional sticky port range assigned at registration, like the
+        /// CLI's `warpforge add --ports`. Not a local override — a declared
+        /// config range outranks it (ADR 0006).
+        port_range: Option<crate::registry::PortRange>,
         reply: oneshot::Sender<Result<ProjectEntry, String>>,
     },
     /// Remove a project from the registry and broadcast the update.
@@ -649,6 +653,15 @@ pub enum Command {
         name: String,
         stop_resources: bool,
         reply: oneshot::Sender<Result<(), ProjectRemovalError>>,
+    },
+    /// Set (or clear) a project's local port-range override, re-resolve every
+    /// range, and broadcast the affected projects. Local registry only — the
+    /// shared config is never touched (ADR 0006 invariant 1).
+    SetPortRange {
+        project: String,
+        /// `None` clears the override.
+        range: Option<crate::registry::PortRange>,
+        reply: oneshot::Sender<Result<(), String>>,
     },
     /// Ensure a language server is running for a task's workspace + language.
     LspStart {

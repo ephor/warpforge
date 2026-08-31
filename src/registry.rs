@@ -3,12 +3,30 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// A project's committed port range: `size` ports starting at `start`,
+/// inclusive.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PortRange {
+    pub start: u16,
+    pub size: u16,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectEntry {
     pub name: String,
     pub path: String,
     #[serde(rename = "addedAt")]
     pub added_at: String,
+    /// Sticky auto-assigned range; absent for old projects.json files.
+    #[serde(rename = "portRange", default, skip_serializing_if = "Option::is_none")]
+    pub port_range: Option<PortRange>,
+    /// Local override; beats any declared config range.
+    #[serde(
+        rename = "portRangeOverride",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub port_range_override: Option<PortRange>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -17,6 +35,10 @@ struct ProjectsData {
 }
 
 fn warpforge_dir() -> PathBuf {
+    // Test seam: lets the suite point the registry at a throwaway directory.
+    if let Ok(dir) = std::env::var("WARPFORGE_HOME") {
+        return PathBuf::from(dir);
+    }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".warpforge")
@@ -43,7 +65,11 @@ fn save(data: &ProjectsData) -> Result<()> {
     Ok(())
 }
 
-pub fn add_project(path: &str, name: Option<&str>) -> Result<ProjectEntry> {
+pub fn add_project(
+    path: &str,
+    name: Option<&str>,
+    port_range: Option<PortRange>,
+) -> Result<ProjectEntry> {
     let abs = Path::new(path)
         .canonicalize()
         .with_context(|| format!("path does not exist: {path}"))?;
@@ -69,10 +95,32 @@ pub fn add_project(path: &str, name: Option<&str>) -> Result<ProjectEntry> {
         name: project_name,
         path: abs_str,
         added_at: chrono_now(),
+        port_range,
+        port_range_override: None,
     };
     data.projects.push(entry.clone());
     save(&data)?;
     Ok(entry)
+}
+
+/// Set (or clear) a project's sticky auto-assigned port range.
+pub fn set_port_range(name: &str, range: Option<PortRange>) -> Result<()> {
+    mutate_project(name, move |entry| entry.port_range = range)
+}
+
+/// Set (or clear) a project's local port-range override.
+pub fn set_port_range_override(name: &str, range: Option<PortRange>) -> Result<()> {
+    mutate_project(name, move |entry| entry.port_range_override = range)
+}
+
+fn mutate_project(name: &str, f: impl FnOnce(&mut ProjectEntry)) -> Result<()> {
+    let mut data = load()?;
+    let entry = match data.projects.iter_mut().find(|p| p.name == name) {
+        Some(entry) => entry,
+        None => bail!("Project \"{}\" not found", name),
+    };
+    f(entry);
+    save(&data)
 }
 
 pub fn remove_project(name: &str) -> Result<()> {

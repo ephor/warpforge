@@ -35,6 +35,8 @@ async fn spawn_with_repo(dir: &tempfile::TempDir) -> DaemonHandle {
             name: "demo".into(),
             path: dir.path().to_string_lossy().into_owned(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }],
         None,
     )

@@ -536,6 +536,8 @@ mod tests {
             name: "demo".into(),
             path: ".".into(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }];
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         crate::daemon::Daemon::spawn(projects, store)

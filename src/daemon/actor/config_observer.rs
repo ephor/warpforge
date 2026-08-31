@@ -120,11 +120,23 @@ impl ConfigObserver {
 impl Daemon {
     pub(crate) fn build_project_config_state(
         &self,
-        index: usize,
+        project_name: &str,
         config: Option<&WorkspaceConfig>,
     ) -> wire::ProjectConfigState {
-        let project = &self.projects[index];
-        let (start, end) = crate::ports::port_range(index);
+        let Some(project) = self.projects.iter().find(|p| p.name == project_name) else {
+            panic!("build_project_config_state: unknown project {project_name:?}");
+        };
+        let (start, end) = self.port_range_for(&project.name).unwrap_or((4000, 4099));
+        let (port_range_source, port_range_conflict) = self
+            .port_ranges
+            .get(&project.name)
+            .map(|resolved| {
+                (
+                    crate::daemon::actor::ports::range_source(resolved.source),
+                    resolved.conflict_with.clone(),
+                )
+            })
+            .unwrap_or((wire::PortRangeSource::Auto, None));
         let declared_services = config.map(sorted_services).unwrap_or_default();
         let agent_templates = config
             .and_then(|c| c.agent_templates.as_ref())
@@ -154,6 +166,11 @@ impl Daemon {
                                 status: wire::ServiceStatus::Stopped,
                                 original_port: service.port.unwrap_or(0),
                                 allocated_port: 0,
+                                // A pinned service that has never started is
+                                // still pinned: report from the resolved
+                                // range, not from a live process.
+                                port_pinned: self.port_pin_for(&project.name, service)
+                                    == crate::ports::PortPin::Strict,
                                 log_seq: 0,
                             },
                         )
@@ -165,6 +182,7 @@ impl Daemon {
             if let Some(declared) = service_map.get_mut(&service.name) {
                 declared.status = wireconv::service_status(&service.status);
                 declared.allocated_port = service.allocated_port;
+                declared.port_pinned = service.port_pinned;
                 declared.log_seq = self.services.newest_seq(&project.name, &service.name);
                 if matches!(
                     service.status,
@@ -236,6 +254,8 @@ impl Daemon {
                 name: project.name.clone(),
                 path: project.path.clone(),
                 port_range: (start, end),
+                port_range_source,
+                port_range_conflict,
                 declared_services,
                 agent_templates,
             },

@@ -50,9 +50,9 @@ impl Daemon {
         let mut projects = Vec::new();
         let mut services = Vec::new();
         let mut portforwards = Vec::new();
-        for (index, project) in self.projects.iter().enumerate() {
+        for project in self.projects.iter() {
             let config = load_workspace_config(Path::new(&project.path));
-            let state = self.build_project_config_state(index, config.as_ref());
+            let state = self.build_project_config_state(&project.name, config.as_ref());
             projects.push(state.project);
             services.extend(state.services);
             portforwards.extend(state.portforwards);
@@ -120,13 +120,6 @@ impl Daemon {
         }
     }
 
-    pub(crate) fn project_index(&self, name: &str) -> usize {
-        self.projects
-            .iter()
-            .position(|p| p.name == name)
-            .unwrap_or(0)
-    }
-
     pub(crate) async fn run(
         mut self,
         mut cmd_rx: mpsc::Receiver<Command>,
@@ -140,6 +133,10 @@ impl Daemon {
             Requested(oneshot::Sender<()>),
             Update(oneshot::Sender<Vec<String>>),
         }
+
+        // Resolve every project's port range before anything can start (and,
+        // for registry entries predating stored ranges, freeze their migration).
+        self.recompute_port_ranges();
 
         let mut config_poll = tokio::time::interval(CONFIG_POLL_INTERVAL);
         config_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -237,8 +234,10 @@ impl Daemon {
                 .await;
             self.config_observer
                 .mark_applied(&project_name, fingerprint);
-            let state = self.build_project_config_state(index, config.as_ref());
-            self.emit(Event::ProjectConfigChanged(state));
+            // A newly declared (or removed) `ports.range` takes effect
+            // immediately; re-resolve and broadcast every project it moved,
+            // plus this one even if its own range did not change.
+            self.recompute_and_broadcast_port_ranges(Some(&project_name));
         }
     }
 

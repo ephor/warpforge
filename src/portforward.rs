@@ -291,8 +291,6 @@ impl PortForwardManager {
     }
 
     /// Stop a single named forward within a project.
-    /// (Consumed by the daemon's `portforward.stop` command in Stage 2.)
-    #[allow(dead_code)]
     pub fn stop(&mut self, project_name: &str, name: &str) {
         let key = format!("{project_name}/{name}");
         if let Some(pf) = self.forwards.get_mut(&key) {

@@ -21,6 +21,30 @@ impl Daemon {
     /// Persisted tasks are loaded from the store (Running/Queued tasks come back
     /// as Interrupted — no live-session resumption in v1).
     pub fn spawn(projects: Vec<ProjectEntry>, store: Option<Store>) -> DaemonHandle {
+        Self::spawn_with_sink(
+            projects,
+            store,
+            crate::daemon::actor::ports::PortRangeSink::for_current_build(),
+        )
+    }
+
+    /// Like [`Daemon::spawn`], but with an explicit port-range persistence
+    /// sink. Tests pass [`PortRangeSink::Registry`] to exercise real
+    /// registry writes against a throwaway `WARPFORGE_HOME`, or rely on the
+    /// default in-memory sink to keep test runs off the real registry.
+    pub fn spawn_with_sink(
+        projects: Vec<ProjectEntry>,
+        store: Option<Store>,
+        port_range_sink: crate::daemon::actor::ports::PortRangeSink,
+    ) -> DaemonHandle {
+        // Entries without a stored range at boot predate port persistence and
+        // get the one-time positional migration. Everything added later — at
+        // runtime or on a subsequent boot — falls through to a fresh scan.
+        let positional_migration: std::collections::HashSet<String> = projects
+            .iter()
+            .filter(|entry| entry.port_range.is_none())
+            .map(|entry| entry.name.clone())
+            .collect();
         let (cmd_tx, cmd_rx) = mpsc::channel(256);
         let (event_tx, _) = broadcast::channel(2048);
         let (agent_tx, agent_rx) = mpsc::unbounded_channel();
@@ -115,6 +139,9 @@ impl Daemon {
         let daemon = Daemon {
             agent_limits,
             projects,
+            port_ranges: HashMap::new(),
+            port_range_sink,
+            positional_migration,
             config_observer,
             tasks,
             configured_agents,

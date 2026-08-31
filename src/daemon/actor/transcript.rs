@@ -185,7 +185,7 @@ impl Daemon {
     ///    real `DeleteTask` path (worktree, backlog refs, workflow runs); a
     ///    closed task that still holds unmerged changes is kept instead.
     ///
-    /// Settling runs before expiry so a task settled by stage 2 gets a fresh
+    /// Settling runs before expiry so a settled task gets a fresh
     /// `updated_at` and cannot be expired by the same sweep.
     pub(crate) fn history_sweep(&self) {
         let config = crate::daemon::history_config::HistoryConfig::load();
