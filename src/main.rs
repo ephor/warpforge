@@ -36,6 +36,9 @@ enum Commands {
         path: String,
         #[arg(short, long)]
         name: Option<String>,
+        /// Pin the project's port range: `4200` (4200-4299) or `4200-4299`.
+        #[arg(long)]
+        ports: Option<String>,
     },
     /// Remove a registered project
     Remove { name: String },
@@ -97,9 +100,25 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command.unwrap_or(Commands::Ui) {
-        Commands::Add { path, name } => {
-            let entry = registry::add_project(&path, name.as_deref())?;
+        Commands::Add { path, name, ports } => {
+            let port_range = match ports.as_deref() {
+                None => None,
+                Some(spec) => {
+                    // Reject a bad value before anything is written.
+                    let (start, end) = config::parse_range(spec).ok_or_else(|| {
+                        anyhow!("invalid port range {spec:?}: expected \"4200\" or \"4200-4299\"")
+                    })?;
+                    Some(registry::PortRange {
+                        start,
+                        size: end - start + 1,
+                    })
+                }
+            };
+            let entry = registry::add_project(&path, name.as_deref(), port_range)?;
             println!("Registered \"{}\" at {}", entry.name, entry.path);
+            if let Some(r) = entry.port_range {
+                println!("Port range: {}-{}", r.start, r.start + r.size - 1);
+            }
             let config_file = config::find_config_file(std::path::Path::new(&entry.path));
             if !config_file.exists() {
                 match config::generate_workspace_yaml(std::path::Path::new(&entry.path)) {
@@ -119,9 +138,12 @@ async fn main() -> Result<()> {
             if projects.is_empty() {
                 println!("No projects registered. Use `warpforge add <path>` to add one.");
             } else {
-                for (i, p) in projects.iter().enumerate() {
-                    let (start, end) = ports::port_range(i);
-                    println!("  {} → {}  (ports {}-{})", p.name, p.path, start, end);
+                for p in projects.iter() {
+                    let range = match p.port_range_override.or(p.port_range) {
+                        Some(r) => format!("{}-{}", r.start, r.start + r.size - 1),
+                        None => "auto".to_string(),
+                    };
+                    println!("  {} → {}  (ports {})", p.name, p.path, range);
                 }
             }
         }
@@ -129,7 +151,7 @@ async fn main() -> Result<()> {
             let dir = path.unwrap_or_else(|| ".".to_string());
             config::generate_workspace_yaml(std::path::Path::new(&dir))?;
             if add {
-                let entry = registry::add_project(&dir, None)?;
+                let entry = registry::add_project(&dir, None, None)?;
                 println!("Registered \"{}\" at {}", entry.name, entry.path);
             }
         }
@@ -143,9 +165,8 @@ async fn main() -> Result<()> {
         Commands::Daemon { dev, owner } => {
             let projects = registry::list_projects().unwrap_or_default();
             let store = daemon::Store::open().ok();
-            let project_count = projects.len();
             let handle = daemon::Daemon::spawn(projects, store);
-            daemon::server::serve(handle, dev, owner.into(), project_count).await?;
+            daemon::server::serve(handle, dev, owner.into()).await?;
         }
         Commands::McpOrchestrator => {
             mcp::run().await?;

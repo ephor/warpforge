@@ -416,6 +416,8 @@ fn apply_event(state: &Arc<Mutex<ClientState>>, ev: wire::Event) {
                     name: info.name.clone(),
                     path: info.path.clone(),
                     added_at: String::new(),
+                    port_range: None,
+                    port_range_override: None,
                 });
             }
         }
@@ -430,6 +432,8 @@ fn apply_event(state: &Arc<Mutex<ClientState>>, ev: wire::Event) {
                     name: project.clone(),
                     path: config.project.path,
                     added_at: String::new(),
+                    port_range: None,
+                    port_range_override: None,
                 }),
             }
 
@@ -485,6 +489,8 @@ fn from_snapshot(snap: wire::Snapshot) -> ClientState {
                 name: p.name.clone(),
                 path: p.path.clone(),
                 added_at: String::new(),
+                port_range: None,
+                port_range_override: None,
             })
             .collect(),
         services: ServiceProjection {

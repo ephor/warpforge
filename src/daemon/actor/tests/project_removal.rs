@@ -7,6 +7,8 @@ fn demo_project() -> ProjectEntry {
         name: "project-removal-test".into(),
         path: ".".into(),
         added_at: "0".into(),
+        port_range: None,
+        port_range_override: None,
     }
 }
 

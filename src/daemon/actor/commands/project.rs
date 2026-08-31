@@ -1,12 +1,17 @@
-use crate::service::kill_listeners_in_ranges;
+use crate::service::kill_listeners_on_ports;
 
 use crate::daemon::actor::{Command, Daemon};
 
 impl Daemon {
     pub(crate) async fn handle_project_command(&mut self, cmd: Command) {
         match cmd {
-            Command::AddProject { path, name, reply } => {
-                let result = self.add_project(&path, name.as_deref()).await;
+            Command::AddProject {
+                path,
+                name,
+                port_range,
+                reply,
+            } => {
+                let result = self.add_project(&path, name.as_deref(), port_range).await;
                 let _ = reply.send(result);
             }
             Command::RemoveProject {
@@ -15,6 +20,14 @@ impl Daemon {
                 reply,
             } => {
                 let result = self.remove_project(&name, stop_resources).await;
+                let _ = reply.send(result);
+            }
+            Command::SetPortRange {
+                project,
+                range,
+                reply,
+            } => {
+                let result = self.set_port_range_override(&project, range);
                 let _ = reply.send(result);
             }
 
@@ -49,8 +62,10 @@ impl Daemon {
                     .collect();
                 self.services.stop_project(&project).await.ok();
                 self.portforwards.stop_project(&project);
-                if let Some(index) = self.projects.iter().position(|p| p.name == project) {
-                    kill_listeners_in_ranges(&[crate::ports::port_range(index)]).await;
+                // Only ports this daemon handed out — a declared range can
+                // hold processes warpforge never started (ADR 0006 invariant 3).
+                if let Some(range) = self.port_range_for(&project) {
+                    kill_listeners_on_ports(&crate::ports::allocated_in_ranges(&[range])).await;
                 }
                 for service in services {
                     self.emit_service_status(&project, &service);

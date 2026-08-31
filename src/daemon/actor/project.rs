@@ -5,7 +5,7 @@ use anyhow::Result;
 use crate::config::{load_workspace_config, sorted_services, WorkspaceConfig};
 use crate::portforward::PfStatus;
 use crate::registry::ProjectEntry;
-use crate::service::{kill_listeners_in_ranges, ServiceStatus};
+use crate::service::{kill_listeners_on_ports, ServiceStatus};
 
 use crate::daemon::actor::event::ProjectLiveResources;
 use crate::daemon::actor::{Daemon, Event, ProjectRemovalError};
@@ -72,9 +72,10 @@ impl Daemon {
         &mut self,
         path: &str,
         name: Option<&str>,
+        port_range: Option<crate::registry::PortRange>,
     ) -> Result<ProjectEntry, String> {
-        let entry =
-            crate::registry::add_project(path, name).map_err(|e| format!("registry: {e}"))?;
+        let entry = crate::registry::add_project(path, name, port_range)
+            .map_err(|e| format!("registry: {e}"))?;
 
         // Generate the workspace config if none exists.
         let config_file = crate::config::find_config_file(std::path::Path::new(&entry.path));
@@ -86,13 +87,18 @@ impl Daemon {
         // Add to in-memory list.
         self.projects.push(entry.clone());
         self.config_observer.track(&entry);
+        // The new project may relocate other projects' sticky ranges; every
+        // moved project must be broadcast, not just the new one.
+        let mut affected = self.recompute_port_ranges();
+        if !affected.iter().any(|name| name == &entry.name) {
+            affected.push(entry.name.clone());
+        }
 
         // Broadcast to all subscribed clients.
-        let index = self.projects.len() - 1;
         let config = load_workspace_config(std::path::Path::new(&entry.path));
-        let state = self.build_project_config_state(index, config.as_ref());
+        let state = self.build_project_config_state(&entry.name, config.as_ref());
         self.emit(Event::ProjectAdded(state.project.clone()));
-        self.emit(Event::ProjectConfigChanged(state));
+        self.broadcast_project_config(&affected);
 
         Ok(entry)
     }
@@ -104,7 +110,7 @@ impl Daemon {
         name: &str,
         stop_resources: bool,
     ) -> Result<(), ProjectRemovalError> {
-        let Some(project_index) = self
+        let Some(_) = self
             .projects
             .iter()
             .position(|project| project.name == name)
@@ -175,11 +181,12 @@ impl Daemon {
             self.portforwards.remove(name, &forward);
         }
 
-        // The range sweep can affect an untracked listener, so reserve it for
-        // an explicitly authorized teardown rather than an unforced removal
-        // whose known resources are already stopped.
+        // Only ports this daemon handed out — a declared range can hold
+        // processes warpforge never started (ADR 0006 invariant 3).
         if stop_resources {
-            kill_listeners_in_ranges(&[crate::ports::port_range(project_index)]).await;
+            if let Some(range) = self.port_range_for(name) {
+                kill_listeners_on_ports(&crate::ports::allocated_in_ranges(&[range])).await;
+            }
         }
 
         let terminal_ids: Vec<String> = self
@@ -201,10 +208,15 @@ impl Daemon {
 
         self.projects.retain(|p| p.name != name);
         self.config_observer.untrack(name);
+        self.port_ranges.remove(name);
+        // Removing a project frees its range; relocated neighbours must be
+        // broadcast, not just the removal itself.
+        let affected = self.recompute_port_ranges();
 
         self.emit(Event::ProjectRemoved {
             name: name.to_string(),
         });
+        self.broadcast_project_config(&affected);
 
         Ok(())
     }
@@ -214,23 +226,27 @@ impl Daemon {
         let Some(path) = self.project_path(name) else {
             return;
         };
-        let index = self.project_index(name);
         let Some(config) = load_workspace_config(std::path::Path::new(&path)) else {
             return;
         };
+        let blocker = self.start_blocker_for(name);
+        let range = self.port_range_for(name).unwrap_or((4000, 4099));
 
         for svc_name in sorted_services(&config) {
             if let Some(svc) = config.services.get(&svc_name) {
+                let pin = self.port_pin_for(name, svc);
                 self.services
                     .start(
                         name,
                         &path,
-                        index,
+                        range,
+                        pin,
                         &svc_name,
                         &svc.command,
                         svc.port.unwrap_or(0),
                         svc.env.as_ref(),
                         svc.ready_pattern.as_deref(),
+                        blocker.as_deref(),
                     )
                     .await
                     .ok();
@@ -279,23 +295,27 @@ impl Daemon {
         let Some(path) = self.project_path(project) else {
             return;
         };
-        let index = self.project_index(project);
         let Some(config) = load_workspace_config(std::path::Path::new(&path)) else {
             return;
         };
         let Some(svc) = config.services.get(service) else {
             return;
         };
+        let pin = self.port_pin_for(project, svc);
+        let blocker = self.start_blocker_for(project);
+        let range = self.port_range_for(project).unwrap_or((4000, 4099));
         self.services
             .start(
                 project,
                 &path,
-                index,
+                range,
+                pin,
                 service,
                 &svc.command,
                 svc.port.unwrap_or(0),
                 svc.env.as_ref(),
                 svc.ready_pattern.as_deref(),
+                blocker.as_deref(),
             )
             .await
             .ok();
@@ -385,7 +405,12 @@ impl Daemon {
             .collect();
         self.services.stop_all().await.ok();
         self.portforwards.stop_all().await.ok();
-        kill_listeners_in_ranges(&self.project_port_ranges()).await;
+        // Only ports this daemon handed out — a declared range can hold
+        // processes warpforge never started (ADR 0006 invariant 3).
+        kill_listeners_on_ports(&crate::ports::allocated_in_ranges(
+            &self.project_port_ranges(),
+        ))
+        .await;
         for (project, service) in services {
             self.emit_service_status(&project, &service);
         }
@@ -397,8 +422,7 @@ impl Daemon {
     pub(crate) fn project_port_ranges(&self) -> Vec<(u16, u16)> {
         self.projects
             .iter()
-            .enumerate()
-            .map(|(index, _)| crate::ports::port_range(index))
+            .filter_map(|p| self.port_range_for(&p.name))
             .collect()
     }
 }

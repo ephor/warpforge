@@ -1,16 +1,16 @@
 //! The daemon actor: a single tokio task that owns all runtime state (projects,
 //! dev servers, port-forwards, agent PTYs, tasks) and is the sole mutator of it.
 //!
-//! Clients (the TUI now; a WebSocket server in Stage 2) never touch the managers
-//! directly — they send [`Command`]s in and consume [`Event`]s out. This is the
+//! Clients (the TUI, the WebSocket server) never touch the managers directly —
+//! they send [`Command`]s in and consume [`Event`]s out. This is the
 //! daemon/client boundary the pivot is about: because every observer is on the
 //! same event stream, there is no "primary" UI, and nothing assumes a single
 //! consumer.
 //!
 //! The internal [`Event`] here is intentionally *not* the serializable wire type
-//! (`warpforge_protocol::Event`): in-process it can carry rich handles like the
-//! live vt100 parser. Stage 2 adds a thin translation from this to the wire
-//! type for the socket.
+//!(`warpforge_protocol::Event`): in-process it can carry rich handles like the
+//! live vt100 parser. A thin translation to the wire type lives in the socket
+//! server (`crate::daemon::server`).
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -44,6 +44,7 @@ mod event;
 mod lifecycle;
 mod output;
 mod policy;
+mod ports;
 mod project;
 mod prompt;
 mod run;
@@ -71,6 +72,18 @@ pub use handle::DaemonHandle;
 
 pub struct Daemon {
     projects: Vec<ProjectEntry>,
+    /// Resolved port ranges per project name (ADR 0006). Rebuilt by
+    /// `recompute_port_ranges`; consult via `port_range_for` /
+    /// `port_conflict_for` rather than deriving ranges anywhere else.
+    port_ranges: HashMap<String, crate::ports::ResolvedRange>,
+    /// Where resolved sticky ranges are persisted. Test builds inject a
+    /// memory sink so `cargo test` can never write `~/.warpforge/projects.json`.
+    port_range_sink: ports::PortRangeSink,
+    /// Registry entries that predate stored port ranges, captured once at
+    /// daemon boot. Only these get the one-time positional migration in
+    /// `recompute_port_ranges`; everything registered afterwards gets a fresh
+    /// scan from 4000 (ADR 0006 invariant 2 — never an index-derived range).
+    positional_migration: std::collections::HashSet<String>,
     config_observer: ConfigObserver,
     tasks: HashMap<String, Task>,
     agent_limits: Vec<warpforge_protocol::AgentAccountLimits>,

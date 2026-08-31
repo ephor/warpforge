@@ -233,11 +233,13 @@ impl DaemonHandle {
         &self,
         path: &str,
         name: Option<&str>,
+        port_range: Option<crate::registry::PortRange>,
     ) -> Result<ProjectEntry, String> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::AddProject {
             path: path.to_string(),
             name: name.map(str::to_string),
+            port_range,
             reply: tx,
         })
         .await;
@@ -260,6 +262,22 @@ impl DaemonHandle {
         rx.await.unwrap_or(Err(ProjectRemovalError::Internal(
             "daemon dropped project removal reply".into(),
         )))
+    }
+
+    /// Set (or clear) a project's local port-range override and re-resolve.
+    pub async fn set_port_range(
+        &self,
+        project: &str,
+        range: Option<crate::registry::PortRange>,
+    ) -> Result<(), String> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Command::SetPortRange {
+            project: project.to_string(),
+            range,
+            reply: tx,
+        })
+        .await;
+        rx.await.unwrap_or(Err("daemon dropped reply".into()))
     }
 
     /// Ask the daemon to tear down (stop services, port-forwards, agents) and

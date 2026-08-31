@@ -108,7 +108,17 @@ pub enum Method {
 
     // ── Projects ──
     #[serde(rename = "project.add")]
-    ProjectAdd { path: String, name: Option<String> },
+    ProjectAdd {
+        path: String,
+        name: Option<String>,
+        /// Optional sticky port range like `"4200-4299"`, assigned at
+        /// registration (the same slot `warpforge add --ports` uses). A
+        /// `ports.range` later declared in the project's config outranks it.
+        /// Snake_case on the wire, like `stop_resources` — the enum's
+        /// `rename_all` covers variant names, not fields.
+        #[serde(default)]
+        port_range: Option<String>,
+    },
     #[serde(rename = "project.remove")]
     ProjectRemove {
         name: String,
@@ -116,6 +126,15 @@ pub enum Method {
         /// Defaults to false so older clients fail safely when resources exist.
         #[serde(default)]
         stop_resources: bool,
+    },
+    /// Set (or clear, `range: null`) a project's local port-range override.
+    /// Writes to the local registry only — never to the shared workspace
+    /// config. The daemon re-resolves every project's range afterwards.
+    #[serde(rename = "project.setPortRange")]
+    ProjectSetPortRange {
+        project: String,
+        /// Inclusive range like `"4200-4299"`; `None` clears the override.
+        range: Option<String>,
     },
 
     // ── Runtime lifecycle ──
@@ -1602,9 +1621,31 @@ pub struct ProjectInfo {
     pub path: String,
     /// Inclusive port range assigned to this project.
     pub port_range: (u16, u16),
+    /// Where the range came from: an auto scan, a sticky assignment, the
+    /// project's declared config range, or a local registry override.
+    #[serde(default)]
+    pub port_range_source: PortRangeSource,
+    /// Name of the project whose declared range this one collides with.
+    #[serde(default)]
+    pub port_range_conflict: Option<String>,
     /// Services declared in .warpforge.yaml (may not be running).
     pub declared_services: Vec<String>,
     pub agent_templates: HashMap<String, String>,
+}
+
+/// How a project's port range was resolved.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PortRangeSource {
+    /// Fresh scan from 4000 upward for a free block.
+    #[default]
+    Auto,
+    /// Sticky auto-assignment kept from an earlier resolution.
+    Sticky,
+    /// Declared in the project's shared config (`ports.range`).
+    Declared,
+    /// Local registry override (`portRangeOverride`).
+    LocalOverride,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1624,6 +1665,9 @@ pub struct ServiceInfo {
     pub status: ServiceStatus,
     pub original_port: u16,
     pub allocated_port: u16,
+    /// True when the service's declared port is a hard pin, not a hint.
+    #[serde(default)]
+    pub port_pinned: bool,
     /// Sequence number of the newest retained log line.
     pub log_seq: u64,
 }
@@ -2875,6 +2919,8 @@ mod tests {
                 name: "demo".into(),
                 path: "/tmp/demo".into(),
                 port_range: (4000, 4099),
+                port_range_source: PortRangeSource::Auto,
+                port_range_conflict: None,
                 declared_services: vec!["web".into()],
                 agent_templates: HashMap::new(),
             },
@@ -2885,6 +2931,7 @@ mod tests {
                 status: ServiceStatus::Stopped,
                 original_port: 3000,
                 allocated_port: 0,
+                port_pinned: false,
                 log_seq: 0,
             }],
             portforwards: Vec::new(),

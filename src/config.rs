@@ -10,6 +10,17 @@ pub struct ServiceHealthcheck {
     pub interval: String,
 }
 
+/// Explicit override for how a service reacts when its configured `port` is
+/// taken. `auto` opts back into first-free-in-range shifting; `None` means
+/// "infer": strict when the port is pinned, auto otherwise. (The ADR only
+/// ever specifies `auto` as the opt-out — a `strict` value would be a no-op,
+/// so it is not expressible.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PortFallback {
+    Auto,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceConfig {
     pub command: String,
@@ -21,6 +32,15 @@ pub struct ServiceConfig {
     /// Services that must be running before this one starts
     #[serde(rename = "dependsOn", default)]
     pub depends_on: Vec<String>,
+    #[serde(rename = "portFallback", default)]
+    pub port_fallback: Option<PortFallback>,
+}
+
+/// Project-level committed port range, e.g. `range: "4200-4299"`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortsConfig {
+    /// Inclusive range string, e.g. "4200-4299".
+    pub range: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +72,8 @@ pub struct WorkspaceConfig {
     pub agent_templates: Option<HashMap<String, AgentTemplate>>,
     #[serde(default)]
     pub portforwards: Vec<PortForwardConfig>,
+    #[serde(default)]
+    pub ports: Option<PortsConfig>,
 }
 
 /// Topologically sorted service names respecting `depends_on`.
@@ -160,6 +182,7 @@ fn auto_detect(project_path: &Path) -> Option<WorkspaceConfig> {
                             healthcheck: None,
                             ready_pattern: None,
                             depends_on: vec![],
+                            port_fallback: None,
                         },
                     );
                 }
@@ -202,6 +225,7 @@ fn auto_detect(project_path: &Path) -> Option<WorkspaceConfig> {
                                                     healthcheck: None,
                                                     ready_pattern: None,
                                                     depends_on: vec![],
+                                                    port_fallback: None,
                                                 },
                                             );
                                         }
@@ -225,6 +249,7 @@ fn auto_detect(project_path: &Path) -> Option<WorkspaceConfig> {
         services,
         agent_templates: None,
         portforwards: vec![],
+        ports: None,
     })
 }
 
@@ -284,6 +309,25 @@ services:
     Ok(())
 }
 
+/// Parse an inclusive range string: `"4200-4299"`, or a bare `"4200"`
+/// meaning start with the default range size (100).
+/// Rejects inverted/zero-width ranges and privileged starts (< 1024).
+pub fn parse_range(s: &str) -> Option<(u16, u16)> {
+    const DEFAULT_RANGE_SIZE: u16 = 100;
+    let (start_str, end) = match s.split_once('-') {
+        Some((start, end)) => (start, end.parse::<u16>().ok()?),
+        None => (
+            s,
+            s.parse::<u16>().ok()?.checked_add(DEFAULT_RANGE_SIZE - 1)?,
+        ),
+    };
+    let start = start_str.parse::<u16>().ok()?;
+    if start < 1024 || end <= start {
+        return None;
+    }
+    Some((start, end))
+}
+
 /// Parse human-readable interval string ("5s", "100ms", "2m") to milliseconds.
 #[allow(dead_code)]
 pub fn parse_interval_ms(interval: &str) -> u64 {
@@ -305,5 +349,56 @@ pub fn parse_interval_ms(interval: &str) -> u64 {
         "s" => num * 1000,
         "m" => num * 60_000,
         _ => 5000,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_range_accepts_explicit_range() {
+        assert_eq!(parse_range("4200-4299"), Some((4200, 4299)));
+    }
+
+    #[test]
+    fn parse_range_accepts_bare_start_with_default_size() {
+        assert_eq!(parse_range("4200"), Some((4200, 4299)));
+    }
+
+    #[test]
+    fn parse_range_rejects_inverted_range() {
+        assert_eq!(parse_range("4299-4200"), None);
+    }
+
+    #[test]
+    fn parse_range_rejects_zero_width_range() {
+        assert_eq!(parse_range("4200-4200"), None);
+    }
+
+    #[test]
+    fn parse_range_rejects_privileged_start() {
+        assert_eq!(parse_range("80-179"), None);
+        assert_eq!(parse_range("80"), None);
+        assert_eq!(parse_range("1023-1100"), None);
+    }
+
+    #[test]
+    fn parse_range_accepts_lowest_legal_start() {
+        assert_eq!(parse_range("1024-1123"), Some((1024, 1123)));
+    }
+
+    #[test]
+    fn parse_range_rejects_garbage() {
+        assert_eq!(parse_range(""), None);
+        assert_eq!(parse_range("abc"), None);
+        assert_eq!(parse_range("4200-"), None);
+        assert_eq!(parse_range("70000"), None);
+    }
+
+    #[test]
+    fn parse_range_rejects_start_that_overflows_default_size() {
+        assert_eq!(parse_range("65500"), None);
+        assert_eq!(parse_range("65535"), None);
     }
 }

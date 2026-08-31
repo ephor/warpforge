@@ -65,18 +65,16 @@ fn write_endpoint(addr: SocketAddr, token: &str, owner: wire::DaemonOwner) -> Re
 
 /// Bind, publish the endpoint, and serve forever. `dev` disables the auth token
 /// so a browser (vite dev, no Tauri) can connect to a known address.
-pub async fn serve(
-    handle: DaemonHandle,
-    dev: bool,
-    owner: wire::DaemonOwner,
-    project_count: usize,
-) -> Result<()> {
-    // Clean up orphan listeners from a previous daemon crash
-    let port_ranges: Vec<(u16, u16)> = (0..project_count).map(crate::ports::port_range).collect();
-    if !port_ranges.is_empty() {
-        eprintln!("warpforge daemon: cleaning up orphan listeners from previous run");
-        crate::service::kill_listeners_in_ranges(&port_ranges).await;
-    }
+pub async fn serve(handle: DaemonHandle, dev: bool, owner: wire::DaemonOwner) -> Result<()> {
+    // No boot-time orphan sweep. It used to `lsof`-kill every listener in every
+    // project's range to clear orphans from a previous daemon crash, but a
+    // range scan cannot tell a warpforge orphan from a process warpforge never
+    // started — and a pinned range deliberately holds such processes (ADR 0006
+    // invariant 3, which covers startup cleanup too). Orphan cleanup may only
+    // return allocation-scoped: persisted service allocations read at startup,
+    // the startup analogue of `ports::allocated_in_ranges`. Until that exists,
+    // a crashed daemon's orphans are cleaned by stopping the project's
+    // services normally, or by hand.
 
     let bind = if dev {
         "127.0.0.1:61814"
@@ -1393,9 +1391,30 @@ async fn dispatch(
             })
             .await
         }
-        ProjectAdd { path, name } => {
+        ProjectAdd {
+            path,
+            name,
+            port_range,
+        } => {
+            let parsed = match port_range.as_deref().map(crate::config::parse_range) {
+                None => None,
+                Some(Some((start, end))) => Some(crate::registry::PortRange {
+                    start,
+                    size: end - start + 1,
+                }),
+                // `Some(None)` = a range string was supplied but invalid.
+                Some(None) => {
+                    return Err(wire::RpcError {
+                        code: wire::ErrorCode::InvalidRequest,
+                        message: format!(
+                            "invalid port range {:?}: expected \"4200\" or \"4200-4299\"",
+                            port_range.unwrap_or_default()
+                        ),
+                    });
+                }
+            };
             let entry = handle
-                .add_project(&path, name.as_deref())
+                .add_project(&path, name.as_deref(), parsed)
                 .await
                 .map_err(|e| wire::RpcError {
                     code: wire::ErrorCode::InvalidRequest,
@@ -1420,6 +1439,33 @@ async fn dispatch(
                         code,
                         message: error.to_string(),
                     }
+                })?;
+            Ok(json!(null))
+        }
+        ProjectSetPortRange { project, range } => {
+            let parsed = match range.as_deref().map(crate::config::parse_range) {
+                None => None,
+                Some(Some((start, end))) => Some(crate::registry::PortRange {
+                    start,
+                    size: end - start + 1,
+                }),
+                // `Some(None)` = a range string was supplied but invalid.
+                Some(None) => {
+                    return Err(wire::RpcError {
+                        code: wire::ErrorCode::InvalidRequest,
+                        message: format!(
+                            "invalid port range {:?}: expected \"4200\" or \"4200-4299\"",
+                            range.unwrap_or_default()
+                        ),
+                    });
+                }
+            };
+            handle
+                .set_port_range(&project, parsed)
+                .await
+                .map_err(|e| wire::RpcError {
+                    code: wire::ErrorCode::InvalidRequest,
+                    message: e,
                 })?;
             Ok(json!(null))
         }
@@ -2189,6 +2235,53 @@ mod tests {
         }
     }
 
+    /// An unparseable port range on `project.add` is rejected at the parse
+    /// gate — before the project is registered, so there is no half-created
+    /// entry and the caller can retry with a fixed range.
+    #[tokio::test]
+    async fn an_unparseable_range_rejects_the_add_before_registration() {
+        let store = Store::open_at(std::path::Path::new(":memory:")).ok();
+        let handle = Daemon::spawn(Vec::new(), store);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(run(listener, handle.clone(), String::new()));
+        let (mut ws, _) = tokio_tungstenite::connect_async(&format!("ws://{addr}"))
+            .await
+            .unwrap();
+
+        // The path exists, so the only thing that can fail is the range —
+        // an error naming the range proves parsing precedes registration.
+        let dir = tempfile::tempdir().unwrap();
+        ws.send(Message::Text(
+            json!({
+                "id": 9,
+                "method": "project.add",
+                "params": { "path": dir.path().to_string_lossy(), "port_range": "nonsense" }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let msg = timeout(Duration::from_secs(2), ws.next())
+            .await
+            .expect("a reply, not silence")
+            .expect("some")
+            .expect("ok");
+        let Message::Text(t) = msg else {
+            panic!("expected a text frame")
+        };
+        let v: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+        assert_eq!(v["error"]["code"], "invalid_request");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("invalid port range")),
+            "the range must be rejected by name, not by a registry error: {}",
+            v["error"]["message"]
+        );
+    }
+
     /// Generating a title spawns an agent process and can run for minutes. It
     /// used to be dispatched on the read loop, so the daemon read nothing else
     /// from that client meanwhile — which is what made starting a task appear
@@ -2263,6 +2356,8 @@ mod tests {
             name: "demo".into(),
             path: dir.path().to_string_lossy().into_owned(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }];
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let handle = Daemon::spawn(projects, store);
@@ -2324,6 +2419,8 @@ mod tests {
             name: "demo".into(),
             path: ".".into(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }];
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let handle = Daemon::spawn(projects, store);
@@ -2411,11 +2508,15 @@ mod tests {
                 name: "demo".into(),
                 path: ".".into(),
                 added_at: "0".into(),
+                port_range: None,
+                port_range_override: None,
             },
             ProjectEntry {
                 name: "other".into(),
                 path: ".".into(),
                 added_at: "0".into(),
+                port_range: None,
+                port_range_override: None,
             },
         ];
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
@@ -2535,6 +2636,8 @@ mod tests {
             name: "demo".into(),
             path: dir.path().to_string_lossy().into_owned(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }];
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let handle = Daemon::spawn(projects, store);
@@ -2593,6 +2696,8 @@ mod tests {
             name: "demo".into(),
             path: ".".into(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }];
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let handle = Daemon::spawn(projects, store);
@@ -2651,6 +2756,8 @@ mod tests {
             name: "demo".into(),
             path: ".".into(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }];
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let handle = Daemon::spawn(projects, store);
@@ -2837,6 +2944,8 @@ mod tests {
             name: "demo".into(),
             path: ".".into(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }];
         let handle = Daemon::spawn(projects, None);
         let task_id = handle
@@ -2937,6 +3046,8 @@ mod tests {
             name: "demo".into(),
             path: project_dir.path().to_string_lossy().into_owned(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }];
         let handle = Daemon::spawn(projects, None);
         let mut events = handle.subscribe();
@@ -2968,6 +3079,8 @@ mod tests {
             name: "demo".into(),
             path: ".".into(),
             added_at: "0".into(),
+            port_range: None,
+            port_range_override: None,
         }];
         let store = Store::open_at(std::path::Path::new(":memory:")).ok();
         let handle = Daemon::spawn(projects, store);
