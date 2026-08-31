@@ -134,6 +134,7 @@ beforeEach(() => {
   vi.spyOn(daemon, "resizeTerminal").mockImplementation(() => {});
   vi.spyOn(daemon, "sendTerminalInput").mockImplementation(() => {});
   vi.spyOn(daemon, "removeProject").mockResolvedValue();
+  vi.spyOn(daemon, "setProjectPortRange").mockResolvedValue();
   vi.spyOn(daemon, "listBacklog").mockImplementation(async (input) => ({
     items: input.pageSize === 1 ? [] : [],
     page: 0,
@@ -390,5 +391,112 @@ describe("Projects", () => {
     expect(getTerminalWorkspace("warpforge").getController("term-1")).toBe(controller);
     expect(xterm.open).toHaveBeenCalledTimes(1);
     expect(xtermInstances).toHaveLength(1);
+  });
+});
+
+describe("Projects — port range source", () => {
+  it("labels each of the four range sources", () => {
+    const sources: [
+      NonNullable<ProjectInfo["portRangeSource"]>,
+      string,
+    ][] = [
+      ["auto", "auto-assigned"],
+      ["sticky", "auto-assigned (kept)"],
+      ["declared", "from team config"],
+      ["localOverride", "local override"],
+    ];
+    const { rerender } = renderProjects();
+    for (const [source, label] of sources) {
+      rerender(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <Projects
+            snapshot={{
+              ...snapshot,
+              projects: [{ ...warpforgeProject, portRangeSource: source }],
+            }}
+            onOpenTask={vi.fn<(id: string) => void>()}
+            onNewTask={vi.fn<(project?: string, prompt?: string) => void>()}
+            onAddProject={vi.fn<() => void>()}
+          />
+        </QueryClientProvider>,
+      );
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("leaves the label off when an older daemon sends no source", () => {
+    renderProjects();
+    expect(screen.getByText(/ports 4000–4099/)).toBeInTheDocument();
+    expect(screen.queryByText("auto-assigned")).not.toBeInTheDocument();
+  });
+});
+
+describe("Projects — port range conflict", () => {
+  const conflicted: ProjectInfo = {
+    ...warpforgeProject,
+    portRangeSource: "declared",
+    portRangeConflict: "other-project",
+  };
+
+  it("surfaces the conflict and names the colliding project", () => {
+    renderProjects({ ...snapshot, projects: [conflicted] });
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/Port range conflict with other-project/);
+    expect(alert).toHaveTextContent(/this machine and does not change the team's shared config/);
+  });
+
+  it("resolves the conflict with a machine-local override", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderProjects({ ...snapshot, projects: [conflicted] });
+
+    await user.type(screen.getByLabelText("New local port range for warpforge"), "4300-4399");
+    await user.click(screen.getByRole("button", { name: "Set range on this machine" }));
+
+    expect(daemon.setProjectPortRange).toHaveBeenCalledWith("warpforge", "4300-4399");
+  });
+
+  it("rejects a malformed range client-side without calling the daemon", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderProjects({ ...snapshot, projects: [conflicted] });
+
+    await user.type(screen.getByLabelText("New local port range for warpforge"), "not-a-range");
+    await user.click(screen.getByRole("button", { name: "Set range on this machine" }));
+
+    expect(daemon.setProjectPortRange).not.toHaveBeenCalled();
+    expect(screen.getByText(/Use a range like 4200-4299/)).toBeInTheDocument();
+  });
+
+  it("surfaces the daemon's rejection of a valid-shaped range", async () => {
+    vi.spyOn(daemon, "setProjectPortRange").mockRejectedValue(
+      new Error("range overlaps project other-project"),
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderProjects({ ...snapshot, projects: [conflicted] });
+
+    await user.type(screen.getByLabelText("New local port range for warpforge"), "4100-4199");
+    await user.click(screen.getByRole("button", { name: "Set range on this machine" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/The daemon rejected this range: range overlaps project other-project/)).toBeInTheDocument();
+    });
+  });
+
+  it("offers to clear an existing local override", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderProjects({
+      ...snapshot,
+      projects: [
+        {
+          ...conflicted,
+          portRangeSource: "localOverride",
+          portRange: [4300, 4399],
+        },
+      ],
+    });
+
+    expect(screen.getByText("local override")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear override" }));
+    expect(daemon.setProjectPortRange).toHaveBeenCalledWith("warpforge", null);
   });
 });

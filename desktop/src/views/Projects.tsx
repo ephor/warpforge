@@ -22,6 +22,7 @@ import { TerminalWorkspaceView } from "../components/runtime/TerminalWorkspace";
 import { daemon } from "../daemon";
 import type { ServiceInfo, Snapshot } from "../protocol";
 import { ProjectFilesSurface } from "./projects/ProjectFilesSurface";
+import { PortRangeConflictCard, PortRangeSourceChip } from "./projects/PortRangeStatus";
 import { ProjectRuntimeSurface } from "./projects/ProjectRuntimeSurface";
 import { PROJECT_SURFACE_TABS, ProjectSurfaceBar } from "./projects/ProjectSurfaceBar";
 import { type ProjectLiveCounts, RemoveProjectDialog } from "./projects/RemoveProjectDialog";
@@ -197,7 +198,13 @@ export default function Projects({ snapshot, onOpenTask, onNewTask, onAddProject
             <span className="tnum shrink-0">
               ports {project.portRange[0]}–{project.portRange[1]}
             </span>
+            <PortRangeSourceChip project={project} />
           </p>
+          {project.portRangeConflict && (
+            <div className="mt-2">
+              <PortRangeConflictCard project={project} />
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           <DropdownMenu>

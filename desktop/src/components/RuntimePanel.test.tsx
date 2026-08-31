@@ -637,3 +637,24 @@ describe("RuntimePanel — service port link", () => {
     expect(screen.getByText(/:8080/).tagName).not.toBe("A");
   });
 });
+
+describe("RuntimePanel — pinned service ports", () => {
+  it("marks a pinned port and explains that it fails rather than move", () => {
+    vi.spyOn(daemon, "fetchServiceLogs").mockReturnValue(new Promise(() => {}));
+    const pinned: ServiceInfo = { ...webService, portPinned: true };
+    render(<RuntimePanel project="warpforge" services={[pinned]} portforwards={[]} />);
+
+    const pin = screen.getByLabelText("web port is pinned");
+    expect(pin).toBeInTheDocument();
+    expect(pin.closest("span")).toHaveAttribute(
+      "title",
+      "This port is fixed by the project's config. If it is already taken, the service fails instead of moving.",
+    );
+  });
+
+  it("does not mark an allocated (non-pinned) port", () => {
+    vi.spyOn(daemon, "fetchServiceLogs").mockReturnValue(new Promise(() => {}));
+    render(<RuntimePanel project="warpforge" services={[webService]} portforwards={[]} />);
+    expect(screen.queryByLabelText(/port is pinned/)).not.toBeInTheDocument();
+  });
+});

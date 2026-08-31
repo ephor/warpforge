@@ -1,4 +1,4 @@
-import { PlugZap } from "lucide-react";
+import { Pin, PlugZap } from "lucide-react";
 import type { MouseEvent } from "react";
 
 import { openExternalLink } from "@/lib/externalLinks";
@@ -54,7 +54,17 @@ export function ServiceHeading({ service }: { service: ServiceInfo }) {
         {service.command}
       </span>
       {service.allocatedPort > 0 && (
-        <ServicePortLink port={service.allocatedPort} running={service.status === "running"} />
+        <span className="flex shrink-0 items-center gap-1">
+          {service.portPinned && (
+            <span
+              className="text-muted-foreground"
+              title="This port is fixed by the project's config. If it is already taken, the service fails instead of moving."
+            >
+              <Pin className="size-3" aria-label={`${service.name} port is pinned`} />
+            </span>
+          )}
+          <ServicePortLink port={service.allocatedPort} running={service.status === "running"} />
+        </span>
       )}
     </>
   );

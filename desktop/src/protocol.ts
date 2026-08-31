@@ -171,10 +171,17 @@ export const EMPTY_SNAPSHOT: Snapshot = {
   terminals: [],
 };
 
+/** How a project's port range was resolved (mirrors Rust `PortRangeSource`). */
+export type PortRangeSource = "auto" | "sticky" | "declared" | "localOverride";
+
 export interface ProjectInfo {
   name: string;
   path: string;
   portRange: [number, number];
+  /** Where the range came from; absent on snapshots from an older daemon. */
+  portRangeSource?: PortRangeSource;
+  /** Name of the project whose declared range this one collides with. */
+  portRangeConflict?: string | null;
   declaredServices: string[];
   agentTemplates: Record<string, string>;
 }
@@ -194,6 +201,8 @@ export interface ServiceInfo {
   status: ServiceStatus;
   originalPort: number;
   allocatedPort: number;
+  /** True when the service's declared port is a hard pin, not a hint. */
+  portPinned?: boolean;
   logSeq: number;
 }
 
