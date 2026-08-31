@@ -19,7 +19,7 @@ warpforge daemon              # run the local daemon explicitly
 
 | Command | Flags | Description |
 | --- | --- | --- |
-| `warpforge add <path>` | `-n, --name <name>` | Register a project directory. |
+| `warpforge add <path>` | `-n, --name <name>`, `--ports <range>` | Register a project directory. `--ports` pins the project's port range at registration — `"4200"` (meaning 4200-4299) or `"4200-4299"` — instead of scanning for a free block. |
 | `warpforge remove <name>` | — | Unregister a project. The directory and its config are left untouched. |
 | `warpforge list` | — | List registered projects and their allocated port ranges. |
 | `warpforge init [path]` | `-a, --add` | Generate `.warpforge/workspace.yaml` in the current (or given) directory, auto-detected from `package.json`/Docker Compose where possible. `--add` also registers the project. |
