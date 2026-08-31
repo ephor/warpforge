@@ -20,9 +20,9 @@ sidebar:
 
 ## No port roulette
 
-Every registered project gets a predictable 100-port range beginning at `4000`. That is not a registry detail — it is what makes parallel work practical: multiple projects, and multiple agent-built previews inside them, stay online together without fighting over `3000`, `5173`, or other common defaults.
+Every registered project gets a predictable 100-port range beginning at `4000` — assigned once and kept, or pinned to an explicit range your team commits. That is not a registry detail — it is what makes parallel work practical: multiple projects, and multiple agent-built previews inside them, stay online together without fighting over `3000`, `5173`, or other common defaults.
 
-For services with a configured port, Warpforge selects an available value in the project's range, sets `PORT`, and expands references such as `${app.port}` in environment variables. The resolved URLs become part of the live context handed to new agent sessions. You can switch projects and come back without stopping unrelated services, rewriting configuration, or chasing `address already in use`.
+For services with a configured port, the behaviour depends on whether the project declares a port range in its config. When it does, the declared port is a hard pin — the service binds exactly that port and fails rather than moving if it is taken. When it doesn't, Warpforge selects an available value in the project's range, sets `PORT`, and expands references such as `${app.port}` in environment variables. Either way, the resolved URLs become part of the live context handed to new agent sessions. You can switch projects and come back without stopping unrelated services, rewriting configuration, or chasing `address already in use`. The full picture — including the trap of an app that ignores `PORT` — is in [How ports work](/concepts/ports/).
 
 ### Agents see the runtime too
 

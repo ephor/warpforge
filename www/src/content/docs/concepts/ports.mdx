@@ -1,0 +1,85 @@
+---
+title: How ports work
+description: How Warpforge assigns service ports, what a service's `port:` value means, and how to get the port into your app.
+sidebar:
+  order: 5
+  label: Ports
+---
+
+## Warpforge assigns the port, it does not discover it
+
+Nothing in Warpforge detects which port a service actually bound. The flow runs the other way: Warpforge picks a port — the first free one in the project's range, or exactly the pinned one — passes it to the process as the `PORT` environment variable, then probes that port with a TCP connect and marks the service Running when something answers.
+
+This means the app has to cooperate. If it reads `PORT`, everything works. If it doesn't, Warpforge has no way of knowing.
+
+## Pinning a port
+
+When the project declares a port range in its config (`ports.range`), a service's `port:` is the exact port it binds:
+
+```yaml
+ports:
+  range: "4200-4299"
+
+services:
+  app:
+    command: bun run dev
+    port: 4210
+```
+
+If 4210 is already taken, the service fails with an explanation instead of quietly moving — that is the point of pinning, since a pinned number is the one you put in `.env` files, Postman collections, and manifests. If 4210 sits outside the declared range, the service fails too, with both ways out named in the error: move the port inside the range, or set `portFallback: auto` on that service to let it shift to a free one.
+
+Without a declared range, the number is only a marker that the service needs a port at all. Warpforge picks the first free one in the project's range and passes it to the app as `PORT`.
+
+## Getting the port into the app
+
+Three cases, most common first.
+
+**1. The app reads `PORT`.** Nothing to do — this is the default path. Many Node, Go, and Python frameworks pick the port up from the environment automatically.
+
+**2. The app wants the port as a flag.** The command runs through `sh -c`, so the shell expands `$PORT` before your command sees it:
+
+```yaml
+ports:
+  range: "4200-4299"
+
+services:
+  app:
+    command: bun run dev -- --port $PORT
+    port: 4210
+```
+
+**3. One service needs another service's port.** Interpolate `${<service>.port}` inside `env` values:
+
+```yaml
+services:
+  db:
+    command: docker compose up postgres
+    port: 4215
+
+  app:
+    command: bun run dev
+    port: 4210
+    env:
+      DATABASE_URL: postgres://localhost:${db.port}/app
+```
+
+The two mechanisms do not mix: `${<service>.port}` substitution happens in `env` values only. Inside `command`, use the shell's own `$PORT`.
+
+## The sharp edge
+
+If an app ignores `PORT` and has its port hardcoded, Warpforge never finds out. It reports the port it chose, probes that port, gets no answer, and the service sits in Starting forever — while the app happily serves on its own port. The diagnostic signal: a service stuck in Starting whose logs say it started almost always means the app is not reading `PORT`. Fix the app (case 1 or 2 above).
+
+Worse case, and it deserves its own warning: when a service sets `readyPattern`, Running is decided by a log line, not by the port probe. An app that ignores `PORT` is then marked Running while listening somewhere else entirely, and Warpforge displays a port number that nothing is bound to. If a service with `readyPattern` refuses to respond at its reported address, check what port the app actually bound in its logs.
+
+## Conflicts and precedence
+
+A project's range is resolved strongest first:
+
+1. A machine-local override (stored in your local registry, set from the UI when resolving a conflict)
+2. An explicit `ports.range` from the committed config
+3. A previously assigned range, kept for the project
+4. A fresh scan from port 4000 upward for a free 100-port block
+
+Two projects declaring the same range is a conflict: one of them refuses to start services until you set a local override on that machine. Committed config is never edited to resolve it — a machine-local problem stays machine-local.
+
+The full schema of the port-related keys lives in the [configuration reference](/reference/configuration/); where a project's range shows up in the UI is described in [Projects and their runtime](/guides/projects-and-runtime/#no-port-roulette).

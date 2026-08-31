@@ -27,6 +27,9 @@ services:
       url: http://localhost:${app.port}/api/health
       interval: 5s
 
+ports:
+  range: "4200-4299"
+
 portforwards:
   - name: staging-db
     namespace: postgres
@@ -51,15 +54,36 @@ A map of service name → service config. Services start in dependency order (se
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `command` | string | yes | Run via `sh -c "<command>"`, so pipes, `&&`, and `cd` all work. |
-| `port` | number | no | If set, Warpforge picks an available port in the project's range, sets `PORT`, and makes `${<service>.port}` available to other services' `env`. |
+| `port` | number | no | If the project declares a [`ports.range`](#portsrange), this is the exact port the service must bind — taken or out-of-range, the service fails instead of moving (opt out per service with `portFallback: auto`). Without a declared range, the number is ignored: Warpforge picks the first free port in the project's range, sets `PORT`, and makes `${<service>.port}` available to other services' `env`. See [How ports work](/concepts/ports/). |
 | `env` | map\<string, string\> | no | Environment variables. Values may reference `${<service>.port}` for any service in the same config. |
 | `readyPattern` | string | no | A substring or pattern to watch for in the service's stdout/stderr before marking it ready. |
 | `dependsOn` | string[] | no | Service names that must be running before this one starts. |
 | `healthcheck` | object | no | `{ url, interval }` — polled after the process starts. `interval` accepts `"5s"`, `"100ms"`, `"2m"`. |
+| `portFallback` | `"auto"` | no | Only meaningful when the project declares a range. By default a pinned port is a hard constraint: taken or out-of-range, the service fails. Set to `"auto"` to shift to the first free port in the range instead. `auto` is the only accepted value. |
 
 <Aside type="note">
   `command` runs whatever you put there — if it's `docker compose up ...`, Docker (and Compose) need to be installed and running; nothing about that is Warpforge-specific.
 </Aside>
+
+## `ports`
+
+Optional project-level port configuration. Only one key today:
+
+### `ports.range`
+
+**Optional, string.** The project's committed port range, shared by the whole team. Two accepted forms:
+
+- `"4200-4299"` — an explicit inclusive range.
+- `"4200"` — a bare start; means the 100-port block from that start (`4200-4299`).
+
+The start must be 1024 or above, the range must be at least one port wide (a bare start that would overflow past 65535 is rejected), and the lower bound must not exceed the upper. Declaring a range makes it binding: every service `port:` inside it is pinned to exactly that port, and a pinned port that is taken fails instead of shifting (see [`portFallback`](#services) for the opt-out). Two projects declaring the same range conflict — one of them refuses to start services until a machine-local override resolves it; the committed config is never edited to fix that.
+
+How ranges are resolved against machine-local overrides, and what a service's `port:` value means in each case: [How ports work](/concepts/ports/).
+
+```yaml
+ports:
+  range: "4200-4299"
+```
 
 ## `portforwards`
 
