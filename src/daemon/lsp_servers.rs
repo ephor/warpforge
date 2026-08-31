@@ -6,9 +6,6 @@
 //! `lsp.detect` is read-only (see `method_is_mutation` in server.rs), so this
 //! module only probes; installs run through `agents::run_manage_command`.
 
-use std::time::Duration;
-
-use tokio::time::Instant;
 use warpforge_protocol as wire;
 
 use super::agents::{self, PackageManager};
@@ -166,53 +163,16 @@ async fn installed_version(server: &KnownLspServer) -> Option<String> {
     None
 }
 
+/// A server's own reported version. `--version` is not a safe flag here: a
+/// language server that does not recognize it starts serving on stdio instead,
+/// which is why this must go through `agents::probe` (null stdin, deadline,
+/// kill-on-drop) rather than spawning the binary directly.
 async fn binary_version(bin: &str) -> Option<String> {
-    let output = tokio::process::Command::new(bin)
-        .arg("--version")
-        .output()
-        .await
-        .ok()?;
+    let output = agents::probe(bin, &["--version"], agents::PROBE_TIMEOUT).await?;
     if !output.status.success() {
         return None;
     }
     agents::first_version_token(&String::from_utf8_lossy(&output.stdout))
-}
-
-/// Latest published npm version, cached ~1h with a short timeout so a slow or
-/// absent registry never blocks detection. Mirrors `agents::latest_npm_version`.
-async fn latest_npm_version(pkg: &str) -> Option<String> {
-    const TTL: Duration = Duration::from_secs(60 * 60);
-    use std::collections::HashMap;
-    use std::sync::Mutex;
-    type VersionCache = HashMap<String, (Instant, Option<String>)>;
-    static CACHE: Mutex<Option<VersionCache>> = Mutex::new(None);
-    {
-        let guard = CACHE.lock().unwrap();
-        if let Some(map) = guard.as_ref() {
-            if let Some((at, version)) = map.get(pkg) {
-                if at.elapsed() < TTL {
-                    return version.clone();
-                }
-            }
-        }
-    }
-    let version = tokio::time::timeout(
-        Duration::from_secs(4),
-        tokio::process::Command::new("npm")
-            .args(["view", pkg, "version"])
-            .output(),
-    )
-    .await
-    .ok()
-    .and_then(|r| r.ok())
-    .filter(|o| o.status.success())
-    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    .filter(|v| !v.is_empty());
-    let mut guard = CACHE.lock().unwrap();
-    guard
-        .get_or_insert_with(HashMap::new)
-        .insert(pkg.to_string(), (Instant::now(), version.clone()));
-    version
 }
 
 fn elixir_candidates(server: &KnownLspServer) -> Vec<&'static str> {
@@ -276,7 +236,7 @@ async fn detect_one(
     let version = installed_version(server).await;
     let latest = if check_latest {
         match server.npm_package {
-            Some(pkg) => latest_npm_version(pkg).await,
+            Some(pkg) => agents::latest_npm_version(pkg).await,
             None => None,
         }
     } else {

@@ -3911,6 +3911,7 @@ dependencies = [
  "dirs 5.0.1",
  "fastembed",
  "futures",
+ "libc",
  "portable-pty",
  "ratatui",
  "reqwest",

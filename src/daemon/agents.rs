@@ -235,15 +235,46 @@ pub(crate) fn package_manager_for_path(path: &str) -> PackageManager {
     }
 }
 
+/// Ceiling for a local probe (`which`, `<binary> --version`, `npm ls -g`).
+/// Wide enough for a cold `npm`, short enough that detection still answers.
+pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Ceiling for a registry lookup, kept short so a slow or absent npm registry
+/// never delays detection.
+const REGISTRY_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// Run a detection probe and capture its output. None when the probe could not
+/// be spawned or outran `limit`.
+///
+/// Both the null stdin and the deadline are load-bearing. `tokio`'s
+/// `Command::output()` pipes only stdout and stderr — unlike std's — so a probe
+/// would otherwise inherit the daemon's own stdin, which in the packaged app is
+/// a pipe the desktop shell holds open for the daemon's whole life. Language
+/// servers ignore `--version` and start serving on stdio, so `elixir-ls
+/// --version` waited on that pipe forever and `lsp.detect` never answered.
+/// `kill_on_drop` is what makes the deadline real: without it a timed-out probe
+/// keeps running (and keeps its BEAM/node runtime alive) after we stop waiting.
+pub(crate) async fn probe(
+    program: &str,
+    args: &[&str],
+    limit: Duration,
+) -> Option<std::process::Output> {
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    tokio::time::timeout(limit, command.output())
+        .await
+        .ok()?
+        .ok()
+}
+
 /// Resolve a binary on PATH → its real (symlink-resolved) path, or None if
 /// absent. Resolving the symlink matters for install-manager classification:
 /// an npm-global bin often lives at a brew prefix as a link into node_modules.
 pub(crate) async fn which(binary: &str) -> Option<String> {
-    let output = tokio::process::Command::new("which")
-        .arg(binary)
-        .output()
-        .await
-        .ok()?;
+    let output = probe("which", &[binary], PROBE_TIMEOUT).await?;
     if !output.status.success() {
         return None;
     }
@@ -277,18 +308,11 @@ pub(crate) async fn latest_npm_version(pkg: &str) -> Option<String> {
             }
         }
     }
-    let version = tokio::time::timeout(
-        Duration::from_secs(4),
-        tokio::process::Command::new("npm")
-            .args(["view", pkg, "version"])
-            .output(),
-    )
-    .await
-    .ok()
-    .and_then(|r| r.ok())
-    .filter(|o| o.status.success())
-    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    .filter(|v| !v.is_empty());
+    let version = probe("npm", &["view", pkg, "version"], REGISTRY_TIMEOUT)
+        .await
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|v| !v.is_empty());
     let mut guard = CACHE.lock().unwrap();
     guard
         .get_or_insert_with(HashMap::new)
@@ -313,11 +337,7 @@ async fn installed_version(agent: &KnownAgent, resolved_path: Option<&str>) -> O
         }
     }
     // Fallback: `<binary> --version`, take the first version-looking token.
-    let output = tokio::process::Command::new(agent.binary)
-        .arg("--version")
-        .output()
-        .await
-        .ok()?;
+    let output = probe(agent.binary, &["--version"], PROBE_TIMEOUT).await?;
     if !output.status.success() {
         return None;
     }
@@ -326,11 +346,12 @@ async fn installed_version(agent: &KnownAgent, resolved_path: Option<&str>) -> O
 }
 
 pub(crate) async fn npm_global_version(pkg: &str) -> Option<String> {
-    let output = tokio::process::Command::new("npm")
-        .args(["ls", "-g", pkg, "--json", "--depth=0"])
-        .output()
-        .await
-        .ok()?;
+    let output = probe(
+        "npm",
+        &["ls", "-g", pkg, "--json", "--depth=0"],
+        PROBE_TIMEOUT,
+    )
+    .await?;
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
     json.get("dependencies")?
         .get(pkg)?
@@ -539,6 +560,31 @@ pub async fn run_manage_command(command: &str) -> (bool, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A probe that never exits must not hold its caller open. `lsp.detect`
+    /// joins one probe per language, so a single unbounded `--version` call
+    /// (elixir-ls starts a language server instead of printing a version) left
+    /// the whole request unanswered and the Settings list loading forever.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_gives_up_on_a_command_that_outruns_its_deadline() {
+        let started = std::time::Instant::now();
+        assert!(probe("sleep", &["30"], Duration::from_millis(200))
+            .await
+            .is_none());
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    /// A probe's stdin must be closed, not inherited: the packaged daemon's own
+    /// stdin is a pipe the desktop app holds open forever, and a child that
+    /// reads it would never see EOF. `cat` exits only at EOF.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn probe_closes_stdin_so_a_reader_sees_eof() {
+        let output = probe("cat", &[], Duration::from_secs(5)).await.unwrap();
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+    }
 
     #[test]
     fn package_manager_prefers_brew_over_inner_node_modules() {

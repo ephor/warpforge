@@ -63,6 +63,31 @@ fn write_endpoint(addr: SocketAddr, token: &str, owner: wire::DaemonOwner) -> Re
     Ok(())
 }
 
+/// Point the daemon's own stdin at /dev/null.
+///
+/// The daemon never reads stdin, but every process it spawns inherits it, and
+/// the packaged desktop app runs the daemon as a Tauri sidecar whose stdin is a
+/// pipe the app holds open for the daemon's whole life. A child that reads
+/// stdin therefore never sees EOF: `elixir-ls --version` (a language server
+/// that ignores the flag and starts serving on stdio) blocked forever, so
+/// `lsp.detect` never answered and the Settings list spun forever. The plugin
+/// gives the app no way to close that pipe, so close it from this side, once,
+/// where every descendant inherits the result.
+#[cfg(unix)]
+fn detach_stdin() {
+    use std::os::unix::io::AsRawFd;
+    match std::fs::File::open("/dev/null") {
+        // SAFETY: `null` owns a live descriptor for the duration of the call,
+        // and fd 0 is a valid target.
+        Ok(null) => unsafe {
+            if libc::dup2(null.as_raw_fd(), libc::STDIN_FILENO) < 0 {
+                eprintln!("warpforge daemon: could not redirect stdin to /dev/null");
+            }
+        },
+        Err(error) => eprintln!("warpforge daemon: could not open /dev/null ({error})"),
+    }
+}
+
 /// Bind, publish the endpoint, and serve forever. `dev` disables the auth token
 /// so a browser (vite dev, no Tauri) can connect to a known address.
 pub async fn serve(handle: DaemonHandle, dev: bool, owner: wire::DaemonOwner) -> Result<()> {
@@ -75,6 +100,9 @@ pub async fn serve(handle: DaemonHandle, dev: bool, owner: wire::DaemonOwner) ->
     // the startup analogue of `ports::allocated_in_ranges`. Until that exists,
     // a crashed daemon's orphans are cleaned by stopping the project's
     // services normally, or by hand.
+
+    #[cfg(unix)]
+    detach_stdin();
 
     let bind = if dev {
         "127.0.0.1:61814"
