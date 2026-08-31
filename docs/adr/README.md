@@ -21,3 +21,4 @@ stale and then misleads.
 | [0003](0003-workflow-agent-loss.md) | Losing a stage's agent pauses a pipeline, it does not fail it |
 | [0004](0004-project-page-surfaces.md) | The project page is surfaces, and the backlog is a list |
 | [0005](0005-chat-transcript-scrolling.md) | The virtualiser owns the chat scroll, and the transcript arrives whole |
+| [0006](0006-explicit-port-pinning.md) | Ports are pinned explicitly, not derived from list positions |
