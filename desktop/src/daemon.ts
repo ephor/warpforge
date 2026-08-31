@@ -75,6 +75,33 @@ const MAX_TERMINAL_BUFFER_GLOBAL_BYTES = 512 * 1024;
 const TERMINAL_BUFFER_TTL_MS = 30_000;
 export const DAEMON_PROTOCOL_VERSION = 1;
 
+/**
+ * How long to wait for a response before failing the call. A request the daemon
+ * never answers used to leave its promise pending forever, which surfaces as a
+ * spinner that never stops — a wedged subprocess inside `lsp.detect` did exactly
+ * that. Almost every method answers in well under a second; the ones that shell
+ * out to a package manager, the network, or an agent get the wider ceiling
+ * below, listed here rather than as a knob at each call site.
+ */
+const REQUEST_TIMEOUT_MS = 120_000;
+const SLOW_REQUEST_TIMEOUT_MS = 900_000;
+const SLOW_METHODS = new Set([
+  "accounts.import",
+  "agents.install",
+  "agents.probe",
+  "bootstrap.finalize",
+  "git.merge",
+  "git.push",
+  "git.rebase",
+  "lsp.install",
+  "memory.dream",
+  "orchestrate.start",
+  "task.create",
+  "task.resume",
+  "text.enhance",
+  "text.generate",
+]);
+
 type Listener = () => void;
 type EventListener = (event: DaemonEvent) => void;
 export type TerminalDataListener = (data: Uint8Array) => void;
@@ -84,7 +111,7 @@ export class DaemonClient {
   private nextId = 1;
   private pending = new Map<
     number,
-    { resolve: (v: unknown) => void; reject: (e: Error) => void }
+    { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: number }
   >();
   private listeners = new Set<Listener>();
   private eventListeners = new Set<EventListener>();
@@ -335,7 +362,10 @@ export class DaemonClient {
         ? { connectionError: "Daemon disconnected. Warpforge will keep retrying." }
         : {}),
     });
-    this.pending.forEach((p) => p.reject(new Error("daemon disconnected")));
+    this.pending.forEach((p) => {
+      window.clearTimeout(p.timer);
+      p.reject(new Error("daemon disconnected"));
+    });
     this.pending.clear();
     this.terminalDataBuffers.clear();
     if (this.reconnectSuspended || this.reconnectTimer !== null) {
@@ -367,7 +397,12 @@ export class DaemonClient {
     const id = this.nextId++;
     ws.send(JSON.stringify({ id, method, params }));
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { reject, resolve });
+      const limit = SLOW_METHODS.has(method) ? SLOW_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+      const timer = window.setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`${method} did not answer within ${Math.round(limit / 1000)}s`));
+      }, limit);
+      this.pending.set(id, { reject, resolve, timer });
     });
   }
 
@@ -717,6 +752,7 @@ export class DaemonClient {
       return;
     }
     this.pending.delete(msg.id);
+    window.clearTimeout(pending.timer);
     if ("error" in msg) {
       pending.reject(new Error(`${msg.error.code}: ${msg.error.message}`));
     } else {

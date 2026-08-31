@@ -295,4 +295,71 @@ describe("DaemonClient connection state", () => {
       stop_resources: true,
     });
   });
+
+  /** A daemon that never answers must surface as an error, not as a spinner
+   * that never stops: a wedged subprocess inside `lsp.detect` left the Settings
+   * language-server list loading forever. */
+  it("fails a request the daemon never answers instead of waiting forever", async () => {
+    const client = new DaemonClient();
+    const socket = await connectedSocket(client);
+
+    const detect = client.detectLanguageServers();
+    const rejected = detect.catch((error: Error) => error.message);
+
+    await vi.advanceTimersByTimeAsync(119_000);
+    expect(socket.readyState).toBe(MockWebSocket.OPEN);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(await rejected).toBe("lsp.detect did not answer within 120s");
+  });
+
+  /** Installing a language server shells out to a package manager, so it must
+   * outlive the ordinary ceiling. */
+  it("gives a package-manager request a wider ceiling", async () => {
+    const client = new DaemonClient();
+    const socket = await connectedSocket(client);
+
+    const install = client.installLanguageServer("typescript");
+    const settled = install.then(
+      () => "resolved",
+      (error: Error) => error.message,
+    );
+
+    await vi.advanceTimersByTimeAsync(150_000);
+    const sent = JSON.parse(socket.sent[socket.sent.length - 1]) as { id: number };
+    socket.onmessage?.(
+      new MessageEvent("message", {
+        data: JSON.stringify({ id: sent.id, result: { command: "", ok: true, output: "" } }),
+      }),
+    );
+
+    expect(await settled).toBe("resolved");
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
+
+/** Drive a client through connect + handshake and hand back its socket. */
+async function connectedSocket(client: DaemonClient): Promise<MockWebSocket> {
+  await client.connect();
+  const socket = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+  socket.readyState = MockWebSocket.OPEN;
+  void socket.onopen?.();
+  await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+  const handshake = JSON.parse(socket.sent[0]) as { id: number };
+  socket.onmessage?.(
+    new MessageEvent("message", {
+      data: JSON.stringify({
+        id: handshake.id,
+        result: {
+          daemonVersion: "dev",
+          exactVersionMatch: true,
+          owner: "desktop",
+          protocolCompatible: true,
+          protocolVersion: 1,
+        },
+      }),
+    }),
+  );
+  await vi.waitFor(() => expect(client.getState().connection).toBe("connected"));
+  return socket;
+}

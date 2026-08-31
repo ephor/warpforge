@@ -48,5 +48,10 @@ async-trait = "0.1"
 rfd = "0.15"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
+# `dup2` for pointing the daemon's own stdin at /dev/null (see
+# `daemon::server::detach_stdin`); std has no way to replace fd 0.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
