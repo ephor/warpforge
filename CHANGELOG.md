@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.15.0
+
+### Minor Changes
+
+- [`993728e`](https://github.com/warpforgehq/warpforge/commit/993728e71f3c83508d9e02e51398b5c2dfa4ac55) Thanks [@ephor](https://github.com/ephor)! - Pin the exact ports your team's services run on — and commit them to the repo.
+
+  Declare a port range in a project's config (`ports.range: "4200-4299"`), and every service in that project that declares a port now binds exactly that port. No more "port 3000 actually means 4000-something": if a pinned port is taken, the service fails loudly and tells you why, instead of silently moving. Services that prefer the old behaviour can opt back in with `portFallback: auto`.
+
+  Ranges are assigned per project and stick for good — adding or removing a project no longer shuffles everyone else's ports, and two machines that declare the same range in the config now agree on the same ports. If two projects claim the same range, one of them refuses to start services until the conflict is resolved. A declared port that sits outside the project's range fails loudly too, with both ways out named in the error: move the port inside the range, or set `portFallback: auto`.
+
+  One thing to know going in: a service's declared port used to be ignored — any free port in the project's range was used and passed to the app as `PORT`. In a project that declares a range it is now the exact port the service must bind, so if your app doesn't read `PORT` (hardcoded port instead), tell it the port via the environment or a `--port $PORT` flag in its command, or it will end up listening somewhere Warpforge isn't looking.
+
+- [`993728e`](https://github.com/warpforgehq/warpforge/commit/993728e71f3c83508d9e02e51398b5c2dfa4ac55) Thanks [@ephor](https://github.com/ephor)! - See where a project's port range comes from — and fix conflicts on your machine only.
+
+  Each project now shows whether its port range was declared in the team's shared config, set as a local override on your machine, or assigned automatically. When two projects claim the same range, the affected project says so up front and names the other project, with a one-field fix that applies to your machine only — the team's shared config is never edited from here. An existing local override can be cleared just as easily, and the badge stays visible the whole time so a machine-only range can't silently outrank the config. Pinned service ports are marked in the runtime view, with a reminder that a pinned port fails rather than moves when it's already taken.
+
 ## 0.14.0
 
 ### Minor Changes
