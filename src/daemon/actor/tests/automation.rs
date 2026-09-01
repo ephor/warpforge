@@ -229,5 +229,32 @@ async fn run_now_creates_a_task_and_completes_the_run() {
     // runNow must not move the next scheduled occurrence.
     assert_eq!(shown.next_run_at, Some(i64::MAX / 2));
 
+    // The agent is told the turn is a scheduled, unattended run — otherwise a
+    // reused session reads the repeated prompt as a person asking again.
+    let (tx, rx) = oneshot::channel();
+    daemon
+        .send(Command::SessionHistory {
+            task_id: task_id.clone(),
+            reply: tx,
+        })
+        .await;
+    let updates = rx.await.unwrap().expect("session history");
+    let sent = updates
+        .iter()
+        .find_map(|u| match u {
+            wire::SessionUpdate::UserMessage { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .expect("the dispatched prompt is in the transcript");
+    assert!(
+        sent.starts_with("[scheduled automation \"Nightly sweep\", run #1 —"),
+        "prompt carries the run marker: {sent}"
+    );
+    assert!(sent.contains("unattended"));
+    assert!(
+        sent.ends_with("\n\ncheck the build"),
+        "the raw prompt stays verbatim below the marker: {sent}"
+    );
+
     daemon.shutdown().await;
 }

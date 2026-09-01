@@ -14,6 +14,18 @@ use crate::daemon::runtime::Write as PersistWrite;
 
 const RUN_OUTPUT_EXCERPT: usize = 4096;
 
+/// Prefix every dispatched prompt with the run's context. A `reuse_session`
+/// automation sends the same text into the same conversation forever, and
+/// without this the agent reads the repeat as a person asking again — it
+/// answers with clarifying questions nobody is there to read.
+fn marked_prompt(a: &wire::Automation, run_number: u64) -> String {
+    format!(
+        "[scheduled automation \"{}\", run #{run_number} — unattended: nobody will \
+answer follow-ups; deliver the result in your final message, do not ask questions]\n\n{}",
+        a.name, a.prompt
+    )
+}
+
 impl Daemon {
     pub(super) fn automation_run_linked(
         &mut self,
@@ -220,17 +232,17 @@ impl Daemon {
     /// as [`Command::AutomationRunLinked`] — the actor must never await its own
     /// handlers here, that would recurse through the whole command chain.
     pub(super) fn dispatch_run(&mut self, a: &wire::Automation, run_id: &str) {
-        if self.load_run(run_id).is_none() {
+        let Some(run) = self.load_run(run_id) else {
             self.automation_active.remove(&a.id);
             self.automation_run_owner.remove(run_id);
             return;
-        }
+        };
         let reused = a.reuse_session
             && a.last_task_id
                 .as_deref()
                 .is_some_and(|task_id| self.tasks.contains_key(task_id));
         let task_id = a.last_task_id.clone().unwrap_or_default();
-        let prompt = a.prompt.clone();
+        let prompt = marked_prompt(a, run.run_number);
         let a = Box::new(a.clone());
         let run_id = run_id.to_string();
         let cmd_tx = self.cmd_tx.clone();
