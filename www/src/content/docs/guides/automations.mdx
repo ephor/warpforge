@@ -129,7 +129,7 @@ Below it, the grid filters by state (**All / Enabled / Paused**) and by last out
 Every agent session gets the `automation_*` [MCP tools](/reference/mcp-tools/#automations--schedule-a-prompt-to-run-itself): create, list, read, patch, delete, run now, and read run history. An agent that notices work worth repeating can schedule it instead of telling you to.
 
 <Aside type="tip">
-  Worth saying out loud in your prompt what the automation is allowed to do. A scheduled run is an unattended run: it commits nothing on its own, but it does everything else a task can, and nobody is watching the turn.
+  Worth saying out loud in your prompt what the automation is allowed to do. A scheduled run is an unattended run: it commits nothing on its own, but it does everything else a task can, and nobody is watching the turn. You do not need to spell out that part — Warpforge prefixes every run with a line naming the automation and its run number and telling the agent the turn is scheduled and unattended, so it answers instead of asking you a question nobody will read.
 </Aside>
 
 ## See also
