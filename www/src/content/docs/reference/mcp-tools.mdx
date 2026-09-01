@@ -21,6 +21,7 @@ Which tools an agent sees depends on how the task was started:
 | | Regular task | Orchestrator task |
 | --- | --- | --- |
 | Runtime, tasks, memory (20 tools) | ✅ | ✅ |
+| Automations (7 tools) | ✅ | ✅ |
 | Sub-agents and pipelines (11 tools) | — | ✅ |
 
 A regular session is one agent doing the work. An **orchestrator** session is an agent that can also *delegate* — so it gets 11 extra tools for dispatching sub-agents and driving pipelines. See [Choosing your mode](/guides/choosing-your-mode/) for which to reach for.
@@ -138,6 +139,51 @@ Memory that only grows eventually rots. Dreaming is the pass that finds duplicat
 
 ---
 
+## Automations — schedule a prompt to run itself
+
+Available in **every** session. The same [automations](/guides/automations/) the desktop screen manages — an agent that notices work worth repeating can schedule it instead of telling you to.
+
+### `automation_create`
+
+```
+automation_create(project, name, prompt, agent, model?, preset?, cron?, timezone?,
+                  precheck?, missed_run_grace_minutes?, reuse_session?, worktree?)
+```
+
+- **`preset`** — `hourly`, `daily`, `weekdays`, `weekly`, or `custom`. With no preset and no cron it is a daily 09:00 job; a `cron` with no preset is treated as `custom`, never as a silent daily.
+- **`cron`** — 5-field (`min hour dom month dow`), required for `custom` and ignored otherwise. Mind the [two ways this cron is not Unix cron](/guides/automations/#custom-cron). The every-5-minutes preset has no name here — write `*/5 * * * *`.
+- **`timezone`** — IANA name; empty resolves the daemon host's zone and stores it.
+- **`precheck`** — shell command run before each *scheduled* run; a non-zero exit skips the run.
+- **`missed_run_grace_minutes`** — catch-up window for an occurrence the daemon was down for, default `720`.
+- **`reuse_session`** — send every run into the previous run's task instead of creating one per run.
+
+### `automation_list` · `automation_get` · `automation_runs`
+
+- `automation_list(project?)` — next run time, last status, enabled state.
+- `automation_get(id)` — one automation in full.
+- `automation_runs(id, limit?)` — run history newest-first: status, the occurrence it belongs to, the task it used, and an output excerpt.
+
+**When:** before editing. The last few runs say whether a schedule is doing anything useful — an automation whose history is all *Skipped · precheck* is a precheck problem, not a prompt problem.
+
+### `automation_update`
+
+```
+automation_update(id, name?, prompt?, agent?, model?, preset?, cron?, timezone?,
+                  precheck?, enabled?, missedRunGraceMinutes?, reuseSession?, worktree?)
+```
+
+Every field is optional and **absent means unchanged**, so flipping `enabled` is a two-key call. `model` and `precheck` also accept `null`, which *clears* them — that is the only way to hand an automation back to the agent's default model or remove a precheck.
+
+### `automation_run_now`
+
+Runs an automation immediately. It **skips the precheck** (an explicit ask is its own authorization), is refused while a run is already in flight, and does **not** move the next scheduled occurrence.
+
+### `automation_delete`
+
+Deletes the automation and its run history permanently, and stops a run in flight. Tasks the automation already created stay.
+
+---
+
 ## Orchestrator only — delegation
 
 These 11 tools appear **only** in an orchestrator session. They're what lets one agent act as a lead rather than a worker.
@@ -215,5 +261,6 @@ Every tool takes an optional `project`, but it is not an escape hatch: a call na
 ## See also
 
 - [Choosing your mode](/guides/choosing-your-mode/) — single, orchestrator, or pipeline
+- [Automations](/guides/automations/) — what the `automation_*` tools schedule
 - [Cross-harness memory](/concepts/memory/) — what the `memory_*` tools write into
 - [Orchestration and workflows](/concepts/orchestration/) — the concepts behind the delegation tools

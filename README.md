@@ -19,6 +19,7 @@
   <a href="https://warpforge.app/concepts/agents/">Agents</a> ·
   <a href="https://warpforge.app/concepts/memory/">Memory</a> ·
   <a href="https://warpforge.app/guides/choosing-your-mode/">Modes</a> ·
+  <a href="https://warpforge.app/guides/automations/">Automations</a> ·
   <a href="https://warpforge.app/reference/mcp-tools/">Agent tools</a> ·
   <a href="https://warpforge.app/guides/projects-and-runtime/">Projects &amp; runtime</a>
 </p>
@@ -114,7 +115,7 @@ Details in **[Orchestration and workflows](https://warpforge.app/concepts/orches
 
 Claude Code reads `CLAUDE.md`, Codex reads `AGENTS.md`, opencode reads its own — teach one, and the other two still don't know. Warpforge gives them a single local store instead, with global and per-project scopes, full-text plus optional local-embedding search, and a **dreaming** pass that reviews stored facts against the codebase and *proposes* merges and corrections for you to approve — it never rewrites memory on its own.
 
-Agents reach it through the same tool surface they use for everything else: **[31 MCP tools](https://warpforge.app/reference/mcp-tools/)** covering the runtime (read a service's logs, restart it), the board (file a task), memory, and — for orchestrators — sub-agents and pipelines.
+Agents reach it through the same tool surface they use for everything else: **[38 MCP tools](https://warpforge.app/reference/mcp-tools/)** covering the runtime (read a service's logs, restart it), the board (file a task), memory, scheduled automations, and — for orchestrators — sub-agents and pipelines.
 
 More in **[Cross-harness memory](https://warpforge.app/concepts/memory/)**.
 

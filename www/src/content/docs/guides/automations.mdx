@@ -1,0 +1,139 @@
+---
+title: Automations
+description: Schedule a prompt to run on its own — presets or cron, a precheck that can call it off, and a run history that links back to the real task each run used.
+sidebar:
+  order: 6
+  label: Automations
+---
+
+An **automation** is a named prompt Warpforge runs on a schedule. "Every weekday at 09:00, triage the open pull requests." "Every hour, run the flaky test and tell me if it broke."
+
+Each occurrence becomes a **real task** — the same transcript, diff, runtime context, and review path a task you typed yourself has. Nothing about a scheduled run is a second-class object; the automation is just what decided to start it, and the run row is the bookkeeping that links the two.
+
+<Aside type="note">
+  The schedule lives in the daemon, not in your shell. There is no `cron` entry and no launch agent to install — but the daemon has to be running for an occurrence to fire, which is what [missed-run grace](#missed-run-grace) exists to soften.
+</Aside>
+
+## Creating one
+
+Open **Automations** in the sidebar and press **New automation**. The dialog asks three things, in the order you actually think about them.
+
+<Steps>
+
+1. **What** — a name and the prompt each run sends. The prompt is the whole instruction; a run gets no other context beyond the project it runs in.
+
+2. **Who** — which agent runs it, and on which model. The model is per-automation: leave it on *agent default* to inherit whatever that harness last used, or pin one so an unattended run cannot silently get more expensive. Reasoning effort and mode, where the harness exposes them, are pinned the same way.
+
+3. **When & where** — the schedule, the project, and the guards: [timezone](#timezones), [precheck](#precheck), [missed-run grace](#missed-run-grace), where runs land, and whether the automation is enabled at all.
+
+</Steps>
+
+**Save & run once** saves the automation and immediately starts one run without touching the schedule — the fastest way to find out whether the prompt does what you meant before leaving it unattended for a week.
+
+## Schedules
+
+Six presets, and every one of them is stored as a plain cron expression, so the card always shows exactly what will fire:
+
+| Preset | Cron | Notes |
+| --- | --- | --- |
+| Hourly | `0 * * * *` | Pick the minute of the hour |
+| Every 5 min | `*/5 * * * *` | No options — it is the whole schedule |
+| Daily | `0 9 * * *` | Pick the time |
+| Weekdays | `0 9 * * MON-FRI` | Pick the time |
+| Weekly | `0 9 * * MON` | Pick the day and the time |
+| Custom cron | *(yours)* | A 5-field expression |
+
+The panel under the picker describes the schedule in words and previews the **next three occurrences** in the automation's own timezone. If a schedule has no occurrence in the next year, it says so rather than sitting there looking scheduled.
+
+### Custom cron
+
+Five fields: `minute hour day-of-month month day-of-week`. Names work (`MON-FRI`, `JAN`), as do steps (`*/15`) and lists (`1,15`).
+
+<Aside type="caution" title="Two ways this cron is not Unix cron">
+  - **Day-of-week is 1–7 with `1 = Sunday`** and `7 = Saturday`. A plain `0` is rejected outright rather than quietly meaning Sunday.
+  - **Day-of-month and day-of-week are AND-ed**, where Unix cron OR-s them. `0 9 13 * 6` is "09:00 on the 13th, but only when the 13th is a Friday" — not "the 13th *or* every Friday".
+
+  The editor validates against the same rules the daemon does, so a preview that renders is a preview that will fire.
+</Aside>
+
+### Timezones
+
+Schedules run in an IANA zone (`Europe/Berlin`, `America/New_York`), and the maths is done in that zone — "daily at 09:00" stays 09:00 across a DST shift instead of drifting an hour.
+
+Leave the field empty and Warpforge resolves your machine's zone **at creation time** and stores the name. That is deliberate: resolving it lazily on every occurrence means a laptop that travels, or a database read on another machine, silently moves the schedule.
+
+## Precheck
+
+An optional shell command, run in the project directory before each scheduled run. **Exit 0 authorizes the run; anything else calls it off** — a non-zero exit, a command that cannot be spawned, or one that runs longer than 120 seconds.
+
+```bash
+# Only triage when the branch actually moved
+git fetch --quiet && ! git diff --quiet HEAD @{u}
+```
+
+A blocked run is recorded as **Skipped · precheck**, never as a failure: a run the precheck never authorized did not fail, it did not happen. The precheck's own output is kept on the run as the reason.
+
+**Run now** skips the precheck. When you ask for a run by hand, you are the gate.
+
+## Missed-run grace
+
+If the daemon was down — laptop asleep, app closed — when an occurrence came due, the automation catches up on the next tick, but only if the occurrence is younger than the grace window. Past that it is recorded as **Skipped · missed** and the automation waits for its next real occurrence.
+
+The default is **720 minutes (12 hours)**: an overnight job still runs when you open the lid in the morning, but a laptop reopened after a week does not fire a week of backlog at you. Lower it for anything whose value expires quickly; raise it for a weekly job you genuinely want caught up.
+
+A grace of `0` is treated as one scheduler tick rather than "never run" — the scheduler fires once a minute, and an occurrence is always at least a moment old by the time it is seen.
+
+## Where runs land
+
+Two shapes, chosen with **Same task every run**:
+
+- **Off (default)** — every run creates a new task. Best when each run is a separate piece of work you want to review, keep, or throw away on its own.
+- **On** — every run continues *one* task, so the automation reads as a single long conversation and your sidebar does not fill up with a task per hour. The agent keeps the previous runs' context, which is what you want for a digest and what you do not want for an isolated check. If that task is gone, the next run starts a fresh one.
+
+**Isolated worktree** puts each new task in its own git worktree — the same isolation a hand-created task gets, and the sane default for an automation that edits files while you are working in the same repo.
+
+Only one run of an automation is ever in flight. If an occurrence comes due while the previous run is still going, it is recorded as **Skipped · overlap** rather than piling up a second agent on the same work.
+
+## Run history
+
+The detail drawer lists every run newest-first: run number, status, when it was scheduled versus when it actually started, the task it used, and an excerpt of the agent's final message. **Open task** goes to the full transcript and diff.
+
+| Status | What it means |
+| --- | --- |
+| **Pending** | The row exists; the precheck is still deciding. |
+| **Running** | A task is running the prompt right now. |
+| **Completed** | The agent finished its turn. |
+| **Failed** | The run started and the agent did not finish. |
+| **Skipped · precheck** | The precheck command did not authorize the run. |
+| **Skipped · missed** | Came due while Warpforge was closed, past the grace window. |
+| **Skipped · overlap** | The previous run had not finished. |
+
+Skips are reported honestly as three different things rather than folded into one, because the fix for each is different: rewrite the precheck, widen the grace, or make the prompt finish faster.
+
+Warpforge keeps the **last 100 finished runs** per automation and prunes the rest. The tasks those runs created are not touched by pruning — they are ordinary tasks and live under their normal retention.
+
+### The live strip
+
+Above the cards: what fires next with a countdown, and every run of the last 24 hours as a clickable marker. Click a marker to read that run's output, or go straight to its task. It is deliberately not a generated summary — the markers *are* the summary, and a sentence would need reading before you could trust it.
+
+Below it, the grid filters by state (**All / Enabled / Paused**) and by last outcome (**Completed / Failed / Skipped / Never run**), and searches names and prompts.
+
+## Pausing and deleting
+
+**Pause** keeps the automation and its history and stops it firing — the honest move for a job you are not sure about, since a paused automation can be read, edited, and resumed.
+
+**Delete** removes the schedule and its run history permanently, and stops a run that is in flight. Tasks the automation already created stay where they are.
+
+## Agents can manage automations too
+
+Every agent session gets the `automation_*` [MCP tools](/reference/mcp-tools/#automations--schedule-a-prompt-to-run-itself): create, list, read, patch, delete, run now, and read run history. An agent that notices work worth repeating can schedule it instead of telling you to.
+
+<Aside type="tip">
+  Worth saying out loud in your prompt what the automation is allowed to do. A scheduled run is an unattended run: it commits nothing on its own, but it does everything else a task can, and nobody is watching the turn.
+</Aside>
+
+## See also
+
+- [Tasks and backlog](/guides/tasks-and-backlog/) — what a run becomes once it starts
+- [Working in a task](/guides/working-in-a-task/) — reviewing what a run did
+- [Agent tools (MCP)](/reference/mcp-tools/#automations--schedule-a-prompt-to-run-itself) — the tool-level reference
