@@ -76,12 +76,10 @@ const TERMINAL_BUFFER_TTL_MS = 30_000;
 export const DAEMON_PROTOCOL_VERSION = 1;
 
 /**
- * How long to wait for a response before failing the call. A request the daemon
- * never answers used to leave its promise pending forever, which surfaces as a
- * spinner that never stops — a wedged subprocess inside `lsp.detect` did exactly
- * that. Almost every method answers in well under a second; the ones that shell
- * out to a package manager, the network, or an agent get the wider ceiling
- * below, listed here rather than as a knob at each call site.
+ * Per-request ceiling. An unanswered request used to leave its promise pending
+ * forever (a wedged subprocess inside `lsp.detect` spun the Settings list
+ * indefinitely). Methods that shell out to package managers, networks, or
+ * agents get the wider ceiling; everything else answers in under a second.
  */
 const REQUEST_TIMEOUT_MS = 120_000;
 const SLOW_REQUEST_TIMEOUT_MS = 900_000;

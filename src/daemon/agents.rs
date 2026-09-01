@@ -246,14 +246,12 @@ const REGISTRY_TIMEOUT: Duration = Duration::from_secs(4);
 /// Run a detection probe and capture its output. None when the probe could not
 /// be spawned or outran `limit`.
 ///
-/// Both the null stdin and the deadline are load-bearing. `tokio`'s
-/// `Command::output()` pipes only stdout and stderr — unlike std's — so a probe
-/// would otherwise inherit the daemon's own stdin, which in the packaged app is
-/// a pipe the desktop shell holds open for the daemon's whole life. Language
-/// servers ignore `--version` and start serving on stdio, so `elixir-ls
-/// --version` waited on that pipe forever and `lsp.detect` never answered.
-/// `kill_on_drop` is what makes the deadline real: without it a timed-out probe
-/// keeps running (and keeps its BEAM/node runtime alive) after we stop waiting.
+/// Both stdin settings are load-bearing. Tokio's `output()` pipes only
+/// stdout/stderr (unlike std's), so a probe inherits the daemon's stdin — a
+/// pipe the packaged desktop app holds open forever. A language server that
+/// ignores `--version` and serves on stdio then blocks on that pipe forever.
+/// `kill_on_drop` makes the deadline real: without it a timed-out probe keeps
+/// running after we stop waiting.
 pub(crate) async fn probe(
     program: &str,
     args: &[&str],
@@ -561,10 +559,8 @@ pub async fn run_manage_command(command: &str) -> (bool, String) {
 mod tests {
     use super::*;
 
-    /// A probe that never exits must not hold its caller open. `lsp.detect`
-    /// joins one probe per language, so a single unbounded `--version` call
-    /// (elixir-ls starts a language server instead of printing a version) left
-    /// the whole request unanswered and the Settings list loading forever.
+    /// A probe that never exits must not hold its caller open: one unbounded
+    /// `--version` left the whole `lsp.detect` request unanswered.
     #[cfg(unix)]
     #[tokio::test]
     async fn probe_gives_up_on_a_command_that_outruns_its_deadline() {
@@ -575,9 +571,8 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
-    /// A probe's stdin must be closed, not inherited: the packaged daemon's own
-    /// stdin is a pipe the desktop app holds open forever, and a child that
-    /// reads it would never see EOF. `cat` exits only at EOF.
+    /// A probe's stdin must be closed, not inherited: the packaged daemon's
+    /// stdin is a pipe that never sees EOF. `cat` exits only at EOF.
     #[cfg(unix)]
     #[tokio::test]
     async fn probe_closes_stdin_so_a_reader_sees_eof() {
