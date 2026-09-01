@@ -18,6 +18,7 @@ import type { TaskInfo } from "@/protocol";
 import { useUi, type View } from "@/store/ui";
 
 const VIEW_LABEL: Record<View, string> = {
+  automations: "Automations",
   control: "Mission Control",
   projects: "Projects",
 };

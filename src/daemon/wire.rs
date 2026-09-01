@@ -241,6 +241,13 @@ pub fn to_wire(ev: &Event) -> Option<wire::Event> {
         Event::AgentLimitsUpdated { accounts } => Some(wire::Event::AgentLimitsUpdated {
             accounts: accounts.clone(),
         }),
+        Event::AutomationUpdated(automation) => {
+            Some(wire::Event::AutomationUpdated((**automation).clone()))
+        }
+        Event::AutomationRemoved { id } => Some(wire::Event::AutomationRemoved { id: id.clone() }),
+        Event::AutomationRunUpdated(run) => {
+            Some(wire::Event::AutomationRunUpdated((**run).clone()))
+        }
         Event::ProjectAdded(info) => Some(wire::Event::ProjectAdded(info.clone())),
         Event::ProjectRemoved { name } => Some(wire::Event::ProjectRemoved { name: name.clone() }),
         Event::ProjectConfigChanged(state) => {

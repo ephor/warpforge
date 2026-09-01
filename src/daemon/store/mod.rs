@@ -10,6 +10,7 @@ use rusqlite::Connection;
 use std::path::PathBuf;
 
 mod agents;
+mod automations;
 mod backlog;
 mod schema;
 mod sessions;

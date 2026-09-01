@@ -83,6 +83,7 @@ import { daemon } from "../daemon";
 import type { DaemonState } from "../daemon";
 import type { ProjectInfo, TaskInfo } from "../protocol";
 import { useUi } from "../store/ui";
+import type { View } from "../store/ui";
 import Sidebar from "./Sidebar";
 import { SidebarTaskTooltipBody } from "./SidebarTaskRow";
 
@@ -142,7 +143,7 @@ const handlers = {
   onOpenSettings: vi.fn<() => void>(),
   onOpenTask: vi.fn<(id: string) => void>(),
   onOpenProject: vi.fn<(name: string) => void>(),
-  onSelectView: vi.fn<(view: "control" | "projects") => void>(),
+  onSelectView: vi.fn<(view: View) => void>(),
   onToggleCollapsed: vi.fn<() => void>(),
 };
 

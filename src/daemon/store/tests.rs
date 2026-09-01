@@ -484,3 +484,91 @@ fn backlog_pages_both_directions_and_filters() {
     assert_eq!(found.total, 1);
     assert_eq!(found.items[0].number, 3);
 }
+
+#[test]
+fn automation_roundtrip_and_run_retention() {
+    use warpforge_protocol::{AutomationPreset, AutomationRunStatus, AutomationTrigger};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("warpforge.db");
+    let store = Store::open_at(&path).unwrap();
+
+    let automation = wire::Automation {
+        id: "a1".into(),
+        project: "demo".into(),
+        name: "Nightly".into(),
+        prompt: "check".into(),
+        agent: "claude".into(),
+        model: Some("opus".into()),
+        config_overrides: Default::default(),
+        trigger: AutomationTrigger {
+            preset: AutomationPreset::Weekly,
+            cron: "0 9 * * MON".into(),
+        },
+        timezone: "Europe/Berlin".into(),
+        precheck: Some("npm test".into()),
+        enabled: true,
+        missed_run_grace_minutes: 30,
+        reuse_session: true,
+        worktree: true,
+        created_at: 1,
+        updated_at: 2,
+        next_run_at: Some(99),
+        last_run_at: None,
+        last_status: None,
+        last_task_id: None,
+    };
+    store.upsert_automation(&automation).unwrap();
+    let loaded = store.load_automation("a1").unwrap().unwrap();
+    assert_eq!(loaded, automation);
+
+    // 103 final runs + 1 running: retention keeps the newest 100 final rows
+    // and never touches the in-flight one.
+    for n in 1..=103u64 {
+        let run = wire::AutomationRun {
+            id: format!("r{n}"),
+            automation_id: "a1".into(),
+            run_number: n,
+            trigger: wire::AutomationRunTrigger::Scheduled,
+            status: AutomationRunStatus::Completed,
+            scheduled_for: n as i64,
+            started_at: n as i64,
+            finished_at: Some(n as i64),
+            task_id: None,
+            error: None,
+            output: None,
+        };
+        store.upsert_automation_run(&run).unwrap();
+    }
+    let live = wire::AutomationRun {
+        id: "r-live".into(),
+        automation_id: "a1".into(),
+        run_number: 104,
+        trigger: wire::AutomationRunTrigger::Manual,
+        status: AutomationRunStatus::Running,
+        scheduled_for: 104,
+        started_at: 104,
+        finished_at: None,
+        task_id: Some("t1".into()),
+        error: None,
+        output: None,
+    };
+    store.upsert_automation_run(&live).unwrap();
+
+    store.prune_automation_runs().unwrap();
+    let runs = store.load_automation_runs("a1", None).unwrap();
+    assert_eq!(runs.len(), 101, "100 kept final runs + the live one");
+    assert_eq!(runs[0].run_number, 104);
+    let numbers: Vec<u64> = runs.iter().map(|r| r.run_number).collect();
+    assert!(
+        numbers.contains(&103) && !numbers.contains(&1),
+        "oldest final rows go first"
+    );
+
+    // Run numbers keep counting from MAX, never from a row count.
+    assert_eq!(store.next_automation_run_number("a1").unwrap(), 105);
+
+    store.delete_automation("a1").unwrap();
+    assert!(store.load_automation("a1").unwrap().is_none());
+    assert!(store.load_automation_runs("a1", None).unwrap().is_empty());
+}

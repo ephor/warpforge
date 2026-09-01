@@ -1,6 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowUpRight,
+  CalendarClock,
   CheckCheck,
   ChevronRight,
   FolderTree,
@@ -57,6 +58,7 @@ import {
 const NAV: { id: View; label: string; icon: typeof LayoutGrid }[] = [
   { icon: LayoutGrid, id: "control", label: "Mission Control" },
   { icon: FolderTree, id: "projects", label: "Projects" },
+  { icon: CalendarClock, id: "automations", label: "Automations" },
 ];
 
 /**

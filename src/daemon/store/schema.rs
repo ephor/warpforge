@@ -100,6 +100,44 @@ pub(super) fn init(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS backlog_items_project_idx
             ON backlog_items(project, number);
+        CREATE TABLE IF NOT EXISTS automations (
+            id             TEXT PRIMARY KEY,
+            project        TEXT NOT NULL,
+            name           TEXT NOT NULL,
+            prompt         TEXT NOT NULL,
+            agent          TEXT NOT NULL,
+            model          TEXT,
+            config_overrides TEXT NOT NULL DEFAULT '{}',
+            trigger        TEXT NOT NULL,
+            timezone       TEXT NOT NULL DEFAULT '',
+            precheck       TEXT,
+            enabled        INTEGER NOT NULL DEFAULT 1,
+            missed_run_grace_minutes INTEGER NOT NULL DEFAULT 720,
+            reuse_session  INTEGER NOT NULL DEFAULT 0,
+            worktree       INTEGER NOT NULL DEFAULT 0,
+            created_at     INTEGER NOT NULL,
+            updated_at     INTEGER NOT NULL,
+            next_run_at    INTEGER,
+            last_run_at    INTEGER,
+            last_status    TEXT,
+            last_task_id   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS automations_project_idx ON automations(project);
+        CREATE TABLE IF NOT EXISTS automation_runs (
+            id             TEXT PRIMARY KEY,
+            automation_id  TEXT NOT NULL,
+            run_number     INTEGER NOT NULL,
+            trigger        TEXT NOT NULL,
+            status         TEXT NOT NULL,
+            scheduled_for  INTEGER NOT NULL,
+            started_at     INTEGER NOT NULL,
+            finished_at    INTEGER,
+            task_id        TEXT,
+            error          TEXT,
+            output         TEXT
+        );
+        CREATE INDEX IF NOT EXISTS automation_runs_automation_idx
+            ON automation_runs(automation_id, run_number);
         "#,
     )?;
     // Existing databases from before config selector persistence won't have

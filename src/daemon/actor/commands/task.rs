@@ -174,6 +174,7 @@ impl Daemon {
                 // deliver it the way TurnEnded used to. notify_orch_finished is
                 // a no-op unless the task is an orchestrator child.
                 self.notify_orch_finished(&task_id, success, output.clone());
+                self.automation_task_finished(&task_id, success, &output);
                 if !workflow_child {
                     self.deliver_child_result(&task_id, success, output);
                 }
@@ -307,6 +308,9 @@ impl Daemon {
                     self.resume_replay.remove(&id);
                     self.pending_resume.remove(&id);
                     self.pending_session_starts.remove(&id);
+                    // The run's task is gone — fail the run so it does not sit
+                    // in Running until the stale-run sweep finds it.
+                    self.automation_task_deleted(&id);
                     // Awaited, not queued: a failed delete is reported to the
                     // user, and dropping the error would leave a task that
                     // reappears on the next start with no explanation.

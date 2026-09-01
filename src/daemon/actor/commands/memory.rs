@@ -162,7 +162,7 @@ impl Daemon {
                 let _ = reply.send(res);
             }
 
-            _ => {}
+            other => self.handle_automation_command(other).await,
         }
     }
 }

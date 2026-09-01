@@ -1,5 +1,6 @@
 mod accounts;
 mod agent;
+mod automation;
 mod backlog;
 mod files;
 mod git;

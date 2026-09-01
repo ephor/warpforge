@@ -132,6 +132,14 @@ pub enum Event {
     AgentLimitsUpdated {
         accounts: Vec<wire::AgentAccountLimits>,
     },
+    /// An automation was created or changed — including the scheduler moving
+    /// `next_run_at`, which is what keeps the desktop's "Next run" column live.
+    AutomationUpdated(Box<wire::Automation>),
+    AutomationRemoved {
+        id: String,
+    },
+    /// A run row was written or its status changed.
+    AutomationRunUpdated(Box<wire::AutomationRun>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
