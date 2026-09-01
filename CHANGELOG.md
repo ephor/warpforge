@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.16.0
+
+### Minor Changes
+
+- [#47](https://github.com/warpforgehq/warpforge/pull/47) [`03b8dae`](https://github.com/warpforgehq/warpforge/commit/03b8daef0d13fea204aff5f858bf44f49798e32b) Thanks [@ephor](https://github.com/ephor)! - Automations: schedule a prompt to run on a project with the agent and model you
+  pick — hourly, daily, weekdays, weekly, or any cron expression in your own time
+  zone. Each run is a real task you can open from Mission Control, with an
+  optional precheck gate (skip the run when a check fails), a reuse-session mode
+  that keeps one ongoing conversation per automation, and a per-automation
+  missed-run grace window so a laptop that slept for a week does not fire a
+  week-old job on wake. Run history per automation shows what happened, when, and
+  why anything was skipped. Agents can manage automations through the automation
+  MCP tools.
+
+### Patch Changes
+
+- [#48](https://github.com/warpforgehq/warpforge/pull/48) [`74fcdea`](https://github.com/warpforgehq/warpforge/commit/74fcdea040119d354eb0951ab9179fccddd35758) Thanks [@ephor](https://github.com/ephor)! - Scheduled automation runs now tell the agent they are scheduled. Every run
+  starts with a short line naming the automation and its run number and saying
+  the turn is unattended, so the agent delivers the result instead of asking a
+  clarifying question nobody is there to answer. This matters most for
+  automations set to reuse the same task every run, where the identical prompt
+  used to arrive in one conversation over and over and read as a person repeating
+  themselves. Your prompt is passed through unchanged underneath, and it no
+  longer has to explain that the run is automated.
+
+- [#46](https://github.com/warpforgehq/warpforge/pull/46) [`6cd1944`](https://github.com/warpforgehq/warpforge/commit/6cd19446a1f57ddb20201677db31fec8e9508178) Thanks [@BatrakM](https://github.com/BatrakM)! - The language server list in Settings now loads in the installed app instead of spinning forever. Version checks are also bounded: a server that stops responding shows up as "not found" or without a version rather than holding up the whole list, and it no longer leaves stray processes running in the background. If a request to the workspace ever does go unanswered, the app now tells you instead of leaving a spinner on screen.
+
 ## 0.15.0
 
 ### Minor Changes
