@@ -19,12 +19,19 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod automations;
+pub use automations::*;
+
 /// Version of the daemon WebSocket contract. Bump this only for a breaking
 /// wire change; application versions may advance without changing it.
 pub const PROTOCOL_VERSION: u32 = 1;
 
 fn default_true() -> bool {
     true
+}
+
+fn default_missed_run_grace_minutes() -> u32 {
+    automations::DEFAULT_MISSED_RUN_GRACE_MINUTES
 }
 
 fn default_search_limit() -> u32 {
@@ -1022,6 +1029,62 @@ pub enum Method {
     /// its first task). Returns `{ ok }`.
     #[serde(rename = "workItem.linkTask")]
     WorkItemLinkTask { item_id: String, task_id: String },
+
+    // ── Automations ──────────────────────────────────────────────────────────
+    /// Every automation, newest first, optionally narrowed to one project.
+    /// Automations are deliberately *not* in the connect [`Snapshot`]: a cold
+    /// connect must not read state no view has asked for yet.
+    #[serde(rename = "automation.list")]
+    AutomationList {
+        #[serde(default)]
+        project: Option<String>,
+    },
+    #[serde(rename = "automation.show")]
+    AutomationShow { id: String },
+    /// Create an automation. Rejected if the cron expression or the timezone
+    /// cannot be parsed — an unschedulable row is never persisted.
+    #[serde(rename = "automation.create")]
+    AutomationCreate {
+        project: String,
+        name: String,
+        prompt: String,
+        agent: String,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        config_overrides: HashMap<String, String>,
+        trigger: AutomationTrigger,
+        #[serde(default)]
+        timezone: String,
+        #[serde(default)]
+        precheck: Option<String>,
+        #[serde(default = "default_true")]
+        enabled: bool,
+        #[serde(default = "default_missed_run_grace_minutes")]
+        missed_run_grace_minutes: u32,
+        #[serde(default)]
+        reuse_session: bool,
+        #[serde(default)]
+        worktree: bool,
+    },
+    /// Patch an automation. Absent fields are left alone. Returns the row.
+    #[serde(rename = "automation.update")]
+    AutomationUpdate { id: String, patch: AutomationPatch },
+    /// Delete an automation and its run history. Returns `{ ok }`.
+    #[serde(rename = "automation.delete")]
+    AutomationDelete { id: String },
+    /// Run an automation now. Skips the precheck and the missed-run grace check
+    /// (an explicit click means run) but still refuses to overlap a live run.
+    /// Does not move the next scheduled occurrence.
+    #[serde(rename = "automation.runNow")]
+    AutomationRunNow { id: String },
+    /// Run history for one automation, newest first.
+    #[serde(rename = "automation.runs")]
+    AutomationRuns {
+        id: String,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
 }
 
 /// One supported editor language and its language-server install state, sent
@@ -1482,6 +1545,16 @@ pub enum Event {
     /// A task was deleted; clients should drop it from all views.
     #[serde(rename = "task.removed")]
     TaskRemoved { id: String },
+
+    /// An automation was created or changed — including the scheduler moving
+    /// `nextRunAt`, which is what keeps the "Next run" column live.
+    #[serde(rename = "automation.updated")]
+    AutomationUpdated(Automation),
+    #[serde(rename = "automation.removed")]
+    AutomationRemoved { id: String },
+    /// A run row was written or its status changed.
+    #[serde(rename = "automation.runUpdated")]
+    AutomationRunUpdated(AutomationRun),
 
     /// Structured ACP session update for a task: tool calls, agent text,
     /// file edits, permission requests. Mirrors ACP `session/update`.

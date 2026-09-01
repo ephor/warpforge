@@ -47,6 +47,12 @@ pub enum Write {
         json: String,
     },
     DeleteWorkflowRun(String),
+    Automation(Box<wire::Automation>),
+    AutomationDelete(String),
+    AutomationRun(Box<wire::AutomationRun>),
+    /// Retention sweep for automation run history, piggybacked on the queue so
+    /// a final run write does not trigger a separate store round-trip.
+    PruneAutomationRuns,
 }
 
 impl Write {
@@ -67,6 +73,13 @@ impl Write {
             Write::OrchestratorConfig(config) => store.save_orchestrator_config(&config),
             Write::WorkflowRun { task_id, json } => store.save_workflow_run(&task_id, &json),
             Write::DeleteWorkflowRun(task_id) => store.delete_workflow_run(&task_id),
+            Write::Automation(automation) => store.upsert_automation(&automation),
+            Write::AutomationDelete(id) => store.delete_automation(&id),
+            Write::AutomationRun(run) => store.upsert_automation_run(&run),
+            Write::PruneAutomationRuns => {
+                store.prune_automation_runs()?;
+                Ok(())
+            }
         }
     }
 }

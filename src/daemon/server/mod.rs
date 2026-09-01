@@ -479,6 +479,15 @@ async fn dispatch(
             }))
         }
         StateSubscribe { .. } => Ok(json!(null)), // handled by caller
+        AutomationList { .. }
+        | AutomationShow { .. }
+        | AutomationCreate { .. }
+        | AutomationUpdate { .. }
+        | AutomationDelete { .. }
+        | AutomationRunNow { .. }
+        | AutomationRuns { .. } => {
+            return crate::daemon::automations::dispatch(handle, method).await;
+        }
         RuntimeStopAll {} => {
             handle.send(Command::StopRuntime).await;
             Ok(json!(null))
@@ -2170,6 +2179,9 @@ fn method_runs_concurrently(method: &wire::Method) -> bool {
             | OrchestrateGetConfig {}
             | WorkflowList { .. }
             | LanguageServersDetect {}
+            | AutomationList { .. }
+            | AutomationShow { .. }
+            | AutomationRuns { .. }
     )
 }
 
@@ -2206,6 +2218,9 @@ fn method_is_mutation(method: &wire::Method) -> bool {
             | LspSend { .. }
             | LspStop { .. }
             | LanguageServersDetect {}
+            | AutomationList { .. }
+            | AutomationShow { .. }
+            | AutomationRuns { .. }
     )
 }
 

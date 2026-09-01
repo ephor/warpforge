@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::{broadcast, mpsc};
 
@@ -135,6 +136,54 @@ impl Daemon {
         // persistence thread and writes go through the queue.
         let (persist, store) = crate::daemon::runtime::Persist::spawn(store);
 
+        // Runs left mid-flight by the previous daemon instance cannot finish;
+        // mark them failed BEFORE the automations load, so last_status is
+        // reconciled against the final state of the run history, and seed the
+        // per-automation run counters from the store while the connection is
+        // still exclusive to this thread.
+        if let Some(startup_store) = store.as_ref() {
+            if let Ok(s) = startup_store.lock() {
+                let _ = s.fail_inflight_automation_runs();
+            }
+        }
+        let mut automation_run_counters: HashMap<String, u64> = HashMap::new();
+        let startup_automations: std::collections::HashMap<String, warpforge_protocol::Automation> = {
+            match store.as_ref().map(|s| s.lock()) {
+                Some(Ok(s)) => {
+                    let mut map = std::collections::HashMap::new();
+                    for mut a in s.load_automations().unwrap_or_default() {
+                        automation_run_counters.insert(
+                            a.id.clone(),
+                            s.next_automation_run_number(&a.id)
+                                .unwrap_or(1)
+                                .saturating_sub(1),
+                        );
+                        // A run that the sweep just failed may have been the
+                        // automation's last known status; do not present a
+                        // mid-flight status the daemon can no longer be in.
+                        if matches!(
+                            a.last_status,
+                            Some(warpforge_protocol::AutomationRunStatus::Pending)
+                                | Some(warpforge_protocol::AutomationRunStatus::Running)
+                        ) {
+                            a.last_status = Some(warpforge_protocol::AutomationRunStatus::Failed);
+                        }
+                        map.insert(a.id.clone(), a);
+                    }
+                    map
+                }
+                _ => Default::default(),
+            }
+        };
+        let persist_handle = persist.clone();
+        for a in startup_automations.values() {
+            if a.last_status == Some(warpforge_protocol::AutomationRunStatus::Failed) {
+                persist_handle.write(crate::daemon::runtime::Write::Automation(Box::new(
+                    a.clone(),
+                )));
+            }
+        }
+
         let config_observer = ConfigObserver::new(&projects);
         let daemon = Daemon {
             agent_limits,
@@ -177,6 +226,12 @@ impl Daemon {
             memory,
             last_memory_activity: Arc::new(Mutex::new(std::time::Instant::now())),
             spend_cache: None,
+            automations: startup_automations,
+            automation_active: HashMap::new(),
+            automation_run_owner: HashMap::new(),
+            automation_runs_live: HashMap::new(),
+            automation_run_tasks: HashMap::new(),
+            automation_run_counters,
         };
 
         let handle = DaemonHandle { cmd_tx, event_tx };
@@ -258,6 +313,29 @@ impl Daemon {
                 }
             });
         }
+
+        // Automation scheduler: every minute, fire due schedules, honour the
+        // per-automation timezone and missed-run grace window. Runs left
+        // mid-flight by the previous daemon instance are marked failed first.
+        let automation_tx = handle.cmd_tx.clone();
+        tokio::spawn(async move {
+            // Align the tick to wall-clock minute boundaries so scheduled
+            // runs fire within a second of their minute, not up to a minute
+            // after it (the old phase drifted with daemon start time).
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default();
+            let to_next_minute = Duration::from_secs(60 - now.as_secs() % 60);
+            tokio::time::sleep(to_next_minute).await;
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                if automation_tx.send(Command::AutomationTick).await.is_err() {
+                    break;
+                }
+                tick.tick().await;
+            }
+        });
 
         // History retention sweeps: once at start (so a shortened window
         // applies without waiting a day), then daily.

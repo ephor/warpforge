@@ -746,6 +746,62 @@ pub enum Command {
     Shutdown {
         reply: oneshot::Sender<()>,
     },
+    /// Every automation, optionally narrowed to one project name.
+    AutomationList {
+        project: Option<String>,
+        reply: oneshot::Sender<Result<Vec<wire::Automation>, String>>,
+    },
+    /// One automation by id.
+    AutomationShow {
+        id: String,
+        reply: oneshot::Sender<Result<wire::Automation, String>>,
+    },
+    /// Persist a fully-built automation (the caller validated the schedule).
+    AutomationCreate {
+        automation: Box<wire::Automation>,
+        reply: oneshot::Sender<Result<wire::Automation, String>>,
+    },
+    /// Patch an automation; absent patch fields are left alone.
+    AutomationUpdate {
+        id: String,
+        patch: Box<wire::AutomationPatch>,
+        reply: oneshot::Sender<Result<wire::Automation, String>>,
+    },
+    /// Delete an automation and its run history.
+    AutomationDelete {
+        id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    /// Run an automation immediately: skips precheck and grace, refuses to
+    /// overlap a live run, does not move the next scheduled occurrence.
+    AutomationRunNow {
+        id: String,
+        reply: oneshot::Sender<Result<wire::AutomationRun, String>>,
+    },
+    /// Run history for one automation, newest first.
+    AutomationRuns {
+        id: String,
+        limit: Option<u32>,
+        reply: oneshot::Sender<Result<Vec<wire::AutomationRun>, String>>,
+    },
+    /// Periodic scheduler tick: fire due automations, advance next_run_at.
+    AutomationTick,
+    /// A dispatched run got its task (or failed to): link the task into the run
+    /// row and the automation's last-run columns.
+    AutomationRunLinked {
+        automation: Box<wire::Automation>,
+        run_id: String,
+        reused: bool,
+        result: Result<String, String>,
+    },
+    /// A run's precheck finished off the loop. `ok == false` skips the run.
+    AutomationPrecheckDone {
+        automation: Box<wire::Automation>,
+        run_id: String,
+        trigger: wire::AutomationRunTrigger,
+        ok: bool,
+        detail: Option<String>,
+    },
     ListAgentLimits {
         reply: oneshot::Sender<Vec<wire::AgentAccountLimits>>,
         refresh: bool,

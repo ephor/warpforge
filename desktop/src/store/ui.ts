@@ -11,7 +11,7 @@ import type { EditHunk } from "../protocol";
  * The server-data store is `daemon.ts` (useSyncExternalStore); this owns UI only.
  */
 
-export type View = "control" | "projects";
+export type View = "control" | "projects" | "automations";
 export type DiffView = "unified" | "split";
 export type RightPanel = "changes" | "files" | "subtasks" | null;
 export type RepositoryOperation = { taskId: string; kind: "pull" | "push" };

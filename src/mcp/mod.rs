@@ -47,6 +47,8 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
+mod automations;
+
 /// MCP protocol version we implement.
 const MCP_VERSION: &str = "2024-11-05";
 
@@ -703,6 +705,9 @@ fn tool_defs(is_orchestrator: bool) -> Value {
         if let Value::Array(orch) = orchestrator_tool_defs() {
             tools.extend(orch);
         }
+    }
+    if let Value::Array(automation) = automations::tool_defs() {
+        tools.extend(automation);
     }
     Value::Array(tools)
 }
@@ -2267,7 +2272,10 @@ async fn handle_tool_call(
                 "Decision '{decision}' applied to workflow pipeline {task_id}."
             ))
         }
-        other => Err(anyhow!("unknown tool: {other}")),
+        other => match automations::handle_tool_call(other, &args, client).await? {
+            Some(text) => Ok(text),
+            None => Err(anyhow!("unknown tool: {other}")),
+        },
     }
 }
 

@@ -174,6 +174,29 @@ pub struct Daemon {
     memory: crate::daemon::memory::MemoryStore,
     last_memory_activity: Arc<Mutex<std::time::Instant>>,
     spend_cache: Option<(Vec<wire::AgentSpend>, std::time::Instant)>,
+    /// Automations with a run in flight: automation id → run id. Presence is
+    /// the overlap guard — a due automation whose previous run has not finished
+    /// is skipped rather than stacked.
+    /// Automations, loaded at spawn and kept in memory. The store write is a
+    /// write-behind queue, so anything that reads an automation right after
+    /// writing it (run-now, the tick, run bookkeeping) must read this mirror,
+    /// not the store.
+    automations: HashMap<String, wire::Automation>,
+    automation_active: HashMap<String, String>,
+    /// Which automation owns each live run, keyed by run id — needed when the
+    /// run finishes to update the automation's last-status columns.
+    automation_run_owner: HashMap<String, String>,
+    /// Run rows this actor wrote but whose store write is still queued. Read
+    /// before the store so an immediate dispatch never races the write-behind
+    /// queue; final-status runs drop out (the store is authoritative then).
+    automation_runs_live: HashMap<String, wire::AutomationRun>,
+    /// Live run per dispatched automation task, so a finished turn's output can
+    /// be attributed back to its run row.
+    automation_run_tasks: HashMap<String, String>,
+    /// Last used run number per automation, seeded from the store at spawn.
+    /// In-memory so run numbers never collide with the write-behind queue and
+    /// assigning one costs no blocking SQLite read on the actor loop.
+    automation_run_counters: HashMap<String, u64>,
 }
 
 impl Daemon {

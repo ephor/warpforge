@@ -84,7 +84,7 @@ impl Daemon {
         let orchestrator_node =
             self.orch_tx.is_some() && task.tags.iter().any(|tag| tag == "orchestrator");
         let feeds_parent = !workflow_child && task.parent_task_id.is_some();
-        orchestrator_node || feeds_parent
+        orchestrator_node || feeds_parent || self.automation_run_tasks.contains_key(task_id)
     }
 
     /// Ask a worker to assemble a finished task's full text output off the loop

@@ -37,6 +37,7 @@ import type { FileDoc, SymbolMatch } from "./protocol";
 import { queryClient, useProjectFileListQuery } from "./query";
 const AddProjectDialog = lazy(() => import("./views/AddProjectDialog"));
 const AgentSetupDialog = lazy(() => import("./views/AgentSetupDialog"));
+const Automations = lazy(() => import("./views/Automations"));
 const MissionControl = lazy(() => import("./views/MissionControl"));
 const NewTaskDialog = lazy(() => import("./views/NewTaskDialog"));
 const Projects = lazy(() => import("./views/Projects"));
@@ -403,6 +404,8 @@ export default function App() {
                     />
                   ) : view === "control" ? (
                     <LiveMissionControl onOpenTask={setOpenTaskId} onNewTask={startNewTask} />
+                  ) : view === "automations" ? (
+                    <Automations snapshot={snapshot} onOpenTask={setOpenTaskId} />
                   ) : (
                     <Projects
                       snapshot={snapshot}
