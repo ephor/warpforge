@@ -65,14 +65,11 @@ fn write_endpoint(addr: SocketAddr, token: &str, owner: wire::DaemonOwner) -> Re
 
 /// Point the daemon's own stdin at /dev/null.
 ///
-/// The daemon never reads stdin, but every process it spawns inherits it, and
-/// the packaged desktop app runs the daemon as a Tauri sidecar whose stdin is a
-/// pipe the app holds open for the daemon's whole life. A child that reads
-/// stdin therefore never sees EOF: `elixir-ls --version` (a language server
-/// that ignores the flag and starts serving on stdio) blocked forever, so
-/// `lsp.detect` never answered and the Settings list spun forever. The plugin
-/// gives the app no way to close that pipe, so close it from this side, once,
-/// where every descendant inherits the result.
+/// The daemon never reads stdin, but spawned children inherit it. As a Tauri
+/// sidecar the daemon's stdin is a pipe the app holds open forever, so a child
+/// that reads stdin (e.g. a language server ignoring `--version`) never sees
+/// EOF and blocks `lsp.detect` forever. Nothing else can close that pipe, so
+/// redirect it here where every descendant inherits the result.
 #[cfg(unix)]
 fn detach_stdin() {
     use std::os::unix::io::AsRawFd;

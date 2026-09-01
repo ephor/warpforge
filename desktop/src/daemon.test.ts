@@ -296,9 +296,7 @@ describe("DaemonClient connection state", () => {
     });
   });
 
-  /** A daemon that never answers must surface as an error, not as a spinner
-   * that never stops: a wedged subprocess inside `lsp.detect` left the Settings
-   * language-server list loading forever. */
+  /** An unanswered request must fail, not spin forever (wedged `lsp.detect`). */
   it("fails a request the daemon never answers instead of waiting forever", async () => {
     const client = new DaemonClient();
     const socket = await connectedSocket(client);
@@ -313,8 +311,7 @@ describe("DaemonClient connection state", () => {
     expect(await rejected).toBe("lsp.detect did not answer within 120s");
   });
 
-  /** Installing a language server shells out to a package manager, so it must
-   * outlive the ordinary ceiling. */
+  /** Package-manager installs outlive the ordinary ceiling. */
   it("gives a package-manager request a wider ceiling", async () => {
     const client = new DaemonClient();
     const socket = await connectedSocket(client);
