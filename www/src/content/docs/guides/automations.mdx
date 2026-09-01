@@ -22,13 +22,13 @@ Open **Automations** in the sidebar and press **New automation**. The dialog ask
 
 1. **What** — a name and the prompt each run sends. The prompt is the whole instruction; a run gets no other context beyond the project it runs in.
 
-2. **Who** — which agent runs it, and on which model. The model is per-automation: leave it on *agent default* to inherit whatever that harness last used, or pin one so an unattended run cannot silently get more expensive. Reasoning effort and mode, where the harness exposes them, are pinned the same way.
+2. **Who** — which agent runs it, and on which model. The model is per-automation: leave it on *agent default* to inherit whatever that harness last used, or pin one so an unattended run cannot silently get more expensive.
 
 3. **When & where** — the schedule, the project, and the guards: [timezone](#timezones), [precheck](#precheck), [missed-run grace](#missed-run-grace), where runs land, and whether the automation is enabled at all.
 
 </Steps>
 
-**Save & run once** saves the automation and immediately starts one run without touching the schedule — the fastest way to find out whether the prompt does what you meant before leaving it unattended for a week.
+**Save & run now** saves the automation and immediately starts one run without touching the schedule — the fastest way to find out whether the prompt does what you meant before leaving it unattended for a week.
 
 ## Schedules
 
@@ -43,7 +43,7 @@ Six presets, and every one of them is stored as a plain cron expression, so the 
 | Weekly | `0 9 * * MON` | Pick the day and the time |
 | Custom cron | *(yours)* | A 5-field expression |
 
-The panel under the picker describes the schedule in words and previews the **next three occurrences** in the automation's own timezone. If a schedule has no occurrence in the next year, it says so rather than sitting there looking scheduled.
+The panel under the picker describes the schedule in words and previews the **next three occurrences** in the automation's own timezone.
 
 ### Custom cron
 
