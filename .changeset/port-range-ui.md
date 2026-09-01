@@ -1,5 +1,5 @@
 ---
-"warpforge-desktop": minor
+"warpforge": minor
 ---
 
 See where a project's port range comes from — and fix conflicts on your machine only.

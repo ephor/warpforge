@@ -1,5 +1,5 @@
 ---
-"warpforge-desktop": minor
+"warpforge": minor
 ---
 
 Pin the exact ports your team's services run on — and commit them to the repo.
