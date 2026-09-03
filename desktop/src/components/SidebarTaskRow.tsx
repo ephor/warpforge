@@ -20,6 +20,7 @@ import {
   Trash2,
   Undo2,
   Unplug,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
@@ -41,6 +42,7 @@ import { agentDisplayName } from "@/lib/agentNames";
 import { buildSnoozePresets } from "@/lib/snooze";
 import { elapsed } from "@/lib/status";
 import { taskLabel } from "@/lib/taskLabel";
+import { isOrchestratorTask } from "@/lib/taskGroups";
 import { cn } from "@/lib/utils";
 import type { TaskInfo } from "@/protocol";
 
@@ -133,6 +135,7 @@ export function SidebarTaskTooltipBody({
   const meta = SIDEBAR_STATE_META[state];
   const StateIcon = STATE_ICON[meta.icon];
   const worktree = task.worktree ?? null;
+  const orchestrator = isOrchestratorTask(task, childCount);
   return (
     <div className="flex max-w-[17rem] flex-col gap-2 p-1">
       <div className="text-[13px] font-medium leading-snug text-foreground">{taskLabel(task)}</div>
@@ -159,7 +162,11 @@ export function SidebarTaskTooltipBody({
         {childCount > 0 && (
           <TooltipLine icon={Layers}>
             {childCount} subtask{childCount === 1 ? "" : "s"}
+            {orchestrator ? " · Lead" : ""}
           </TooltipLine>
+        )}
+        {orchestrator && childCount === 0 && (
+          <TooltipLine icon={Layers}>Orchestrator lead — no workers yet</TooltipLine>
         )}
         {task.filesChanged > 0 && (
           <TooltipLine icon={FileDiff}>
@@ -373,6 +380,7 @@ export const SidebarTaskRow = memo(function SidebarTaskRow({
   const meta = SIDEBAR_STATE_META[state];
   const StateIcon = STATE_ICON[meta.icon];
   const receded = state === "snoozed" || state === "settled" || state === "done";
+  const orchestrator = isOrchestratorTask(task, childCount);
 
   return (
     <div
@@ -418,6 +426,11 @@ export const SidebarTaskRow = memo(function SidebarTaskRow({
             >
               {label}
             </span>
+            {orchestrator && (
+              <span title="Orchestrator lead" className="inline-flex shrink-0">
+                <Users aria-hidden className="size-3 text-primary/70" />
+              </span>
+            )}
             <span className="relative ml-auto flex h-6 w-[4.5rem] shrink-0 items-center justify-end gap-1.5 pl-1 transition-opacity group-hover/row:opacity-0 group-focus-within/row:opacity-0">
               {childCount > 0 && (
                 <span className="tnum text-[10px] text-muted-foreground/45">{childCount}</span>

@@ -102,6 +102,16 @@ export function flattenTaskTree(tree: TaskTree): TaskInfo[] {
   return [tree.task, ...tree.children.flatMap(flattenTaskTree)];
 }
 
+/**
+ * Lead of an orchestration group: tagged `orchestrator-chat` at creation
+ * (catches the lead before workers spawn), has children, or runs a workflow.
+ */
+export function isOrchestratorTask(task: TaskInfo, childCount = 0): boolean {
+  return (
+    task.tags.includes("orchestrator-chat") || childCount > 0 || task.workflowRun != null
+  );
+}
+
 /** Index every task by its explicit orchestration root. */
 export function buildTaskGroupIndex(tasks: TaskInfo[]): TaskGroupIndex {
   const forest = buildTaskForest(tasks);

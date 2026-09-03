@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { agentDisplayName } from "@/lib/agentNames";
 import { statusLabel } from "@/lib/statusMeta";
-import { flattenTaskTree, type TaskTree } from "@/lib/taskGroups";
+import { flattenTaskTree, isOrchestratorTask, type TaskTree } from "@/lib/taskGroups";
 import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +29,7 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
   const currentIndex = members.findIndex((member) => member.id === currentTaskId);
   const current = members[currentIndex] ?? tree.task;
   const workflow = Boolean(tree.task.workflowRun);
+  const orchestrator = isOrchestratorTask(tree.task, tree.children.length);
   const stageByTaskId = useMemo(() => {
     const result = new Map<string, string>();
     for (const node of tree.task.orchestrationGraph?.nodes ?? []) {
@@ -54,7 +55,18 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
     [currentTaskId, onOpenTask],
   );
 
-  if (members.length <= 1) return null;
+  if (members.length <= 1) {
+    if (!orchestrator) return null;
+    return (
+      <span
+        title="Orchestrator lead — no worker sessions yet"
+        className="flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-border/60 bg-secondary/40 px-2 text-[11px] font-medium text-muted-foreground"
+      >
+        <Users className="size-3.5 text-muted-foreground" />
+        Orchestrator
+      </span>
+    );
+  }
 
   return (
     <DropdownMenu>
@@ -62,20 +74,24 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
         <button
           type="button"
           aria-label={`Switch agent session. Current: ${currentLabel}`}
-          title="Switch agent session"
+          title={
+            members.length - 1 === 0
+              ? "no worker sessions yet"
+              : `${members.length - 1} worker sessions`
+          }
           className="flex h-7 shrink-0 items-center gap-1.5 rounded px-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
         >
-          <Users className="size-3.5 text-primary" />
-          <span>
-            {workflow ? "Stages" : "Agents"} {members.length - 1}
+          <Users className="size-3.5 text-muted-foreground" />
+          <span className="text-[11px] text-muted-foreground">
+            {members.length - 1}
           </span>
-          <span className="text-border">·</span>
+          <span className="text-muted-foreground/50">·</span>
           {currentIndex === 0 ? (
-            <span className="max-w-24 truncate text-foreground">
+            <span className="max-w-24 truncate rounded-full border border-border/60 bg-secondary/40 px-1.5 py-px text-[11px] font-medium text-foreground">
               {workflow ? "Workflow" : "Lead"}
             </span>
           ) : (
-            <span className="max-w-40 truncate text-foreground">{currentLabel}</span>
+            <span className="max-w-40 truncate rounded-full border border-border/60 bg-secondary/40 px-1.5 py-px text-[11px] font-medium text-foreground">{currentLabel}</span>
           )}
           <ChevronDown className="size-3 opacity-60" />
         </button>

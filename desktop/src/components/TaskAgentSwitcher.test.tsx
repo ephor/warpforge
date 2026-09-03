@@ -97,7 +97,7 @@ describe("TaskAgentSwitcher", () => {
     );
 
     expect(screen.getByRole("button", { name: /current: workflow/i })).toHaveTextContent(
-      "Stages 1",
+      "1",
     );
     await user.click(screen.getByRole("button", { name: /current: workflow/i }));
     expect(
