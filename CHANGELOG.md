@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.17.0
+
+### Minor Changes
+
+- [`15aa428`](https://github.com/warpforgehq/warpforge/commit/15aa4288fda82d3fbba558c90c01c2000d98e87c) Thanks [@ephor](https://github.com/ephor)! - Attach text files to chat prompts, not just images. Click the paperclip in the composer (or drag and drop, or paste) to add markdown, code, configs, CSV and any other text file — the full content reaches the agent, so it can answer questions about the file instead of guessing. Images keep working as before, and you can mix files and images in one message.
+
+- [`8982d69`](https://github.com/warpforgehq/warpforge/commit/8982d69f5cbba7c3f5729f7c1090cfdd987a54e9) Thanks [@ephor](https://github.com/ephor)! - Settings has been redesigned. Pick a category on the left — Appearance, Agents, Integrations, Tasks, Memory, Advanced — instead of scrolling one long page, and each setting says what it does in a line. Your agent logins now show the quota they have left, right on the account.
+
+  Chat scrolling is fixed. Scroll up while an agent is answering and you stay there instead of being dragged back to the newest message, and pasting a long log no longer freezes the window.
+
 ## 0.16.0
 
 ### Minor Changes
