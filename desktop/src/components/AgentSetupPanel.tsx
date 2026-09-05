@@ -148,26 +148,37 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
     }
   };
 
-  /** Re-read the agent's model list from its harness. Needed when a provider
-   *  or model was added outside Warpforge — the daemon caches the list and only
-   *  refreshes it on its own at startup. */
-  const refreshModels = async (id: string) => {
-    setProbing((prev) => new Set(prev).add(id));
+  /**
+   * Re-read model lists from the harnesses themselves. Needed when a provider
+   * or model was added outside Warpforge — the daemon caches the lists and only
+   * refreshes them on its own at startup.
+   *
+   * Every enabled agent is probed at once, and each one owns its failure: a
+   * harness that never answers records its error on its own row and leaves the
+   * others' fresh lists alone.
+   */
+  const refreshModels = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    setProbing((prev) => new Set([...prev, ...ids]));
     setErrors((prev) => {
-      const { [id]: _cleared, ...rest } = prev;
-      return rest;
+      const next = { ...prev };
+      for (const id of ids) delete next[id];
+      return next;
     });
-    try {
-      await daemon.probeAgent(id);
-    } catch (e) {
-      setErrors((prev) => ({ ...prev, [id]: e instanceof Error ? e.message : String(e) }));
-    } finally {
-      setProbing((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-    }
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          await daemon.probeAgent(id);
+        } catch (e) {
+          setErrors((prev) => ({ ...prev, [id]: e instanceof Error ? e.message : String(e) }));
+        }
+      }),
+    );
+    setProbing((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) next.delete(id);
+      return next;
+    });
   };
 
   const save = async () => {
@@ -209,6 +220,11 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
     return <div className="p-4 text-sm text-destructive">Failed to detect agents: {loadError}</div>;
   }
 
+  // Only a saved-enabled agent has a cached list the daemon can re-read.
+  const refreshableIds = agents
+    .filter((a) => configured?.find((c) => c.id === a.id)?.enabled)
+    .map((a) => a.id);
+
   return (
     <>
       <div className="flex flex-col">
@@ -216,9 +232,7 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
           const on = enabled.has(agent.id);
           const isBusy = busy.has(agent.id);
           const behind = agent.status === "behind";
-          // Only a saved-enabled agent has a cached list the daemon can refresh.
           const savedConfig = configured?.find((c) => c.id === agent.id);
-          const canRefresh = !!savedConfig?.enabled;
           const modelCount = savedConfig?.models.find((o) => configRole(o) === "model")?.options
             .length;
           const isProbing = probing.has(agent.id);
@@ -270,8 +284,12 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
                 </div>
                 <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
                   {agent.defaultAcpCommand}
-                  {modelCount !== undefined && (
-                    <span className="font-sans"> · {modelCount} models</span>
+                  {isProbing ? (
+                    <span className="font-sans"> · reloading models…</span>
+                  ) : (
+                    modelCount !== undefined && (
+                      <span className="font-sans"> · {modelCount} models</span>
+                    )
                   )}
                 </p>
                 {behind && agent.latestVersion && (
@@ -291,24 +309,6 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                {/* Says what it does instead of hiding it in a tooltip nobody
-                    hovers: the model list is cached, and adding a provider or
-                    model outside Warpforge is the reason to re-read it. */}
-                {canRefresh && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 whitespace-nowrap px-2 text-xs text-muted-foreground"
-                    disabled={isProbing}
-                    aria-label={`Refresh ${agent.displayName} models`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void refreshModels(agent.id);
-                    }}
-                  >
-                    {isProbing ? "Reloading…" : "Reload models list"}
-                  </Button>
-                )}
                 {agent.canManage && (!agent.installed || behind) && (
                   <Button
                     size="sm"
@@ -345,6 +345,18 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
           </span>
         )}
         {saveError && <span className="text-[11px] text-destructive">{saveError}</span>}
+        {/* One button for the whole list. Per-agent buttons repeated the same
+            label down the column for no gain: you reload because something
+            changed outside Warpforge, and you rarely know which harness saw it. */}
+        {refreshableIds.length > 0 && (
+          <Button
+            variant="outline"
+            disabled={probing.size > 0}
+            onClick={() => void refreshModels(refreshableIds)}
+          >
+            {probing.size > 0 ? "Reloading…" : "Reload models list"}
+          </Button>
+        )}
         <Button onClick={() => void save()} disabled={saved}>
           {saved ? "Saved" : "Save"}
         </Button>

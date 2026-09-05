@@ -107,8 +107,25 @@ describe("AgentSetupPanel", () => {
       render(<AgentSetupPanel detected={[agent("claude", { installed: true })]} />);
 
       expect(screen.getByText(/3 models/)).toBeInTheDocument();
-      await userEvent.click(screen.getByRole("button", { name: "Refresh Claude models" }));
+      await userEvent.click(screen.getByRole("button", { name: "Reload models list" }));
       expect(probeAgent).toHaveBeenCalledWith("claude");
+    });
+
+    it("reloads every enabled agent from the one button", async () => {
+      daemonState.snapshot.agents = [
+        ...configured([modelOption(3)]),
+        { ...configured([modelOption(2)])[0], displayName: "Codex", id: "codex" },
+      ];
+      probeAgent.mockResolvedValue();
+      render(
+        <AgentSetupPanel
+          detected={[agent("claude", { installed: true }), agent("codex", { installed: true })]}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Reload models list" }));
+      expect(probeAgent).toHaveBeenCalledWith("claude");
+      expect(probeAgent).toHaveBeenCalledWith("codex");
     });
 
     it("reports a failed probe instead of leaving the stale list unexplained", async () => {
@@ -116,17 +133,34 @@ describe("AgentSetupPanel", () => {
       probeAgent.mockRejectedValue(new Error("agent exited before replying"));
       render(<AgentSetupPanel detected={[agent("claude", { installed: true })]} />);
 
-      await userEvent.click(screen.getByRole("button", { name: "Refresh Claude models" }));
+      await userEvent.click(screen.getByRole("button", { name: "Reload models list" }));
       expect(await screen.findByText(/agent exited before replying/)).toBeInTheDocument();
     });
 
-    it("offers no refresh for an agent that is not enabled yet", async () => {
+    it("keeps one harness's failure off the others", async () => {
+      daemonState.snapshot.agents = [
+        ...configured([modelOption(3)]),
+        { ...configured([modelOption(2)])[0], displayName: "Codex", id: "codex" },
+      ];
+      probeAgent.mockImplementation((id: string) =>
+        id === "claude" ? Promise.reject(new Error("claude never answered")) : Promise.resolve(),
+      );
+      render(
+        <AgentSetupPanel
+          detected={[agent("claude", { installed: true }), agent("codex", { installed: true })]}
+        />,
+      );
+
+      await userEvent.click(screen.getByRole("button", { name: "Reload models list" }));
+      expect(await screen.findByText(/claude never answered/)).toBeInTheDocument();
+      expect(probeAgent).toHaveBeenCalledWith("codex");
+    });
+
+    it("offers no reload when no agent is enabled yet", async () => {
       daemonState.snapshot.agents = [];
       render(<AgentSetupPanel detected={[agent("claude", { installed: true })]} />);
 
-      expect(
-        screen.queryByRole("button", { name: "Refresh Claude models" }),
-      ).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Reload models list" })).not.toBeInTheDocument();
     });
   });
 });
