@@ -471,6 +471,11 @@ mod tests {
                         mime_type: "image/png".into(),
                         data: "iVBORw0KGgpyZXN0".into(),
                     },
+                    PromptAttachment::Document {
+                        name: "spec.md".into(),
+                        mime_type: "text/markdown".into(),
+                        text: "# spec".into(),
+                    },
                 ],
                 None,
                 std::collections::HashMap::new(),
@@ -484,7 +489,7 @@ mod tests {
                 update: warpforge_protocol::SessionUpdate::AgentText { text },
             })) = timeout(Duration::from_secs(2), events.recv()).await
             {
-                if id == task_id && text == "blocks:text,resource,image" {
+                if id == task_id && text == "blocks:text,resource,image,resource" {
                     initial = true;
                     break;
                 }
@@ -492,16 +497,23 @@ mod tests {
         }
         assert!(
             initial,
-            "initial prompt should use resource and image blocks"
+            "initial prompt should use resource, image and document blocks"
         );
         daemon
             .session_prompt(
                 &task_id,
                 "follow up",
-                vec![PromptAttachment::File {
-                    path: "note.txt".into(),
-                    range: None,
-                }],
+                vec![
+                    PromptAttachment::File {
+                        path: "note.txt".into(),
+                        range: None,
+                    },
+                    PromptAttachment::Document {
+                        name: "spec.md".into(),
+                        mime_type: "text/markdown".into(),
+                        text: "# spec".into(),
+                    },
+                ],
             )
             .await
             .unwrap();
@@ -512,7 +524,7 @@ mod tests {
                 update: warpforge_protocol::SessionUpdate::AgentText { text },
             })) = timeout(Duration::from_secs(2), events.recv()).await
             {
-                if id == task_id && text == "blocks:text,resource" {
+                if id == task_id && text == "blocks:text,resource,resource" {
                     followup = true;
                     break;
                 }
@@ -552,10 +564,17 @@ mod tests {
                 false,
                 false,
                 None,
-                vec![PromptAttachment::File {
-                    path: "note.txt".into(),
-                    range: None,
-                }],
+                vec![
+                    PromptAttachment::File {
+                        path: "note.txt".into(),
+                        range: None,
+                    },
+                    PromptAttachment::Document {
+                        name: "spec.md".into(),
+                        mime_type: "text/markdown".into(),
+                        text: "# spec".into(),
+                    },
+                ],
                 None,
                 std::collections::HashMap::new(),
                 None,
@@ -568,13 +587,16 @@ mod tests {
                 update: warpforge_protocol::SessionUpdate::AgentText { text },
             })) = timeout(Duration::from_secs(2), events.recv()).await
             {
-                if task_id == id && text == "blocks:text,text" {
+                if task_id == id && text == "blocks:text,text,text" {
                     fallback = true;
                     break;
                 }
             }
         }
-        assert!(fallback, "resource should fall back to delimited text");
+        assert!(
+            fallback,
+            "resources and documents should fall back to delimited text"
+        );
 
         let daemon = Daemon::spawn(
             projects,

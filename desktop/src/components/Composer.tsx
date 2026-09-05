@@ -1,7 +1,5 @@
-import { ImagePlus, Loader2, Send, Square } from "lucide-react";
 import {
   forwardRef,
-  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -11,12 +9,6 @@ import {
   useState,
 } from "react";
 
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
 import {
@@ -29,22 +21,20 @@ import {
   replaceMention,
   splitFileReference,
 } from "../lib/composerMentions";
-import type { ImageAttachmentDraft } from "../lib/imageAttachments";
-import {
-  fileToImageAttachment,
-  revokeImagePreviews,
-  validateImageFiles,
-} from "../lib/imageAttachments";
-import { compactTokenCount, type ContextUsage } from "../lib/sessionUsage";
+import type { ContextUsage } from "../lib/sessionUsage";
 import type {
   CommandInfo,
   FileDiff as FileDiffType,
   ProjectFile,
   PromptSubmission,
 } from "../protocol";
+import { AttachButton } from "./composer/AttachButton";
 import { AttachmentBar } from "./composer/AttachmentBar";
+import { ComposerActionButton } from "./composer/ComposerActionButton";
+import { ContextUsageIndicator } from "./composer/ContextUsageIndicator";
 import { FileMentionMenu } from "./composer/FileMentionMenu";
 import { SlashCommandMenu } from "./composer/SlashCommandMenu";
+import { useComposerAttachments } from "./composer/useComposerAttachments";
 
 export interface ComposerAttachment {
   id: string;
@@ -106,32 +96,35 @@ export const Composer = forwardRef<
     const [caret, setCaret] = useState(0);
     const [menuIndex, setMenuIndex] = useState(0);
     const [diffs, setDiffs] = useState<ComposerAttachment[]>([]);
-    const [images, setImages] = useState<ImageAttachmentDraft[]>([]);
     const [sending, setSending] = useState(false);
     const [stopping, setStopping] = useState(false);
-    const [error, setError] = useState<string | null>(null);
     const [dragging, setDragging] = useState(false);
     const [refDrag, setRefDrag] = useState(false);
     const textRef = useRef<HTMLTextAreaElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
-    const imagesRef = useRef(images);
     const sendActionRef = useRef<() => void>(() => {});
-
-    useEffect(() => {
-      imagesRef.current = images;
-    }, [images]);
-    useEffect(() => () => revokeImagePreviews(imagesRef.current), []);
+    // One error line, one owner: attaching a file, sending and stopping all
+    // report through the same state, so neither can leave the other's message
+    // stranded under an unrelated action.
+    const {
+      addFiles,
+      attachments,
+      clear: clearAttachments,
+      error,
+      remove: removeAttachment,
+      setError,
+    } = useComposerAttachments();
 
     const removeDiff = useCallback((id: string) => {
       setDiffs((prev) => prev.filter((diff) => diff.id !== id));
     }, []);
 
-    const removeImage = useCallback((image: ImageAttachmentDraft) => {
-      URL.revokeObjectURL(image.previewUrl);
-      setImages((prev) => prev.filter((item) => item.id !== image.id));
-    }, []);
+    const attach = useCallback(
+      (incoming: File[]) => void addFiles(incoming, { imageSupported }),
+      [addFiles, imageSupported],
+    );
 
-    const openImagePicker = useCallback(() => {
+    const openFilePicker = useCallback(() => {
       inputRef.current?.click();
     }, []);
 
@@ -201,25 +194,9 @@ export const Composer = forwardRef<
       .map(splitFileReference)
       .filter((fileRef) => fileSet.has(fileRef.path));
 
-    const addImages = async (incoming: File[]) => {
-      setError(null);
-      const imageFiles = incoming;
-      const validation = validateImageFiles(imageFiles, images);
-      if (validation) {
-        setError(validation);
-        return;
-      }
-      try {
-        const drafts = await Promise.all(imageFiles.map(fileToImageAttachment));
-        setImages((prev) => [...prev, ...drafts]);
-      } catch {
-        setError("Could not read one of the selected images.");
-      }
-    };
-
     async function send() {
       const text = value.trim();
-      if ((!text && diffs.length === 0 && images.length === 0) || disabled || sending) return;
+      if ((!text && diffs.length === 0 && attachments.length === 0) || disabled || sending) return;
       const parts = text ? [text] : [];
       diffs.forEach((diff) => parts.push(`\`\`\`diff\n${diff.content}\n\`\`\``));
       setSending(true);
@@ -233,13 +210,12 @@ export const Composer = forwardRef<
               path: fileRef.path,
               ...(fileRef.range ? { range: fileRef.range } : {}),
             })),
-            ...images.map((image) => image.attachment),
+            ...attachments.map((attachment) => attachment.attachment),
           ],
         });
-        revokeImagePreviews(images);
         setValue("");
         setDiffs([]);
-        setImages([]);
+        clearAttachments();
         setCaret(0);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "Message could not be sent.");
@@ -283,9 +259,14 @@ export const Composer = forwardRef<
     };
 
     const onKeyDown = (event: React.KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "i") {
+      // ⌘⇧I predates the general attach button; keep it as an alias.
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
+        ["a", "i"].includes(event.key.toLowerCase())
+      ) {
         event.preventDefault();
-        if (imageSupported) inputRef.current?.click();
+        openFilePicker();
         return;
       }
       const open = mentionOpen || slashOpen;
@@ -326,7 +307,7 @@ export const Composer = forwardRef<
       }
     };
 
-    const hasSubmission = !!(value.trim() || diffs.length || images.length);
+    const hasSubmission = !!(value.trim() || diffs.length || attachments.length);
     const canSend = hasSubmission && !disabled && !sending;
     const action = onCancel && !hasSubmission ? "stop" : "send";
     return (
@@ -334,11 +315,8 @@ export const Composer = forwardRef<
         className={cn("relative", compact ? "p-1.5" : "p-2", className)}
         onDragEnter={(e) => {
           e.preventDefault();
-          const isRef = isFileRefDrag(Array.from(e.dataTransfer.types));
-          if (imageSupported || isRef) {
-            setRefDrag(isRef);
-            setDragging(true);
-          }
+          setRefDrag(isFileRefDrag(Array.from(e.dataTransfer.types)));
+          setDragging(true);
         }}
         onDragOver={(e) => e.preventDefault()}
         onDragLeave={(e) => {
@@ -370,7 +348,7 @@ export const Composer = forwardRef<
             });
             return;
           }
-          if (imageSupported) void addImages([...e.dataTransfer.files]);
+          attach([...e.dataTransfer.files]);
         }}
       >
         {mentionOpen && (
@@ -393,15 +371,15 @@ export const Composer = forwardRef<
         <div className="bg-deep-surface relative flex flex-col rounded-lg border border-input focus-within:ring-2 focus-within:ring-ring">
           {dragging && (
             <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-background/90 text-sm font-medium">
-              {refDrag ? "Drop to attach file as context" : "Drop PNG or JPEG images"}
+              {refDrag ? "Drop to attach file as context" : "Drop files to attach"}
             </div>
           )}
-          {(diffs.length > 0 || images.length > 0) && (
+          {(diffs.length > 0 || attachments.length > 0) && (
             <AttachmentBar
               diffs={diffs}
-              images={images}
+              attachments={attachments}
               onRemoveDiff={removeDiff}
-              onRemoveImage={removeImage}
+              onRemoveAttachment={removeAttachment}
             />
           )}
           <textarea
@@ -420,7 +398,13 @@ export const Composer = forwardRef<
             onClick={(e) => setCaret(e.currentTarget.selectionStart)}
             onKeyUp={(e) => setCaret(e.currentTarget.selectionStart)}
             onKeyDown={onKeyDown}
-            placeholder={diffs.length || images.length ? "Add a message…" : placeholder}
+            onPaste={(e) => {
+              const pasted = [...(e.clipboardData?.files ?? [])];
+              if (pasted.length === 0) return;
+              e.preventDefault();
+              attach(pasted);
+            }}
+            placeholder={diffs.length || attachments.length ? "Add a message…" : placeholder}
             className={cn(
               "resize-none bg-transparent px-3 text-sm placeholder:text-muted-foreground focus-visible:outline-none disabled:opacity-50",
               compact ? "max-h-[180px] min-h-[52px] py-2" : "max-h-[220px] min-h-[76px] py-2.5",
@@ -438,17 +422,12 @@ export const Composer = forwardRef<
               type="file"
               className="hidden"
               multiple
-              accept="image/png,image/jpeg"
               onChange={(e) => {
-                void addImages([...(e.currentTarget.files ?? [])]);
+                attach([...(e.currentTarget.files ?? [])]);
                 e.currentTarget.value = "";
               }}
             />
-            <ImageUploadButton
-              disabled={!imageSupported || disabled || sending}
-              imageSupported={imageSupported}
-              onClick={openImagePicker}
-            />
+            <AttachButton disabled={disabled || sending} onClick={openFilePicker} />
             <div className="ml-auto shrink-0">
               {contextUsage && contextUsage.size > 0 ? (
                 <ContextUsageIndicator usage={contextUsage} />
@@ -471,144 +450,3 @@ export const Composer = forwardRef<
     );
   },
 );
-
-const ComposerActionButton = memo(function ComposerActionButton({
-  action,
-  disabled,
-  sendActionRef,
-  onStop,
-  stopping,
-}: {
-  action: "send" | "stop";
-  disabled: boolean;
-  sendActionRef: React.RefObject<() => void>;
-  onStop?: () => void;
-  stopping: boolean;
-}) {
-  const stopAction = action === "stop";
-
-  return (
-    <Button
-      type="button"
-      size="icon"
-      variant={stopAction ? "destructive" : "default"}
-      aria-label={stopping ? "Stopping" : stopAction ? "Stop" : "Send"}
-      className="size-6 shrink-0"
-      onClick={stopAction ? onStop : () => sendActionRef.current?.()}
-      disabled={disabled}
-    >
-      {stopping ? (
-        <Loader2 className="size-3 animate-spin" />
-      ) : stopAction ? (
-        <Square className="size-3 fill-current" />
-      ) : (
-        <Send className="size-3" />
-      )}
-    </Button>
-  );
-});
-
-const ImageUploadButton = memo(function ImageUploadButton({
-  disabled,
-  imageSupported,
-  onClick,
-}: {
-  disabled: boolean;
-  imageSupported: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      className="size-5"
-      disabled={disabled}
-      title={imageSupported ? "Attach images (⌘⇧I)" : "This agent does not support images"}
-      onClick={onClick}
-    >
-      <ImagePlus className="size-3" />
-    </Button>
-  );
-});
-
-const ContextUsageIndicator = memo(function ContextUsageIndicator({
-  usage,
-}: {
-  usage: ContextUsage;
-}) {
-  const used = Math.max(0, usage.used);
-  const size = Math.max(1, usage.size);
-  const remaining = Math.max(0, size - used);
-  const percentage = Math.min(100, Math.round((used / size) * 100));
-  const tone =
-    percentage >= 90
-      ? "text-destructive"
-      : percentage >= 75
-        ? "text-warn"
-        : "text-muted-foreground";
-  const progressTone =
-    percentage >= 90 ? "bg-destructive" : percentage >= 75 ? "bg-warn" : "bg-primary";
-  const cost = usage.cost
-    ? ` · ${usage.cost.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${usage.cost.currency}`
-    : "";
-  const detail = `${compactTokenCount(used)} used · ${compactTokenCount(remaining)} remaining · ${compactTokenCount(size)} total${cost}`;
-
-  return (
-    <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={`Context window: ${detail}`}
-          title="Context window"
-          className={cn(
-            "flex size-6 items-center justify-center rounded-md outline-none hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring",
-            tone,
-          )}
-        >
-          <span
-            aria-hidden="true"
-            className="relative size-4 rounded-full"
-            style={{
-              background: `conic-gradient(currentColor ${percentage * 3.6}deg, hsl(var(--secondary)) 0deg)`,
-            }}
-          >
-            <span className="bg-deep-surface absolute inset-[3px] rounded-full" />
-          </span>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        side="top"
-        align="end"
-        sideOffset={8}
-        className="w-72 space-y-3 rounded-lg p-4"
-      >
-        <div className="tnum flex items-center justify-between gap-4 text-sm">
-          <span className="font-semibold text-foreground">Context Window</span>
-          <span className={cn("shrink-0", tone)}>
-            {percentage}% · {compactTokenCount(used)}/{compactTokenCount(size)}
-          </span>
-        </div>
-        <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
-          <div
-            className={cn("h-full rounded-full transition-[width]", progressTone)}
-            style={{ width: `${percentage}%` }}
-          />
-        </div>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          The agent can compact its context automatically when needed.
-        </p>
-        {usage.cost && (
-          <p className="tnum border-t pt-3 text-xs text-muted-foreground">
-            Session cost ·{" "}
-            {usage.cost.amount.toLocaleString("en-US", {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}{" "}
-            {usage.cost.currency}
-          </p>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-});

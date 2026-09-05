@@ -59,7 +59,3 @@ export async function fileToImageAttachment(file: File): Promise<ImageAttachment
     size: file.size,
   };
 }
-
-export function revokeImagePreviews(images: ImageAttachmentDraft[]) {
-  images.forEach((image) => URL.revokeObjectURL(image.previewUrl));
-}

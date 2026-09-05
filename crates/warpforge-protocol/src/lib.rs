@@ -2052,6 +2052,16 @@ pub enum PromptAttachment {
         mime_type: String,
         data: String,
     },
+    /// A text file uploaded inline with the prompt (never persisted). Distinct
+    /// from `File`, which references a path inside the task worktree.
+    Document {
+        name: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        /// UTF-8 file contents. Binary uploads are rejected on both the client
+        /// and the daemon, so this is plain text rather than base64.
+        text: String,
+    },
 }
 
 /// Safe, persistence-friendly attachment metadata stored in the transcript.
@@ -2060,6 +2070,7 @@ pub enum PromptAttachment {
 pub enum PromptAttachmentSummary {
     File { path: String },
     Image { name: String },
+    Document { name: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2786,6 +2797,7 @@ mod tests {
                 config_overrides: Default::default(),
                 workflow: None,
                 backlog_item_id: None,
+                start: true,
             },
         };
         let json = serde_json::to_value(&req).unwrap();
@@ -2821,13 +2833,33 @@ mod tests {
                 mime_type: "image/png".into(),
                 data: "AA==".into(),
             },
+            PromptAttachment::Document {
+                name: "notes.md".into(),
+                mime_type: "text/markdown".into(),
+                text: "# hi".into(),
+            },
         ] {
             let value = serde_json::to_value(&attachment).unwrap();
+            assert!(value["type"].is_string());
             assert_eq!(
                 serde_json::from_value::<PromptAttachment>(value).unwrap(),
                 attachment
             );
         }
+        assert_eq!(
+            serde_json::to_value(PromptAttachment::Document {
+                name: "notes.md".into(),
+                mime_type: "text/markdown".into(),
+                text: "# hi".into(),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "type": "document",
+                "name": "notes.md",
+                "mimeType": "text/markdown",
+                "text": "# hi"
+            })
+        );
 
         let old_history: SessionUpdate =
             serde_json::from_str(r#"{"kind":"user_message","text":"hello"}"#).unwrap();

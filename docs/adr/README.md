@@ -22,3 +22,6 @@ stale and then misleads.
 | [0004](0004-project-page-surfaces.md) | The project page is surfaces, and the backlog is a list |
 | [0005](0005-chat-transcript-scrolling.md) | The virtualiser owns the chat scroll, and the transcript arrives whole |
 | [0006](0006-explicit-port-pinning.md) | Ports are pinned explicitly, not derived from list positions |
+| [0007](0007-scheduled-automations.md) | Scheduled automations: the mirror, the run, and the tick |
+| [0009](0009-service-secrets.md) | Service secrets are SOPS files warpforge reads, not a warpforge format |
+| [0008](0008-prompt-file-attachments.md) | Prompt attachments carry text, not blobs |

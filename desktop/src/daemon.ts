@@ -583,7 +583,9 @@ export class DaemonClient {
           ? p.attachments.map((attachment: any) =>
               attachment.type === "file"
                 ? { path: String(attachment.path), type: "file" as const }
-                : { name: String(attachment.name), type: "image" as const },
+                : attachment.type === "document"
+                  ? { name: String(attachment.name), type: "document" as const }
+                  : { name: String(attachment.name), type: "image" as const },
             )
           : [];
         this.appendUpdate(taskId, { attachments, kind: "user_message", text: String(p.text) });

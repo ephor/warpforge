@@ -1,9 +1,10 @@
 import { FileDiff, FileMinus, FilePen, FilePlus, X } from "lucide-react";
 import { memo } from "react";
 
-import type { ImageAttachmentDraft } from "../../lib/imageAttachments";
+import type { AttachmentDraft } from "../../lib/fileAttachments";
 import type { FileDiff as FileDiffType } from "../../protocol";
 import type { ComposerAttachment } from "../Composer";
+import { DocumentAttachmentChip } from "./DocumentAttachmentChip";
 import { ImageAttachmentPreview } from "./ImageAttachmentPreview";
 
 const statusIcon = (s: FileDiffType["status"]) => {
@@ -21,16 +22,16 @@ const statusIcon = (s: FileDiffType["status"]) => {
 
 interface AttachmentBarProps {
   diffs: ComposerAttachment[];
-  images: ImageAttachmentDraft[];
+  attachments: AttachmentDraft[];
   onRemoveDiff: (id: string) => void;
-  onRemoveImage: (image: ImageAttachmentDraft) => void;
+  onRemoveAttachment: (attachment: AttachmentDraft) => void;
 }
 
 export const AttachmentBar = memo(function AttachmentBar({
   diffs,
-  images,
+  attachments,
   onRemoveDiff,
-  onRemoveImage,
+  onRemoveAttachment,
 }: AttachmentBarProps) {
   return (
     <div className="flex flex-wrap gap-1.5 border-b border-input/50 px-2.5 py-2">
@@ -54,13 +55,21 @@ export const AttachmentBar = memo(function AttachmentBar({
           </button>
         </div>
       ))}
-      {images.map((image) => (
-        <ImageAttachmentPreview
-          key={image.id}
-          image={image}
-          onRemove={() => onRemoveImage(image)}
-        />
-      ))}
+      {attachments.map((attachment) =>
+        attachment.kind === "image" ? (
+          <ImageAttachmentPreview
+            key={attachment.id}
+            image={attachment}
+            onRemove={() => onRemoveAttachment(attachment)}
+          />
+        ) : (
+          <DocumentAttachmentChip
+            key={attachment.id}
+            document={attachment}
+            onRemove={() => onRemoveAttachment(attachment)}
+          />
+        ),
+      )}
     </div>
   );
 });

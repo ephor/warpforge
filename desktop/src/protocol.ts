@@ -399,7 +399,8 @@ export interface FileRange {
 
 export type PromptAttachment =
   | { type: "file"; path: string; range?: FileRange }
-  | { type: "image"; name: string; mimeType: "image/png" | "image/jpeg"; data: string };
+  | { type: "image"; name: string; mimeType: "image/png" | "image/jpeg"; data: string }
+  | { type: "document"; name: string; mimeType: string; text: string };
 
 export interface PromptSubmission {
   text: string;
@@ -408,7 +409,8 @@ export interface PromptSubmission {
 
 export type PromptAttachmentSummary =
   | { type: "file"; path: string }
-  | { type: "image"; name: string };
+  | { type: "image"; name: string }
+  | { type: "document"; name: string };
 
 export interface SessionUsageCost {
   amount: number;

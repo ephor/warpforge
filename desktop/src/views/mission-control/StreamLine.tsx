@@ -11,7 +11,18 @@ import { BufferedMarkdown, CollapsibleMarkdown, Markdown } from "../../component
 import { ThinkingBlock } from "../../components/ThinkingBlock";
 import { WorkflowEventLine } from "../../components/WorkflowEventLine";
 import { daemon } from "../../daemon";
-import type { EditHunk, SessionUpdate } from "../../protocol";
+import type { EditHunk, PromptAttachmentSummary, SessionUpdate } from "../../protocol";
+
+const attachmentLabel = (attachment: PromptAttachmentSummary) => {
+  switch (attachment.type) {
+    case "file":
+      return `@${attachment.path}`;
+    case "image":
+      return `image: ${attachment.name}`;
+    default:
+      return `📎 ${attachment.name}`;
+  }
+};
 
 /** A tool-call card whose output can be expanded/collapsed. Collapsed by default. */
 function ToolCallLine({
@@ -181,13 +192,15 @@ export function StreamLine({
           {!!update.attachments?.length && (
             <div className="mt-1.5 flex flex-wrap gap-1">
               {withOccurrenceKeys(update.attachments, (attachment) =>
-                attachment.type === "file" ? `file:${attachment.path}` : `image:${attachment.name}`,
+                attachment.type === "file"
+                  ? `file:${attachment.path}`
+                  : `${attachment.type}:${attachment.name}`,
               ).map(({ item: attachment, key }) => (
                 <span
                   key={key}
                   className="rounded border border-primary/20 bg-background/40 px-1.5 py-0.5 font-mono text-[10px]"
                 >
-                  {attachment.type === "file" ? `@${attachment.path}` : `image: ${attachment.name}`}
+                  {attachmentLabel(attachment)}
                 </span>
               ))}
             </div>

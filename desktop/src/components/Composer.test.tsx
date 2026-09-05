@@ -15,6 +15,14 @@ const files = [
   { changed: false, path: "docs/my file.md" },
 ];
 
+/** jsdom's File has no working arrayBuffer(), so back it with real bytes. */
+function textFile(name: string, body: string): File {
+  const bytes = new TextEncoder().encode(body);
+  const file = new File([bytes], name, { type: "" });
+  Object.defineProperty(file, "arrayBuffer", { value: async () => bytes.buffer });
+  return file;
+}
+
 describe("Composer", () => {
   it("uses a shorter but fully functional textarea in compact mode", () => {
     render(<Composer compact onSend={vi.fn<OnSend>()} />);
@@ -159,8 +167,15 @@ describe("Composer", () => {
     );
     await user.click(screen.getByRole("button", { name: /send/i }));
     await waitFor(() => expect(onSend.mock.calls[0][0].text).toContain("```diff"));
+
+    // Without image support the attach button still works — only images are
+    // refused, because documents are not capability-gated.
     rerender(<Composer onSend={onSend} imageSupported={false} />);
-    expect(screen.getByTitle("This agent does not support images")).toBeDisabled();
+    expect(screen.getByTitle("Attach files (⌘⇧A)")).toBeEnabled();
+    await act(async () => {
+      await user.upload(document.querySelector('input[type="file"]') as HTMLInputElement, png);
+    });
+    await expect(screen.findByText(/does not support images/)).resolves.toBeInTheDocument();
   });
 
   it("accepts image drag-and-drop", async () => {
@@ -173,6 +188,60 @@ describe("Composer", () => {
       dataTransfer: { files: [png] },
     });
     await expect(screen.findByText("drop.png")).resolves.toBeInTheDocument();
+  });
+
+  it("attaches a dropped text file and sends it as a document", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn<OnSend>();
+    render(<Composer onSend={onSend} />);
+    fireEvent.drop(screen.getByRole("textbox").parentElement!.parentElement!, {
+      dataTransfer: { files: [textFile("notes.md", "# hello")] },
+    });
+
+    await expect(screen.findByText("notes.md")).resolves.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() =>
+      expect(onSend).toHaveBeenCalledWith({
+        attachments: [
+          { type: "document", name: "notes.md", mimeType: "text/markdown", text: "# hello" },
+        ],
+        text: "",
+      }),
+    );
+  });
+
+  it("keeps one error line for attach and send failures", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn<OnSend>().mockRejectedValueOnce(new Error("Daemon offline"));
+    render(<Composer onSend={onSend} />);
+    const textarea = screen.getByRole("textbox");
+
+    await user.type(textarea, "hi");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await expect(screen.findByText("Daemon offline")).resolves.toBeInTheDocument();
+
+    // An attachment failure replaces the stale send error…
+    const binary = new File([new Uint8Array([0, 1, 0xff])], "app.bin", { type: "" });
+    Object.defineProperty(binary, "arrayBuffer", {
+      value: async () => new Uint8Array([0, 1, 0xff]).buffer,
+    });
+    fireEvent.drop(textarea.parentElement!.parentElement!, { dataTransfer: { files: [binary] } });
+    await expect(screen.findByText(/is not a text file/)).resolves.toBeInTheDocument();
+    expect(screen.queryByText("Daemon offline")).not.toBeInTheDocument();
+
+    // …and a successful send clears it.
+    onSend.mockResolvedValue(undefined);
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(screen.queryByText(/is not a text file/)).not.toBeInTheDocument());
+  });
+
+  it("attaches a text file pasted into the textarea", async () => {
+    render(<Composer onSend={vi.fn<OnSend>()} />);
+    fireEvent.paste(screen.getByRole("textbox"), {
+      clipboardData: { files: [textFile("pasted.txt", "body")] },
+    });
+
+    await expect(screen.findByText("pasted.txt")).resolves.toBeInTheDocument();
   });
 
   it("inserts a file reference when a project file is dragged in", () => {
