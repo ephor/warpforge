@@ -127,6 +127,7 @@ impl Daemon {
                 request_id,
                 title,
                 options,
+                tool_call_id,
             } => {
                 self.pending_permissions.record(&task_id, &request_id);
                 self.emit_acp_session(
@@ -135,6 +136,7 @@ impl Daemon {
                         request_id,
                         title,
                         options,
+                        tool_call_id,
                     },
                 )
             }

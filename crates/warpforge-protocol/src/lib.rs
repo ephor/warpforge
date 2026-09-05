@@ -1988,6 +1988,13 @@ pub enum SessionUpdate {
         request_id: String,
         title: String,
         options: Vec<String>,
+        /// The tool call this prompt is gating, when the agent named one, so
+        /// the UI can ask for the permission on the tool's own row instead of
+        /// as a second card next to it. Optional: histories recorded before
+        /// this existed carry no id, and an agent may ask about something that
+        /// is not a tool call at all.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_call_id: Option<String>,
     },
     /// A permission request the developer answered — recorded in the stream so
     /// the resolved state survives reopen/restart (the request itself lingers).

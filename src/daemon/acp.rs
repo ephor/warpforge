@@ -59,6 +59,7 @@ pub enum AcpUpdate {
         request_id: String,
         title: String,
         options: Vec<String>,
+        tool_call_id: Option<String>,
     },
     Plan {
         entries: Vec<wire::PlanEntry>,
@@ -780,7 +781,7 @@ pub fn spawn_acp_session(
                     }
                     "session/request_permission" => {
                         let Some(agent_id) = id else { continue };
-                        let (title, options, map) = parse_permission(&params);
+                        let (title, options, map, tool_call_id) = parse_permission(&params);
                         let request_id =
                             format!("{task_id}:{permission_run_id}:{}", compact_id(&agent_id));
                         perms.lock().unwrap().insert(
@@ -796,6 +797,7 @@ pub fn spawn_acp_session(
                                 request_id,
                                 title,
                                 options,
+                                tool_call_id,
                             },
                         ));
                         // reply is deferred until the human answers
@@ -2285,12 +2287,23 @@ fn line_change_counts(old_text: Option<&str>, new_text: &str) -> (u32, u32) {
 /// label→optionId map for replying. ACP option `kind`s
 /// (allow_once/allow_always/reject_once/reject_always) collapse to our three
 /// outcomes.
-fn parse_permission(params: &Value) -> (String, Vec<String>, HashMap<String, String>) {
+fn parse_permission(
+    params: &Value,
+) -> (String, Vec<String>, HashMap<String, String>, Option<String>) {
     let title = params
         .get("toolCall")
         .and_then(|t| t.get("title"))
         .and_then(|t| t.as_str())
         .unwrap_or("Permission request");
+    // The tool call being gated. Carrying it through lets the UI put the
+    // prompt on that tool's own row rather than in a card beside it — the two
+    // are one event, and the titles differ (the prompt shows the tool's title,
+    // the row shows the command), so nothing downstream can rejoin them.
+    let tool_call_id = params
+        .get("toolCall")
+        .and_then(|t| t.get("toolCallId"))
+        .and_then(|t| t.as_str())
+        .map(str::to_string);
     // Prettify an MCP tool title (mcp__server__tool or warpforge_tool) for the
     // permission line too; pretty_mcp_tool_label leaves non-MCP titles as-is.
     let title = pretty_mcp_tool_label(title);
@@ -2318,7 +2331,7 @@ fn parse_permission(params: &Value) -> (String, Vec<String>, HashMap<String, Str
             options.push(label.to_string());
         }
     }
-    (title, options, map)
+    (title, options, map, tool_call_id)
 }
 
 #[cfg(test)]
@@ -2462,12 +2475,26 @@ mod tests {
 
     #[test]
     fn permission_title_prettifies_mcp_names() {
-        let (title, options, _map) = parse_permission(&json!({
+        let (title, options, _map, _tool_call_id) = parse_permission(&json!({
             "toolCall": { "title": "mcp__warpforge__service_start" },
             "options": []
         }));
         assert_eq!(title, "Service start");
         assert!(options.is_empty());
+    }
+
+    /// The prompt and the tool row are one event, so the id that joins them
+    /// has to survive parsing. An agent that names no tool call still asks.
+    #[test]
+    fn permission_carries_the_tool_call_it_gates() {
+        let (_title, _options, _map, tool_call_id) = parse_permission(&json!({
+            "toolCall": { "title": "Bash", "toolCallId": "exec-42" },
+            "options": []
+        }));
+        assert_eq!(tool_call_id.as_deref(), Some("exec-42"));
+
+        let (_title, _options, _map, missing) = parse_permission(&json!({ "options": [] }));
+        assert_eq!(missing, None);
     }
 
     fn test_process_guard() -> Arc<ProcessGuard> {

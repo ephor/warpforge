@@ -24,19 +24,40 @@ const attachmentLabel = (attachment: PromptAttachmentSummary) => {
   }
 };
 
-/** A tool-call card whose output can be expanded/collapsed. Collapsed by default. */
+/**
+ * A tool-call card whose output can be expanded/collapsed. Collapsed by
+ * default.
+ *
+ * When the call needs the developer's permission, the prompt lives here rather
+ * than in a card of its own: asking about a command and showing that command
+ * are the same event, and two rows for it made a battery of alternating
+ * boxes down the transcript.
+ */
 function ToolCallLine({
   update,
   dot,
+  taskId,
+  resolvedOutcome,
 }: {
   update: Extract<SessionUpdate, { kind: "tool_call" }>;
   dot: string;
+  taskId?: string;
+  resolvedOutcome?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [clicked, setClicked] = useState<string | null>(null);
   const hasContent = Boolean(update.content);
   const title = toolDisplayTitle(update);
+  const permission = update.pendingPermission;
+  const answered = clicked ?? resolvedOutcome ?? null;
+  const awaiting = Boolean(permission) && !answered;
   return (
-    <div className="min-w-0 overflow-hidden rounded-md border bg-secondary/30">
+    <div
+      className={cn(
+        "min-w-0 overflow-hidden rounded-md border bg-secondary/30",
+        awaiting && "border-warn/40 bg-warn/5",
+      )}
+    >
       <button
         type="button"
         disabled={!hasContent}
@@ -61,8 +82,42 @@ function ToolCallLine({
             {update.tool_kind}
           </span>
         )}
-        <span className={cn("shrink-0 text-xs", dot)}>{update.status.replace("_", " ")}</span>
+        {permission && answered ? (
+          <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+            ✓ {answered.replace("_", " ")}
+          </span>
+        ) : (
+          !awaiting && (
+            <span className={cn("shrink-0 text-xs", dot)}>{update.status.replace("_", " ")}</span>
+          )
+        )}
       </button>
+      {awaiting && permission && (
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-warn/30 px-2.5 py-2">
+          <TriangleAlert className="size-3.5 shrink-0 text-warn" />
+          {taskId ? (
+            permission.options.map((opt) => (
+              <Button
+                key={opt}
+                size="sm"
+                variant={opt === "deny" ? "destructive" : "default"}
+                onClick={() => {
+                  setClicked(opt);
+                  void daemon.request("session.permission", {
+                    outcome: opt,
+                    request_id: permission.request_id,
+                    task_id: taskId,
+                  });
+                }}
+              >
+                {opt.replace("_", " ")}
+              </Button>
+            ))
+          ) : (
+            <span className="text-xs text-muted-foreground">Open the task to respond.</span>
+          )}
+        </div>
+      )}
       {open && hasContent && (
         <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words border-t px-2.5 py-2 font-mono text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
           {update.content}
@@ -262,7 +317,16 @@ export function StreamLine({
           </p>
         );
       }
-      return <ToolCallLine update={update} dot={dot} />;
+      return (
+        <ToolCallLine
+          update={update}
+          dot={dot}
+          taskId={taskId}
+          resolvedOutcome={
+            update.pendingPermission ? resolved?.[update.pendingPermission.request_id] : undefined
+          }
+        />
+      );
     }
     case "file_edit":
       const filePath = resolveFilePath?.(update.path) ?? null;

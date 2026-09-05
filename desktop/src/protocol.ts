@@ -457,6 +457,12 @@ export type SessionUpdate =
       content?: string;
       /** Daemon-preserved start of this tool call, in Unix milliseconds. */
       started_at?: number;
+      /**
+       * Set by the client, never by the daemon: the permission prompt gating
+       * this call, folded in from the `permission_request` that named it. The
+       * prompt and the call are one event, so they render as one row.
+       */
+      pendingPermission?: { request_id: string; options: string[] };
     }
   | {
       kind: "file_edit";
@@ -473,6 +479,9 @@ export type SessionUpdate =
       request_id: string;
       title: string;
       options: string[];
+      /** The tool call this prompt gates, when the agent named one. Absent on
+       *  histories recorded before the daemon carried it through. */
+      tool_call_id?: string;
     }
   | { kind: "permission_resolved"; request_id: string; outcome: string }
   | { kind: "plan"; entries: PlanEntry[] }

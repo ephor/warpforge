@@ -194,7 +194,9 @@ function sessionUpdatesSemanticallyEqual(a: SessionUpdate, b: SessionUpdate): bo
         a.title === (b as typeof a).title &&
         a.content === (b as typeof a).content &&
         a.tool_kind === (b as typeof a).tool_kind &&
-        a.started_at === (b as typeof a).started_at
+        a.started_at === (b as typeof a).started_at &&
+        // A prompt arriving on, or clearing from, this row has to re-render it.
+        a.pendingPermission?.request_id === (b as typeof a).pendingPermission?.request_id
       );
     case "file_edit":
       return (
@@ -297,6 +299,21 @@ export function appendCoalesced(
       output.push(truncateToolContent(update));
     }
   } else if (update.kind === "permission_request") {
+    // The prompt belongs on the row of the tool it gates: they are one event,
+    // and their titles differ (the prompt names the tool, the row shows the
+    // command) so nothing downstream could rejoin them. ACP announces a tool
+    // call before asking about it, so the row is normally already here.
+    // Failing that — an older history with no id, or a prompt about something
+    // that is not a tool call — it stands on its own as before.
+    const toolIndex = update.tool_call_id ? toolIndexes.get(update.tool_call_id) : undefined;
+    const toolRow = toolIndex === undefined ? undefined : output[toolIndex];
+    if (toolRow?.kind === "tool_call") {
+      output[toolIndex!] = {
+        ...toolRow,
+        pendingPermission: { options: update.options, request_id: update.request_id },
+      };
+      return;
+    }
     // A request can be re-emitted (resume replay, a reconnect retry). Its row
     // key is the request id, so a second copy would collide in the transcript
     // list — fold it onto the first instead.
@@ -357,8 +374,15 @@ export function appendCoalescedUpdate(
   const output = existing.slice();
   const indexes = new Map<string, number>();
   if (update.kind === "permission_request") {
+    const gated = update.tool_call_id;
     for (let index = output.length - 1; index >= 0; index -= 1) {
       const candidate = output[index];
+      // Seed the gated tool's row too, so the prompt folds onto it rather
+      // than landing as a second card beside it.
+      if (gated && candidate.kind === "tool_call" && candidate.tool_call_id === gated) {
+        indexes.set(gated, index);
+        break;
+      }
       if (candidate.kind === "permission_request" && candidate.request_id === update.request_id) {
         indexes.set(`perm:${update.request_id}`, index);
         break;

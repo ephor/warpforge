@@ -109,6 +109,54 @@ describe("session stream coalescing", () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(appendCoalescedUpdate([request], request)).toEqual([request]);
   });
+
+  it("asks for permission on the gated tool's own row, not beside it", () => {
+    const call: SessionUpdate = {
+      kind: "tool_call",
+      tool_call_id: "exec-1",
+      title: "git commit",
+      status: "pending",
+      tool_kind: "execute",
+    };
+    const request: SessionUpdate = {
+      kind: "permission_request",
+      request_id: "req-1",
+      title: "Bash",
+      options: ["allow", "deny"],
+      tool_call_id: "exec-1",
+    };
+
+    const folded = coalesceUpdates([call, request]);
+    expect(folded).toHaveLength(1);
+    expect(folded[0]).toMatchObject({
+      kind: "tool_call",
+      pendingPermission: { request_id: "req-1", options: ["allow", "deny"] },
+    });
+
+    // Same result when the request arrives live rather than in a history.
+    const live = appendCoalescedUpdate([call], request);
+    expect(live).toHaveLength(1);
+    expect(live[0]).toMatchObject({ pendingPermission: { request_id: "req-1" } });
+  });
+
+  it("keeps a row of its own when no tool call is named", () => {
+    const call: SessionUpdate = {
+      kind: "tool_call",
+      tool_call_id: "exec-1",
+      title: "git commit",
+      status: "pending",
+      tool_kind: "execute",
+    };
+    // An older history, recorded before the daemon carried the id through.
+    const request: SessionUpdate = {
+      kind: "permission_request",
+      request_id: "req-1",
+      title: "Bash",
+      options: ["allow", "deny"],
+    };
+
+    expect(coalesceUpdates([call, request])).toHaveLength(2);
+  });
 });
 
 describe("session history merge", () => {
