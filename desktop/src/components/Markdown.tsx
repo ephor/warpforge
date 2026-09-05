@@ -250,6 +250,36 @@ export function Markdown({
 const STREAM_MARKDOWN_INTERVAL_MS = 80;
 const MAX_COLLAPSED_MESSAGE_LENGTH = 600;
 const MAX_COLLAPSED_MESSAGE_LINES = 8;
+/**
+ * How much text a collapsed message actually renders. Generous next to the
+ * 8-line threshold — the clip is `max-h-44`, and a little slack keeps the fade
+ * looking like there is more underneath — but bounded, which is the point.
+ */
+const COLLAPSED_RENDER_LINES = 20;
+const COLLAPSED_RENDER_CHARS = 2000;
+
+/**
+ * The prefix of a message worth rendering while it is clipped.
+ *
+ * Collapsing used to be purely visual: the full text was parsed, highlighted
+ * and laid out, then hidden behind `max-h-44`. A pasted log of a few thousand
+ * lines therefore cost its full render for 176px of visible output, and paid
+ * it synchronously — the main thread stalled long enough that text could not
+ * be selected and the composer would not accept input until it finished.
+ *
+ * Cutting mid-document can leave a code fence open, which would swallow the
+ * rest of the prefix into one code block, so an odd fence count gets closed.
+ */
+function collapsedPrefix(text: string): string {
+  const lines = text.split("\n");
+  let prefix = lines.slice(0, COLLAPSED_RENDER_LINES).join("\n");
+  if (prefix.length > COLLAPSED_RENDER_CHARS) {
+    prefix = prefix.slice(0, COLLAPSED_RENDER_CHARS);
+  }
+  if (prefix.length === text.length) return text;
+  const fences = prefix.match(/^```/gm)?.length ?? 0;
+  return fences % 2 === 1 ? `${prefix}\n\`\`\`` : prefix;
+}
 const COLLAPSED_MESSAGE_MASK =
   "linear-gradient(to bottom, black calc(100% - 1.75rem), transparent)";
 
@@ -285,7 +315,7 @@ export function CollapsibleMarkdown({
         }
       >
         <Markdown className={className} resolveFilePath={resolveFilePath} onOpenFile={onOpenFile}>
-          {children}
+          {collapsed ? collapsedPrefix(children) : children}
         </Markdown>
       </div>
       {collapsible && (
