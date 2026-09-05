@@ -7,7 +7,18 @@ import { configRole } from "@/lib/configRole";
 import type { HistorySettings } from "@/protocol";
 import { useUi } from "@/store/ui";
 
-import { Section, SettingRow, Toggle } from "../primitives";
+import { Section, SectionNote, SettingRow, Toggle } from "../primitives";
+
+/** The three retention windows as one sentence, so the chain they form is
+ *  readable without holding three rows in your head. */
+function lifecycleSentence(settle: number, keep: number, remove: number): string {
+  const parts = [
+    settle ? `settles after ${settle} days` : "never settles on its own",
+    keep ? `loses its chat after ${keep} days` : "keeps its chat forever",
+    remove ? `is deleted after ${remove} days` : "is never deleted",
+  ];
+  return `Left alone, a finished task ${parts[0]}, ${parts[1]}, and ${parts[2]}.`;
+}
 
 export default function TasksPage() {
   const queryClient = useQueryClient();
@@ -47,28 +58,21 @@ export default function TasksPage() {
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
 
-  const backlogSettings = useQuery({
-    queryKey: ["backlog", "settings"],
-    queryFn: () => daemon.backlogSettings(),
-  });
-  const backlogStorage = useMutation({
-    mutationFn: (mode: "sqlite" | "yaml") => daemon.setBacklogStorage(mode),
-    onSuccess: (settings) => queryClient.setQueryData(["backlog", "settings"], settings),
-  });
-
   return (
     <div className="flex flex-col gap-8">
       <Section title="Text generation">
         <SettingRow
           title="Auto-name tasks"
-          description="On task creation, ask the selected agent to generate a short title. Respects your agent and model picks above."
+          description="Give a new task a short title, written by the agent below."
+          hint="Runs once, right after the task is created. Uses the agent and model picked below."
           control={
             <Toggle id="auto-name-tasks" checked={autoNameTasks} onChange={setAutoNameTasks} />
           }
         />
         <SettingRow
           title="Agent for git text"
-          description="Drafts commit messages and PR descriptions from the diff, on demand. Used for both."
+          description="Drafts commit messages and PR descriptions from the diff."
+          hint="On demand, never automatically. The same agent is used for both."
           control={
             <select
               value={textGenAgentId ?? ""}
@@ -89,8 +93,13 @@ export default function TasksPage() {
             title="Model"
             description={
               modelOption
-                ? "Which model that agent uses for this. Agent default when unset."
-                : "Model list appears once the agent has been started at least once, so Warpforge can read its options."
+                ? "Which model that agent uses for this."
+                : "Start the agent once to load its model list."
+            }
+            hint={
+              modelOption
+                ? "Agent default when unset."
+                : "Warpforge reads an agent's options the first time it runs, so the list is empty until then."
             }
             control={
               <select
@@ -114,7 +123,8 @@ export default function TasksPage() {
       <Section title="Task history">
         <SettingRow
           title="Keep transcripts for"
-          description="How long a closed task keeps its conversation. After this it still shows the title, prompt and diff, but the chat is gone. Pruning runs at daemon start, once a day, and right after you change this — with a notice each time it deletes something."
+          description="How long a closed task keeps its conversation."
+          hint="Afterwards the task still shows its title, prompt and diff — only the chat is gone. Pruning runs at startup, once a day, and right after you change this, with a notice each time it deletes something."
           control={
             <select
               aria-label="Transcript retention"
@@ -134,7 +144,8 @@ export default function TasksPage() {
         />
         <SettingRow
           title="Settle ignored tasks after"
-          description="A finished turn with no changes that nobody touched for this long moves to Closed on its own. Tasks with changes are never settled automatically. 0 turns this off."
+          description="An untouched finished turn closes itself."
+          hint="Only turns that produced no changes. A task with changes is never settled automatically. Off disables it."
           control={
             <select
               aria-label="Auto-settle ignored tasks"
@@ -154,7 +165,8 @@ export default function TasksPage() {
         />
         <SettingRow
           title="Delete closed tasks after"
-          description="A closed task nobody touched for this long is deleted entirely — row, chat and worktree. Commits stay in git. Tasks with unmerged changes are kept. 0 turns this off."
+          description="Removes the task, its chat and its worktree."
+          hint="Commits stay in git. A task with unmerged changes is kept regardless. Forever disables it."
           control={
             <select
               aria-label="Closed task expiry"
@@ -172,25 +184,13 @@ export default function TasksPage() {
             </select>
           }
         />
-      </Section>
-
-      <Section title="Backlog storage">
-        <SettingRow
-          title="Storage format"
-          description="Backlog is owned by daemon. YAML lives in .warpforge/backlog; SQLite stays in Warpforge data."
-          control={
-            <select
-              aria-label="Backlog storage format"
-              value={backlogSettings.data?.mode ?? "sqlite"}
-              disabled={backlogSettings.isLoading || backlogStorage.isPending}
-              onChange={(event) => backlogStorage.mutate(event.target.value as "sqlite" | "yaml")}
-              className="h-7 rounded-md border bg-background px-2 text-xs"
-            >
-              <option value="sqlite">SQLite</option>
-              <option value="yaml">YAML files</option>
-            </select>
-          }
-        />
+        <SectionNote>
+          {lifecycleSentence(
+            historySettings.data?.settleIgnoredAfterDays ?? 14,
+            historySettings.data?.retentionDays ?? 30,
+            historySettings.data?.deleteClosedAfterDays ?? 90,
+          )}
+        </SectionNote>
       </Section>
     </div>
   );

@@ -1,4 +1,4 @@
-import { RotateCcw, X } from "lucide-react";
+import { X } from "lucide-react";
 import { useEffect } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -35,11 +35,6 @@ interface Props {
 export default function SettingsView({ open, onOpenChange }: Props) {
   const page = useUi((s) => s.settingsPage);
   const setPage = useUi((s) => s.setSettingsPage);
-  const fontSize = useUi((s) => s.fontSize);
-  const monoFontSize = useUi((s) => s.monoFontSize);
-  const resetFontSizes = useUi((s) => s.resetFontSizes);
-
-  const fontDirty = fontSize !== 14 || monoFontSize !== 13;
 
   // Escape key closes overlay.
   useEffect(() => {
@@ -64,30 +59,16 @@ export default function SettingsView({ open, onOpenChange }: Props) {
       <div className="flex h-full max-h-full w-full max-w-5xl flex-col px-8 py-8">
         <header className="mb-6 flex items-center justify-between">
           <h1 className="text-lg font-semibold">Settings</h1>
-          <div className="flex items-center gap-3">
-            {fontDirty && (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-7 gap-1.5 text-xs"
-                onClick={resetFontSizes}
-              >
-                <RotateCcw className="size-3" />
-                Reset defaults
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-7"
-              onClick={() => onOpenChange(false)}
-              aria-label="Close"
-              type="button"
-            >
-              <X className="size-4" />
-            </Button>
-          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            onClick={() => onOpenChange(false)}
+            aria-label="Close"
+            type="button"
+          >
+            <X className="size-4" />
+          </Button>
         </header>
 
         <div className="grid min-h-0 flex-1 grid-cols-[180px_1fr] gap-8">

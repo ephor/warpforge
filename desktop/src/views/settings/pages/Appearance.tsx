@@ -60,33 +60,35 @@ export default function AppearancePage() {
       </div>
       <SettingRow
         title="UI font size"
-        description="Controls labels, chat prose, buttons, and all general chrome. Keyboard: Cmd/Ctrl +/−/0"
-        control={<NumberInput value={fontSize} min={10} max={24} onChange={setFontSize} />}
-      />
-      <SettingRow
-        title="Mono font size"
-        description="Controls code editor, diff views, and terminal output. Scales independently from UI font."
-        control={<NumberInput value={monoFontSize} min={9} max={22} onChange={setMonoFontSize} />}
-      />
-      <SettingRow
-        title="Reset font sizes"
-        description="Restore UI font to 14px and mono font to 13px."
+        description="Labels, chat, buttons — all general chrome."
+        hint="Cmd/Ctrl +/− to change, Cmd/Ctrl 0 to reset. Default 14px."
         control={
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs"
-            onClick={resetFontSizes}
-            disabled={!fontDirty}
-          >
-            Reset
-          </Button>
+          <>
+            {fontDirty && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs text-muted-foreground"
+                onClick={resetFontSizes}
+              >
+                Reset
+              </Button>
+            )}
+            <NumberInput value={fontSize} min={10} max={24} onChange={setFontSize} />
+          </>
         }
       />
       <SettingRow
+        title="Mono font size"
+        description="Code editor, diffs, terminal. Scales on its own."
+        hint="Independent of the UI font. Default 13px."
+        control={<NumberInput value={monoFontSize} min={9} max={22} onChange={setMonoFontSize} />}
+      />
+      <SettingRow
         title="TheoMod"
-        description="For when you might share your screen. Blurs email addresses everywhere they appear. Hover to peek — copy still works."
+        description="Blurs email addresses everywhere, for screen sharing."
+        hint="Hover a blurred address to peek. Copying still works."
         control={<Toggle id="theo-mod" checked={theoMod} onChange={setTheoMod} />}
       />
     </Section>
