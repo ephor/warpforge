@@ -82,16 +82,16 @@ export const TaskAgentSwitcher = memo(function TaskAgentSwitcher({
           className="flex h-7 shrink-0 items-center gap-1.5 rounded px-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
         >
           <Users className="size-3.5 text-muted-foreground" />
-          <span className="text-[11px] text-muted-foreground">
-            {members.length - 1}
-          </span>
+          <span className="text-[11px] text-muted-foreground">{members.length - 1}</span>
           <span className="text-muted-foreground/50">·</span>
           {currentIndex === 0 ? (
             <span className="max-w-24 truncate rounded-full border border-border/60 bg-secondary/40 px-1.5 py-px text-[11px] font-medium text-foreground">
               {workflow ? "Workflow" : "Lead"}
             </span>
           ) : (
-            <span className="max-w-40 truncate rounded-full border border-border/60 bg-secondary/40 px-1.5 py-px text-[11px] font-medium text-foreground">{currentLabel}</span>
+            <span className="max-w-40 truncate rounded-full border border-border/60 bg-secondary/40 px-1.5 py-px text-[11px] font-medium text-foreground">
+              {currentLabel}
+            </span>
           )}
           <ChevronDown className="size-3 opacity-60" />
         </button>

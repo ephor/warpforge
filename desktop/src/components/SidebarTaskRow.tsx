@@ -41,8 +41,8 @@ import { daemon } from "@/daemon";
 import { agentDisplayName } from "@/lib/agentNames";
 import { buildSnoozePresets } from "@/lib/snooze";
 import { elapsed } from "@/lib/status";
-import { taskLabel } from "@/lib/taskLabel";
 import { isOrchestratorTask } from "@/lib/taskGroups";
+import { taskLabel } from "@/lib/taskLabel";
 import { cn } from "@/lib/utils";
 import type { TaskInfo } from "@/protocol";
 
