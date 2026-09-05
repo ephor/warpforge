@@ -211,7 +211,7 @@ function SidebarResizeHandle({
       onMouseDown={handleMouseDown}
       onKeyDown={handleKeyDown}
       data-testid="sidebar-resize-handle"
-      className="group flex w-1 shrink-0 cursor-col-resize items-center justify-center hover:bg-primary/15 focus-visible:bg-primary/15 focus-visible:outline-none"
+      className="z-10 group flex w-1 -ml-1 shrink-0 cursor-col-resize items-center justify-center hover:bg-primary/15 focus-visible:bg-primary/15 focus-visible:outline-none"
     >
       <div className="h-full w-px bg-border/70 transition-colors group-hover:bg-primary/60 group-focus-visible:bg-primary/60" />
     </div>
