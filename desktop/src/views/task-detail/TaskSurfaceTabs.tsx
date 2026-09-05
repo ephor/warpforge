@@ -25,7 +25,7 @@ export function TaskSurfaceTabs({
   onToggleFocus,
 }: TaskSurfaceTabsProps) {
   return (
-    <div className="flex h-9 min-w-0 items-center gap-1 border-b border-border/70 pr-1">
+    <div className="flex h-9 min-w-0 items-center gap-1 border-b border-rule pr-1">
       <div className="min-w-0 flex-1">
         <SurfaceTabs value={activeSurface} onValueChange={onSurfaceChange} tabs={tabs} />
       </div>

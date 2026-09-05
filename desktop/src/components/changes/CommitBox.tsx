@@ -34,7 +34,7 @@ export function CommitBox({
   textGenAgentId,
 }: CommitBoxProps) {
   return (
-    <div className="flex flex-col gap-2 border-t bg-background/30 p-2.5">
+    <div className="flex flex-col gap-2 border-t border-rule bg-background/30 p-2.5">
       {commitExpanded ? (
         <>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -56,7 +56,7 @@ export function CommitBox({
               onChange={(e) => setMessage(e.target.value)}
               placeholder="Commit message"
               rows={3}
-              className="bg-deep-surface min-h-20 w-full resize-none rounded-md border py-1.5 pl-2 pr-9 text-xs outline-none placeholder:text-muted-foreground/80 focus:ring-1 focus:ring-ring"
+              className="bg-deep-surface min-h-20 w-full resize-none rounded-md py-1.5 pl-2 pr-9 text-xs outline-none placeholder:text-muted-foreground/80 focus:ring-1 focus:ring-ring"
             />
             <button
               type="button"
@@ -100,20 +100,21 @@ export function CommitBox({
           </div>
         </>
       ) : (
-        <Button
+        // The strip is the button. An outlined button inset inside a bordered
+        // footer drew the same edge twice, for a target that already spans the
+        // rail's full width.
+        <button
           type="button"
-          size="sm"
-          variant="outline"
-          className="w-full justify-between"
+          className="-m-2.5 flex items-center gap-1.5 p-2.5 text-left text-xs transition-colors hover:bg-secondary/50 disabled:pointer-events-none disabled:opacity-50"
           disabled={stagedSize === 0}
           onClick={() => setCommitExpanded(true)}
         >
-          <span className="flex items-center gap-1.5">
-            <GitCommitVertical className="size-3.5" />
-            Commit…
+          <GitCommitVertical className="size-3.5 shrink-0" />
+          Commit…
+          <span className="tnum ml-auto text-[10px] text-muted-foreground">
+            {stagedSize} selected
           </span>
-          <span className="tnum text-[10px] text-muted-foreground">{stagedSize} selected</span>
-        </Button>
+        </button>
       )}
     </div>
   );

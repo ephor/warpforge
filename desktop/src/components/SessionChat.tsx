@@ -614,28 +614,28 @@ export function SessionChat({
         <TranscriptRowContext.Provider value={rowContext}>
           {historyResolved ? (
             <LegendList<TranscriptListRow>
-            ref={listRef}
-            data={transcriptRows}
-            keyExtractor={transcriptRowKey}
-            getItemType={transcriptRowType}
-            itemsAreEqual={transcriptRowsAreEqual}
-            renderItem={renderTranscriptItem}
-            recycleItems
-            drawDistance={CHAT_DRAW_DISTANCE_PX}
-            estimatedItemSize={CHAT_ESTIMATED_ROW_PX}
-            initialScrollAtEnd
-            maintainScrollAtEnd={
-              following && !disclosureSettling ? CHAT_MAINTAIN_SCROLL_AT_END : false
-            }
-            maintainScrollAtEndThreshold={CHAT_MAINTAIN_SCROLL_AT_END_THRESHOLD}
-            maintainVisibleContentPosition={maintainVisibleContentPosition}
-            onScroll={onTranscriptScroll}
-            onKeyDown={pauseFollowingOnNavigationKey}
-            tabIndex={0}
-            className="scrollbar-gutter-both h-full min-w-0 overflow-x-hidden overscroll-y-contain px-2 text-sm [overflow-anchor:none]"
-            ListHeaderComponent={CHAT_LIST_HEADER}
-            ListFooterComponent={CHAT_LIST_FOOTER}
-            ListEmptyComponent={CHAT_LIST_EMPTY}
+              ref={listRef}
+              data={transcriptRows}
+              keyExtractor={transcriptRowKey}
+              getItemType={transcriptRowType}
+              itemsAreEqual={transcriptRowsAreEqual}
+              renderItem={renderTranscriptItem}
+              recycleItems
+              drawDistance={CHAT_DRAW_DISTANCE_PX}
+              estimatedItemSize={CHAT_ESTIMATED_ROW_PX}
+              initialScrollAtEnd
+              maintainScrollAtEnd={
+                following && !disclosureSettling ? CHAT_MAINTAIN_SCROLL_AT_END : false
+              }
+              maintainScrollAtEndThreshold={CHAT_MAINTAIN_SCROLL_AT_END_THRESHOLD}
+              maintainVisibleContentPosition={maintainVisibleContentPosition}
+              onScroll={onTranscriptScroll}
+              onKeyDown={pauseFollowingOnNavigationKey}
+              tabIndex={0}
+              className="scrollbar-gutter-both h-full min-w-0 overflow-x-hidden overscroll-y-contain px-2 text-sm [overflow-anchor:none]"
+              ListHeaderComponent={CHAT_LIST_HEADER}
+              ListFooterComponent={CHAT_LIST_FOOTER}
+              ListEmptyComponent={CHAT_LIST_EMPTY}
             />
           ) : (
             <div
@@ -672,15 +672,22 @@ export function SessionChat({
           Reconnecting to the saved agent session…
         </div>
       )}
+      {/* No bottom padding on the activity line: the composer's own `py-2` is
+          the gap. Stacking both put 14px between the status line and the box
+          it describes. */}
       {activity && (
-        <div className="shrink-0 px-2 py-1.5">
+        <div className="shrink-0 px-2 pb-0 pt-1.5">
           <AgentActivityIndicator activity={activity} compact />
         </div>
       )}
       {task.workflowRun && !readOnly && <WorkflowControls task={task} />}
       {!readOnly && (
-        <div className="border-t border-border/80">
+        <div>
           <Composer
+            // One left edge down the whole column: the header title, every
+            // message and the composer all start at px-3. With no frame around
+            // the conversation, three different insets is what read as slop.
+            className="px-2"
             ref={composerRef}
             commands={commands}
             contextUsage={contextUsage}

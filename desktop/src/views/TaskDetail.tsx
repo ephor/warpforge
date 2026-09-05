@@ -374,32 +374,20 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
-      {/* Back, status, title, project/agent and the task menu now live in
-          AppHeader's breadcrumb row — this view used to repeat all of it in
-          a second bar directly underneath, which is the duplication that got
-          reported. */}
       <div className="relative flex min-h-0 flex-1 gap-2">
         <ResizablePanelGroup
           direction="horizontal"
-          className={cn(
-            "min-h-0 flex-1 gap-0",
-            showChat && showDiff && "overflow-hidden rounded-md border border-border/80",
-          )}
+          className={cn("min-h-0 flex-1 gap-0.5", showChat && showDiff && "overflow-hidden")}
         >
           {showChat && (
             <ResizablePanel id="chat" order={1} defaultSize={showDiff ? 42 : 100} minSize={28}>
               <Card
                 className={cn(
-                  "flex h-full min-h-0 w-full flex-col overflow-hidden border-transparent bg-transparent shadow-none",
+                  "flex h-full min-h-0 w-full flex-col overflow-hidden border bg-transparent shadow-none",
                   !showDiff && "mx-auto max-w-[1100px]",
                 )}
               >
-                <div
-                  className={cn(
-                    "flex h-10 items-center gap-2 bg-card/95 px-4",
-                    showDiff ? "border-b border-border/80" : "rounded-md border border-border/80",
-                  )}
-                >
+                <div className="flex h-9 shrink-0 items-center border-b border-border bg-card px-2">
                   <div className="min-w-0 flex-1 truncate text-sm font-semibold">Conversation</div>
                   {taskGroup && (
                     <TaskAgentSwitcher
@@ -437,12 +425,7 @@ export default function TaskDetail({ task, snapshot, onOpenTask, onOpenPush }: P
 
           {showDiff && (
             <ResizablePanel id="surface" order={2} defaultSize={showChat ? 58 : 100} minSize={30}>
-              <Card
-                className={cn(
-                  "flex h-full min-h-0 flex-col overflow-hidden border-border/80 bg-card/95 shadow-[0_0_0_1px_rgba(255,255,255,0.01)]",
-                  showChat && "rounded-none border-0 shadow-none",
-                )}
-              >
+              <Card className="flex h-full min-h-0 flex-col overflow-hidden rounded-md border border-border bg-card/95 shadow-none">
                 <TaskSurfaceTabs
                   activeSurface={activeSurface}
                   onSurfaceChange={setActiveSurface}

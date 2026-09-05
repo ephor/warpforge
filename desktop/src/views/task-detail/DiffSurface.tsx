@@ -57,7 +57,7 @@ export function DiffSurface({
   const toggleCollapsed = useUi((s) => s.toggleDiffPanelCollapsed);
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-9 items-center gap-2 border-b bg-background/25 px-2">
+      <div className="flex h-9 items-center gap-2 border-b border-rule bg-background/25 px-2">
         {diff && (
           <span className="tnum text-xs text-muted-foreground">{diff.files.length} files</span>
         )}

@@ -368,7 +368,7 @@ export const Composer = forwardRef<
             onHover={setMenuIndex}
           />
         )}
-        <div className="bg-deep-surface relative flex flex-col rounded-lg border border-input focus-within:ring-2 focus-within:ring-ring">
+        <div className="bg-deep-surface relative flex flex-col rounded-lg border border-input transition-colors focus-within:border-ring">
           {dragging && (
             <div className="absolute inset-0 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-background/90 text-sm font-medium">
               {refDrag ? "Drop to attach file as context" : "Drop files to attach"}
