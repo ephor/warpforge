@@ -82,21 +82,21 @@ export default function LanguageServersPanel() {
 
   if (servers.length === 0 && loadError) {
     return (
-      <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+      <div className="p-4 text-sm text-destructive">
         Failed to detect language servers: {loadError.message}
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col">
       {servers.map((server) => {
         const isBusy = busy.has(server.id);
         const behind = server.status === "behind";
         return (
           <div
             key={server.id}
-            className="flex items-center justify-between gap-4 rounded-md border border-border p-3"
+            className="flex items-center justify-between gap-4 border-t border-border/60 px-4 py-2.5 first:border-t-0"
           >
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-sm font-medium">
@@ -146,7 +146,7 @@ export default function LanguageServersPanel() {
           </div>
         );
       })}
-      <div className="flex items-center gap-2 pt-2">
+      <div className="flex items-center gap-2 border-t border-border/60 px-4 py-2.5">
         <Button
           type="button"
           size="sm"

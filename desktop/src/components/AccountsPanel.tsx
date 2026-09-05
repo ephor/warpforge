@@ -71,7 +71,7 @@ export default function AccountsPanel() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col">
       {agentIds.map((agentId) => {
         const displayName = agentDisplayName(
           agentId,
@@ -87,19 +87,22 @@ export default function AccountsPanel() {
         const label = labels[agentId] ?? "";
 
         return (
-          <section key={agentId} className="flex flex-col gap-2">
-            <header className="flex items-center gap-2 text-sm font-medium">
+          <section
+            key={agentId}
+            className="flex flex-col border-t border-border/60 first:border-t-0"
+          >
+            <header className="flex items-center gap-2 px-4 pb-1.5 pt-3 text-[13px] font-semibold">
               <AgentLogo agentId={agentId} displayName={displayName} />
               {displayName}
               <SpendSummary spend={spend?.find((s) => s.agentId === agentId) ?? null} />
             </header>
 
             {own.length === 0 && strays.length === 0 ? (
-              <p className="text-xs text-muted-foreground">
+              <p className="px-4 pb-2 text-xs text-muted-foreground">
                 No accounts yet. Sign in to {displayName}, then import the login below.
               </p>
             ) : (
-              <ul className="flex flex-col gap-1">
+              <ul className="flex flex-col">
                 {own.map((account) => (
                   <AccountRow
                     key={account.id}
@@ -133,7 +136,7 @@ export default function AccountsPanel() {
 
             {manageable && (
               <form
-                className="flex items-center gap-2"
+                className="flex items-center gap-2 px-4 pb-3 pt-1"
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (!label.trim()) return;
@@ -171,12 +174,12 @@ export default function AccountsPanel() {
       })}
 
       {error && (
-        <p className="text-xs text-warn" role="status">
+        <p className="border-t border-border/60 px-4 py-2 text-xs text-warn" role="status">
           {error}
         </p>
       )}
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 border-t border-border/60 px-4 py-2.5">
         {spend && spend.length > 0 && (
           <span className="mr-auto text-[11px] text-muted-foreground/80">{SPEND_DISCLAIMER}</span>
         )}
@@ -255,7 +258,7 @@ function AccountRow({
   const nowSec = Math.floor(Date.now() / 1000);
   const outdated = limits ? isSnapshotOutdated(limits.fetchedAt, nowSec) : false;
   return (
-    <li className="flex items-center gap-2 rounded-md border px-2 py-1.5">
+    <li className="flex items-center gap-2 px-4 py-1.5 hover:bg-muted/30">
       <button
         type="button"
         onClick={onActivate}

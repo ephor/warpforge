@@ -9,19 +9,20 @@ export function hsl(triplet: string): string {
 }
 
 /**
- * A titled group of setting rows.
+ * A titled group of settings, on a card.
  *
- * `bare` drops the card around the children, for sections whose content is a
- * panel that already draws its own cards — a border inside a border inside a
- * border reads as noise, not as hierarchy.
+ * Every section on every page is this card — one surface, one border, and the
+ * rows inside are separated by dividers rather than each carrying a box of its
+ * own. Content that is a form or a grid of toggles rather than a list of rows
+ * passes `padded`.
  */
 export function Section({
   title,
-  bare,
+  padded,
   children,
 }: {
   title: string;
-  bare?: boolean;
+  padded?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -30,11 +31,9 @@ export function Section({
         <span className="mr-2 inline-block h-px w-3 bg-border" aria-hidden />
         {title}
       </h2>
-      {bare ? (
-        children
-      ) : (
-        <div className="overflow-hidden rounded-xl border border-border/80 bg-card">{children}</div>
-      )}
+      <div className="overflow-hidden rounded-xl border border-border/80 bg-card">
+        {padded ? <div className="p-4">{children}</div> : children}
+      </div>
     </section>
   );
 }

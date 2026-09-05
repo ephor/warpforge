@@ -6,11 +6,11 @@ import { Section } from "../primitives";
 export default function IntegrationsPage() {
   return (
     <div className="flex flex-col gap-8">
-      <Section title="Language servers" bare>
+      <Section title="Language servers">
         <LanguageServersPanel />
       </Section>
 
-      <Section title="Issue trackers" bare>
+      <Section title="Issue trackers" padded>
         <TrackersPanel />
       </Section>
     </div>
