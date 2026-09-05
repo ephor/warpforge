@@ -1,4 +1,4 @@
-import { Download, Loader2, RefreshCw } from "lucide-react";
+import { Download, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -291,20 +291,22 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-1">
+                {/* Says what it does instead of hiding it in a tooltip nobody
+                    hovers: the model list is cached, and adding a provider or
+                    model outside Warpforge is the reason to re-read it. */}
                 {canRefresh && (
                   <Button
-                    size="icon"
+                    size="sm"
                     variant="ghost"
-                    className="size-7"
+                    className="h-7 whitespace-nowrap px-2 text-xs text-muted-foreground"
                     disabled={isProbing}
-                    title="Re-read this agent's model list from the agent itself. Use it after adding a provider or model outside Warpforge."
                     aria-label={`Refresh ${agent.displayName} models`}
                     onClick={(e) => {
                       e.stopPropagation();
                       void refreshModels(agent.id);
                     }}
                   >
-                    <RefreshCw className={cn("size-3.5", isProbing && "animate-spin")} />
+                    {isProbing ? "Reloading…" : "Reload models list"}
                   </Button>
                 )}
                 {agent.canManage && (!agent.installed || behind) && (
