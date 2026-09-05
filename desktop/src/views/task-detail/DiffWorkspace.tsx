@@ -4,6 +4,7 @@ import {
   forwardRef,
   lazy,
   Suspense,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useRef,
@@ -96,11 +97,15 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
   const highlightTimerRef = useRef<number | null>(null);
   const files = diff?.files ?? EMPTY_DIFF_FILES;
 
+  // Overscan 2, not 1: `scrollToFile` targets a file that may be off screen,
+  // and the editor inside it cannot report its hunk position until it is
+  // mounted. One row of slack left the target unmounted exactly when it was
+  // being scrolled to.
   const unifiedVirtualizer = useVirtualizer({
     count: files.length,
     estimateSize: () => 384,
     getScrollElement: () => unifiedScrollParent.current,
-    overscan: 1,
+    overscan: 2,
   });
   const splitVirtualizer = useVirtualizer({
     count: files.length,
@@ -150,6 +155,15 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
     [],
   );
 
+  /** Start the fade only once the editor reports the hunk is on screen. */
+  const armHighlightFade = useCallback(() => {
+    if (highlightTimerRef.current !== null) return;
+    highlightTimerRef.current = window.setTimeout(() => {
+      setHighlightedEdit(null);
+      highlightTimerRef.current = null;
+    }, 2400);
+  }, []);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -160,16 +174,17 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
           editHunks.length > 0 ? matchingHunkIndexes(files[index].hunks, editHunks) : [];
         if (highlightTimerRef.current !== null) {
           window.clearTimeout(highlightTimerRef.current);
+          highlightTimerRef.current = null;
         }
+        // No timer here. The editor that consumes this is lazy-loaded and waits
+        // on its own document fetch, so on a cold open it can mount well after
+        // the request — a fixed 2.4s window expired first and the request
+        // arrived as `undefined`, which is why the diff opened at the top of
+        // the file instead of at the change. The fade is armed by
+        // `onScrolledToHunk`, once the scroll has actually happened.
         setHighlightedEdit(
           matchingHunks.length > 0 ? { hunks: new Set(matchingHunks), path } : null,
         );
-        if (matchingHunks.length > 0) {
-          highlightTimerRef.current = window.setTimeout(() => {
-            setHighlightedEdit(null);
-            highlightTimerRef.current = null;
-          }, 2400);
-        }
         const container =
           diffView === "unified" ? unifiedScrollParent.current : splitScrollParent.current;
         const virtualizer = diffView === "unified" ? unifiedVirtualizer : splitVirtualizer;
@@ -230,6 +245,7 @@ export const DiffWorkspace = forwardRef<DiffWorkspaceHandle, Props>(function Dif
                         highlightedHunks={
                           _highlightedEdit?.path === file.path ? _highlightedEdit.hunks : undefined
                         }
+                        onScrolledToHunk={armHighlightFade}
                         onSave={(content) =>
                           void daemon.request("file.save", {
                             content,

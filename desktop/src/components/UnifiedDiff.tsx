@@ -20,6 +20,7 @@ export function UnifiedDiff({
   file,
   editable,
   highlightedHunks,
+  onScrolledToHunk,
   onSave,
   onSendToChat,
 }: {
@@ -28,6 +29,11 @@ export function UnifiedDiff({
   editable?: boolean;
   /** Indexes of hunks to bring into view / highlight (chat "changed lines"). */
   highlightedHunks?: ReadonlySet<number>;
+  /** Fired once the editor has actually brought a highlighted hunk into view.
+   *  The caller cannot know when that happens: this editor is lazy-loaded and
+   *  waits on its own document fetch, so on a cold open it can mount seconds
+   *  after the request to scroll was made. */
+  onScrolledToHunk?: () => void;
   onSave?: (content: string) => void;
   onSendToChat?: (file: FileDiff) => void;
 }) {
@@ -36,6 +42,10 @@ export function UnifiedDiff({
   const themeMode = useThemeMode();
   const [status, setStatus] = useState<SaveStatus>("clean");
   const onSaveRef = useRef(onSave);
+  // Read through a ref: the scroll effect must not re-run just because the
+  // parent passed a new closure.
+  const onScrolledToHunkRef = useRef(onScrolledToHunk);
+  onScrolledToHunkRef.current = onScrolledToHunk;
   const originalRef = useRef(doc.newText);
 
   useEffect(() => {
@@ -162,6 +172,7 @@ export function UnifiedDiff({
     if (firstLine === null) return;
     const from = view.state.doc.line(Math.min(firstLine, view.state.doc.lines)).from;
     view.dispatch({ effects: EditorView.scrollIntoView(from, { y: "center" }) });
+    onScrolledToHunkRef.current?.();
   }, [file, highlightedHunks]);
 
   return (
