@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { AgentAccountLimits, AgentLimitWindow, AgentSpend } from "../protocol";
+import type { AgentAccountLimits, AgentLimitWindow } from "../protocol";
 import {
   activeAccountWorstWindow,
   formatResetDuration,
@@ -14,7 +14,6 @@ import {
   percentLeft,
   resetSentence,
   snapshotAgeSec,
-  spendForAccountCard,
   worstWindow,
 } from "./agentLimits";
 
@@ -35,15 +34,6 @@ const account = (overrides: Partial<AgentAccountLimits>): AgentAccountLimits => 
   exhausted: false,
   fetchedAt: NOW,
   source: "api",
-  ...overrides,
-});
-
-const spend = (overrides: Partial<AgentSpend>): AgentSpend => ({
-  agentId: "claude",
-  todayUsd: 12.34,
-  totalUsd: 567.89,
-  tasks: 3,
-  reported: true,
   ...overrides,
 });
 
@@ -80,35 +70,6 @@ describe("formatUsd", () => {
 
   it("keeps the sign outside the dollar mark", () => {
     expect(formatUsd(-1.5)).toBe("-$1.50");
-  });
-});
-
-describe("spendForAccountCard", () => {
-  it("shows a harness's spend once, on its first card — not per account", () => {
-    // Spend carries no account id, so repeating $12.34 under both logins would
-    // read as twice the money.
-    const accounts = [
-      account({ accountId: "claude:personal" }),
-      account({ accountId: "claude:work", active: false }),
-    ];
-    const spends = [spend({})];
-    expect(spendForAccountCard(accounts, accounts[0], spends)?.todayUsd).toBe(12.34);
-    expect(spendForAccountCard(accounts, accounts[1], spends)).toBeNull();
-  });
-
-  it("keys spend to its own harness", () => {
-    const accounts = [
-      account({ accountId: "claude:personal" }),
-      account({ accountId: "codex:live", agentId: "codex" }),
-    ];
-    const spends = [spend({}), spend({ agentId: "codex", reported: false })];
-    expect(spendForAccountCard(accounts, accounts[1], spends)?.agentId).toBe("codex");
-  });
-
-  it("is null for a harness with no spend entry, and when the daemon reported none", () => {
-    const accounts = [account({ accountId: "codex:live", agentId: "codex" })];
-    expect(spendForAccountCard(accounts, accounts[0], [spend({})])).toBeNull();
-    expect(spendForAccountCard(accounts, accounts[0], null)).toBeNull();
   });
 });
 

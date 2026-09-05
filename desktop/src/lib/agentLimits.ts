@@ -1,4 +1,4 @@
-import type { AgentAccountLimits, AgentLimitWindow, AgentSpend } from "@/protocol";
+import type { AgentAccountLimits, AgentLimitWindow } from "@/protocol";
 
 export type LimitRamp = "neutral" | "warning" | "danger";
 
@@ -199,22 +199,4 @@ export function formatUsd(value: number | null | undefined): string | null {
     maximumFractionDigits: digits,
   });
   return `${value < 0 ? "-" : ""}$${amount}`;
-}
-
-/**
- * Spend to show on one account's card, or null.
- *
- * Spend is reported per HARNESS — the cost stream carries no account id — so a
- * harness with several logins shows it once, on that harness's first card, and
- * never repeats the same dollars under each account as if they were separate.
- */
-export function spendForAccountCard(
-  accounts: AgentAccountLimits[],
-  account: AgentAccountLimits,
-  spend: AgentSpend[] | null,
-): AgentSpend | null {
-  if (!spend) return null;
-  const first = accounts.find((a) => a.agentId === account.agentId);
-  if (!first || first.accountId !== account.accountId) return null;
-  return spend.find((s) => s.agentId === account.agentId) ?? null;
 }

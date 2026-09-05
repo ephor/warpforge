@@ -1,5 +1,4 @@
 import AccountsPanel from "@/components/AccountsPanel";
-import { AgentLimitsSection } from "@/components/AgentLimitsSection";
 import AgentSetupPanel from "@/components/AgentSetupPanel";
 
 import { Section } from "../primitives";
@@ -13,14 +12,10 @@ export default function AgentsPage() {
         </div>
       </Section>
 
-      <Section title="Accounts">
+      <Section title="Accounts & usage">
         <div className="p-4">
           <AccountsPanel />
         </div>
-      </Section>
-
-      <Section title="Rate limits">
-        <AgentLimitsSection />
       </Section>
     </div>
   );
