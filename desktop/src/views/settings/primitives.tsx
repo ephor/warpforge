@@ -31,7 +31,7 @@ export function Section({
         <span className="mr-2 inline-block h-px w-3 bg-border" aria-hidden />
         {title}
       </h2>
-      <div className="overflow-hidden rounded-xl border border-border/80 bg-card">
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
         {padded ? <div className="p-4">{children}</div> : children}
       </div>
     </section>
@@ -62,7 +62,7 @@ export function SettingRow({
   resetAction?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-t border-border/60 px-4 py-3 first:border-t-0">
+    <div className="flex items-center justify-between gap-4 border-t border-rule px-4 py-3 first:border-t-0">
       <div className="min-w-0 flex-1 space-y-0.5">
         <div className="flex min-h-5 items-center gap-1.5">
           <h3 className="text-[13px] font-semibold text-foreground">{title}</h3>
@@ -101,7 +101,7 @@ export function StatusStrip({
   items: { label: string; value: React.ReactNode; title?: string }[];
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-border/60 px-4 py-2.5">
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-rule px-4 py-2.5">
       {items.map((item) => (
         <span key={item.label} className="flex items-center gap-1.5 text-[11px]" title={item.title}>
           <span className="text-muted-foreground/70">{item.label}</span>
@@ -115,7 +115,7 @@ export function StatusStrip({
 /** A sentence at the foot of a section, tying its rows together. */
 export function SectionNote({ children }: { children: React.ReactNode }) {
   return (
-    <p className="border-t border-border/60 px-4 py-2.5 text-[11px] text-muted-foreground/70">
+    <p className="border-t border-rule px-4 py-2.5 text-[11px] text-muted-foreground/70">
       {children}
     </p>
   );

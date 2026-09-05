@@ -84,7 +84,7 @@ export default function MemoryPage() {
           the select has already snapped back, so without this the screen looks
           like nothing happened. */}
       {stats?.embeddingUnavailable && (
-        <p className="border-t border-border/60 bg-warn/5 px-4 py-2.5 text-[11px] text-warn">
+        <p className="border-t border-rule bg-warn/5 px-4 py-2.5 text-[11px] text-warn">
           Last attempt at hybrid search failed: {stats.embeddingUnavailable}. On macOS,{" "}
           <span className="font-mono">brew install onnxruntime</span>, then pick Hybrid again.
         </p>

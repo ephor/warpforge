@@ -30,9 +30,7 @@ export default function AppearancePage() {
               onClick={() => setTheme(t.id)}
               aria-pressed={active}
               className={`flex cursor-pointer flex-col items-start gap-2 rounded-lg border px-3 py-2 text-left transition-colors ${
-                active
-                  ? "border-ring bg-accent"
-                  : "border-border/70 bg-card hover:border-primary/50"
+                active ? "border-ring bg-accent" : "border-border bg-card hover:border-primary/50"
               }`}
             >
               <span className="flex items-center gap-1.5">

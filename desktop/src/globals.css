@@ -41,7 +41,18 @@
   --color-destructive: hsl(var(--destructive));
   --color-destructive-foreground: hsl(var(--destructive-foreground));
 
-  --color-border: hsl(var(--border));
+  /*
+   * Three weights, one hue. A single `--border` with an opacity picked per
+   * component is how the same rule ended up rendering in three shades where a
+   * split handle, a panel header and a tab strip meet.
+   *
+   *   border-edge   structural — boundaries between top-level panes
+   *   border-border a surface on the ground — the outline of a card
+   *   border-rule   inside a surface — row separators, header rules, footers
+   */
+  --color-edge: hsl(var(--border));
+  --color-border: hsl(var(--border) / 0.8);
+  --color-rule: hsl(var(--border) / 0.5);
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
 
@@ -191,7 +202,7 @@
   --color-foreground: hsl(var(--foreground));
   --color-muted: hsl(var(--muted));
   --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-border: hsl(var(--border));
+  --color-border: hsl(var(--border) / 0.8);
   --color-ring: hsl(var(--ring));
   --color-primary: hsl(var(--primary));
 }
@@ -209,7 +220,7 @@
   --color-foreground: hsl(var(--foreground));
   --color-muted: hsl(var(--muted));
   --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-border: hsl(var(--border));
+  --color-border: hsl(var(--border) / 0.8);
   --color-ring: hsl(var(--ring));
   --color-primary: hsl(var(--primary));
 }
@@ -264,8 +275,17 @@
   --app-mono-font-scale: 1;
 }
 
-* {
-  border-color: hsl(var(--border));
+/* Default colour for a bare `border`/`border-b`: same weight as
+   `border-border`, so an unqualified border never outranks a deliberate one.
+ *
+ * This MUST stay inside `@layer base`. Unlayered CSS beats every cascade
+ * layer regardless of specificity, so as a top-level rule it overrode every
+ * `border-*` colour utility in the app — `border-transparent` included, which
+ * is why panels that asked for an invisible border still drew one. */
+@layer base {
+  * {
+    border-color: hsl(var(--border) / 0.8);
+  }
 }
 
 /*

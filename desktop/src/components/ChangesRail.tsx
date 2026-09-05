@@ -384,7 +384,7 @@ export function ChangesRail({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-card">
-      <div className="flex h-9 items-center gap-2 border-b px-3 text-sm font-semibold">
+      <div className="flex h-9 items-center gap-2 border-b border-rule px-3 text-sm font-semibold">
         <span className="min-w-0 flex-1 truncate">Changes</span>
         <button
           type="button"
@@ -411,7 +411,7 @@ export function ChangesRail({
           <Undo2 className="size-3.5" />
         </button>
       </div>
-      <div className="flex h-8 items-center gap-2 border-b bg-secondary/55 px-3 text-xs text-muted-foreground">
+      <div className="flex h-8 items-center gap-2 border-b border-rule bg-secondary/55 px-3 text-xs text-muted-foreground">
         <input
           aria-label="Stage all files"
           type="checkbox"

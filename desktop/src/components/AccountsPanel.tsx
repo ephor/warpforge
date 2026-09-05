@@ -87,10 +87,7 @@ export default function AccountsPanel() {
         const label = labels[agentId] ?? "";
 
         return (
-          <section
-            key={agentId}
-            className="flex flex-col border-t border-border/60 first:border-t-0"
-          >
+          <section key={agentId} className="flex flex-col border-t border-rule first:border-t-0">
             <header className="flex items-center gap-2 px-4 pb-1.5 pt-3 text-[13px] font-semibold">
               <AgentLogo agentId={agentId} displayName={displayName} />
               {displayName}
@@ -174,12 +171,12 @@ export default function AccountsPanel() {
       })}
 
       {error && (
-        <p className="border-t border-border/60 px-4 py-2 text-xs text-warn" role="status">
+        <p className="border-t border-rule px-4 py-2 text-xs text-warn" role="status">
           {error}
         </p>
       )}
 
-      <div className="flex items-center gap-2 border-t border-border/60 px-4 py-2.5">
+      <div className="flex items-center gap-2 border-t border-rule px-4 py-2.5">
         {spend && spend.length > 0 && (
           <span className="mr-auto text-[11px] text-muted-foreground/80">{SPEND_DISCLAIMER}</span>
         )}

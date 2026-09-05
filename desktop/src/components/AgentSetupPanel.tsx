@@ -249,7 +249,7 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
                 }
               }}
               className={cn(
-                "flex cursor-pointer items-start gap-3 border-t border-border/60 px-4 py-2.5 text-left transition-colors first:border-t-0",
+                "flex cursor-pointer items-start gap-3 border-t border-rule px-4 py-2.5 text-left transition-colors first:border-t-0",
                 on ? "bg-primary/5" : "hover:bg-muted/30",
               )}
             >
@@ -329,7 +329,7 @@ export default function AgentSetupPanel({ detected, onSaved }: Props) {
           );
         })}
       </div>
-      <div className="flex items-center justify-end gap-3 border-t border-border/60 px-4 py-2.5">
+      <div className="flex items-center justify-end gap-3 border-t border-rule px-4 py-2.5">
         <span className="mr-auto text-[11px] text-muted-foreground">
           Enable the agents you want available for new tasks, then Save.
         </span>
