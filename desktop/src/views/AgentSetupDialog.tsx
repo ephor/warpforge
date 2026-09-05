@@ -33,8 +33,12 @@ export default function AgentSetupDialog({ detected, onClose }: Props) {
           </DialogDescription>
         </DialogHeader>
 
-        {/* The panel owns the save button; saving here also closes the dialog. */}
-        <AgentSetupPanel detected={detected} onSaved={onClose} />
+        {/* The panel owns the save button; saving here also closes the dialog.
+            Its rows are edge-to-edge with dividers, so they need the same card
+            around them that a Settings section provides. */}
+        <div className="overflow-hidden rounded-xl border border-border/80">
+          <AgentSetupPanel detected={detected} onSaved={onClose} />
+        </div>
 
         <DialogFooter className="gap-2">
           <Button variant="ghost" onClick={onClose}>

@@ -6,7 +6,7 @@ import { Section } from "../primitives";
 export default function AgentsPage() {
   return (
     <div className="flex flex-col gap-8">
-      <Section title="Agents" padded>
+      <Section title="Agents">
         <AgentSetupPanel />
       </Section>
 
