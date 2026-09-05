@@ -1,11 +1,13 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Loader2, RotateCw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 import { daemon } from "../daemon";
-import type { DetectedLanguageServer } from "../protocol";
+
+const QUERY_KEY = ["languageServers"];
 
 /** Last meaningful line of command output, skipping npm's log-file boilerplate
  * so a failed install surfaces the actual error ("404 Not Found", etc.). */
@@ -23,28 +25,25 @@ function lastLine(output: string): string {
  * the missing/outdated ones — no manual command needed.
  */
 export default function LanguageServersPanel() {
-  const [servers, setServers] = useState<DetectedLanguageServer[]>([]);
+  const queryClient = useQueryClient();
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [refreshing, setRefreshing] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const refresh = async () => {
-    setRefreshing(true);
-    setLoadError(null);
-    try {
-      setServers(await daemon.detectLanguageServers());
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  useEffect(() => {
-    void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Detection shells out to every server's `--version` and asks npm for newer
+  // ones, so it takes seconds. It lives in the query cache rather than local
+  // state: reopening Settings then shows the last known list immediately
+  // instead of a spinner, and only re-checks once the result has gone stale.
+  const {
+    data: servers = [],
+    isFetching,
+    error: loadError,
+    refetch,
+  } = useQuery({
+    queryKey: QUERY_KEY,
+    queryFn: () => daemon.detectLanguageServers(),
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  });
 
   const manage = async (id: string) => {
     setBusy((prev) => new Set(prev).add(id));
@@ -60,7 +59,7 @@ export default function LanguageServersPanel() {
           [id]: lastLine(result.output) || "install failed",
         }));
       }
-      setServers(await daemon.detectLanguageServers());
+      queryClient.setQueryData(QUERY_KEY, await daemon.detectLanguageServers());
     } catch (e) {
       setErrors((prev) => ({ ...prev, [id]: e instanceof Error ? e.message : String(e) }));
     } finally {
@@ -72,7 +71,7 @@ export default function LanguageServersPanel() {
     }
   };
 
-  if (servers.length === 0 && refreshing) {
+  if (servers.length === 0 && isFetching) {
     return (
       <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
         <Loader2 className="size-4 animate-spin" />
@@ -84,7 +83,7 @@ export default function LanguageServersPanel() {
   if (servers.length === 0 && loadError) {
     return (
       <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-        Failed to detect language servers: {loadError}
+        Failed to detect language servers: {loadError.message}
       </div>
     );
   }
@@ -148,21 +147,15 @@ export default function LanguageServersPanel() {
         );
       })}
       <div className="flex items-center gap-2 pt-2">
-        {refreshing && (
-          <span className="mr-auto flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <Loader2 className="size-3 animate-spin" />
-            Checking versions…
-          </span>
-        )}
         <Button
           type="button"
           size="sm"
           variant="outline"
           className="h-7 gap-1.5 text-xs"
-          onClick={() => void refresh()}
-          disabled={refreshing}
+          onClick={() => void refetch()}
+          disabled={isFetching}
         >
-          <RotateCw className={cn("size-3", refreshing && "animate-spin")} />
+          <RotateCw className={cn("size-3", isFetching && "animate-spin")} />
           Refresh
         </Button>
       </div>
