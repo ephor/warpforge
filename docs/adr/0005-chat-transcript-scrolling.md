@@ -109,8 +109,58 @@ outside the follow zone, where nothing re-pins.
    from the latest message.
 7. **`@legendapp/list` is patched.** `desktop/patches/@legendapp%2Flist@3.3.5.patch`
    bounds the anchored end-space by a known-size cap and propagates shrinks
-   before the list is ready. Without it `maintainScrollAtEnd` cannot hold the
-   end steady; a version bump must carry the patch forward.
+   before the list is ready. Note that as of 3.3.5 the code it edits sits
+   entirely inside `if (anchoredEndSpace)`, and nothing in `src/` passes that
+   prop — so the patch is currently inert here. It still pins the version.
+8. **Gesture handlers are React props on the list, never hand-attached to
+   `getScrollableNode()`.** The imperative version asked for the node inside a
+   single `requestAnimationFrame` and gave up silently when the list had not
+   populated its ref yet — which is the common case on a cold mount. Traced
+   across two full sessions: not one detach ever fired, `following` stayed true
+   forever, and the chat pinned to the end no matter how hard the user scrolled
+   away. Switching to another task and back "fixed" it only because that
+   re-runs the effect against a ready ref.
+9. **An upward gesture outranks the re-arm band.** Leaving the end crosses
+   `CHAT_FOLLOW_REARM_PX` on the way out — traced at six consecutive events
+   between -51 and 15 — so re-arming on distance alone undid the gesture in the
+   same tick it happened. A wheel-up inside `GESTURE_WINDOW_MS` suppresses it.
+10. **`drawDistance` is margin against wrong estimates, not against speed.**
+   Unmeasured rows are sized by the average of their `getItemType`, and
+   `agent_text` spans one-line replies to two-thousand-pixel answers, so its
+   average badly overstates the short ones. At 250 the window only had to cover
+   ~1000px, which a single overestimated row satisfied alone: traced rendering
+   exactly one row (`start: 414, end: 414` of 494) into an 840px viewport, with
+   the rest of the screen blank.
+11. **Clipping a message with CSS does not make it cheap.** `CollapsibleMarkdown`
+   hid overflow behind `max-h-44` while still parsing and highlighting the whole
+   string. A pasted log of a few thousand lines paid its full render for 176px
+   of output, synchronously — the main thread stalled long enough that text
+   could not be selected and the composer refused input, always at the same
+   scroll position. Collapsed messages render a bounded prefix instead.
+
+## Debugging
+
+Every fix in this record after the first four came from instrumenting the
+scroll machine and reading the numbers; the ones before came from reading the
+code, and each fixed a real contributing cause without curing the symptom.
+
+The instrumentation is not kept in the tree — it is a dozen `traceScroll` calls
+and a ring buffer, cheaper to rewrite than to maintain. What matters is what to
+record, learned the hard way:
+
+- the list's own render window from `getState()` — `start`, `end`,
+  `startBuffered`, `endBuffered` against `data.length`. A window of one row
+  against an 840px viewport is what "messages disappeared" actually was.
+- whether the gesture listeners ever attached, and after how many frames, kept
+  somewhere a buffer reset cannot clear. Its absence reads identically to a
+  stale build, which cost two rounds.
+- one entry per detach, deduplicated. A single wheel gesture emits dozens, and
+  each lands twice — the list spreads unknown props onto two nested nodes.
+
+Record from the first frame, not from when a console is opened: the interesting
+events happen while the transcript mounts. And always cold-reload before
+judging a fix — a warm app has its row measurements cached, produces no height
+churn, and looks fixed when it is not.
 
 ## Consequences
 

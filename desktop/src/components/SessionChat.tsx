@@ -51,7 +51,20 @@ import { Composer } from "./Composer";
 import { MessageActions } from "./MessageActions";
 import { WorkflowControls } from "./WorkflowControls";
 
-const CHAT_DRAW_DISTANCE_PX = 250;
+/**
+ * How far beyond the viewport the list keeps rows rendered.
+ *
+ * This is not about scroll speed — it is the margin the window has to survive
+ * a wrong size estimate. Unmeasured rows are sized by the average of their
+ * type, and `agent_text` covers everything from a one-line acknowledgement to
+ * a two-thousand-pixel answer, so its average badly overstates the short ones.
+ * At 250 the list only had to cover ~1000px, which a single overestimated row
+ * satisfied on its own: traced with a 511px viewport rendering exactly one row
+ * (`start: 414, end: 414` of 494), leaving the rest of the screen blank. Four
+ * viewports of margin means the window still holds several rows when the
+ * estimate is off by a factor of three.
+ */
+const CHAT_DRAW_DISTANCE_PX = 1000;
 /**
  * Measured mean row height. Only mounted rows are measured, so this decides
  * almost the whole content height — and an estimate that is wrong in one
@@ -475,7 +488,12 @@ export function SessionChat({
     previousScrollRef.current = state.scroll;
     const distanceFromEnd =
       state.contentLength - state.scroll - state.scrollLength - CHAT_LIST_FOOTER_HEIGHT;
-    if (state.isAtEnd || distanceFromEnd <= CHAT_FOLLOW_REARM_PX) {
+    // A gesture away from the end wins over the re-arm band. Leaving the end
+    // crosses that band on the way out — the trace shows six consecutive
+    // events at `distanceFromEnd` between -51 and 15 — and re-arming on each
+    // of them undid the gesture in the same tick it happened.
+    const pullingAway = performance.now() - lastWheelUpRef.current < GESTURE_WINDOW_MS;
+    if (!pullingAway && (state.isAtEnd || distanceFromEnd <= CHAT_FOLLOW_REARM_PX)) {
       setFollowing(true);
       return;
     }
@@ -507,6 +525,42 @@ export function SessionChat({
   const cancelLiveFollow = useCallback(() => {
     setFollowing(false);
   }, []);
+
+  /**
+   * Detach on an upward gesture, as a React prop rather than a hand-attached
+   * DOM listener.
+   *
+   * The listener version depended on `listRef` being populated inside a single
+   * animation frame, and tracing showed it losing that race: across two full
+   * sessions not one detach ever fired, so nothing could ever stop the list
+   * pinning to the end. Props cannot lose that race — the element carrying
+   * `onScroll` is the element carrying these.
+   */
+  const lastWheelUpRef = useRef(0);
+  const onWheelCapture = useCallback(
+    (event: React.WheelEvent) => {
+      if (event.deltaY >= 0) return;
+      lastWheelUpRef.current = performance.now();
+      cancelLiveFollow();
+    },
+    [cancelLiveFollow],
+  );
+  const touchYRef = useRef<number | null>(null);
+  const onTouchStartCapture = useCallback((event: React.TouchEvent) => {
+    touchYRef.current = event.touches[0]?.clientY ?? null;
+  }, []);
+  const onTouchMoveCapture = useCallback(
+    (event: React.TouchEvent) => {
+      const nextY = event.touches[0]?.clientY;
+      if (nextY === undefined) return;
+      if (touchYRef.current !== null && nextY > touchYRef.current + 1) {
+        lastWheelUpRef.current = performance.now();
+        cancelLiveFollow();
+      }
+      touchYRef.current = nextY;
+    },
+    [cancelLiveFollow],
+  );
   const pauseFollowingOnNavigationKey = useCallback(
     (event: React.KeyboardEvent) => {
       if (["ArrowUp", "Home", "PageUp"].includes(event.key)) cancelLiveFollow();
@@ -517,33 +571,39 @@ export function SessionChat({
   useEffect(() => {
     previousScrollRef.current = 0;
     let removeListeners: (() => void) | null = null;
-    const frame = requestAnimationFrame(() => {
+    let frame = 0;
+    let cancelled = false;
+    let attempts = 0;
+    /**
+     * Wait for the list to hand us its scroller.
+     *
+     * `listRef` is populated after LegendList's own first commit, which on a
+     * cold start lands *after* this effect's first animation frame. The
+     * previous version asked once and returned — leaving the transcript with
+     * no wheel/touch handlers and no keep-at-end observer for the entire
+     * session. Nothing could then detach follow, so every scroll up was undone
+     * by the list's own end-pinning, and the only cure was switching tasks and
+     * back (which re-runs this effect against a ready ref). Confirmed by
+     * tracing: not one detach or resize-pin event fired in a whole session.
+     */
+    const attach = () => {
+      if (cancelled) return;
       const scrollNode = listRef.current?.getScrollableNode();
-      if (!scrollNode) return;
-      // Only an upward gesture detaches following. Scrolling *down* is not
-      // navigation away from the latest message, and a click inside the
-      // transcript — a file link, a work group, selecting text — is not a
-      // scroll at all.
-      let touchY: number | null = null;
-      const onWheel = (event: WheelEvent) => {
-        if (event.deltaY < 0) cancelLiveFollow();
-      };
-      const onTouchStart = (event: TouchEvent) => {
-        touchY = event.touches[0]?.clientY ?? null;
-      };
-      const onTouchMove = (event: TouchEvent) => {
-        const nextY = event.touches[0]?.clientY;
-        if (nextY === undefined) return;
-        if (touchY !== null && nextY > touchY + 1) cancelLiveFollow();
-        touchY = nextY;
-      };
+      if (!scrollNode) {
+        attempts += 1;
+        // ~2s at 60fps. If the scroller genuinely never appears, stop rather
+        // than spin a frame callback for the life of the task.
+        if (attempts > 120) return;
+        frame = requestAnimationFrame(attach);
+        return;
+      }
+      // Wheel and touch detach through React props on the list itself; only
+      // the scrollbar-drag heuristic needs a raw listener, since a drag emits
+      // no gesture event of its own.
       const onPointerDown = () => {
         lastPointerRef.current = performance.now();
       };
       scrollNode.addEventListener("pointerdown", onPointerDown, { passive: true });
-      scrollNode.addEventListener("wheel", onWheel, { passive: true });
-      scrollNode.addEventListener("touchstart", onTouchStart, { passive: true });
-      scrollNode.addEventListener("touchmove", onTouchMove, { passive: true });
       // The list sizes unmeasured rows from a running average, so a handful of
       // tall rows measuring can move the estimated total by tens of thousands
       // of pixels at once — past any sane end-pin band, which then lets go of
@@ -567,12 +627,11 @@ export function SessionChat({
       removeListeners = () => {
         keepAtEnd?.disconnect();
         scrollNode.removeEventListener("pointerdown", onPointerDown);
-        scrollNode.removeEventListener("wheel", onWheel);
-        scrollNode.removeEventListener("touchstart", onTouchStart);
-        scrollNode.removeEventListener("touchmove", onTouchMove);
       };
-    });
+    };
+    frame = requestAnimationFrame(attach);
     return () => {
+      cancelled = true;
       cancelAnimationFrame(frame);
       removeListeners?.();
     };
@@ -630,6 +689,9 @@ export function SessionChat({
               maintainScrollAtEndThreshold={CHAT_MAINTAIN_SCROLL_AT_END_THRESHOLD}
               maintainVisibleContentPosition={maintainVisibleContentPosition}
               onScroll={onTranscriptScroll}
+              onWheelCapture={onWheelCapture}
+              onTouchStartCapture={onTouchStartCapture}
+              onTouchMoveCapture={onTouchMoveCapture}
               onKeyDown={pauseFollowingOnNavigationKey}
               tabIndex={0}
               className="scrollbar-gutter-both h-full min-w-0 overflow-x-hidden overscroll-y-contain px-2 text-sm [overflow-anchor:none]"

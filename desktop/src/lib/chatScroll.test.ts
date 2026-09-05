@@ -58,8 +58,11 @@ describe("transcript restore mode", () => {
     expect(transcriptRestoreMode(true, true, null)).toBe("none");
   });
 
-  it("restores every row while reading away from the end", () => {
-    expect(transcriptRestoreMode(false, false, null)).toBe("all");
-    expect(transcriptRestoreMode(false, false, "work-toggle:work:i4")).toBe("all");
+  it("restores nothing while reading away from the end", () => {
+    // `"all"` blanked rows out as the recycling list reused them. It had never
+    // run before the detach handlers were fixed, so the damage only surfaced
+    // once scrolling up actually stopped the follow.
+    expect(transcriptRestoreMode(false, false, null)).toBe("none");
+    expect(transcriptRestoreMode(false, false, "work-toggle:work:i4")).toBe("none");
   });
 });

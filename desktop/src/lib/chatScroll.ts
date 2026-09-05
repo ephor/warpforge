@@ -54,16 +54,20 @@ export function createChatFollowGate() {
  *   per-type size estimates that churn over unmeasured history rows.
  * - While settling a work-group disclosure, only the toggled row: the trigger
  *   stays under the cursor instead of the viewport chasing the end.
- * - While reading away from the end, every row: keeps the reading position
- *   stable while new content streams in below.
+ * - While reading away from the end: nothing either. `"all"` — restore every
+ *   row — was meant to hold the reading position while new content streamed in
+ *   below, but it had never actually run: `following` only becomes false on a
+ *   real gesture, and until the detach handlers were fixed no gesture ever
+ *   registered. The first time it did run, rows blanked out as the list
+ *   recycled them. Drifting a little while reading beats reading nothing.
  */
 export type TranscriptRestoreMode = "none" | "anchor" | "all";
 
 export function transcriptRestoreMode(
-  following: boolean,
+  _following: boolean,
   settling: boolean,
   anchorKey: string | null,
 ): TranscriptRestoreMode {
   if (settling && anchorKey !== null) return "anchor";
-  return following ? "none" : "all";
+  return "none";
 }
