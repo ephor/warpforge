@@ -12,6 +12,14 @@ import type { EditHunk } from "../protocol";
  */
 
 export type View = "control" | "projects" | "automations";
+/** Page shown in the Settings overlay's left rail. */
+export type SettingsPage =
+  | "appearance"
+  | "agents"
+  | "integrations"
+  | "tasks"
+  | "memory"
+  | "advanced";
 export type DiffView = "unified" | "split";
 export type RightPanel = "changes" | "files" | "subtasks" | null;
 export type RepositoryOperation = { taskId: string; kind: "pull" | "push" };
@@ -76,6 +84,9 @@ export interface SettingsState {
   /** Easter egg: blur email addresses wherever they render. */
   theoMod: boolean;
   setTheoMod: (v: boolean) => void;
+  /** Last Settings page the user was on — reopening lands where they left. */
+  settingsPage: SettingsPage;
+  setSettingsPage: (page: SettingsPage) => void;
   /**
    * Whether New Task starts in an isolated git worktree. Persisted so the
    * choice survives across task creations instead of resetting every time.
@@ -223,6 +234,7 @@ export const useUi = create<UiState>()(
       newWorkItemExpanded: false,
       theoMod: false,
       lspEnabled: true,
+      settingsPage: "appearance",
 
       setView: (view) => set({ openTaskId: null, openTaskNav: null, view }),
       openProject: (selectedProjectId) =>
@@ -336,6 +348,7 @@ export const useUi = create<UiState>()(
       setBranchWorktree: (branchWorktree) => set({ branchWorktree }),
       setNewWorkItemExpanded: (newWorkItemExpanded) => set({ newWorkItemExpanded }),
       setTheoMod: (theoMod) => set({ theoMod }),
+      setSettingsPage: (settingsPage) => set({ settingsPage }),
       toggleLsp: () => set((s) => ({ lspEnabled: !s.lspEnabled })),
     }),
     {

@@ -42,7 +42,7 @@ const MissionControl = lazy(() => import("./views/MissionControl"));
 const NewTaskDialog = lazy(() => import("./views/NewTaskDialog"));
 const Projects = lazy(() => import("./views/Projects"));
 const PushDialog = lazy(() => import("./views/PushDialog"));
-const SettingsView = lazy(() => import("./views/Settings"));
+const SettingsView = lazy(() => import("./views/settings"));
 const TaskDetail = lazy(() => import("./views/TaskDetail"));
 
 function LiveMissionControl({
